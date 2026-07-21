@@ -1,0 +1,5 @@
+           CPU0       CPU1
+  0:        100        200   IO-APIC   2-edge      timer
+  1:          5         15   IO-APIC   1-edge      i8042
+NMI:         10         20   Non-maskable interrupts
+BAD: not-a-number       7   malformed

@@ -1,0 +1,12 @@
+[
+  {
+    "from": "cpu_hotspots",
+    "to": "code_hotspots",
+    "version": "0.56.0"
+  },
+  {
+    "from": "topdown",
+    "to": "cpu_microarchitecture",
+    "version": "0.56.0"
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "compatibility": {
+    "instruction_mix": {
+      "0.27.0": { "minimum_version": "0.27.0" },
+      "NEXT_VERSION": { "minimum_version": "0.27.0" }
+    },
+    "cpu_hotspots": {
+      "0.27.0": { "minimum_version": "0.27.0" },
+      "NEXT_VERSION": { "minimum_version": "0.27.0" }
+    },
+    "memory_access": {
+      "0.27.0": { "minimum_version": "0.27.0" },
+      "NEXT_VERSION": { "minimum_version": "0.27.0" }
+    },
+    "cpu_microarchitecture": {
+      "0.27.0": { "minimum_version": "0.27.0" }
+    }
+  }
+}

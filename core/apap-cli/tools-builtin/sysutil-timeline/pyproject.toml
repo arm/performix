@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+[project]
+name = "sysutil-timeline"
+version = "1.0.0"
+description = "Collect system utilization metrics from /proc and /sys into a CSV timeline."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+classifiers = [
+  "Programming Language :: Python :: 3"
+]
+dependencies = []

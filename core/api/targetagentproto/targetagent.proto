@@ -1,0 +1,346 @@
+// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+option go_package = "github.com/Arm-Debug/apap-cli/clients/go/targetagentproto";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+
+
+service TargetAgent {
+
+    // --------------------
+    // Agent Management
+    // --------------------
+    rpc GetVersion (google.protobuf.Empty) returns (GetVersionResponse);
+    rpc Shutdown(ShutdownRequest) returns (google.protobuf.Empty);
+    rpc ElevatePrivileges (ElevatePrivilegesRequest) returns (ElevatePrivilegesResponse);
+    rpc GetPrivilegeInfo(google.protobuf.Empty) returns (GetPrivilegeInfoResponse);
+
+    // --------------------
+    // Process Management
+    // --------------------
+
+    // StartProcess starts a process on the target with the specified command and options.
+    // The returned PID can be used to manage the process (e.g. stream output, wait for completion, kill, etc.).
+    //Clients must call ReleaseProcessHandles with the PID when they are finished with the process to allow the agent to clean up any associated resources.
+    rpc StartProcess (StartProcessRequest) returns (StartProcessResponse);
+    rpc ReleaseProcessHandles (ReleaseProcessHandlesRequest) returns (google.protobuf.Empty);
+    rpc ExecCommand (ExecCommandRequest) returns (CommandResult);
+    rpc KillProcess (KillProcessRequest) returns (google.protobuf.Empty);
+    rpc InterruptProcess (InterruptProcessRequest) returns (google.protobuf.Empty);
+    rpc WaitProcess (WaitProcessRequest) returns (WaitProcessResponse);
+
+    // --------------------
+    // Filesystem
+    // --------------------
+    rpc RetrieveFile (FileRequest) returns (stream FileContent);
+    rpc StoreFile (stream StoreRequest) returns (google.protobuf.Empty);
+    rpc CreateTempDir (google.protobuf.Empty) returns (TempDir);
+    rpc Mkdir (MkdirRequest) returns (google.protobuf.Empty);
+    rpc Rm (RmRequest) returns (google.protobuf.Empty);
+    rpc MakeWritable (MakeWritableRequest) returns (google.protobuf.Empty);
+    rpc Chown (ChownRequest) returns (google.protobuf.Empty);
+    rpc ListFiles (ListFilesRequest) returns (ListFilesResponse);
+
+    // --------------------
+    // System Info
+    // --------------------
+    rpc GetTargetInfo (google.protobuf.Empty) returns (TargetInfo);
+    rpc ListProcesses (google.protobuf.Empty) returns (ProcessList);
+    rpc ListAndroidPackages (google.protobuf.Empty) returns (AndroidPackageList);
+    rpc SetAffinity (AffinityRequest) returns (google.protobuf.Empty);
+
+    // --------------------
+    // Streaming I/O
+    // --------------------
+    rpc StreamStdout (ProcessStreamRequest) returns (stream StreamChunk);
+    rpc StreamStderr (ProcessStreamRequest) returns (stream StreamChunk);
+    rpc WriteToStdin (StdinChunk) returns (google.protobuf.Empty);
+
+    // --------------------
+    // Logging
+    // --------------------
+    rpc StreamLogs(google.protobuf.Empty) returns (stream LogEntry);
+
+
+    // --------------------
+    // Locking - provide controls for exclusive access to the target. The lock does
+    // not restrict other clients from utilising any of the API surface. Clients are
+    // expected to cooperate to respect the lock.
+    // --------------------
+    rpc HoldLock(google.protobuf.Empty) returns (stream LockGranted);
+}
+
+// --------------------
+// Request/Response Types
+// --------------------
+
+message LockGranted {}
+
+message GetVersionResponse {
+    string version = 1;
+}
+
+message ShutdownRequest {
+    // force forcefully kills existing process without waiting for them to finish
+    optional bool force = 1;
+}
+
+message ElevatePrivilegesRequest {
+    PrivilegeProof proof = 1;
+}
+
+message ElevatePrivilegesResponse {
+    PrivilegeProofToken token = 1;
+}
+
+message StartProcessRequest {
+    repeated string command = 1;
+    bool as_privileged = 2;
+    repeated string affinity = 3;
+    map<string, string> environment = 4;
+    string working_directory = 5;
+
+    // StreamStdout must be called to drain the stdout buffer if Stream mode is enabled for stdout
+    StreamRedirect stdout = 6;
+    // StreamStderr must be called to drain the stderr buffer if Stream mode is enabled for stderr
+    StreamRedirect stderr = 7;
+    StdinMode stdin = 8;
+
+    bool use_group_controller = 9;
+}
+
+message ReleaseProcessHandlesRequest {
+    repeated int32 pids = 1;
+}
+
+message StartProcessResponse {
+    int32 pid = 1;
+}
+
+message WaitProcessRequest {
+    int32 pid = 1;
+}
+
+message WaitProcessResponse {
+    int32 exit_code = 1;
+}
+
+message ExecCommandRequest {
+    repeated string command = 1;
+    bool as_privileged = 2;
+    repeated string affinity = 3;
+    map<string, string> environment = 4;
+    string working_directory = 5;
+}
+
+message CommandResult {
+    int32 rc = 1;
+    string stdout = 2;
+    string stderr = 3;
+}
+
+message KillProcessRequest {
+    int32 pid = 1;
+}
+
+message InterruptProcessRequest {
+    int32 pid = 1;
+}
+
+message FileRequest {
+    string path = 1;
+}
+
+message FileContent {
+    bytes content = 1;
+}
+
+message OpenFileRequest {
+    string path = 1;
+    bool append = 2;
+}
+
+message StoreRequest {
+    oneof item {
+        OpenFileRequest open = 1;
+        bytes content = 2;
+    }
+}
+
+message TempDir {
+    string path = 1;
+}
+
+message MkdirRequest {
+    string path = 1;
+}
+
+message RmRequest {
+    string path = 1;
+    bool recursive = 2;
+    bool force = 3;
+}
+
+message MakeWritableRequest {
+    string path = 1;
+    bool recursive = 2;
+}
+
+message ChownRequest {
+    string path = 1;
+    string owner = 2;
+    bool recursive = 3;
+}
+
+
+message ListFilesRequest {
+    repeated string paths = 1; // Can be exact path or glob (e.g. "/tmp/*.log")
+}
+
+message FileInfo {
+    string path = 1;
+    bool is_dir = 2;
+    int64 size = 3;   // in bytes
+    int64 mtime = 4;  // last modified (epoch millis)
+    int64 atime = 5;  // last accessed (epoch millis)
+    int64 ctime = 6;  // creation/change time (epoch millis)
+    string owner = 7;
+    string group = 8;
+    uint32 mode = 9;  // unix-style permission bits
+    string error = 10; // if an error occurred trying to stat the file, this will be set
+}
+
+message FileInfos {
+    repeated FileInfo fileInfos = 1;
+}
+
+message ListFilesResponse {
+    repeated FileInfos responses = 1;
+}
+
+message CPUDescription {
+    uint32 coreNumber = 1;
+    uint32 clusterID = 2;
+    string midr = 3;
+    string name = 4;
+}
+
+message ClusterDescription {
+    uint32 clusterID = 1;
+    string name = 2;
+}
+
+message CPUTopology {
+    string primaryCPUName = 1;
+    repeated CPUDescription CPUs = 2;
+    repeated ClusterDescription ClusterInfo = 3;
+}
+
+message TargetInfo {
+    string os = 1;
+    string os_description = 2;
+    string arch = 3;
+    string kernel_version = 4;
+    bool is_root = 5;
+    CPUTopology cpu_topology = 6;
+}
+
+message ProcessList {
+    repeated ProcessInfo processes = 1;
+}
+
+message ProcessInfo {
+    int32 pid = 1;
+    string user = 2;
+    string name = 3;
+    string command_line = 4;
+}
+
+message AndroidActivity {
+    string name = 1;
+}
+
+message AndroidPackage {
+    string name = 1;
+    repeated AndroidActivity activities = 2;
+}
+
+message AndroidPackageList {
+    repeated AndroidPackage packages = 1;
+}
+
+message AffinityRequest {
+    int32 pid = 1;
+    repeated string cpus = 2;
+}
+
+message StreamRedirect {
+    enum Mode {
+        NONE = 0;
+        FILE = 1;
+        STREAM = 2;
+        BOTH = 3;
+    }
+    Mode redirect = 1;
+    string path = 2;
+}
+
+enum StdinMode {
+    NONE = 0;   // default; close stdin after fork (i.e. /dev/null)
+    BUFFER = 1; // send data in a single call, then close
+}
+
+message ProcessStreamRequest {
+    int32 pid = 1;
+}
+
+message StreamChunk {
+    bytes data = 1;
+}
+
+message StdinChunk {
+    int32 pid = 1;
+    bytes data = 2;
+}
+
+message LogEntry {
+    string level = 1;
+    string message = 2;
+    string timestamp = 3;
+    google.protobuf.Struct metadata = 4;
+}
+
+message GetPrivilegeInfoResponse {
+    bool HasAdmin = 1;
+}
+
+// Token that's used to prove the caller has the right to perform privileged
+// gRPC calls. Currently only the StartProcess and the ExecCommand calls 
+// accepts this token. Those calls will be proxied to the root worker process if
+// the token is valid.
+message PrivilegeProofToken {
+    string value = 1;
+}
+
+message SudoPassword {
+    string value = 1;
+}
+
+// PrivilegeProof describes the mechanism to be used when elevating privileges
+// and spawning the root worker process. Current mechanisms are:
+//  a. **user‑namespace + targeted caps** (no password)     - not supported
+//  b. **sudo -n** (non‑interactive NOPASSWD)               - supported 
+//  c. **sudo -S** with password from `PrivilegeProof`      - not supported
+//  d. **set‑uid helper** if sudo/userns unavailable        - not supported
+message PrivilegeProof {
+    oneof mech {
+        bool no_passwd_userns = 1;
+        bool no_passwd_sudo = 2;
+        SudoPassword sudo_password = 3;
+        bool setuid_helper = 4;
+    }
+}

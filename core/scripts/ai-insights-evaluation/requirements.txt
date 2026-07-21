@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+pytest>=8.4.2
+pytest-xdist>=3.8.0
+requests>=2.32.0
+rich>=14.1.0
+urllib3<2

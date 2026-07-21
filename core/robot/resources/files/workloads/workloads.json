@@ -1,0 +1,20 @@
+{
+  "simple-java-work": {
+    "repo": "Arm-Debug/performix-workloads",
+    "release": "simple-java-work_v1.0.0",
+    "asset": "simple-java-work.tar.gz",
+    "relative_workload_path": "simple-java-work/SimpleJavaWork.java"
+  },
+  "netbench": {
+    "repo": "Arm-Debug/performix-workloads",
+    "release": "netbench_v1.0.0",
+    "asset": "netbench.tar.gz",
+    "relative_workload_path": "netbench/linux-arm64/netbench"
+  },
+  "javabench": {
+    "repo": "Arm-Debug/performix-workloads",
+    "release": "javabench_v1.0.0",
+    "asset": "javabench.tar.gz",
+    "relative_workload_path": "javabench/javabench.jar"
+  }
+}

@@ -1,0 +1,184 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+version: '3'
+
+vars:
+  ROOT_SYSTEM_PYTHON: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
+  ROOT_VENV_PYTHON: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
+  ROOT_DETECT_SECRETS: '{{if eq OS "windows"}}.venv/Scripts/detect-secrets.exe{{else}}.venv/bin/detect-secrets{{end}}'
+  ROOT_DETECT_SECRETS_HOOK: '{{if eq OS "windows"}}.venv/Scripts/detect-secrets-hook.exe{{else}}.venv/bin/detect-secrets-hook{{end}}'
+
+includes:
+  gui:
+    taskfile: ./gui
+    dir: ./gui
+  core:
+    taskfile: ./core
+    dir: ./core
+  ci:
+    taskfile: ./.github
+    dir: ./.github
+
+tasks:
+  default:
+    desc: List available repository tasks
+    cmds:
+      - task --list
+
+  install:
+    desc: Install dependencies, generate sources, and build project components
+    cmds:
+      - task: deps
+      - task: generate
+      - task: build
+
+  build:
+    desc: Build project components
+    cmds:
+      - task: core:build
+      - task: gui:build
+
+  test:
+    desc: Run project unit tests
+    cmds:
+      - task: core:test:unit
+      - task: gui:test:unit
+
+  test:bootstrap:
+    desc: Run bootstrap toolchain integration tests
+    cmds:
+      - task: deps:tools
+      - '{{.ROOT_VENV_PYTHON}} -m pytest scripts/tests -v'
+
+  deps:
+    desc: Install repository dependencies
+    cmds:
+      - task: deps:tools
+      - task: gui:deps
+      - task: core:deps
+
+  deps:tools:
+    desc: Install repository-wide development tools
+    cmds:
+      - '{{.ROOT_SYSTEM_PYTHON}} -m venv .venv'
+      - '{{.ROOT_VENV_PYTHON}} -m pip install --disable-pip-version-check -r requirements-dev.txt detect-secrets==1.5.0'
+
+  lint:
+    desc: Run project linters
+    cmds:
+      - task: gui:lint
+      - task: core:lint
+
+  secrets:scan:
+    desc: Scan tracked files against the detect-secrets baseline
+    cmds:
+      - task: deps:tools
+      - git ls-files -z | xargs -0 {{.ROOT_DETECT_SECRETS_HOOK}} --baseline .secrets.baseline --no-verify
+
+  secrets:audit:
+    desc: Update and interactively audit the detect-secrets baseline
+    cmds:
+      - task: deps:tools
+      - '{{.ROOT_DETECT_SECRETS}} scan --baseline .secrets.baseline'
+      - '{{.ROOT_DETECT_SECRETS}} audit .secrets.baseline'
+
+  release:
+    desc: Prepare a public source snapshot from the internal release tag
+    summary: |
+      Alias for release:prepare.
+
+      Variables:
+        TAG=<tag>              Prepare this internal tag. Defaults to the latest release tag.
+        LOCAL=true             Export this checkout as an untagged local snapshot.
+        COMMIT_MSG=<message>   Commit message for a LOCAL=true snapshot.
+        PUBLIC_BRANCH=<branch> Public review branch printed in push guidance.
+        MANIFEST_PATH=<path>   Use this ossmosis manifest instead of auto-discovery.
+        RELEASE_WORKDIR=<path> Use this directory for local release checkouts.
+    env:
+      TAG: '{{default "" .TAG}}'
+      LOCAL: '{{default "false" .LOCAL}}'
+      COMMIT_MSG: '{{default "" .COMMIT_MSG}}'
+      PUBLIC_BRANCH: '{{default "" .PUBLIC_BRANCH}}'
+      MANIFEST_PATH: '{{default "" .MANIFEST_PATH}}'
+      RELEASE_WORKDIR: '{{default "" .RELEASE_WORKDIR}}'
+    cmds:
+      - '{{.ROOT_SYSTEM_PYTHON}} scripts/release/export-open-source.py --prepare'
+
+  release:prepare:
+    desc: Prepare a public source snapshot from the internal release tag
+    summary: |
+      Prepare a public source snapshot from the internal Performix repository.
+      The current implementation uses ossmosis and the root .ossmosis.json
+      manifest.
+
+      Variables:
+        TAG=<tag>              Prepare this internal tag. Defaults to the latest release tag.
+        LOCAL=true             Export this checkout as an untagged local snapshot.
+        COMMIT_MSG=<message>   Commit message for a LOCAL=true snapshot.
+        PUBLIC_BRANCH=<branch> Public review branch printed in push guidance.
+        MANIFEST_PATH=<path>   Use this ossmosis manifest instead of auto-discovery.
+        RELEASE_WORKDIR=<path> Use this directory for local release checkouts.
+    env:
+      TAG: '{{default "" .TAG}}'
+      LOCAL: '{{default "false" .LOCAL}}'
+      COMMIT_MSG: '{{default "" .COMMIT_MSG}}'
+      PUBLIC_BRANCH: '{{default "" .PUBLIC_BRANCH}}'
+      MANIFEST_PATH: '{{default "" .MANIFEST_PATH}}'
+      RELEASE_WORKDIR: '{{default "" .RELEASE_WORKDIR}}'
+    cmds:
+      - '{{.ROOT_SYSTEM_PYTHON}} scripts/release/export-open-source.py --prepare'
+
+  release:push:
+    desc: Push a reviewed public source snapshot
+    summary: |
+      Push a prepared public source snapshot branch, and the matching tag for
+      tagged releases.
+      This task never exports or scans source; run release:prepare first and
+      inspect the generated local commit before pushing. By default it pushes
+      the snapshot recorded by release:prepare.
+
+      Variables:
+        TAG=<tag>              Override the prepared state with a tagged release snapshot.
+        LOCAL=true             Override the prepared state with an untagged local snapshot.
+        COMMIT_MSG=<message>   Commit message for a LOCAL=true snapshot override.
+        PUBLIC_BRANCH=<branch> Public review branch. Defaults to prepared state or performix/<tag-or-message-slug>.
+        RELEASE_WORKDIR=<path> Use this directory for local release checkouts.
+    env:
+      TAG: '{{default "" .TAG}}'
+      LOCAL: '{{default "false" .LOCAL}}'
+      COMMIT_MSG: '{{default "" .COMMIT_MSG}}'
+      PUBLIC_BRANCH: '{{default "" .PUBLIC_BRANCH}}'
+      RELEASE_WORKDIR: '{{default "" .RELEASE_WORKDIR}}'
+    cmds:
+      - '{{.ROOT_SYSTEM_PYTHON}} scripts/release/export-open-source.py --push'
+
+  release:clean:
+    desc: Remove local open-sourcing worktrees created by task release
+    summary: |
+      Remove the local release workdir used by task release.
+
+      Variables:
+        RELEASE_WORKDIR=<path> Remove this directory instead of .release-worktrees.
+    env:
+      RELEASE_WORKDIR: '{{default "" .RELEASE_WORKDIR}}'
+    cmds:
+      - '{{.ROOT_SYSTEM_PYTHON}} scripts/release/export-open-source.py --clean'
+
+  copyright:lint:
+    desc: Check copyright and license metadata for the files planned for open source
+    cmds:
+      - task: deps:tools
+      - '{{.ROOT_VENV_PYTHON}} scripts/release/copyright-lint.py lint'
+
+  copyright:annotate:
+    desc: Add SPDX metadata to first-party files that can be safely annotated automatically
+    cmds:
+      - task: deps:tools
+      - '{{.ROOT_VENV_PYTHON}} scripts/release/copyright-annotate.py'
+
+  generate:
+    desc: Generate project generated files (protobuf, codegen, etc.)
+    cmds:
+      - task: core:generate
+      - task: gui:generate

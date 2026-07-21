@@ -1,0 +1,24 @@
+# Third Party Intellectual Property (TPIP) Report for [Arm Performix CLI](https://github.com/Arm-Debug/performix-cli)
+
+This file lists the copyright and license information for third party software included in this release of `Arm Performix CLI`. Refer to the License Agreement (End User License Agreement (EULA)) that accompanies this release of `Arm Performix CLI` for terms and conditions relating to your use of such third party software.
+
+## Summary
+
+| __Name__ | __Version__ | __Licence__ |
+|----------|-------------|-------------|
+{{- range . }}
+| {{ .Name }} | {{ .Version }}  | [{{ .LicenseName }}]({{ .LicenseURL }}) |
+{{- end }}
+
+## Full Licenses
+
+{{- range . }}
+### {{ .Name }}
+**License:** {{ .LicenseName }}
+**Version:** {{ .Version }}
+```text
+{{ .LicenseText }}
+```
+{{- end }}
+
+Report generated and repository checked for [forbidden](https://github.com/google/licenseclassifier/blob/842c0d70d7027215932deb13801890992c9ba364/license_type.go#L323) and [restricted](https://github.com/google/licenseclassifier/blob/842c0d70d7027215932deb13801890992c9ba364/license_type.go#L176) licenses on: 

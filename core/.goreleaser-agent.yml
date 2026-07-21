@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# This file controls the release of the apx-agent binary by [GoReleaser](https://goreleaser.com/).
+# - Injects the version number into the agent code when building.
+# - Produces a tar.gz archive for distribution as a tool.
+#
+# For more information see the documentation at https://goreleaser.com/
+version: 2
+project_name: apx-agent
+
+before:
+  hooks:
+    - bash ./core/scripts/go/generate-all.sh
+
+builds:
+  - id: apx-agent
+    dir: core/atperf-agent
+    binary: apx-agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - android
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - arm64
+      - amd64
+    ignore:
+      - goos: android
+        goarch: amd64
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w{{ if ne (envOrDefault "NO_INJECT" "") "1" }} -X github.com/Arm-Debug/apap-cli/atperf-version/versions.version={{ .Version }}{{ end }}
+    hooks:
+      post:
+        - cmd: >-
+            {{ if ne (envOrDefault "NO_SIGN" "") "1" }} ./core/scripts/sign.sh {{ .Os }} {{ .Path }} {{ .Version }} {{ .Arch }} {{ end }}
+          output: true
+
+archives:
+  - id: android-archive
+    ids: [apx-agent]
+    formats: [tar.gz]
+    # Don't create this archive for Linux, Windows or Darwin targets:
+    format_overrides:
+      - goos: linux
+        formats: ['none']
+      - goos: windows
+        formats: ['none']
+      - goos: darwin
+        formats: ['none']
+    wrap_in_directory: false
+    name_template: '{{ .Binary }}-{{ .Os }}-{{ .Arch }}'
+    files:
+      - src: core/scripts/verify-and-launch-android.sh
+        dst: verify-and-launch.sh
+        info:
+          mode: 0755
+
+  - id: linux-darwin-archive
+    ids: [apx-agent]
+    formats: [tar.gz]
+    # Don't create this archive for Android, Windows targets:
+    format_overrides:
+      - goos: android
+        formats: ['none']
+      - goos: windows
+        formats: ['none']
+    wrap_in_directory: false
+    name_template: '{{ .Binary }}-{{ .Os }}-{{ .Arch }}'
+    files:
+      - src: core/scripts/verify-and-launch.sh
+        dst: verify-and-launch.sh
+        info:
+          mode: 0755
+
+  - id: windows-archive
+    ids: [apx-agent]
+    formats: [tar.gz]
+    # Don't create this archive for Android, Linux or Darwin targets:
+    format_overrides:
+      - goos: android
+        formats: ['none']
+      - goos: linux
+        formats: ['none']
+      - goos: darwin
+        formats: ['none']
+    wrap_in_directory: false
+    name_template: '{{ .Binary }}-{{ .Os }}-{{ .Arch }}'
+    files:
+      - src: core/scripts/verify-and-launch.ps1
+        dst: verify-and-launch.ps1
+        info:
+          mode: 0755
+
+snapshot:
+  version_template: '{{ .Version }}-dev'

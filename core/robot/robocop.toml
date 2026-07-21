@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# Configuration file for Robocop linter
+[tool.robocop.lint]
+
+# Enable all reports
+reports = [
+    "all"
+]
+
+custom_rules = [
+    "robocop_rules/spdx_header.py",
+]
+
+# Custom configuration of rules
+configure = [
+    "todo-in-comment.markers=''",
+    "line-too-long.line_length=150",
+    "bad-indent.indent=2",
+    "file-too-long.max_lines=1000",
+]
+
+# Rules to ignore from linting checks
+ignore = [
+    "missing-doc-keyword",
+    "ignored-data",          # Replaced by custom SPDX-aware pre-section checks.
+    "too-many-arguments",
+    "arguments-per-line",
+    "no-global-variable",    # TODO - consider removing global variables and re-enabling this one
+    "no-suite-variable",
+    "no-test-variable",
+    "replace-create-with-var",
+]
+
+# Format settings
+[tool.robocop.format]
+separator = "space"
+space-count = 2

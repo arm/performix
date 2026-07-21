@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# Python dependencies for the helper scripts under core/scripts/.
+#
+# Keep this lean: list only what the scripts in this directory import or invoke.
+# Robot Framework test dependencies live in ../robot/requirements.txt, which
+# includes this file via "-r" so the shared tooling virtualenv (core/.venv)
+# still receives everything it needs.
+
+certifi          # download_github_release_asset.py
+jsonschema       # validate_matrix.py
+pytest>=8.4.2    # sysutil-timeline pytest tests (pending shared-venv unification)

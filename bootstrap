@@ -1,0 +1,393 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+# Interactive first-run setup for the Performix developer toolchain. Run this
+# from a fresh checkout to install mise if needed, optionally configure the
+# current shell, and install the tool versions pinned by mise.toml.
+
+PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+MISE_BOOTSTRAP_VERSION="2026.7.5"
+MISE_BOOTSTRAP_TAG="v${MISE_BOOTSTRAP_VERSION}"
+DEFAULT_MISE_INSTALL_PATH="$HOME/.local/bin/mise"
+MISE_INSTALL_PATH="${MISE_INSTALL_PATH:-$DEFAULT_MISE_INSTALL_PATH}"
+
+ACTIVATED_SHELL_THIS_RUN=false
+
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]]; then
+  BOLD=$'\033[1m'
+  GREEN=$'\033[32m'
+  CYAN=$'\033[36m'
+  MAGENTA=$'\033[35m'
+  RESET=$'\033[0m'
+  SUCCESS_MARK="✓ "
+  INFO_MARK="→ "
+  BANNER_MARK="⚙️  "
+else
+  BOLD=""
+  GREEN=""
+  CYAN=""
+  MAGENTA=""
+  RESET=""
+  SUCCESS_MARK=""
+  INFO_MARK=""
+  BANNER_MARK=""
+fi
+
+banner() {
+  printf '%b%s%b%b%s%b\n' "$MAGENTA" "$BANNER_MARK" "$RESET" "$BOLD" "$*" "$RESET"
+}
+
+info() {
+  printf '%b%s%b%s\n' "$CYAN" "$INFO_MARK" "$RESET" "$*"
+}
+
+success() {
+  printf '%b%s%b%s\n' "$GREEN" "$SUCCESS_MARK" "$RESET" "$*"
+}
+
+question() {
+  printf '%bQ:%b %s\n' "$CYAN" "$RESET" "$*"
+}
+
+usage() {
+  cat <<'EOF'
+Usage: ./bootstrap
+
+Install the Performix local toolchain with mise.
+
+Options:
+  -h, --help         Show this help.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+existing_mise() {
+  # Bootstrap only needs a working mise entrypoint. The pinned tool versions
+  # remain in mise.toml, so this script does not enforce a mise minimum version.
+  local binary="$1"
+  [[ -x "$binary" ]] || return 1
+}
+
+sha256_file() {
+  local file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  else
+    shasum -a 256 "$file" | awk '{print $1}'
+  fi
+}
+
+platform_asset() {
+  local os arch
+  case "$(uname -s)" in
+    Darwin)
+      os="macos"
+      ;;
+    Linux)
+      os="linux"
+      ;;
+    *)
+      echo "Unsupported OS for automatic mise bootstrap: $(uname -s)" >&2
+      exit 1
+      ;;
+  esac
+
+  case "$(uname -m)" in
+    arm64|aarch64)
+      arch="arm64"
+      ;;
+    x86_64|amd64)
+      arch="x64"
+      ;;
+    *)
+      echo "Unsupported architecture for automatic mise bootstrap: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+
+  echo "mise-v${MISE_BOOTSTRAP_VERSION}-${os}-${arch}"
+}
+
+expected_sha256() {
+  # The fallback installer downloads a raw executable from GitHub Releases, so
+  # keep checksums in-tree rather than trusting the transport alone.
+  case "$1" in
+    mise-v2026.7.5-macos-arm64)
+      echo "a456c65907e8334619d77fa152bdcf9023fddc0daa03d47fbe86d032dbf565b0"
+      ;;
+    mise-v2026.7.5-macos-x64)
+      echo "62fe1fe9dbc32c6ce1388ee23df4a0862d3d7f40a6820b40c2f1cbab995dc1d4"
+      ;;
+    mise-v2026.7.5-linux-arm64)
+      echo "41fcf744050bfa27f9871e2151ac6f44b5ce2741424b3d5282b92becc71e6bc4"
+      ;;
+    mise-v2026.7.5-linux-x64)
+      echo "5f7ab76afdf0780d12edeaa67e908094e9ccf7924cfe203e415c1cfb87bbf778"
+      ;;
+    *)
+      echo "No checksum recorded for $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+download_mise() {
+  local asset="$1" destination="$2" tmp expected actual url
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "curl is required to download mise." >&2
+    echo "Install curl with your system package manager, then rerun ./bootstrap." >&2
+    exit 1
+  fi
+
+  expected="$(expected_sha256 "$asset")"
+  url="https://github.com/jdx/mise/releases/download/${MISE_BOOTSTRAP_TAG}/${asset}"
+  tmp="${destination}.tmp"
+
+  mkdir -p "$(dirname "$destination")"
+  info "Downloading mise ${MISE_BOOTSTRAP_VERSION} from GitHub Releases..." >&2
+  if ! curl --fail --location --silent --show-error --output "$tmp" "$url"; then
+    rm -f "$tmp"
+    echo "Failed to download mise from $url" >&2
+    exit 1
+  fi
+
+  actual="$(sha256_file "$tmp")"
+  if [[ "$actual" != "$expected" ]]; then
+    rm -f "$tmp"
+    echo "Checksum mismatch for $asset" >&2
+    echo "Expected: $expected" >&2
+    echo "Actual:   $actual" >&2
+    exit 1
+  fi
+
+  chmod 0755 "$tmp"
+  mv "$tmp" "$destination"
+}
+
+profile_path() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
+  case "$shell_name" in
+    zsh)
+      echo "$HOME/.zshrc"
+      ;;
+    bash)
+      echo "$HOME/.bashrc"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+path_expr_for_profile() {
+  # Keep generated profile blocks portable across home-directory moves and
+  # easier to review by writing repo-local install paths relative to $HOME.
+  local path="$1"
+  case "$path" in
+    "$HOME"/*)
+      echo "\$HOME/${path#"$HOME"/}"
+      ;;
+    *)
+      echo "$path"
+      ;;
+  esac
+}
+
+append_managed_block() {
+  # Managed markers make bootstrap idempotent without trying to parse or merge a
+  # developer's existing shell profile.
+  local file="$1" block_name="$2" content="$3" start end
+  start="# >>> Performix ${block_name} >>>"
+  end="# <<< Performix ${block_name} <<<"
+
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
+  if grep -Fq "$start" "$file"; then
+    echo "Shell profile already contains Performix ${block_name} block: $file"
+    return
+  fi
+
+  {
+    printf '\n%s\n' "$start"
+    printf '%s\n' "$content"
+    printf '%s\n' "$end"
+  } >>"$file"
+  success "Updated $file with Performix ${block_name} block"
+}
+
+prompt_yes_no() {
+  local prompt="$1" answer
+  [[ -t 0 ]] || return 1
+  printf '%b%s%b [Y/n] ' "$BOLD" "$prompt" "$RESET"
+  read -r answer
+  case "$answer" in
+    n|N|no|NO|No)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+add_to_path() {
+  local file bin_dir bin_expr
+  if ! file="$(profile_path)"; then
+    echo "Skipping PATH setup: unsupported shell ${SHELL:-unknown}"
+    return 1
+  fi
+
+  bin_dir="$(dirname "$MISE_INSTALL_PATH")"
+  bin_expr="$(path_expr_for_profile "$bin_dir")"
+  append_managed_block "$file" "mise path" "export PATH=\"${bin_expr}:\$PATH\""
+}
+
+path_command() {
+  local bin_expr
+  bin_expr="$(path_expr_for_profile "$(dirname "$MISE_INSTALL_PATH")")"
+  printf 'export PATH="%s:$PATH"' "$bin_expr"
+}
+
+activate_shell() {
+  local file shell_name mise_expr
+  if ! file="$(profile_path)"; then
+    echo "Skipping shell activation: unsupported shell ${SHELL:-unknown}"
+    return
+  fi
+
+  shell_name="$(basename "${SHELL:-}")"
+  mise_expr="$(path_expr_for_profile "$MISE_INSTALL_PATH")"
+  append_managed_block "$file" "mise activation" "eval \"\$(\"${mise_expr}\" activate ${shell_name})\""
+  ACTIVATED_SHELL_THIS_RUN=true
+}
+
+activation_command() {
+  local shell_name mise_expr
+  shell_name="$(basename "${SHELL:-}")"
+  mise_expr="$(path_expr_for_profile "$MISE_INSTALL_PATH")"
+  printf 'eval "$("%s" activate %s)"' "$mise_expr" "$shell_name"
+}
+
+current_shell_activated() {
+  [[ -n "${MISE_SHELL:-}" ]]
+}
+
+print_intro() {
+  banner "Bootstrapping Performix toolchain"
+  echo "This will download required tools/versions and optionally configure your shell."
+  echo
+}
+
+select_mise() {
+  local path_mise asset
+  path_mise="$(command -v mise 2>/dev/null || true)"
+  if [[ -n "$path_mise" ]]; then
+    # A mise already on PATH is treated as user-managed. Use it directly and do
+    # not add Performix-managed profile blocks around it.
+    MISE_BIN="$path_mise"
+    return
+  fi
+
+  if existing_mise "$MISE_INSTALL_PATH"; then
+    # A repo-local mise exists but future shells may not see it yet. Prompt for
+    # PATH and activation setup after selecting it.
+    MISE_BIN="$MISE_INSTALL_PATH"
+    MISE_NEEDS_PATH_SETUP=true
+    return
+  fi
+
+  asset="$(platform_asset)"
+  download_mise "$asset" "$MISE_INSTALL_PATH"
+  JUST_INSTALLED_MISE=true
+  MISE_NEEDS_PATH_SETUP=true
+  MISE_BIN="$MISE_INSTALL_PATH"
+}
+
+ensure_selected_mise_on_path() {
+  # The current bootstrap process must use the same mise that was selected for
+  # installation, even before the user's shell profile has been reloaded.
+  local mise_dir path_entry
+  mise_dir="$(dirname "$MISE_BIN")"
+  case ":$PATH:" in
+    *":$mise_dir:"*)
+      return
+      ;;
+  esac
+
+  PATH="$mise_dir:$PATH"
+  export PATH
+}
+
+JUST_INSTALLED_MISE=false
+MISE_NEEDS_PATH_SETUP=false
+PATH_SETUP_ACCEPTED=false
+MISE_BIN=""
+print_intro
+select_mise
+ensure_selected_mise_on_path
+
+if [[ "$JUST_INSTALLED_MISE" == true ]]; then
+  success "mise was installed to $MISE_INSTALL_PATH."
+else
+  info "Using existing mise: $MISE_BIN"
+fi
+
+if [[ "$MISE_NEEDS_PATH_SETUP" == true ]]; then
+  echo
+  question "Do you want to add $(dirname "$MISE_INSTALL_PATH") to your PATH?"
+  echo "   This lets you run 'mise' directly from your shell (recommended)."
+  if prompt_yes_no "Add mise to PATH?"; then
+    if add_to_path; then
+      PATH_SETUP_ACCEPTED=true
+    fi
+  fi
+fi
+
+if [[ "$MISE_NEEDS_PATH_SETUP" == true ]]; then
+  echo
+  question "Do you want mise to activate the toolchain automatically?"
+  echo "   This makes the correct versions of tools available (added to path) when entering the performix working dir (recommended)."
+  echo "   Choose no if you prefer to manually invoke tools via 'mise exec --'."
+  if prompt_yes_no "Enable automatic toolchain activation?"; then
+    activate_shell
+  fi
+fi
+
+echo
+info "Installing pinned tool versions with mise..."
+# Trusting the checked-in mise.toml avoids an interactive trust prompt on a
+# fresh clone while keeping mise's normal trust model for other directories.
+"$MISE_BIN" trust --yes "$PROJECT_ROOT/mise.toml"
+"$MISE_BIN" install -C "$PROJECT_ROOT"
+
+success "Performix bootstrap completed."
+echo
+if current_shell_activated; then
+  info "Next: run 'task install' when you are ready to install dependencies, generate code, and build."
+elif [[ "$ACTIVATED_SHELL_THIS_RUN" == true ]]; then
+  info "Next: run this command to activate mise in this shell, then run 'task install':"
+  printf '  %b%s%b\n' "$BOLD" "$(activation_command)" "$RESET"
+elif [[ "$PATH_SETUP_ACCEPTED" == true ]]; then
+  info "Next: run this command to make mise available in this shell, then run 'mise exec -- task install':"
+  printf '  %b%s%b\n' "$BOLD" "$(path_command)" "$RESET"
+elif [[ "$MISE_NEEDS_PATH_SETUP" == true ]]; then
+  info "Next: run '$MISE_BIN exec -- task install' when you are ready to install dependencies, generate code, and build."
+else
+  info "Next: run 'mise exec -- task install' when you are ready to install dependencies, generate code, and build."
+fi
