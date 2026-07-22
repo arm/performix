@@ -1,0 +1,45 @@
+// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package errors;
+
+option go_package = "github.com/Arm-Debug/apap-cli/clients/go/errorsproto";
+
+import "google/protobuf/any.proto";
+
+// In case of error, the service responds with a GRPC error code and message, and an encoded StatusDetails message in the
+// `Grpc-Status-Details-Bin` header. Inspired by the Google API [error model](https://cloud.google.com/apis/design/errors).
+message StatusDetails {
+    // The status code, which should match the gRPC status code for the containing gRPC response.
+    int32 code = 1;
+    // A developer-facing error message, which should match the gRPC response message.
+    string message = 2;
+    // A list of messages that carry the error details.
+    repeated google.protobuf.Any details = 3;
+}
+
+// Describes the cause of the error.
+// Should be used in the `details` field of `StatusDetails`.
+message ErrorMessage {
+    string message = 1;
+}
+
+// Describes violations in a client request. This error type focuses on the syntactic aspects of the request.
+// Should be used in the `details` field of `StatusDetails`.
+message BadRequest {
+    // A message type used to describe a single bad request field.
+    message FieldViolation {
+        // A path leading to a field in the request body. The value will be a
+        // sequence of dot-separated identifiers that identify a protocol buffer
+        // field. E.g., "field_violations.field" would identify this field.
+        string field = 1;
+
+        // A description of why the request element is bad.
+        string description = 2;
+    }
+
+    // Describes all violations in a client request.
+    repeated FieldViolation field_violations = 1;
+}

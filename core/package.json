@@ -1,0 +1,14 @@
+{
+  "name": "core",
+  "private": true,
+  "scripts": {
+    "format": "prettier --write \"**/*.js\" --ignore-path ../.gitignore --log-level warn",
+    "format:check": "prettier --check \"**/*.js\" --ignore-path ../.gitignore --log-level warn"
+  },
+  "prettier": {
+    "singleQuote": true
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2"
+  }
+}

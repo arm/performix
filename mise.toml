@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+[tools]
+go = "1.26.5"
+"npm:npm" = "11.0.0"
+node = "24.14.0"
+python = "3.10"
+"github:go-task/task" = "v3.50.0"
+"github:protocolbuffers/protobuf" = "v23.4"
+"go:github.com/golangci/golangci-lint/v2/cmd/golangci-lint" = "v2.9.0"
+
+[env]
+NPM_CONFIG_REGISTRY = "https://artifactory.arm.com/artifactory/api/npm/mirrors.npmjs_org"

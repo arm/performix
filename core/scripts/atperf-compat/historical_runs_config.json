@@ -1,0 +1,26 @@
+[
+  {
+    "uid":    "cpu_microarchitecture",
+    "cmd_args": ["cpu_microarchitecture", "--workload=/tmp/workloads/megabench/megabench"]
+  },
+  {
+    "uid":    "code-hotspots",
+    "cmd_args": ["code_hotspots", "--workload=/tmp/workloads/megabench/megabench"]
+  },
+  {
+    "uid":    "i-mix-static",
+    "cmd_args": ["instruction_mix", "--param=mode=static", "--workload=/tmp/workloads/megabench/megabench"]
+  },
+  {
+    "uid":    "i-mix-dynamic",
+    "cmd_args": ["instruction_mix", "--param=mode=dynamic", "--workload=/tmp/workloads/megabench/megabench"]
+  },
+  {
+    "uid":    "i-mix-both",
+    "cmd_args": ["instruction_mix", "--param=mode=both", "--workload=/tmp/workloads/megabench/megabench"]
+  },
+  {
+    "uid":    "memory-access",
+    "cmd_args": ["memory_access", "--workload=/tmp/workloads/megabench/megabench"]
+  }
+]

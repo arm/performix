@@ -1,0 +1,1397 @@
+// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package apap;
+
+option go_package = "github.com/Arm-Debug/apap-cli/clients/go/apapproto";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+
+// Arm Performance Analysis Platform Service Definition
+service Apap {
+  // Requests that the server should shut down
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // Get the version of the connected server
+  rpc GetVersion(google.protobuf.Empty) returns (ServiceVersion);
+
+  // Get the telemetry specification for a supported CPU model
+  rpc GetTelemetrySpecification(GetTelemetrySpecificationRequest) returns (GetTelemetrySpecificationResponse);
+
+  // Return descriptions of all runs
+  rpc ListRuns(google.protobuf.Empty) returns (RunListing);
+
+  // Return description a single run
+  rpc GetRunDescription(GetRunDescriptionRequest) returns (RunDescription);
+
+  // Rename run
+  rpc RenameRun(RunRenameRequest) returns (RunRenameResponse);
+
+  // Invoke renderer(s) - primitive for calling renderers directly
+  rpc InvokeRender(InvokeRenderRequest) returns (InvokeRenderResponse);
+
+  // Prepare for calling InvokeRender - primitive for calling the recipe to obtain the rendering and visualization configuration
+  rpc PrepareRender(PrepareRenderRequest) returns (PrepareRenderResponse);
+
+  // List all active render sessions and their respective memory usages
+  rpc ListRenders(google.protobuf.Empty) returns (RenderListing);
+
+  // Close an active renderer session
+  rpc CloseRender(CloseRenderRequest) returns (google.protobuf.Empty);
+
+  // Query rendered data
+  rpc Query(QueryRequest) returns (stream QueryResponse);
+
+  // Requests that the server should run the specified recipe command on the target
+  rpc RecipeIssueCommand(RecipeCommand) returns (stream RecipeResponse);
+
+  // Check whether a recipe is ready to run on a target
+  rpc RecipeReady(RecipeReadyRequest) returns (RecipeReadyResponse);
+
+  // Test the connection to the target server
+  rpc TargetTest(TargetTestRequest) returns (TargetTestResponse);
+
+  // Test the connection to the target server
+  rpc TargetPrepare(TargetPrepareRequest) returns (TargetPrepareResponse);
+
+  // Delete a run
+  rpc DeleteRun(RunId) returns (DeleteRunResponse);
+
+  // Delete multiple runs
+  rpc DeleteRuns(DeleteRunsRequest) returns (DeleteRunsResponse);
+
+  // Export a run
+  rpc ExportRun(RunExportRequest) returns (RunExportResponse);
+
+  // Collect target information
+  rpc TargetInfoCollector(TargetInfoRequest) returns (TargetInfoResponse);
+
+  // List Android packages and their activities for the target.
+  rpc ListAndroidPackages(ListAndroidPackagesRequest) returns (ListAndroidPackagesResponse);
+
+  // Import a run
+  rpc ImportRun(RunImportRequest) returns (RunImportResponse);
+
+  // List private SSH keys found in common search directories on the host machine.
+  rpc ListPrivateSSHKeys(google.protobuf.Empty) returns (PrivateSSHKeyListing);
+
+  // Parse the named recipe and return its definition. If a target is provided parameter value functions will be executed
+  // and the target info will be exposed.
+  rpc ParseRecipe(ParseRecipeMessage) returns (ParseRecipeResponse);
+
+  // List available recipes
+  rpc ListRecipes(google.protobuf.Empty) returns (RecipeNameListing);
+
+  // Validate the recipe parameters meet the constraints provided by the recipe. Parameter enabled state is computed and returned in the response.
+  rpc RecipeValidateParameters(RecipeValidateParametersRequest) returns (RecipeValidateParametersResponse);
+
+  // Automatically find SSH keys for the target
+  rpc FindSSHKeysForTarget(Target) returns (SSHKeyResponse);
+
+  // Update one or more runs
+  rpc UpdateRuns(UpdateRunsRequest) returns (UpdateRunsResponse);
+
+  // Lookup a message in the catalog
+  rpc LookupMessage(LookupMessageRequest) returns (LookupMessageResponse);
+
+  // List the directories used by atperf (e.g. the engine logs directory)
+  rpc ListDirectories(google.protobuf.Empty) returns (ListDirectoriesResponse);
+
+  // Create a support package containing diagnostic logs and optional run exports
+  rpc CreateSupportPackage(CreateSupportPackageRequest) returns (CreateSupportPackageResponse);
+
+  // Fetch data required by the MCP server to generate insights
+  rpc GetRunSummaryBundle(RunSummaryBundleRequest) returns (RunSummaryBundleResponse);
+}
+
+// Standardized run description extras that can be requested
+enum StandardRunDescriptionExtras {
+  EXTRA_TARGET_INFO = 0;
+}
+
+// Request object sent to obtain run description
+message GetRunDescriptionRequest {
+  // The ID of the run whose description to request
+  RunId id = 1;
+
+  // A list of standardized extras to request; in future there may be more customizability here
+  repeated StandardRunDescriptionExtras extras_request_std = 2;
+}
+
+// Request message to validate recipe parameter values
+message RecipeValidateParametersRequest {
+  string recipe_name = 1;
+  map<string, google.protobuf.Value> parameters = 2;
+  optional Target target = 3;
+  optional string target_name = 4;
+  RecipeWorkload workload = 5;
+}
+
+// A single parameter validation result, representing failed validation of the parameter
+message ParameterValidationResult {
+  string parameter_id = 1;
+  ErrorChain message = 2;
+}
+
+// Response message for recipe parameter validation, no messages indicates all parameters are valid
+message RecipeValidateParametersResponse {
+  repeated ParameterValidationResult messages = 2;
+}
+
+// A private SSH key on the host machine
+message PrivateSSHKey {
+  string path = 1;
+  bool has_passphrase = 2;
+}
+
+// Response message for listing private SSH keys
+message PrivateSSHKeyListing {
+  repeated PrivateSSHKey keys = 1;
+}
+
+message SSHKeyResponse {
+  StringArray private_key_paths = 1;
+  ErrorChain error = 2;
+}
+
+message RunExportRequest {
+  RunId run_id = 1;
+  string target_directory = 2;
+}
+
+message RunExportResponse {
+  optional StatusCode return_code = 1; // required
+}
+
+message RunImportRequest {
+  string external_run_path = 1;
+}
+
+message RunImportResponse {
+  optional StatusCode return_code = 1; // required
+  RunId new_id = 2;
+}
+
+// Request message to create a support package:
+//   - CLI clients will set cli_version
+//   - GUI clients will set cli_version and gui_version
+message CreateSupportPackageRequest {
+  repeated RunId run_ids = 1; // The IDs of optional runs to include in the support package
+  string output_directory = 2; // The directory to which the support package should be written
+  string cli_version = 3; // CLI version to include in the package (set by CLI and GUI clients)
+  optional string gui_version = 4; // GUI version to include in the package (set by GUI clients)
+  uint32 log_count = 5; // Number of most recent engine logs to include in the support package
+  string gui_log_directory = 6; // Directory that contains GUI logs (set by GUI clients; leave empty for CLI)
+}
+
+// Response message for CreateSupportPackageRequest
+message CreateSupportPackageResponse {
+  string package_path = 1; // The path to the created support package, if creation was successful
+  uint64 package_size_bytes = 2; // The size of the created support package in bytes, for clients to display to users
+}
+
+message RunRenameRequest {
+  RunId run_id = 1;
+  string new_name = 2;
+}
+
+message RunRenameResponse {
+  StatusCode return_code = 1;
+}
+
+message ServiceVersion {
+  // SemVer compliant version string
+  string version = 1;
+}
+
+// The ID of a run
+message RunId {
+  string value = 1;
+}
+
+// The selection of content that will be rendered
+message ContentSelection {
+  repeated RunId runs = 1;
+}
+
+// Configuration for a single renderer invocation
+message RendererConfig {
+  // The name of the renderer to invoke
+  string renderer = 1;
+
+  // The configuration; schema is dependent on the particular renderer that is invoked
+  optional google.protobuf.Struct config = 2;
+
+  // User-supplied identifier for this invocation; will appear in output manifest if supplied. Overrides any value
+  // supplied in config_json
+  optional RendererId id = 3;
+}
+
+// Identifier for a visualization; usually supplied by the recipe
+message VisualizationId {
+  string value = 1;
+}
+
+// Identifier for a renderer; usually supplied by the recipe
+message RendererId {
+  string value = 1;
+}
+
+// Configuration for a visualization or other recipe-driven widget
+message VisualizationConfig {
+  // The ID of this visualization; must be non-empty and unique within the request
+  VisualizationId id = 1;
+
+  // The name of the visualization component to create
+  string type = 2;
+
+  // The ID of the renderer that will supply data to the visualization. Optional in the API, but most visualizations
+  // will require a nonempty value here
+  optional RendererId renderer_id = 3;
+
+  // Title string to display
+  optional string title = 4;
+
+  // Description string to display
+  optional string description = 5;
+
+  // Config payload to pass to the visualization component. Contents is not verified by the engine
+  optional google.protobuf.Struct config = 6;
+
+  // Mapping from visualization parameter IDs to recipe render parameter IDs
+  map<string, string> parameter_bindings = 7;
+
+  // GUI placement name for this widget. Empty or unset means "visualizations".
+  optional string placement = 8;
+
+  // Optional tag indicating this widget should be disabled.
+  optional WidgetDisabledState disabled = 9;
+}
+
+// Message representing a disabled widget, including a user-facing reason
+message WidgetDisabledState {
+  string reason = 1;
+}
+
+// Specifies the policy to use for selecting a recipe during PrepareRender.
+enum RecipeSelectionPolicyType {
+  // Use the recipe version installed with the application.
+  USE_INSTALLED_VERSION = 0;
+
+  // Use the recipe file stored inside the run content.
+  FROM_CONTENT = 1;
+
+  // Override by specifying a recipe name manually.
+  OVERRIDE_BY_NAME = 2;
+}
+
+// Arguments for the recipe selection policy.
+message RecipeSelectionPolicyOptions {
+  // Specifies the policy type. Defaults to USE_INSTALLED_VERSION.
+  RecipeSelectionPolicyType policy = 1;
+
+  // If policy is OVERRIDE_BY_NAME, this field must be set.
+  optional string override_name = 2;
+}
+
+// Request preparation of renderer and visualization config
+message PrepareRenderRequest {
+  // The content to load from disk
+  ContentSelection content = 1;
+
+  // The recipe selection policy; if not supplied, the default policy will be used.
+  optional RecipeSelectionPolicyOptions recipe_selection_policy = 2;
+
+  // Render parameters
+  map<string, google.protobuf.Value> render_parameters = 3;
+
+  // Visualization parameters keyed by visualization parameter ID
+  map<string, google.protobuf.Value> visualization_parameters = 4;
+}
+
+// Prepared renderer/visualization config returned by the recipe
+message PrepareRenderResponse {
+  // List of renderers; IDs are guaranteed to be non-empty and unique within this response
+  repeated RendererConfig renderers = 1;
+
+  // List of visualizations; IDs are guaranteed to be non-empty and unique within this response. Where renderer IDs
+  // are referenced, they must exist in the list of renderers above.
+  repeated VisualizationConfig visualizations = 2;
+
+  // A warning Message if the run is not compatible with the current engine version, according to the recipe
+  // compatibility matrix.
+  ErrorChain compatibilityWarning = 3;
+
+  // Render parameter values with defaults and static options.
+  map<string, RenderParameterDetails> render_parameters = 4;
+
+  // Mapping from visualization parameter IDs to recipe render parameter IDs.
+  map<string, string> visualization_parameters = 5;
+}
+
+message RenderParameterDetails {
+  // The effective value (explicit or default) for this parameter.
+  google.protobuf.Value value = 1;
+
+  // The default value defined in the recipe.
+  google.protobuf.Value default_value = 2;
+
+  // Static options defined in the recipe (for radio/select parameters only).
+  repeated string options = 3;
+}
+
+// Request the server to perform a render; this involves loading one or more on-disk models into the in-memory DB,
+// in preparation for queries
+message InvokeRenderRequest {
+  // The content to load from disk
+  ContentSelection content = 1;
+
+  // The renderers to invoke
+  repeated RendererConfig renderer_config = 2;
+
+  // visualization configs
+  repeated VisualizationConfig visualization_config = 3;
+}
+
+// Request the server to close an active render session
+message CloseRenderRequest {
+  string session_id = 1;
+}
+
+// This weird thing exists so that, when we convert "index" fields into JSON, they aren't completely omitted
+message NumericIndex {
+  int64 value = 1;
+}
+
+// Describes a single entry in the render manifest
+message RenderManifestEntry {
+  // Component type name; a given (component_type, version) tuple precisely identifies a well-known schema
+  string component_type = 1;
+
+  // The version number of the component schema
+  string component_schema_version = 2;
+
+  // Name of the table in the loaded DB
+  string table_name = 3;
+
+  // The index of the renderer (within the session) that generated this rendered item
+  NumericIndex renderer_index = 4;
+
+  // The content with which this rendered item is associated; if empty, there is either no associated content,
+  // because the rendered item has static content, or the rendered item is associated with all entries from the
+  // ContentSelection
+  repeated RunId associated_content = 5;
+
+  // The ID of the renderer, as passed in the request (if supplied)
+  optional RendererId renderer_id = 6;
+
+  // Whether this entry is pending or not
+  optional Pending pending = 7;
+}
+
+// Describes the data that was loaded into the in-memory DB
+message RenderManifest {
+  repeated RenderManifestEntry entry = 1;
+}
+
+// Empty tag indicating success
+message Success {}
+
+// Empty tag indicating a pending output
+message Pending {}
+
+// The result of invoking a renderer - either success, an error, or 'pending'. Note: Render "outputs" are not
+// captured here, but instead are captured within the manifest
+message RendererInvocationStatus {
+  // The ID of the renderer to which this status applies
+  optional RendererId id = 1;
+
+  oneof status {
+    Success success = 2;
+    Error error = 3;
+    Pending pending = 4;
+  }
+}
+
+message VisualizationResolvedTablesList {
+  repeated VisualizationResolvedTables entries = 1;
+}
+
+message VisualizationResolvedTables {
+  VisualizationId id = 1;
+  map<string, StringArray> tables = 2;
+  optional Pending pending = 3;
+}
+
+// Response from a InvokeRenderRequest API call
+message InvokeRenderResponse {
+  // The ID of the render session
+  string session_id = 1;
+
+  // The connection string to use to connect to the DB
+  string connection_string = 2;
+
+  // The manifest of available components in the DB
+  RenderManifest manifest = 3;
+
+  // A list of invocation statuses; this list will be exactly the same length as the list of RenderConfigs in the
+  // invocation request
+  repeated RendererInvocationStatus invocation_statuses = 4;
+  VisualizationResolvedTablesList visualization_resolved_tables= 5;
+}
+
+// List of sessions (id and memory usage)
+message RenderListing {
+  repeated SessionInfo sessions = 1;
+  repeated DbInstanceInfo db_instances = 2;
+}
+
+// A session's name and database key
+message SessionInfo {
+  // The ID of the session
+  string session_id = 1;
+  // The database instance key for the session
+  string db_key = 2;
+}
+
+// A database instance's key and memory usage in GiB
+message DbInstanceInfo {
+  // The database instance key
+  string db_key = 1;
+  // The database instance's memory usage in GiB
+  double memory_usage_gib = 2;
+}
+
+// Output format for a table
+enum TableFormat {
+  UNKNOWN = 0;
+  PROTOBUF_STRUCT = 1; // A stream of protobuf structs; chunk format will be StructTableChunk
+  ARROW_IPC_STREAM = 2; // An Arrow IPC stream; chunk format will be BinaryTableChunk
+}
+
+// Request the server to query existing rendered data via SQL
+message QueryRequest {
+  // The ID of the session from which to query data
+  string session_id = 1;
+
+  // The SQL to execute
+  string query_sql = 2;
+
+  // The format of the output
+  TableFormat table_format = 3;
+}
+
+// A table chunk in the format of protobuf structs
+message StructTableChunk {
+  repeated google.protobuf.Struct rows = 1;
+}
+
+// A table chunk in raw binary format
+message BinaryTableChunk {
+  bytes bytes = 1;
+}
+
+// Description of one column
+message ColumnDescription {
+  string name = 1;
+}
+
+// Description of all columns in a query response
+message Columns {
+  repeated ColumnDescription columns = 1;
+}
+
+// A chunk of rows in a table
+message TableChunk {
+  // The format of the table; all chunks will have the same format in a table
+  TableFormat format = 1;
+
+  oneof chunk {
+    StructTableChunk struct_chunk = 2;
+    BinaryTableChunk binary_chunk = 3;
+  }
+}
+
+message TableDescription {
+  // The format of the table; all chunks will have the same format in a table
+  TableFormat format = 1;
+
+  // The SQL command executed
+  optional string command = 2;
+
+  // The column descriptions
+  Columns columns = 3;
+}
+
+// Response from the Query API call. The first response will always be a TableDescription, followed by zero or more
+// chunks describing the data in the table. Chunks will arrive in a sequence matching the rows of the query response.
+message QueryResponse {
+  oneof sub_response {
+    TableDescription description = 1;
+    TableChunk chunk = 2;
+  }
+}
+
+// SSH host configuration
+message SSHHostConfig {
+  // The hostname, IP, or FQDN
+  string host = 1;
+
+  // The port to connect to the remote SSH server on
+  int32 port = 2;
+
+  // The username to use to authenticate
+  string username = 3;
+
+  // The private key file; must exist on the machine where the engine is running
+  string private_key_filename = 4;
+
+  // The authentication method to use when connecting
+  optional SSHAuthMethod auth_method = 5;
+}
+
+// SSH authentication method: determines which authentication method to use for SSH
+enum SSHAuthMethod {
+  // Use an SSH key (default)
+  SSH_AUTH_METHOD_KEY = 0;
+  // Use a password
+  SSH_AUTH_METHOD_PASSWORD = 1;
+}
+
+// SSH host key policy: determines how the engine's SSH client behaves in different known_hosts situations
+enum SSHHostKeyPolicy {
+  // No host checking: if host is not in known_hosts, then so be it
+  SSH_HOST_KEY_POLICY_IGNORE_IF_MISSING = 0;
+  // Strict host key checking: if the host is not in the known_hosts, fail
+  SSH_HOST_KEY_POLICY_REJECT_IF_MISSING = 1;
+  // Less strict host key checking: if the host is not in the known_hosts, add it
+  SSH_HOST_KEY_POLICY_ADD_IF_MISSING = 2;
+  // Slightly less strict host key checking: if the host is not in the known_hosts, add it. If it's present with a different key, replace the key
+  SSH_HOST_KEY_POLICY_ADD_OR_REPLACE_EXISTING = 3;
+  // Prompt before adding an unknown host key
+  SSH_HOST_KEY_POLICY_ASK_IF_MISSING = 4;
+}
+
+// Configuration for an SSH connection
+message SSHConnectionConfig {
+  // Host configuration; the destination target is the last entry on this list. Preceding entries are jump nodes.
+  // Each jump node may have a completely different host configuration.
+  repeated SSHHostConfig hosts = 1;
+
+  // Host key policy; similar to StrictHostKeyChecking in OpenSSH config
+  optional SSHHostKeyPolicy host_key_policy = 2;
+}
+
+// Request message to prepare the target
+message TargetPrepareRequest {
+  Target target = 1;
+  ToolDeploy deployment_type = 2;
+}
+
+// Local target configuration
+message LocalConnectionConfig {
+
+}
+
+// Android target configuration for ADB connections
+message AndroidConnectionConfig {
+  // Device serial used with adb -s
+  string serial_number = 1;
+  // Optional address passed to adb connect before ADB operations
+  optional string device_ip_address = 2;
+}
+
+// Describes the target
+message Target {
+  oneof connection {
+    SSHConnectionConfig ssh_config = 1;
+    LocalConnectionConfig local_config = 2;
+    AndroidConnectionConfig android_config = 3;
+  }
+}
+
+// Simple tool message
+message RecipeTool {
+  string name = 1;
+  string version = 2;
+}
+
+// Host source code paths
+message HostSourceCodePaths {
+  repeated string paths = 1;
+}
+
+// Message to indicate launching a specified command
+message LaunchWorkload {
+  string command = 1;
+  map<string, string> environment = 2;
+  string working_dir = 3;
+  bool use_shell = 4;
+}
+
+// Message to indicate attaching to a specified process id
+message AttachWorkload {
+  optional int32 pid = 1; // required
+}
+
+// Message to indicate profiling whole system
+message SystemWideWorkload {
+}
+
+// Recipe workload message
+message RecipeWorkload {
+  oneof specificWorkload {
+    LaunchWorkload launch_workload = 1;
+    AttachWorkload attach_workload = 2;
+    SystemWideWorkload system_wide_workload = 3;
+    AndroidLaunchWorkload android_launch_workload = 4;
+  }
+}
+
+message ListAndroidPackagesRequest {
+  Target target = 1;
+}
+
+message AndroidActivity {
+  string name = 1;
+}
+
+message AndroidPackage {
+  string name = 1;
+  repeated AndroidActivity activities = 2;
+}
+
+message ListAndroidPackagesResponse {
+  repeated AndroidPackage packages = 1;
+}
+
+enum StatusCode {
+  SUCCESS = 0;
+  ERROR = 1;
+}
+
+// Determines the deployment type of the tools
+enum ToolDeploy {
+  NONE = 0;
+  AUTO = 1;
+  AUTO_FORCE = 2;
+  CHECK = 3;
+}
+
+// RecipeCommand is used to embed the relevant recipe command
+message RecipeCommand {
+  oneof specificCommand {
+    RecipeStartCommand start_command = 1;
+    RecipeStopCommand stop_command = 2;
+    RecipeCancelCommand cancel_command = 3;
+  }}
+
+// RecipeStopCommand is a message used to tell the engine to stop the current run and process the profiling data
+// Embed the RunId within the message so the CLI can tell the engine which run to stop
+message RecipeStopCommand {
+  RunId id = 1;
+}
+
+// RecipeCancelCommand is a message used to tell the engine to cancel the current run and ignore the profling data
+// Embed the RunId within the message so the CLI can tell the engine which run to cancel
+message RecipeCancelCommand {
+  RunId id = 1;
+}
+
+// RecipeStartCommand is a bundle of all the data required to run a recipe. This includes relevant recipe definition
+// fields as well as user configuration such as workload, install paths, output directories, parameters and a timeout
+message RecipeStartCommand {
+  Target target = 1;
+  string output_directory = 2;
+  string install_path = 3;
+  RecipeWorkload workload = 4;
+  string name = 5;
+  float version = 6;
+  map<string, google.protobuf.Value> parameters = 7;
+  ToolDeploy deployment_type = 8;
+  optional uint32 timeout = 9; // required
+  HostSourceCodePaths host_source_code_paths = 10;
+  optional bool no_cleanup_working_area = 11;
+  optional string target_name = 12;
+}
+
+// Recipe has begun message
+message RecipeStart {
+  Target target = 1;
+}
+
+// Recipe has finished running with either success or failure
+message RecipeFinish {
+  StatusCode return_code = 1;
+  ErrorChain error = 2;
+}
+
+// Stage has begun, taking up a portion of the duration of the recipe
+message StageStart {
+  string stage_name = 1;
+}
+
+// Denotes progress through a stage
+message StageProgress {
+  string stage_name = 1;
+  int64 count = 2; // progress towards max, when count = max the stage is complete
+  int64 max = 3;
+  StageProgressUnit unit = 4; // unit type of progress e.g. B, %
+  optional string message = 5; // description of the current progress state
+}
+
+enum StageProgressUnit {
+  UNIT_UNKNOWN = 0;
+  UNIT_BYTES = 1;
+  UNIT_PERCENT = 2;
+}
+
+// Stage has finished, in success or failure
+message StageFinish {
+  string stage_name = 1;
+  StatusCode return_code = 2;
+}
+
+// Information has been written to stdio or stderr
+message StdioWritten {
+  string data = 1;
+  bool isErr = 2;
+}
+
+// CLI request to engine for target information
+message TargetInfoRequest {
+  Target target = 1;
+  repeated string collectors = 2;
+}
+
+// An enumeration of supported OSes
+enum OsFamily {
+  OS_FAMILY_UNKNOWN = 0;
+  OS_FAMILY_LINUX = 1;
+  OS_FAMILY_MACOS = 2;
+  OS_FAMILY_WINDOWS = 3;
+  OS_FAMILY_ANDROID = 4;
+}
+
+enum CpuArch {
+  CPU_ARCH_UNKNOWN = 0;
+  CPU_ARCH_AARCH64 = 1;
+  CPU_ARCH_X86_64 = 2;
+}
+
+enum TargetInfoStatus {
+  PLATFORM_PROBE_STATUS_UNKNOWN = 0;
+  PLATFORM_PROBE_STATUS_SUCCESS = 1;
+  PLATFORM_PROBE_STATUS_PARTIAL = 2;
+  PLATFORM_PROBE_STATUS_FAILED = 3;
+}
+
+// Part of the Target Info Response - contains information about each running process
+message TargetInfoPIDs {
+  optional uint32 pid = 1; // required
+  optional string name = 2; // required
+  optional string username = 3; // required
+  optional string command_line = 4; // required
+}
+
+// Part of the Target Info Response - contains information about the OS
+message TargetInfoOS {
+  OsFamily family = 1; // required
+  optional string description = 2; // required
+  optional string kernelVersion = 3; //required
+}
+
+// Part of the Target Info Response - contains information about each cluster
+message TargetInfoCluster {
+  optional uint32 id = 1; // required
+  optional string name = 2; // required
+}
+
+// Part of the Target Info Response - contains information about each CPU
+message TargetInfoCPU {
+  optional uint32 core_number = 1; // required
+  optional uint32 cluster_id = 2; // required
+  optional string midr = 3; // required
+  optional string name = 4; // required
+}
+
+// Part of the Target Info Response - contains information about tools that are available for data capture
+message TargetInfoTool {
+  optional string name = 1; // required
+}
+
+// Wrapper response as part of main Target Info response used to wrap running process related info.
+message TargetInfoPIDResponse {
+  repeated TargetInfoPIDs process = 1; // required
+}
+
+// Wrapper response as part of the main Target Info response used to wrap the system info.
+message TargetInfoSystemResponse {
+  TargetInfoOS os = 1; // required
+  repeated TargetInfoCluster clusters = 2; // required
+  repeated TargetInfoCPU cpus = 3; // required
+  repeated TargetInfoTool tool = 4; // required
+  CpuArch cpu_arch = 5; // required
+}
+
+message TargetInfo {
+  oneof info {
+    TargetInfoSystemResponse system = 1;
+    TargetInfoPIDResponse pids = 2;
+  }
+  TargetInfoStatus status = 3; // required
+  repeated string error_messages = 4; // required
+}
+
+// The main Target Information response message. Embeds both the System and PID responses
+message TargetInfoResponse {
+  map <string, TargetInfo> info = 1; // required
+}
+
+// Recipe response message
+message RecipeResponse {
+  bool returnCode = 1;
+  string stdout = 2;
+  string stderr = 3;
+  RunId id = 4;
+  oneof sub_message {
+    RecipeStart recipe_start = 5;
+    RecipeFinish recipe_finish = 6;
+    StageStart stage_start = 7;
+    StageProgress stage_progress = 8;
+    StageFinish stage_finish = 9;
+    StdioWritten stdio_written = 10;
+  }
+}
+
+message RecipeReadyRequest {
+  RecipeStartCommand recipe_info = 1;
+  ToolDeploy tool_deploy_type = 2;
+}
+
+message TargetTestRequest {
+  Target target = 1;
+}
+
+// Describes the result of a single target test connection stage (ssh or collector)
+message TargetTestConnection {
+  // A code corresponding to an enum describing whether the test was a success or failure
+  ConnectionStatus status = 1;
+  // A rich error containing information about any failure which may have occurred
+  ErrorChain error = 2;
+}
+
+// Describes the result of a TargetTest RPC call
+message TargetTestResponse {
+  // The result of the target connection stage.
+  TargetTestConnection connection = 1;
+}
+
+message RecipeReadyResponse {
+  ReadyStatus ready_status = 1;
+  repeated Advice advice_messages = 2;
+}
+
+message Advice {
+  string tool_name = 1;
+  ErrorChain advice_message = 2;
+  AdviceSeverity advice_severity = 3;
+  repeated AdviceAction actions = 4;
+}
+
+message AdviceAction {
+  string key = 1;
+  string message = 2;
+}
+
+enum AdviceSeverity {
+  ADVICE_SEVERITY_UNKNOWN = 0;
+  ADVICE_SEVERITY_MESSAGE = 1;
+  ADVICE_SEVERITY_WARNING = 2;
+  ADVICE_SEVERITY_ERROR = 3;
+}
+
+enum ConnectionStatus {
+  CONNECTION_STATUS_OK = 0;
+  CONNECTION_STATUS_ERROR = 1;
+}
+
+enum ReadyStatus {
+  READY_STATUS_UNKNOWN = 0;
+  READY_STATUS_READY = 1;
+  READY_STATUS_WARNING = 2;
+  READY_STATUS_ERROR = 3;
+}
+
+// The metadata of a specified run
+message RunMetadata {
+  // Name of the run
+  string name = 1;
+
+  // UTZ time the collection started
+  string start_time = 2;
+
+  // UTZ time the collection ended
+  string end_time = 3;
+
+  // Name of the recipe used when collecting
+  string recipe_name = 4;
+
+  // Workload type used to run the recipe
+  string workload_type = 5;
+
+  // cmdline of launched workload, can be empty string if workload_type is attach / system-wide
+  string cmdline = 6;
+
+  // pid of attached processed if workload_type is attach. Can be -2 if workload_type is launch or -1 if workload_type is system-wide
+  int64 pid = 7;
+
+  // Target details
+  Target target = 8;
+
+  // The time in seconds to profile the specific workload
+  uint32 timeout = 9;
+
+  // The resulting state of the recipe run process
+  string run_result = 10;
+
+  // The error encountered when running the recipe, empty if no error encountered
+  string run_error = 11;
+
+  // The recipe parameters
+  map<string, google.protobuf.Value> parameters = 12;
+
+  // The engine version used to collect the run
+  string engine_version = 13;
+
+  // The name of the target used during the run
+  string target_name = 14;
+
+  // The working directory used when launching the workload
+  string working_dir = 15;
+
+  // The environment variables provided to the launched workload
+  map<string, string> env = 16;
+
+  // Whether the launched workload used shell mode
+  bool use_shell = 17;
+
+  // The organization group assigned to this run
+  string group = 18;
+
+  // The organization tags assigned to this run
+  repeated string tags = 19;
+
+  // The package and activity launched for an Android workload
+  AndroidLaunchWorkload android_launch_workload = 20;
+}
+
+// A table result from a renderer, containing both schema and data.
+message TableWithDescription {
+  // The table schema: column names, format, and query.
+  TableDescription description = 1;
+
+  // The data rows associated with this table.
+  StructTableChunk chunk = 2;
+}
+
+// Extra data returned with a RunDescription, typically containing the output
+// of one or more renderers. Each key in the map is a table name.
+message RunExtra {
+  // Map of table name - full table output (schema and rows).
+  map<string, TableWithDescription> extra = 1;
+
+  // Any errors encountered while computing the RunExtra
+  repeated Error errors = 2;
+}
+
+// Either a RunExtra or an Error
+message RunExtraOrError {
+  oneof some {
+    // Value present if no error
+    RunExtra value = 1;
+
+    // Error that occurred during rendering
+    Error error = 2;
+  }
+}
+
+// Describes a single run. Contains metadata and any extra data attached
+// from renderers (e.g., target info, summaries, performance metrics).
+message RunDescription {
+  // Metadata about the run, including command line, recipe, PID, etc.
+  RunMetadata metadata = 1;
+
+  // Optional data tables generated from renderers (example TargetInfo)
+  // Each entry in this list represents one renderer's output.
+  repeated RunExtraOrError extra = 2;
+
+  // Host source code paths associated with this run - these are separate from
+  // the metadata as this is a different component within the manifest
+  HostSourceCodePaths host_source_code_paths = 3;
+}
+
+// An error response
+message Error {
+  string message = 1;
+}
+
+// The result of listing a single run
+message ListedRun {
+  // Unique ID of the run
+  string id = 1;
+
+  oneof item {
+    RunDescription description = 2;
+    Error list_error = 3;
+  }
+}
+
+// The result of listing runs
+message RunListing {
+  repeated ListedRun runs = 1;
+}
+
+message DeleteRunResponse {
+  // Return code for the delete run request
+  StatusCode return_code = 1;
+}
+
+// A request to delete one or more runs
+message DeleteRunsRequest {
+  repeated string ids = 1;
+  bool delete_all = 2;
+}
+
+// A response containing a list of pairs of (run ID, optional error during deletion)
+// There will be one status for every run requested to be deleted, regardless of whether it succeeded
+message DeleteRunsResponse {
+  repeated RunDeletionStatus statuses = 1;
+}
+
+// A message representing the result of attempting to delete a run
+message RunDeletionStatus {
+  // The ID of the run
+  string id = 1;
+  // The error that occurred during deletion, if any
+  optional ErrorChain error = 2;
+}
+
+// Determines the deployment type of the tools
+enum TargetPrepareResult {
+  DEPLOYED = 0;
+  DEPLOY = 1; // No action taken but the target needs deploying
+  NO_ACTION = 2; // No action taken the target was previously prepared or an error was encountered
+}
+
+message TargetPrepareResponse {
+  TargetPrepareResult result = 1;
+}
+
+message ParseRecipeMessage {
+  string name = 1;
+  optional Target target = 2;
+}
+
+// ParameterDependency defines a dependency between one parameter and a specific value.
+// It is used for conditional visibility ("show this field only if X = Y").
+message ParameterDependency {
+  string parameter_id = 1; // The ID of the parameter this dependency refers to
+  string value        = 2; // The required value of the referenced parameter
+}
+
+// SingleSelectParameter allows choosing at most one value from a list of options.
+message SingleSelectParameter {
+    RecipeParameterBase base = 1; // Common metadata (ID, label, description, etc.)
+    string default_value     = 2; // Default selected value
+    repeated ParameterOption options = 3; // Rich option data when available
+}
+
+// MultiSelectParameter allows choosing zero or more values from a list of options.
+message MultiSelectParameter {
+    RecipeParameterBase base      = 1; // Common metadata (ID, label, description, etc.)
+    repeated string default_value = 2; // Default selected values
+    repeated ParameterOption options = 3; // Rich option data when available
+}
+
+// ParameterOption represents one selectable parameter option.
+message ParameterOption {
+    string value = 1;
+    string label = 2;
+    optional string description = 3;
+}
+
+// RadioParameter allows choosing exactly one value from a list of options (radio buttons).
+message RadioParameter {
+  RecipeParameterBase base = 1; // Common metadata (ID, label, description, etc.)
+  string default_value     = 2; // Default selected option
+  repeated ParameterOption options = 3; // Rich option data when available
+}
+
+// CheckboxParameter represents a true/false input (checkbox).
+message CheckboxParameter {
+  RecipeParameterBase base = 1; // Common metadata (ID, label, description, etc.)
+  bool default_value       = 2; // Default state (true = checked, false = unchecked)
+}
+
+// InputParameter represents a free-text input field.
+message InputParameter {
+  RecipeParameterBase base   = 1; // Common metadata (ID, label, description, etc.)
+  string default_value       = 2; // Default input value
+  map<string, string> custom = 3; // Custom metadata (validation rules, formatting, etc.)
+}
+
+// RecipeParameterBase contains all common properties shared by every parameter type.
+message RecipeParameterBase {
+  string ID          = 1; // Unique identifier for this parameter
+  string label       = 2; // Display label shown in UI
+  string description = 3; // Help text / explanation for the user
+  bool required      = 4; // Whether this parameter must be filled in
+  repeated ParameterDependency visible_when = 5; // List of conditions for visibility
+}
+
+// ParameterList is a wrapper that can hold any parameter type, ensuring only one type is set at a time.
+message ParameterList {
+  oneof parameter {
+    SingleSelectParameter single_select = 1; // Single select parameter
+    RadioParameter radio                = 2; // Radio button parameter
+    CheckboxParameter checkbox          = 3; // Checkbox parameter
+    InputParameter input                = 4; // Free-text input parameter
+    MultiSelectParameter multi_select   = 5; // Multi select parameter
+  }
+}
+
+message RenderParameter {
+  string id = 1;
+  RenderParameterType type = 2;
+  bool is_array = 3;
+}
+
+enum RenderParameterType {
+  RENDER_PARAMETER_TYPE_UNSPECIFIED = 0;
+  RENDER_PARAMETER_TYPE_NUMBER = 1;
+  RENDER_PARAMETER_TYPE_STRING = 2;
+}
+
+message PlatformSupportRequirementSpec {
+  string type = 1;
+  map<string, string> parameters = 2;
+}
+
+enum PlatformSupportResult {
+  PLATFORM_SUPPORTED = 0;
+  PLATFORM_UNSUPPORTED = 1;
+  PLATFORM_CONDITIONALLY_SUPPORTED = 2;
+}
+
+message PlatformConfiguration {
+  string os = 1;
+  string arch = 2;
+}
+
+message PlatformSupport {
+  PlatformSupportResult result = 1;
+  repeated PlatformSupportRequirementSpec condition_list = 2;
+  PlatformConfiguration platform = 3;
+}
+
+enum RecipeStatus {
+  // Fully fledged recipe.
+  RECIPE_STATUS_STABLE = 0;
+  // Gated behind the experimental recipes feature flag. Experimental recipes
+  // are not user-facing by default and may not be fully functional end-to-end.
+  RECIPE_STATUS_EXPERIMENTAL = 1;
+  // User-facing by default and expected to work end-to-end, but may have
+  // significant updates in the near future. This is the default when recipe
+  // status is omitted from a recipe definition.
+  RECIPE_STATUS_PREVIEW = 2;
+}
+
+message ParseRecipeResponse {
+  string name         = 1;
+  string title        = 2;
+  string description  = 3;
+  string version      = 4;
+  repeated ParameterList parameters = 5;
+  repeated PlatformSupport platform_support = 6;
+  repeated RenderParameter render_parameters = 7;
+  RecipeStatus status = 8;
+  // Agent-facing recipe advice, such as MCP timeout or parameter-selection
+  // guidance. This is separate from description text shown in GUI and CLI
+  // recipe summaries.
+  optional string mcp_guidance = 9;
+}
+
+
+message StringArray {
+  repeated string values = 1;
+}
+
+
+// RunUpdatePatch is an ordered list of operations for editable fields on a run.
+message RunUpdatePatch {
+  repeated RunUpdateOperation operations = 1;
+}
+
+// RunUpdateOperation is a single mutation in a run update patch.
+message RunUpdateOperation {
+  oneof operation {
+    SetHostSourceCodePaths set_host_source_code_paths = 1;
+    ClearHostSourceCodePaths clear_host_source_code_paths = 2;
+    SetRunGroup set_group = 3;
+    ClearRunGroup clear_group = 4;
+    SetRunTags set_tags = 5;
+    AddRunTags add_tags = 6;
+    RemoveRunTags remove_tags = 7;
+    ClearRunTags clear_tags = 8;
+  }
+}
+
+message SetHostSourceCodePaths {
+  HostSourceCodePaths value = 1;
+}
+
+message ClearHostSourceCodePaths {}
+
+message SetRunGroup {
+  string value = 1;
+}
+
+message ClearRunGroup {}
+
+message SetRunTags {
+  StringArray value = 1;
+}
+
+message AddRunTags {
+  StringArray value = 1;
+}
+
+message RemoveRunTags {
+  StringArray value = 1;
+}
+
+message ClearRunTags {}
+
+// UpdateRunsRequest is the request to apply a partial update to multiple runs.
+message UpdateRunsRequest {
+  repeated RunId run_ids = 1;
+  RunUpdatePatch patch = 2;
+}
+
+// UpdateRunsResponse is the response to an UpdateRunsRequest.
+message UpdateRunsResponse {
+  repeated RunUpdateStatus statuses = 1;
+}
+
+// RunUpdateStatus is the result of attempting to update one run.
+message RunUpdateStatus {
+  string id = 1;
+  optional ErrorChain error = 2;
+}
+
+// The result of listing recipes
+message RecipeNameListing {
+  repeated RecipeNameEntry recipe_names = 1;
+}
+
+// An individual recipe listing. Path is provided if name cannot be obtained,
+// such as due to recipe file parsing errors.
+message RecipeNameEntry {
+  oneof identifier {
+    string name = 1;
+    string path = 2;
+  }
+  optional ErrorChain load_error = 3;
+}
+
+// A message raised by the system that we want to tell the user about
+// See MessageImpl for the implementation of this message
+message MessageDetails {
+  string code = 1;
+  map<string, string> metadata = 2;
+  string locale = 3;
+}
+
+// ErrorNode represents a single error in a chain of errors. Each node may have
+// zero or more children, representing wrapped errors.
+message ErrorNode {
+  string error    = 1; // Always present, e.Error()
+  string type     = 2; // Always present, Go concrete type name (best-effort)
+  MessageDetails message = 10; // Present if this node represents a MessageImpl
+  repeated ErrorNode children = 20; // Children: 0..N; N>1 represents errors.Join fan-out
+}
+
+// ErrorChain represents a chain of errors, with the root error at the top.
+message ErrorChain {
+  uint32 schema_version = 1;
+  ErrorNode root = 2;
+}
+
+// A CatalogMessage is a message that has been looked up in the catalog
+message CatalogMessage {
+  string code = 1;
+  string severity = 2;
+  string message = 3;
+  string explanation = 4;
+  string advice = 5;
+}
+
+// LookupMessageRequest is the request to look up a message in the catalog.
+message LookupMessageRequest {
+  MessageDetails msg = 1;
+}
+
+// LookupMessageResponse is the response to a LookupMessageRequest
+message LookupMessageResponse {
+  CatalogMessage catalogMsg = 1;
+}
+
+message ListDirectoriesResponse {
+  string log_dir = 1;
+  string default_data_dir = 2;
+}
+
+// Generic request from the MCP server to fetch run data for agentic insights
+message RunSummaryBundleRequest {
+  RunId run_id = 1;
+}
+
+// Prompt fragments should provide an agentic-readable plain text description of the payload
+// Payloads should be JSON-as-a-string, ready to be parsed by the MCP client
+message RunSummaryPayload {
+  string prompt_fragment = 1;
+  string payload = 2;
+  string name = 3;
+}
+
+message RunSummaryBundleResponse {
+  repeated RunSummaryPayload payloads = 1;
+}
+
+message GetTelemetrySpecificationRequest {
+  // Supported CPU model name as reported by the target agent
+  string cpu_name = 1;
+}
+
+message TelemetrySpecification {
+  // Supported CPU model
+  string cpu_model = 1;
+
+  // Complete telemetry specification encoded as JSON
+  string json = 2;
+}
+
+message GetTelemetrySpecificationResponse {
+  // Omitted when the CPU model is unsupported
+  TelemetrySpecification specification = 1;
+}
+
+// Message to indicate launching an Android package activity
+message AndroidLaunchWorkload {
+  string package_name = 1;
+  string activity_name = 2;
+}

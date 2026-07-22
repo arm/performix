@@ -1,0 +1,171 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# OS files
+.DS_Store
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.lib
+*.so
+apx.*
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Go work files
+go.work
+go.work.sum
+
+# mise local overrides
+mise.local.toml
+.mise.local.toml
+mise.local.lock
+.mise.local.lock
+
+# Pid files
+*.pid
+
+# Dependency directories
+# vendor/
+**/node_modules/
+
+# Python build artifacts
+__pycache__
+*.egg-info
+*pb2.py
+*pb2_grpc.py
+dist/
+
+# Python env
+env/
+venv/
+.venv/
+
+# JavaScript and Electron build artifacts
+**/out/
+installers/
+build/
+artifacts/
+
+# Generated gRPC code
+build/
+
+# Conan build dir
+conan
+
+# Generated with godog
+pkg
+
+# Autoversion
+new-version.patch
+
+# Generated release notes used by installer packaging
+/CHANGELOG.md
+
+# Binary built in development workflow
+core/apap-cli/apap-cli
+core/apap-cli/atperf
+core/apap-cli/apx
+core/atperf-agent/atperf-agent
+core/atperf-agent/apx-agent
+
+# goreleaser distribution directories
+dist-cross-linux/
+dist-cross-darwin/
+dist-cross-windows/
+dist-native-windows-amd64/
+
+# IDE directories
+.idea/
+.vscode/settings.json
+
+.zed/
+.zed/tasks.json
+
+# VS code
+*.code-workspace
+
+# APAP configuration data
+.config
+*.env
+/feature-flags.json
+gui/feature-flags.json
+
+# Vim swap files
+*.sw?
+
+# Coverage output dirs
+coverage/
+**/coverage/
+
+# GUI test results and generated data
+gui/assets/apx
+gui/assets/.apx-tmp
+gui/e2e-tests/performance-tests/performance-test-results.json
+gui/e2e-tests/soak-tests/soak-test-results.json
+**/e2e-test-results/
+**/e2e-test-reports/
+atp-e2e-log.txt
+
+# Ignore Robot Framework test results
+core/robot/results
+core/robot/log.html
+core/robot/output.xml
+core/robot/report.html
+core/robot/resources/files/export
+core/robot/results/.gitkeep
+
+# Ignore Robot Framework target files
+core/robot/resources/files/targets
+
+# Ignore atperf-eval benchmark results
+core/scripts/atperf-evaluation/output
+
+# Ignore AI Insights evaluation output
+core/scripts/ai-insights-evaluation/results/
+.pytest_cache/
+
+# Ignore local tool binaries
+tools/
+/core/apap-cli/tools-*-*/
+sl-analyze-host-tools/
+
+# Ignore the C API lib directory
+core/apap-cli/lib/
+
+# NPM local files
+.npmrc
+!core/.npmrc
+.eslintcache
+node_modules/
+
+# Ignore nested AGENTS.md files by default, but keep the top-level repo policy tracked
+**/AGENTS.md
+!/AGENTS.md
+AGENTS.override.md
+# Local agent configuration files
+.agents/private
+
+.codex
+
+# Ignore any local open-sourcing worktrees created by 'task release'
+.release-worktrees/
+
+# Don't check in auto-generated Go code
+core/apap-engine/message/codes.go
+
+# License terms
+# They are generated during CI, but we don't want to check them in to avoid
+# dirty git state and accidental modifications.
+core/license_terms/
+gui/installer-resources/license_terms/third_party_licenses
+gui/installer-resources/license_terms/redistributables.txt
+
+# AI prompt plans (default location for AI-generated plans used by Copilot)
+.github/prompts/

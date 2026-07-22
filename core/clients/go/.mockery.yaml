@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+dir: "mocks"
+filename: "{{.InterfaceNameCamel}}.go"
+mockname: "{{.InterfaceNameCamel}}"
+outpkg: "mocks"
+packages:
+  github.com/Arm-Debug/apap-cli/clients/go/apapproto:
+    interfaces:
+      ApapClient:
+  github.com/Arm-Debug/apap-cli/clients/go/targetagentproto:
+    interfaces:
+      TargetAgentClient:
+  github.com/Arm-Debug/apap-cli/clients/go/tetherproto:
+    interfaces:
+      TetherClient:
+      Tether_HoldClient:
+      Tether_HoldServer:
+  github.com/Arm-Debug/apap-cli/clients/go/authproto:
+    interfaces:
+      AuthClient:
+      Auth_TargetLoginClient:
+      Auth_TargetLoginServer:

@@ -1,0 +1,356 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# This file controls the release performed in GitHub actions by [GoReleaser](https://goreleaser.com/), which creates Go
+# binaries as performs a GitHub release.
+# - The version number is injected into both the CLI and Daemon/gRPC Server.
+# - The target release is the CLI, which links to both the Engine and the Client library.
+# - The generated binary is called `apx` (Arm Performix)
+#
+# For more information see the documentation at https://goreleaser.com/
+version: 2
+project_name: apx
+
+before:
+  hooks:
+    - bash ./core/scripts/go/generate-all.sh
+
+    # Local builds may not have generated release notes yet.
+    - python3 ./core/scripts/ensure-changelog.py
+
+    # Prepare the license_terms/ directory and the TPIP files
+    # See the script for more details
+    - python3 ./core/scripts/prepare-license-terms.py
+
+builds:
+  - id: apx-static-duckdb-linux-amd64
+    dir: core/apap-cli
+    binary: apx
+    goos: [linux]
+    goarch: [amd64]
+    env:
+      - CGO_ENABLED=1
+      - CC=/opt/apap-toolchains/bootlin/x86-64--glibc--stable-2022.08-1/bin/x86_64-buildroot-linux-gnu-gcc
+      - CXX=/opt/apap-toolchains/bootlin/x86-64--glibc--stable-2022.08-1/bin/x86_64-buildroot-linux-gnu-g++
+      - CGO_LDFLAGS=-Wl,-rpath,\$ORIGIN/lib/amd64-linux -L{{ .Env.PWD }}/core/apap-cli/lib/amd64-linux
+    flags:
+      - -trimpath
+    tags:
+      - duckdb_arrow
+    ldflags:
+      - >
+        -s -w
+        -extldflags "-Wl,-rpath,$ORIGIN/lib/amd64-linux"
+        -X github.com/Arm-Debug/apap-cli/atperf-version/versions.version={{.Version}}
+    hooks:
+      post:
+        - cmd: ./core/scripts/sign.sh {{ .Os }} {{ .Path }} {{ .Version }} {{ .Arch }}
+          output: true
+
+  - id: apx-static-duckdb-linux-arm64
+    dir: core/apap-cli
+    binary: apx
+    goos: [linux]
+    goarch: [arm64]
+    env:
+      - CGO_ENABLED=1
+      - CC=/opt/apap-toolchains/bootlin/aarch64--glibc--stable-2022.08-1/bin/aarch64-buildroot-linux-gnu-gcc
+      - CXX=/opt/apap-toolchains/bootlin/aarch64--glibc--stable-2022.08-1/bin/aarch64-buildroot-linux-gnu-g++
+      - CGO_LDFLAGS=-Wl,-rpath,\$ORIGIN/lib/arm64-linux -L{{ .Env.PWD }}/core/apap-cli/lib/arm64-linux
+    flags:
+      - -trimpath
+    tags:
+      - duckdb_arrow
+    ldflags:
+      - >
+        -s -w
+        -extldflags "-Wl,-rpath,$ORIGIN/lib/arm64-linux"
+        -X github.com/Arm-Debug/apap-cli/atperf-version/versions.version={{.Version}}
+    hooks:
+      post:
+        - cmd: ./core/scripts/sign.sh {{ .Os }} {{ .Path }} {{ .Version }} {{ .Arch }}
+          output: true
+
+  - id: apx-static-duckdb-darwin-amd64
+    dir: core/apap-cli
+    binary: apx
+    goos: [darwin]
+    goarch: [amd64]
+    env:
+      - CGO_ENABLED=1
+      - CC=o64-clang
+      - CXX=o64-clang++
+      - CGO_LDFLAGS=-Wl,-rpath,@executable_path/lib/amd64-darwin -L{{ .Env.PWD }}/core/apap-cli/lib/amd64-darwin
+    flags:
+      - -trimpath
+    tags:
+      - duckdb_arrow
+    ldflags:
+      - >
+        -s -w
+        -extldflags "-Wl,-rpath,@executable_path/lib/amd64-darwin"
+        -X github.com/Arm-Debug/apap-cli/atperf-version/versions.version={{.Version}}
+    hooks:
+      post:
+        - cmd: ./core/scripts/sign.sh {{ .Os }} {{ .Path }} {{ .Version }} {{ .Arch }}
+          output: true
+
+  - id: apx-static-duckdb-darwin-arm64
+    dir: core/apap-cli
+    binary: apx
+    goos: [darwin]
+    goarch: [arm64]
+    env:
+      - CGO_ENABLED=1
+      - CC=oa64-clang
+      - CXX=oa64-clang++
+      - CGO_LDFLAGS=-Wl,-rpath,@executable_path/lib/arm64-darwin -L{{ .Env.PWD }}/core/apap-cli/lib/arm64-darwin
+    flags:
+      - -trimpath
+    tags:
+      - duckdb_arrow
+    ldflags:
+      - >
+        -s -w
+        -extldflags "-Wl,-rpath,@executable_path/lib/arm64-darwin"
+        -X github.com/Arm-Debug/apap-cli/atperf-version/versions.version={{.Version}}
+    hooks:
+      post:
+        - cmd: ./core/scripts/sign.sh {{ .Os }} {{ .Path }} {{ .Version }} {{ .Arch }}
+          output: true
+
+  - id: apx-static-duckdb-windows
+    dir: core/apap-cli
+    binary: apx
+    goos:
+      - windows
+    goarch:
+      - amd64
+
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    tags:
+      - duckdb_arrow
+
+    # Insert version number.
+    ldflags:
+      - -s -w -X github.com/Arm-Debug/apap-cli/atperf-version/versions.version={{.Version}}
+    hooks:
+      post:
+        - cmd: bash ./core/scripts/sign.sh {{ .Os }} {{ .Path }} {{ .Version }} {{ .Arch }}
+          output: true
+
+  - id: apx-dynamic-duckdb
+    dir: core/apap-cli
+    binary: apx
+    goos:
+      - windows
+    goarch:
+      - arm64
+
+    env:
+      - CGO_ENABLED=1
+      - CGO_LDFLAGS=-L{{ .Env.PWD }}/deps/duckdb/{{ .Os }}/{{ .Arch }}
+      # Windows
+      - CC_windows_amd64=x86_64-w64-mingw32-gcc
+      - CXX_windows_amd64=x86_64-w64-mingw32-g++
+      - CC_windows_arm64=/llvm-mingw/bin/aarch64-w64-mingw32-gcc
+      - CXX_windows_arm64=/llvm-mingw/bin/aarch64-w64-mingw32-g++
+      # Actually set CC and CXX using current Os and Arch
+      - 'CC={{ index .Env (print "CC_" .Os "_" .Arch ) }}'
+      - 'CXX={{ index .Env (print "CXX_" .Os "_" .Arch ) }}'
+    flags:
+      - -trimpath
+
+    overrides:
+      - goos: windows
+        flags:
+          - -trimpath
+          - -buildmode=exe
+
+    tags:
+      - duckdb_use_lib
+      - duckdb_arrow
+
+    # Insert version number.
+    ldflags:
+      - -s -w -X github.com/Arm-Debug/apap-cli/atperf-version/versions.version={{.Version}}
+    hooks:
+      pre:
+        - cmd: ./core/scripts/get-duckdb-release.sh {{ .Os }} {{ .Arch }}
+          output: true
+      post:
+        - cmd: ./core/scripts/sign.sh {{ .Os }} {{ .Path }} {{ .Version }} {{ .Arch }}
+          output: true
+
+archives:
+  - id: linux_amd64
+    ids: [apx-static-duckdb-linux-amd64]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_Linux_x86_64"
+    format_overrides:
+      - goos: linux
+        format: tar.gz
+    files:
+      - src: CHANGELOG.md
+        dst: CHANGELOG.md
+      - src: core/license_terms
+        dst: license_terms
+      - src: core/apap-cli/recipes
+        dst: recipes
+      - src: core/apap-cli/tools-{{ .Os }}-{{ .Arch }}
+        dst: tools
+      - src: core/apap-cli/sl-analyze-host-tools/linux-x64/sl-analyze
+        dst: tools/sl-analyze-host/sl-analyze
+      - src: core/apap-cli/tool-integrations
+        dst: tool-integrations
+        strip_parent: true
+
+  - id: linux_arm64
+    ids: [apx-static-duckdb-linux-arm64]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_Linux_arm64"
+    format_overrides:
+      - goos: linux
+        format: tar.gz
+    files:
+      - src: CHANGELOG.md
+        dst: CHANGELOG.md
+      - src: core/license_terms
+        dst: license_terms
+      - src: core/apap-cli/recipes
+        dst: recipes
+      - src: core/apap-cli/tools-{{ .Os }}-{{ .Arch }}
+        dst: tools
+      - src: core/apap-cli/sl-analyze-host-tools/linux-arm64/sl-analyze
+        dst: tools/sl-analyze-host/sl-analyze
+      - src: core/apap-cli/tool-integrations
+        dst: tool-integrations
+        strip_parent: true
+
+  - id: darwin_amd64
+    ids: [apx-static-duckdb-darwin-amd64]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_macOS_x86_64"
+    format_overrides:
+      - goos: darwin
+        format: tar.gz
+    files:
+      - src: CHANGELOG.md
+        dst: CHANGELOG.md
+      - src: core/license_terms
+        dst: license_terms
+      - src: core/apap-cli/recipes
+        dst: recipes
+      - src: core/apap-cli/tools-{{ .Os }}-{{ .Arch }}
+        dst: tools
+      - src: core/apap-cli/sl-analyze-host-tools/darwin-x64/sl-analyze
+        dst: tools/sl-analyze-host/sl-analyze
+      - src: core/apap-cli/tool-integrations
+        dst: tool-integrations
+        strip_parent: true
+
+  - id: darwin_arm64
+    ids: [apx-static-duckdb-darwin-arm64]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_macOS_arm64"
+    format_overrides:
+      - goos: darwin
+        format: tar.gz
+    files:
+      - src: CHANGELOG.md
+        dst: CHANGELOG.md
+      - src: core/license_terms
+        dst: license_terms
+      - src: core/apap-cli/recipes
+        dst: recipes
+      - src: core/apap-cli/tools-{{ .Os }}-{{ .Arch }}
+        dst: tools
+      - src: core/apap-cli/sl-analyze-host-tools/darwin-arm64/sl-analyze
+        dst: tools/sl-analyze-host/sl-analyze
+      - src: core/apap-cli/tool-integrations
+        dst: tool-integrations
+        strip_parent: true
+
+  # This silly copy&paste exists only because goreleaser-filter can't handle multiple build IDs per archive spec
+  - id: windows_static_duckdb
+    name_template: "{{ .ProjectName }}_{{ .Version }}_Windows_x86_64"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - src: CHANGELOG.md
+        dst: CHANGELOG.md
+      - src: core/license_terms
+        dst: license_terms
+      - src: core/apap-cli/recipes
+        dst: recipes
+      - src: core/apap-cli/tools-{{ .Os }}-{{ .Arch }}
+        dst: tools
+      - src: core/apap-cli/sl-analyze-host-tools/windows-x64/sl-analyze.exe
+        dst: tools/sl-analyze-host/sl-analyze.exe
+      - src: core/apap-cli/tool-integrations
+        dst: tool-integrations
+    ids:
+      - apx-static-duckdb-windows
+
+  - id: windows_external_duckdb
+    name_template: >-
+      {{- .ProjectName }}_
+      {{- .Version }}_
+      {{- if eq .Os "darwin" }}macOS{{ else }}{{- title .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64{{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - src: CHANGELOG.md
+        dst: CHANGELOG.md
+      - src: deps/duckdb/{{ .Os }}/{{ .Arch }}/duckdb.dll
+        strip_parent: true
+      - src: core/license_terms
+        dst: license_terms
+      - src: core/apap-cli/recipes
+        dst: recipes
+      - src: core/apap-cli/tools-{{ .Os }}-{{ .Arch }}
+        dst: tools
+      - src: core/apap-cli/sl-analyze-host-tools/{{ .Os }}-{{ if eq .Arch "amd64" }}x64{{ else }}{{ .Arch }}{{ end }}/sl-analyze.exe
+        dst: tools/sl-analyze-host/sl-analyze.exe
+      - src: core/apap-cli/tool-integrations
+        dst: tool-integrations
+    ids:
+      - apx-dynamic-duckdb
+
+checksum:
+  name_template: "checksums.txt"
+snapshot:
+  name_template: "{{ .Version }}-dev"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+release:
+  # If the version tag looks like a pre-release e.g. beta then the GitHub release is set to prerelease
+  prerelease: auto
+  name_template: "Release v{{.Version}}"
+nfpms:
+  - formats:
+      - deb
+    maintainer: Arm Performix Engine Team
+    dependencies:
+      - ca-certificates
+    bindir: /opt/apx
+    contents:
+      - src: CHANGELOG.md
+        dst: /opt/apx/CHANGELOG.md
+      - src: core/license_terms
+        dst: /opt/apx/license_terms
+      - src: core/apap-cli/recipes
+        dst: /opt/apx/recipes
+      - src: core/apap-cli/tools-{{ .Os }}-{{ .Arch }}
+        dst: /opt/apx/tools
+      - src: core/apap-cli/tool-integrations
+        dst: /opt/apx/tool-integrations
+      - src: /opt/apx/apx
+        dst: /usr/bin/apx
+        type: "symlink"

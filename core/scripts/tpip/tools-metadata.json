@@ -1,0 +1,50 @@
+{
+  "asct": {
+    "homepage": "",
+    "licenses": ["Apache License 2.0"],
+    "sources": "",
+    "copyrights": "Copyright (c) 2025-2026 Arm Ltd. All rights reserved."
+  },
+  "jitdump-jvm": {
+    "homepage": "",
+    "licenses": ["Apache License 2.0"],
+    "sources": "",
+    "copyrights": "Copyright (c) 2025-2026 Arm Ltd. All rights reserved."
+  },
+  "dotnet-agent": {
+    "homepage": "",
+    "licenses": ["Apache License 2.0"],
+    "sources": "",
+    "copyrights": "Copyright (c) 2025-2026 Arm Ltd. All rights reserved."
+  },
+  "sl-analyze": {
+    "homepage": "",
+    "licenses": ["GPL-2.0", "Apache License 2.0"],
+    "sources": "",
+    "copyrights": "Copyright (c) 2010-2026 Arm Ltd. All rights reserved."
+  },
+  "sl-record": {
+    "homepage": "",
+    "licenses": ["GPL-2.0", "Apache License 2.0"],
+    "sources": "",
+    "copyrights": "Copyright (c) 2010-2026 Arm Ltd. All rights reserved."
+  },
+  "instruction_mix": {
+    "homepage": "",
+    "licenses": ["Apache License 2.0"],
+    "sources": "",
+    "copyrights": "Copyright (c) 2025-2026 Arm Ltd. All rights reserved."
+  },
+  "wperf": {
+    "homepage": "https://gitlab.com/Linaro/WindowsPerf/windowsperf",
+    "licenses": ["BSD 3-clause \"New\" or \"Revised\" License"],
+    "sources": "https://gitlab.com/Linaro/WindowsPerf/windowsperf",
+    "copyrights": "Copyright (c) 2025, Arm Limited. All rights reserved."
+  },
+  "cache_sharing": {
+    "homepage": "",
+    "licenses": ["Apache License 2.0"],
+    "sources": "",
+    "copyrights": "Copyright (c) 2026 Arm Ltd. All rights reserved."
+  }
+}

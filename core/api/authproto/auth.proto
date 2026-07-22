@@ -1,0 +1,83 @@
+// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package auth;
+
+option go_package = "github.com/Arm-Debug/apap-cli/clients/go/authproto";
+
+import "apapproto/apap.proto";
+
+// Auth service provides TLS-protected authentication entrypoints between clients and the engine.
+service Auth {
+    // TargetLogin establishes an authenticated session for a specific target.
+    // The stream allows the service to prompt for additional credentials (for example, passwords) in the future.
+    rpc TargetLogin(stream TargetLoginClientMessage) returns (stream TargetLoginServerMessage);
+}
+
+// TargetLoginRequest describes the target that the client wants to log into.
+message TargetLoginRequest {
+    apap.Target target = 1;
+}
+
+// TargetLoginResponse returns placeholder information for the target login request.
+message TargetLoginResponse {
+    apap.StatusCode return_code = 1;
+    apap.ErrorChain error = 2;
+}
+
+// TargetLoginClientMessage encapsulates all client-to-server communication for the TargetLogin RPC.
+message TargetLoginClientMessage {
+    oneof message {
+        TargetLoginRequest request = 1;
+        TargetLoginCredentials credentials = 2;
+        TargetLoginFingerprintAcceptance fingerprint_acceptance = 3;
+    }
+}
+
+// TargetLoginServerMessage encapsulates all server-to-client communication for the TargetLogin RPC.
+message TargetLoginServerMessage {
+    oneof message {
+        TargetLoginPrompt prompt = 1;
+        TargetLoginResponse response = 2;
+        TargetLoginFingerprintPrompt fingerprint_prompt = 3;
+    }
+}
+
+// TargetLoginPrompt requests additional information from the client, such as passwords or passphrases.
+message TargetLoginPrompt {
+    TargetLoginPromptType type = 2;
+    string host = 3;
+    uint32 jump_index = 4;
+    string key_path = 5;
+    uint32 current_attempt = 6;
+    uint32 max_attempts = 7;
+    string username = 8;
+    uint32 total_jumps = 9;
+}
+
+// TargetLoginCredentials responds to a secret prompt issued by the server.
+message TargetLoginCredentials {
+    bytes secret = 2;
+}
+
+// TargetLoginFingerprintAcceptance responds to a host-key prompt issued by the server.
+message TargetLoginFingerprintAcceptance {
+    bool accepted = 1;
+}
+
+// TargetLoginPromptType specifies the type of credential requested.
+enum TargetLoginPromptType {
+    TARGET_LOGIN_PROMPT_TYPE_UNSPECIFIED = 0;
+    TARGET_LOGIN_PROMPT_TYPE_PASSWORD = 1;
+    TARGET_LOGIN_PROMPT_TYPE_KEYPASSPHRASE = 2;
+}
+
+// TargetLoginFingerprintPrompt requests acceptance for a host key fingerprint.
+message TargetLoginFingerprintPrompt {
+    string host = 1;
+    string host_key_type = 2;
+    string host_key_fingerprint = 3;
+    repeated string known_as = 4;
+}

@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# Robot Framework functional-test dependencies.
+#
+# Shared helper-script tooling lives in ../scripts/requirements.txt and is 
+# included below, so installing this file alone provisions the shared tooling
+# virtualenv (core/.venv) with everything the Robot tests and the
+# core/scripts Python helpers need.
+-r ../scripts/requirements.txt
+
+robotframework>=7.2.0
+robotframework-robocop<8.2.1
+robotframework-seleniumlibrary
+paramiko          # resources/libs/CommandService.py, AgentHelper.py
+requests          # resources/libs/NetworkUtils.py
+pylint            # lints resources/libs (.pylintrc)
+flake8            # lints resources/libs (.flake8)

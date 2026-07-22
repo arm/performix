@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+repos:
+  - repo: local
+    hooks:
+      - id: build-lint-test-all
+        name: build-lint-test-all
+        description: Building, linting and testing all files
+        entry: ./core/scripts/build-lint-test-all.sh
+        language: script
+        pass_filenames: false
+        stages: [pre-push]
+      - id: lint-all
+        name: lint-all
+        description: Linting all files
+        entry: ./core/scripts/lint-all.sh
+        language: script
+        pass_filenames: false
+        stages: [pre-commit]
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-ast
+      - id: check-case-conflict
+      - id: check-executables-have-shebangs
+        files: \.(sh|bash|zsh)$
+      - id: check-json
+        exclude: ^(core/apap-engine/regressiontests/test-data/.*\.json|\.vscode/.*\.json)$
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-vcs-permalinks
+      - id: check-yaml
+      - id: destroyed-symlinks
+      - id: detect-aws-credentials
+        args: [--allow-missing-credentials]
+      - id: check-illegal-windows-names
+      # - id: trailing-whitespace
+      #   args: [--markdown-linebreak-ext=md]
+
+default_install_hook_types: [pre-commit, pre-push]

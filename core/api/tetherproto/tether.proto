@@ -1,0 +1,18 @@
+// SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package tether;
+
+option go_package = "github.com/Arm-Debug/apap-cli/clients/go/tetherproto";
+
+service Tether {
+  // Hold keeps the connection open, sending periodic pulses. The server
+  // will close the connection if no pulse is received within a timeout
+  // period.
+  rpc Hold(stream PulseRequest) returns (stream PulseAck);
+}
+
+message PulseRequest {}
+message PulseAck {}

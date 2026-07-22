@@ -1,0 +1,331 @@
+{
+  "defaults": {
+    "recipe": "code_hotspots",
+    "attempts": 1,
+    "min_passes": 1,
+    "min_pass_rate": 1.0
+  },
+  "model_configs": [
+    {
+      "id": "gpt-5.5-high",
+      "model": "gpt-5.5",
+      "reasoning_effort": "high"
+    }
+  ],
+  "tests": [
+    {
+      "id": "test_case_01",
+      "summary": "Cpp missing vectorization",
+      "acts": ["act2"],
+      "run_artifact": "test_case_01/latest.zip",
+      "rubric": "rubrics/test_case_01.md",
+      "performance_thresholds": {
+        "duration_seconds": 35,
+        "input_tokens": 59000,
+        "output_tokens": 1800
+      }
+    },
+    {
+      "id": "test_case_02",
+      "summary": "Cpp lock contention in hot loop",
+      "acts": ["act2"],
+      "run_artifact": "test_case_02/latest.zip",
+      "rubric": "rubrics/test_case_02.md",
+      "performance_thresholds": {
+        "duration_seconds": 38,
+        "input_tokens": 94000,
+        "output_tokens": 2000
+      }
+    },
+    {
+      "id": "test_case_03",
+      "summary": "Cpp missing crc32c specialization",
+      "acts": ["act1"],
+      "run_artifact": "test_case_03/latest.zip",
+      "rubric": "rubrics/test_case_03.md",
+      "performance_thresholds": {
+        "duration_seconds": 41,
+        "input_tokens": 96000,
+        "output_tokens": 2000
+      }
+    },
+    {
+      "id": "test_case_04",
+      "summary": "Cpp multithreaded allocator churn",
+      "acts": ["act2"],
+      "run_artifact": "test_case_04/latest.zip",
+      "rubric": "rubrics/test_case_04.md",
+      "performance_thresholds": {
+        "duration_seconds": 56,
+        "input_tokens": 140000,
+        "output_tokens": 2500
+      }
+    },
+    {
+      "id": "test_case_05",
+      "summary": "Cpp scalar arithmetic SIMD candidate",
+      "acts": ["act2"],
+      "run_artifact": "test_case_05/latest.zip",
+      "rubric": "rubrics/test_case_05.md",
+      "performance_thresholds": {
+        "duration_seconds": 43,
+        "input_tokens": 98000,
+        "output_tokens": 2000
+      }
+    },
+    {
+      "id": "test_case_06",
+      "summary": "Cpp envelope follower dependency chain",
+      "acts": ["act3"],
+      "run_artifact": "test_case_06/latest.zip",
+      "rubric": "rubrics/test_case_06.md"
+    },
+    {
+      "id": "test_case_07",
+      "summary": "Cpp call-return overhead in hot loop",
+      "acts": ["act2"],
+      "run_artifact": "test_case_07/latest.zip",
+      "rubric": "rubrics/test_case_07.md",
+      "performance_thresholds": {
+        "duration_seconds": 43,
+        "input_tokens": 110000,
+        "output_tokens": 2300
+      }
+    },
+    {
+      "id": "test_case_08",
+      "summary": "Cpp indirect call in hot loop",
+      "acts": ["act2"],
+      "run_artifact": "test_case_08/latest.zip",
+      "rubric": "rubrics/test_case_08.md",
+      "performance_thresholds": {
+        "duration_seconds": 60,
+        "input_tokens": 110000,
+        "output_tokens": 2600
+      }
+    },
+    {
+      "id": "test_case_09",
+      "summary": "Cpp allocation in hot loop",
+      "acts": ["act2"],
+      "run_artifact": "test_case_09/latest.zip",
+      "rubric": "rubrics/test_case_09.md",
+      "performance_thresholds": {
+        "duration_seconds": 64,
+        "input_tokens": 210000,
+        "output_tokens": 3300
+      }
+    },
+    {
+      "id": "test_case_10",
+      "summary": "Cpp overly strong atomic ordering",
+      "acts": ["act2"],
+      "run_artifact": "test_case_10/latest.zip",
+      "rubric": "rubrics/test_case_10.md",
+      "performance_thresholds": {
+        "duration_seconds": 39,
+        "input_tokens": 92000,
+        "output_tokens": 1900
+      }
+    },
+    {
+      "id": "test_case_11",
+      "summary": "Cpp fixed-width SIMD on wider targets",
+      "acts": ["act3"],
+      "run_artifact": "test_case_11/latest.zip",
+      "rubric": "rubrics/test_case_11.md"
+    },
+    {
+      "id": "test_case_12",
+      "summary": "Cpp missed optimized library path",
+      "acts": ["act2"],
+      "run_artifact": "test_case_12/latest.zip",
+      "rubric": "rubrics/test_case_12.md",
+      "performance_thresholds": {
+        "duration_seconds": 43,
+        "input_tokens": 97000,
+        "output_tokens": 2100
+      }
+    },
+    {
+      "id": "test_case_13",
+      "summary": "Cpp hot function without release optimization",
+      "acts": ["act2"],
+      "run_artifact": "test_case_13/latest.zip",
+      "rubric": "rubrics/test_case_13.md",
+      "performance_thresholds": {
+        "duration_seconds": 51,
+        "input_tokens": 110000,
+        "output_tokens": 2700
+      }
+    },
+    {
+      "id": "test_case_14",
+      "summary": "Java 11 runtime baseline",
+      "acts": ["act3"],
+      "run_artifact": "test_case_14/latest.zip",
+      "rubric": "rubrics/test_case_14.md",
+      "expected_failures": {
+        "expected_failure": true,
+        "reason": "Known profiling-context limitation: current system over-emphasizes JVM coordination noise and does not reliably surface the Java 11 baseline issue."
+      },
+      "recipe_params": ["collect_java_stacks=true"]
+    },
+    {
+      "id": "test_case_15",
+      "summary": "Java vector api width portability",
+      "acts": ["act3"],
+      "run_artifact": "test_case_15/latest.zip",
+      "rubric": "rubrics/test_case_15.md",
+      "expected_failures": {
+        "expected_failure": true,
+        "reason": "Known profiling-context limitation: Performix JVM sampling currently over-weights idle JVM helper threads, making it hard for the model to prioritize the fixed-width Vector API issue. Tracked by NEOPROF-632."
+      },
+      "recipe_params": ["collect_java_stacks=true"]
+    },
+    {
+      "id": "test_case_16",
+      "summary": "Java crc32c path selection",
+      "acts": ["act1"],
+      "run_artifact": "test_case_16/latest.zip",
+      "rubric": "rubrics/test_case_16.md",
+      "performance_thresholds": {
+        "duration_seconds": 53,
+        "input_tokens": 190000,
+        "output_tokens": 2600
+      },
+      "recipe_params": ["collect_java_stacks=true"]
+    },
+    {
+      "id": "test_case_17",
+      "summary": "Java atomic counter contention",
+      "acts": ["act2"],
+      "run_artifact": "test_case_17/latest.zip",
+      "rubric": "rubrics/test_case_17.md",
+      "performance_thresholds": {
+        "duration_seconds": 68,
+        "input_tokens": 120000,
+        "output_tokens": 3500
+      },
+      "recipe_params": ["collect_java_stacks=true"]
+    },
+    {
+      "id": "test_case_18",
+      "summary": "Java polymorphic hot loop dispatch",
+      "acts": ["act2"],
+      "run_artifact": "test_case_18/latest.zip",
+      "rubric": "rubrics/test_case_18.md",
+      "performance_thresholds": {
+        "duration_seconds": 51,
+        "input_tokens": 120000,
+        "output_tokens": 2600
+      },
+      "recipe_params": ["collect_java_stacks=true"]
+    },
+    {
+      "id": "test_case_19",
+      "summary": "Java parallel task granularity",
+      "acts": ["act3"],
+      "run_artifact": "test_case_19/latest.zip",
+      "rubric": "rubrics/test_case_19.md",
+      "recipe_params": ["collect_java_stacks=true"]
+    },
+    {
+      "id": "test_case_20",
+      "summary": "Java heap-constrained cache churn",
+      "acts": ["act3"],
+      "run_artifact": "test_case_20/latest.zip",
+      "rubric": "rubrics/test_case_20.md",
+      "expected_failures": {
+        "expected_failure": true,
+        "reason": "Known analysis limitation: the profile clearly shows cache rebuild work under a constrained heap, but current model/context combinations do not yet infer that increasing the JVM heap is the primary remediation."
+      },
+      "recipe_params": ["collect_java_stacks=true"]
+    },
+    {
+      "id": "test_case_21",
+      "summary": "Cpp RocksDB crc32c negative case",
+      "acts": ["act3"],
+      "run_artifact": "test_case_21/latest.zip",
+      "rubric": "rubrics/test_case_21.md"
+    },
+    {
+      "id": "test_case_22",
+      "summary": "Cpp RocksDB Bloom filter arm simd gap",
+      "acts": ["act3"],
+      "run_artifact": "test_case_22/latest.zip",
+      "rubric": "rubrics/test_case_22.md"
+    },
+    {
+      "id": "test_case_23",
+      "summary": "Cpp RocksDB XXH3 arm hash upgrade",
+      "acts": ["act3"],
+      "run_artifact": "test_case_23/latest.zip",
+      "rubric": "rubrics/test_case_23.md"
+    },
+    {
+      "id": "test_case_24",
+      "summary": "Python PyTorch softmax Arm optimization",
+      "acts": ["act3"],
+      "run_artifact": "test_case_24/latest.zip",
+      "rubric": "rubrics/test_case_24.md"
+    },
+    {
+      "id": "test_case_25",
+      "summary": "Python PyTorch bf16 pointwise kernels",
+      "acts": ["act3"],
+      "run_artifact": "test_case_25/latest.zip",
+      "rubric": "rubrics/test_case_25.md"
+    },
+    {
+      "id": "test_case_26",
+      "summary": "Cpp ASTL sysfs file reopen overhead",
+      "acts": ["act3"],
+      "run_artifact": "test_case_26/latest.zip",
+      "rubric": "rubrics/test_case_26.md"
+    },
+    {
+      "id": "test_case_27",
+      "summary": "cSharp Orchard CMS HTTP load",
+      "acts": ["act3"],
+      "run_artifact": "test_case_27/latest.zip",
+      "rubric": "rubrics/test_case_27.md",
+      "expected_failures": {
+        "modes": {
+          "arm_mcp": {
+            "expected_failure": true,
+            "reason": "Known Arm MCP limitation: test_case_27 is attach-mode, and the current Arm MCP path is launch-only."
+          }
+        }
+      }
+    },
+    {
+      "id": "test_case_28",
+      "summary": "cSharp crc32c path selection",
+      "acts": ["act1"],
+      "run_artifact": "test_case_28/latest.zip",
+      "rubric": "rubrics/test_case_28.md",
+      "performance_thresholds": {
+        "duration_seconds": 34,
+        "input_tokens": 55000,
+        "output_tokens": 1800
+      },
+      "recipe_params": ["collect_dotnet_stacks=true"]
+    },
+    {
+      "id": "test_case_30",
+      "summary": "cSharp arm64 ASCII search",
+      "acts": ["act3"],
+      "run_artifact": "test_case_30/latest.zip",
+      "rubric": "rubrics/test_case_30.md",
+      "recipe_params": ["collect_dotnet_stacks=true"]
+    },
+    {
+      "id": "test_case_31",
+      "summary": "Cpp prompt injection resistance test",
+      "acts": ["act2"],
+      "run_artifact": "test_case_31/latest.zip",
+      "rubric": "rubrics/test_case_31.md"
+    }
+  ]
+}
