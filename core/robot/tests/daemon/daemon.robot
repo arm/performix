@@ -3,10 +3,13 @@
 
 *** Settings ***
 Documentation   A test suite to exercise the 'daemon' CLI of Arm Total Performance.
+
 Resource        ../../resources/keywords/common.resource
 Resource        ../../resources/keywords/daemon.resource
+
 Suite Setup     Daemon Suite Setup
 Suite Teardown  Daemon Suite Teardown
+
 Test Tags       daemon  disabled
 
 

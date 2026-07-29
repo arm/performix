@@ -79,6 +79,7 @@ type ApapServerConfig struct {
 
 type ApapServer struct {
 	apapproto.UnimplementedApapServer
+	ctx                  context.Context
 	shutdownCb           func()
 	config               ApapServerConfig
 	deploymentPaths      deployer.BaseToolDeploymentPaths
@@ -138,6 +139,7 @@ func NewApapServer(ctx context.Context, config ApapServerConfig, deploymentPaths
 		OptionsEvaluator: optionsEvaluator,
 	}
 	apapServer := &ApapServer{
+		ctx:              ctx,
 		shutdownCb:       shutdownCb,
 		config:           config,
 		runs:             rc,
@@ -185,6 +187,13 @@ func (s *ApapServer) recipeAllowed(recipeInfo recipe.Recipe) bool {
 
 func (s *ApapServer) getFullCaptureSupport() bool {
 	return s.config.EnableFullCaptureSupport || s.config.EnableRerendering
+}
+
+func (s *ApapServer) engineContext() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
 }
 
 // newBaseStageConfiguration returns a StageConfiguration with server-owned config, shared by all stage workflows.
@@ -700,27 +709,19 @@ func (s *ApapServer) RecipeIssueCommand(in *apapproto.RecipeCommand, out apappro
 	var err error
 	switch command := in.SpecificCommand.(type) {
 	case *apapproto.RecipeCommand_StartCommand:
-		hook, ctx := runtime.InitializeRunLog(out.Context())
-		defer hook.Close()
-		logx.FromContext(ctx).Infof("Starting run using %v Engine %v", terminology.GetProductFullName(), versions.GetVersion())
-
-		// Create stage notifier
+		detachBackgroundTransfers := command.StartCommand.GetDetachBackgroundTransfers() && s.config.EnableTransferManager
 		grpcNotifier := &progress.GRPCRecipeStageNotifier{Out: out}
-		stageNotifier := recipe.NewCompositeStageNotifier(
-			grpcNotifier,
-			recipe.NewLoggingStageNotifier(logx.FromContext(ctx)),
-		)
 
 		parsedRecipe, err := s.getRecipe(command.StartCommand.GetName())
 		if err != nil {
-			logx.FromContext(ctx).WithError(err).Error("failed to parse recipe")
+			logx.FromContext(out.Context()).WithError(err).Error("failed to parse recipe")
 			grpcNotifier.SendRecipeFinishMessage(out, apapproto.StatusCode_ERROR, message.BuildErrorChain(err))
 			return err
 		}
 
 		recipeCtx, err := RecipeCtxFromProto(command.StartCommand)
 		if err != nil {
-			logx.FromContext(ctx).WithError(err).Error("failed to construct recipe context")
+			logx.FromContext(out.Context()).WithError(err).Error("failed to construct recipe context")
 			grpcNotifier.SendRecipeFinishMessage(out, apapproto.StatusCode_ERROR, message.BuildErrorChain(err))
 			return err
 		}
@@ -732,7 +733,7 @@ func (s *ApapServer) RecipeIssueCommand(in *apapproto.RecipeCommand, out apappro
 
 		recipeCtx.ParamValues, err = parameters.BindRecipeParameters(convertedParams, parsedRecipe.Parameters, parsedRecipe.Name)
 		if err != nil {
-			logx.FromContext(ctx).WithError(err).Error("parameter setup failed")
+			logx.FromContext(out.Context()).WithError(err).Error("parameter setup failed")
 			grpcNotifier.SendRecipeFinishMessage(out, apapproto.StatusCode_ERROR, message.BuildErrorChain(err))
 			return err
 		}
@@ -740,7 +741,6 @@ func (s *ApapServer) RecipeIssueCommand(in *apapproto.RecipeCommand, out apappro
 		recipeCtx.RecipeMetadata.APIVersion = parsedRecipe.APIVersion
 		recipeCtx.ToolVersions = parsedRecipe.ToolVersions
 
-		// Run the recipe.
 		stageConfig := s.newBaseStageConfiguration()
 		stageConfig.Recipe = parsedRecipe
 		stageConfig.Ctx = recipeCtx
@@ -748,22 +748,35 @@ func (s *ApapServer) RecipeIssueCommand(in *apapproto.RecipeCommand, out apappro
 		stageConfig.ToolDeploymentType = deployer.ToolDeploymentMode(command.StartCommand.DeploymentType)
 		stageConfig.UsrMessageWriter = &run.ConcreteUserMessageWriter{}
 		stageConfig.CollectionState = &recipe.CollectionState{}
-		err = runtime.RunRecipe(
-			ctx,
-			hook,
+		job := runtime.StartRecipeJob(
+			s.engineContext(),
 			stageConfig,
 			&runtime.RunStageFactory{},
-			stageNotifier,
+			grpcNotifier,
 			s.recipeCommandMap,
+			detachBackgroundTransfers,
 		)
 
-		// When the run completes, stream the finish message (and result) back to the client
+		jobCompleted, err := awaitRecipeJob(
+			out.Context(),
+			job.Done(),
+			job.Phase1Done(),
+			job.Cancel,
+			detachBackgroundTransfers,
+		)
+		if !jobCompleted {
+			if err == nil {
+				grpcNotifier.SendDetachedRecipeFinishMessage(out)
+			}
+			return err
+		}
+
 		returnCode := apapproto.StatusCode_SUCCESS
 		if err != nil {
-			logx.FromContext(ctx).WithError(err).Error("recipe run failed")
 			returnCode = apapproto.StatusCode_ERROR
 		}
 		grpcNotifier.SendRecipeFinishMessage(out, returnCode, message.BuildErrorChain(err))
+		return err
 
 	case *apapproto.RecipeCommand_CancelCommand:
 		// Write CANCEL flag
@@ -783,6 +796,53 @@ func (s *ApapServer) RecipeIssueCommand(in *apapproto.RecipeCommand, out apappro
 	}
 
 	return err
+}
+
+// awaitRecipeJob waits for full completion, phase 1 completion, or client cancellation.
+// The boolean result reports whether the job fully completed and should send its final status.
+func awaitRecipeJob(
+	ctx context.Context,
+	done <-chan error,
+	phase1Done <-chan struct{},
+	cancel func(),
+	detachBackgroundTransfers bool,
+) (bool, error) {
+	if detachBackgroundTransfers {
+		// Detached CLI requests return on either full job completion, phase1 completion, or client disconnects.
+		select {
+		case err := <-done:
+			return true, err
+		case <-phase1Done:
+			select {
+			// Handle the case when the job completed at the same time as phase1 complete.
+			case err := <-done:
+				return true, err
+			default:
+				return false, nil
+			}
+		case <-ctx.Done():
+			select {
+			// Handle the case when phase1 completed at the same time as the RPC cancellation, in which case allow the job to continue detached.
+			// Otherwise, cancel the job.
+			case <-phase1Done:
+				return false, ctx.Err()
+			default:
+				cancel()
+				<-done
+				return false, ctx.Err()
+			}
+		}
+	}
+
+	// Attached runs retain the RPC lifetime: cancellation stops the job and waits for cleanup.
+	select {
+	case err := <-done:
+		return true, err
+	case <-ctx.Done():
+		cancel()
+		<-done
+		return false, ctx.Err()
+	}
 }
 
 func (s *ApapServer) ListRuns(ctx context.Context, _ *emptypb.Empty) (*apapproto.RunListing, error) {

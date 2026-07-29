@@ -4,13 +4,15 @@
 # Configuration file for Robocop linter
 [tool.robocop.lint]
 
+# Load Performix-specific Robot Framework conventions.
+custom_rules = [
+    "robocop_rules/spdx_header.py",
+    "robocop_custom_rules.py",
+]
+
 # Enable all reports
 reports = [
     "all"
-]
-
-custom_rules = [
-    "robocop_rules/spdx_header.py",
 ]
 
 # Custom configuration of rules
@@ -19,6 +21,7 @@ configure = [
     "line-too-long.line_length=150",
     "bad-indent.indent=2",
     "file-too-long.max_lines=1000",
+    "print_issues.output_format=extended",
 ]
 
 # Rules to ignore from linting checks

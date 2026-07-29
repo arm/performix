@@ -11,7 +11,7 @@ Resource        ../../resources/keywords/target.resource
 Suite Setup     Instruction Mix Suite Setup
 Suite Teardown  Instruction Mix Suite Teardown
 
-Test Tags       instruction_mix
+Test Tags  instruction-mix
 
 
 *** Test Cases ***
@@ -38,7 +38,8 @@ The Instruction Mix Recipe Fails In Static Mode When The Workload Does Not Exist
   ...  message when the specified workload does not exist.
   Given The Instruction Mix Recipe Is Listed
   And The Target Exists  ${G_TARGET_NAME}
-  When Run Instruction Mix Recipe  --param mode=static --workload my-made-up-workload --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  When Run Instruction Mix Recipe
+  ...  --param mode=static --workload my-made-up-workload --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   Then The Last Command Failed With Message Code  tool_integrations.common.WORKLOAD_NOT_EXIST
   And The Target Output Directory Is Empty
 
@@ -56,7 +57,8 @@ The Instruction Mix Recipe Fails In Static Mode When Shell Mode Is Used
   ...  message when the --use-shell flag is used
   Given The Instruction Mix Recipe Is Listed
   And The Target Exists  ${G_TARGET_NAME}
-  When Run Instruction Mix Recipe  --param mode=static --workload ls --use-shell --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  When Run Instruction Mix Recipe
+  ...  --param mode=static --workload ls --use-shell --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   Then The Last Command Failed With Message Code  tool_integrations.instruction_mix.USE_SHELL
   And The Target Output Directory Is Empty
 
@@ -68,9 +70,7 @@ The Instruction Mix Recipe Uses The Specified Working Dir In Static Mode
   Given The Instruction Mix Recipe Is Listed
   And The Target Exists  ${G_TARGET_NAME}
   And The Script Is Created On The Target  ${TEMP_FILE_PATH}  ls
-  ${instruction_mix_args} =  Catenate  --param mode=static --workload ./${TEMP_FILE_NAME}
-  ...  --working-dir ${ATPERF_DIR} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
-  When Run Instruction Mix Recipe  ${instruction_mix_args}
+  When Run Instruction Mix Recipe In Static Mode With Working Dir
   Then The Last Command Did Not Fail With Message Code  tool_integrations.common.WORKLOAD_NOT_EXIST
   And The Target Output Directory Is Empty
   [Teardown]  The File Is Removed From The Target  ${TEMP_FILE_PATH}
@@ -78,7 +78,6 @@ The Instruction Mix Recipe Uses The Specified Working Dir In Static Mode
 
 *** Keywords ***
 # This section is for throwaway keywords that only exist to this test suite.
-
 Instruction Mix Suite Setup
   Common Setup
   Set Suite Variables
@@ -90,4 +89,9 @@ Instruction Mix Suite Teardown
   Common Teardown
 
 Set Suite Variables
-  VAR  ${TEMP_FILE_PATH}  ${ATPERF_DIR}/${TEMP_FILE_NAME}  scope=SUITE
+  VAR  ${TEMP_FILE_PATH} =  ${ATPERF_DIR}/${TEMP_FILE_NAME}  scope=SUITE
+
+Run Instruction Mix Recipe In Static Mode With Working Dir
+  ${instruction_mix_args} =  Catenate  --param mode=static --workload ./${TEMP_FILE_NAME}
+  ...  --working-dir ${ATPERF_DIR} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  Run Instruction Mix Recipe  ${instruction_mix_args}

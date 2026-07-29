@@ -285,7 +285,10 @@ func extractParametersWithMessages(params []ParameterDefinition, source string, 
 
 		var msc MultiSelectConfig
 		if err := json.Unmarshal(data, &msc); err == nil && msc.Type == ParameterConfigTypeMultiSelect {
-			defaultValue := append([]string(nil), msc.DefaultValue...)
+			var defaultValue []string
+			if msc.DefaultValue != nil {
+				defaultValue = append([]string{}, msc.DefaultValue...)
+			}
 
 			extracted.MultiSelect = append(extracted.MultiSelect, MultiSelectParameter{
 				Parameter:    paramOut,

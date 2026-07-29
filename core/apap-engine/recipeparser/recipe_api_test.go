@@ -407,7 +407,7 @@ func TestListRunComponents(t *testing.T) {
 		fn, ok := goja.AssertFunction(api.vm.ToValue(api.listRunComponents))
 		require.True(t, ok)
 
-		value, err := fn(goja.Undefined(), api.vm.ToValue(0), api.vm.ToValue("tool/example_tool/0/output"))
+		value, err := fn(goja.Undefined(), api.vm.ToValue(0), api.vm.ToValue("tool/example_tool/0/output/**"))
 		require.NoError(t, err)
 
 		var fromJS []map[string]any
@@ -452,11 +452,11 @@ func TestListRunComponents(t *testing.T) {
 		fn, ok := goja.AssertFunction(api.vm.ToValue(api.listRunComponents))
 		require.True(t, ok)
 
-		_, err := fn(goja.Undefined(), api.vm.ToValue(0), api.vm.ToValue("tool/example_tool/0/output"))
+		_, err := fn(goja.Undefined(), api.vm.ToValue(0), api.vm.ToValue("tool/example_tool/0/output/**"))
 		require.EqualError(t, err, "run index out of range: 0")
 	})
 
-	t.Run("fails when entity is missing", func(t *testing.T) {
+	t.Run("returns empty when entity is missing", func(t *testing.T) {
 		runDir := t.TempDir()
 		model := cdf.NewOnDiskModel(runDir, &cdf.Manifest{}, cdf.Metadata{})
 
@@ -471,9 +471,12 @@ func TestListRunComponents(t *testing.T) {
 		fn, ok := goja.AssertFunction(api.vm.ToValue(api.listRunComponents))
 		require.True(t, ok)
 
-		_, err := fn(goja.Undefined(), api.vm.ToValue(0), api.vm.ToValue("tool/example_tool/0/output"))
-		require.Error(t, err)
-		assert.ErrorContains(t, err, "failed to list components in entity 'tool/example_tool/0/output'")
+		value, err := fn(goja.Undefined(), api.vm.ToValue(0), api.vm.ToValue("tool/example_tool/0/output/**"))
+		require.NoError(t, err)
+
+		var fromJS []map[string]any
+		require.NoError(t, api.vm.ExportTo(value, &fromJS))
+		require.Empty(t, fromJS)
 	})
 }
 

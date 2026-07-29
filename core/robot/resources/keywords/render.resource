@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 *** Settings ***
-Documentation       A resource file containing 'render' keywords for the Arm Total Performance CLI.
+Documentation  A resource file containing 'render' keywords for the Arm Total Performance CLI.
 
-Resource            common.resource
-Resource            run.resource
-Resource            recipe.resource
+Resource       common.resource
+Resource       run.resource
+Resource       recipe.resource
 
 
 *** Variables ***
@@ -32,7 +32,7 @@ The Runs Are Invoke-Rendered Successfully
 
 Extract The Render Session
   [Documentation]  Extract the render session (i.e s0, s1) from stdout, following
-  ...    a run render invocation
+  ...  a run render invocation
   ${render_info} =  Parse JSON To Dictionary  ${G_LAST_RESULT.stdout}
   ${data} =  Get From Dictionary  ${render_info}  data
   # 'run render' has session_id under data.invocation.session_id, whereas

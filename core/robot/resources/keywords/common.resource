@@ -62,7 +62,7 @@ Determine Target For Test
   ${target_var} =  Get Variable Value  ${TARGET}
   IF  "${target_var}" != "None"
     ${normalized_dir} =  Normalize Path  ${TARGET_CONFIG_DIR}
-    VAR  ${target_json}  ${normalized_dir}${/}${target_var}.json  scope=LOCAL
+    VAR  ${target_json} =  ${normalized_dir}${/}${target_var}.json  scope=LOCAL
     File Should Exist  ${target_json}
     ${target_dict} =  Read JSON File Into Dictionary  ${target_json}
     ${normalized_dict} =  Normalize Key Path In Target Dictionary  ${target_dict}
@@ -75,13 +75,13 @@ Set Test Target As Global Variable
   [Documentation]  Set the provided test target globally for use by all test suites.
   [Arguments]  ${target_dict}
   # TODO - temporary, should set the whole dictionary as global, but having trouble accessing keys
-  VAR  ${G_TARGET_NAME}  ${target_dict}[name]  scope=GLOBAL
-  VAR  ${G_TARGET_HOST}  ${target_dict}[host]  scope=GLOBAL
-  VAR  ${G_TARGET_PORT}  ${target_dict}[port]  scope=GLOBAL
-  VAR  ${G_TARGET_USER}  ${target_dict}[user]  scope=GLOBAL
-  VAR  ${G_TARGET_KEY}  ${target_dict}[key]  scope=GLOBAL
-  VAR  ${G_TARGET_ARCH}  ${target_dict}[arch]  scope=GLOBAL
-  VAR  ${G_TARGET_OS}  ${target_dict}[os]  scope=GLOBAL
+  VAR  ${G_TARGET_NAME} =  ${target_dict}[name]  scope=GLOBAL
+  VAR  ${G_TARGET_HOST} =  ${target_dict}[host]  scope=GLOBAL
+  VAR  ${G_TARGET_PORT} =  ${target_dict}[port]  scope=GLOBAL
+  VAR  ${G_TARGET_USER} =  ${target_dict}[user]  scope=GLOBAL
+  VAR  ${G_TARGET_KEY} =  ${target_dict}[key]  scope=GLOBAL
+  VAR  ${G_TARGET_ARCH} =  ${target_dict}[arch]  scope=GLOBAL
+  VAR  ${G_TARGET_OS} =  ${target_dict}[os]  scope=GLOBAL
 
 Configure Test Target Platform
   [Documentation]  Configures the platform for the test target
@@ -92,13 +92,13 @@ Determine Workloads For Test
   ${workloads_var} =  Get Variable Value  ${WORKLOADS}  ${EMPTY}
   IF  "${workloads_var}" != "${EMPTY}" and "${workloads_var}" != "None"
     ${normalized_dir} =  Normalize Path  ${WORKLOAD_CONFIG_DIR}
-    VAR  ${workload_file}  ${normalized_dir}${/}${workloads_var}.json  scope=LOCAL
+    VAR  ${workload_file} =  ${normalized_dir}${/}${workloads_var}.json  scope=LOCAL
     File Should Exist  ${workload_file}
     ${workloads_dict} =  Read JSON File Into Dictionary  ${workload_file}
-    VAR  ${G_WORKLOADS}  ${workloads_dict}  scope=GLOBAL
+    VAR  ${G_WORKLOADS} =  ${workloads_dict}  scope=GLOBAL
   ELSE
     ${empty_workloads} =  Create Dictionary
-    VAR  ${G_WORKLOADS}  ${empty_workloads}  scope=GLOBAL
+    VAR  ${G_WORKLOADS} =  ${empty_workloads}  scope=GLOBAL
     Log To Console  No workloads supplied on command-line. Workload-dependent tests may skip.
   END
 
@@ -122,11 +122,11 @@ Determine ATPerf CLI Bin Path
   ...  Also normalize the path (to reduce up-level references etc.) before returning it.
   ${os} =  Determine Operating System
   IF  '${os}' == 'Linux'
-    VAR  ${path}  ${CURDIR}${/}..${/}..${/}..${/}apap-cli${/}${PRODUCT_BINARY_NAME}  scope=LOCAL
+    VAR  ${path} =  ${CURDIR}${/}..${/}..${/}..${/}apap-cli${/}${PRODUCT_BINARY_NAME}  scope=LOCAL
   ELSE IF  '${os}' == 'Darwin'
-    VAR  ${path}  ${CURDIR}${/}..${/}..${/}..${/}apap-cli${/}${PRODUCT_BINARY_NAME}  scope=LOCAL
+    VAR  ${path} =  ${CURDIR}${/}..${/}..${/}..${/}apap-cli${/}${PRODUCT_BINARY_NAME}  scope=LOCAL
   ELSE IF  '${os}' == 'Windows'
-    VAR  ${path}  ${CURDIR}${/}..${/}..${/}..${/}apap-cli${/}${PRODUCT_BINARY_NAME}.exe  scope=LOCAL
+    VAR  ${path} =  ${CURDIR}${/}..${/}..${/}..${/}apap-cli${/}${PRODUCT_BINARY_NAME}.exe  scope=LOCAL
   END
   ${normalized_path} =  Normalize Path  ${path}
   RETURN  ${normalized_path}
@@ -135,15 +135,15 @@ Determine Runs Directory Path
   [Documentation]  Determine the full path to the runs directory based on the APXD_DATA_DIR env var.
   ...  Also normalize the path (to reduce up-level references etc.) before returning it.
   ${env_var} =  Get Performix Env Var  DATA_DIR
-  VAR  ${path}  ${env_var}${/}runs  scope=LOCAL
+  VAR  ${path} =  ${env_var}${/}runs  scope=LOCAL
   ${normalized_path} =  Normalize Path  ${path}
-  VAR  ${G_RUNS_DIR}  ${normalized_path}  scope=GLOBAL
+  VAR  ${G_RUNS_DIR} =  ${normalized_path}  scope=GLOBAL
 
 Determine Data Directory Path
   [Documentation]  Determine the full path to the atperf user data directory based on the APXD_DATA_DIR env var.
   ...  Also normalize the path (to reduce up-level references etc.) before returning it.
   ${env_var} =  Get Performix Env Var  DATA_DIR
-  VAR  ${path}  ${env_var}  scope=LOCAL
+  VAR  ${path} =  ${env_var}  scope=LOCAL
   ${normalized_path} =  Normalize Path  ${path}
   RETURN  ${normalized_path}
 
@@ -151,7 +151,7 @@ Determine Config Directory Path
   [Documentation]  Determine the full path to the config directory based on the APXD_CONFIG_DIR env var.
   ...  Also normalize the path (to reduce up-level references etc.) before returning it.
   ${env_var} =  Get Performix Env Var  CONFIG_DIR
-  VAR  ${path}  ${env_var}  scope=LOCAL
+  VAR  ${path} =  ${env_var}  scope=LOCAL
   ${normalized_path} =  Normalize Path  ${path}
   RETURN  ${normalized_path}
 
@@ -160,7 +160,7 @@ Determine Engine Log Directory Path
   ...  Also normalize the path (to reduce up-level references etc.) before returning it.
   ${env_var} =  Get Performix Env Var  LOG_FILE
   ${log_dir}  ${_} =  Split Path  ${env_var}
-  VAR  ${path}  ${log_dir}  scope=LOCAL
+  VAR  ${path} =  ${log_dir}  scope=LOCAL
   ${normalized_path} =  Normalize Path  ${path}
   RETURN  ${normalized_path}
 
@@ -168,14 +168,14 @@ Determine Engine Log File Path
   [Documentation]  Determine the full path to the ATP engine log file based on the APXD_LOG_FILE env var.
   ...  Also normalize the path (to reduce up-level references etc.) before returning it.
   ${env_var} =  Get Performix Env Var  LOG_FILE
-  VAR  ${path}  ${env_var}  scope=LOCAL
+  VAR  ${path} =  ${env_var}  scope=LOCAL
   ${normalized_path} =  Normalize Path  ${path}
   RETURN  ${normalized_path}
 
 Determine GUI Log Directory Path
   [Documentation]  Determine the full path to the GUI install directory based on the host OS.
   ...  TODO: this keyword is not finished yet.
-  VAR  ${todo_fake_path}  /this/is/a/fake/path  scope=LOCAL
+  VAR  ${todo_fake_path} =  /this/is/a/fake/path  scope=LOCAL
   RETURN  ${todo_fake_path}
 
 The ATPerf CLI Is Installed
@@ -240,13 +240,13 @@ Get Default Launch Workload
 Set Default Launch Workload
   [Documentation]  Resolve and store the default workload command for the configured target.
   ${launch_workload} =  Get Default Launch Workload
-  VAR  ${LAUNCH_WORKLOAD}  ${launch_workload}  scope=GLOBAL
+  VAR  ${LAUNCH_WORKLOAD} =  ${launch_workload}  scope=GLOBAL
 
 Wait For Process And Log
   [Documentation]  Wait for a command in the background to finish
   [Arguments]  ${process}
   ${result} =  Wait For Process  ${process}
-  VAR  ${G_LAST_RESULT}  ${result}  scope=GLOBAL
+  VAR  ${G_LAST_RESULT} =  ${result}  scope=GLOBAL
   Log Many  rc: ${G_LAST_RESULT.rc}  stdout: ${G_LAST_RESULT.stdout}  stderr: ${G_LAST_RESULT.stderr}
 
 Ensure The File Is Created On The Target
@@ -396,7 +396,7 @@ Set Test Username
   [Arguments]  ${username}=${G_TARGET_USER}
   Should Not Be Empty  ${username}
   ...  msg=The username used for deployment verification must not be empty.
-  VAR  ${G_TEST_USERNAME}  ${username}  scope=SUITE
+  VAR  ${G_TEST_USERNAME} =  ${username}  scope=SUITE
 
 Get Localhost User
   [Documentation]  Resolve the current host username when the test target is localhost.

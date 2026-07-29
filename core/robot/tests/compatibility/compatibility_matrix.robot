@@ -3,11 +3,14 @@
 
 *** Settings ***
 Documentation       A test suite to exercise the compatibility matrix scripts
+
 Resource            ../../resources/keywords/compatibility_matrix.resource
 Library             OperatingSystem
 Library             Process
+
 Suite Setup         Compatibility Matrix Suite Setup
 Suite Teardown      Compatibility Matrix Suite Teardown
+
 Test Tags           compatibility
 
 

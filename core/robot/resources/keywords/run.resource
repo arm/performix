@@ -3,6 +3,7 @@
 
 *** Settings ***
 Documentation  A resource file containing 'run' keywords for the Arm Total Performance CLI.
+
 Resource       common.resource
 Resource       recipe.resource
 
@@ -20,7 +21,7 @@ Count Runs
   [Documentation]  Counts the number of runs in the runs list.
   ${runs} =  Get Runs As List
   ${num_runs} =  Get Length  ${runs}
-  VAR  ${G_NUM_RUNS}  ${num_runs}  scope=GLOBAL
+  VAR  ${G_NUM_RUNS} =  ${num_runs}  scope=GLOBAL
 
 The Number Of Runs Is
   [Arguments]  ${expected}
@@ -37,9 +38,9 @@ The Number Of Runs Has Increased By
   [Documentation]  Checks the number of runs has increased by the specified amount, by taking
   ...  note of the old count, re-counting the number of runs, and finding the difference.
   [Arguments]  ${expected}
-  VAR  ${old_num}  ${G_NUM_RUNS}  scope=LOCAL
+  VAR  ${old_num} =  ${G_NUM_RUNS}  scope=LOCAL
   Count Runs
-  VAR  ${new_num}  ${G_NUM_RUNS}  scope=LOCAL
+  VAR  ${new_num} =  ${G_NUM_RUNS}  scope=LOCAL
   ${increase} =  Evaluate  ${new_num} - ${old_num}
   Should Be Equal As Integers  ${increase}  ${expected}
 
@@ -47,9 +48,9 @@ The Number Of Runs Has Decreased By
   [Documentation]  Checks the number of runs has decreased by the specified amount, by taking
   ...  note of the old count, re-counting the number of runs, and finding the difference.
   [Arguments]  ${expected}
-  VAR  ${old_num}  ${G_NUM_RUNS}  scope=LOCAL
+  VAR  ${old_num} =  ${G_NUM_RUNS}  scope=LOCAL
   Count Runs
-  VAR  ${new_num}  ${G_NUM_RUNS}  scope=LOCAL
+  VAR  ${new_num} =  ${G_NUM_RUNS}  scope=LOCAL
   ${decrease} =  Evaluate  ${old_num} - ${new_num}
   Should Be Equal As Integers  ${decrease}  ${expected}
 
@@ -77,10 +78,10 @@ The Run Is Deleted Successfully
 The Run Exists
   [Documentation]  Confirms a run exists by inspecting the run list and the on-disk contents.
   [Arguments]  ${id}
-  VAR  ${found}  False
+  VAR  ${found} =  False
   ${runs} =  Get Runs As List
   FOR  ${run}  IN  @{runs}
-    IF  "${run['id']}" == "${id}"  VAR  ${found}  True
+    IF  "${run['id']}" == "${id}"  VAR  ${found} =  True
   END
   Should Be True  ${found}
   Directory Should Not Be Empty  ${G_RUNS_DIR}${/}${id}
@@ -88,10 +89,10 @@ The Run Exists
 The Run Does Not Exist
   [Documentation]  Confirms a run doesn't exist by inspecting the run list and the on-disk contents.
   [Arguments]  ${id}
-  VAR  ${found}  False
+  VAR  ${found} =  False
   ${runs} =  Get Runs As List
   FOR  ${run}  IN  @{runs}
-    IF  "${run['id']}" == "${id}"  VAR  ${found}  True
+    IF  "${run['id']}" == "${id}"  VAR  ${found} =  True
   END
   Should Not Be True  ${found}
   Directory Should Not Exist  ${G_RUNS_DIR}${/}${id}
@@ -222,7 +223,8 @@ Run Memory Access Recipe And Extract Run ID
 
 Run System Utilization Recipe And Extract Run ID
   [Documentation]  Run system utilization recipe against the test target and return a run ID
-  Run System Utilization Recipe  --workload ${LAUNCH_WORKLOAD} --param=interval=0.1 --timeout 1 --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  Run System Utilization Recipe
+  ...  --workload ${LAUNCH_WORKLOAD} --param=interval=0.1 --timeout 1 --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   The Last Command Succeeded
   ${id} =  Extract The Run ID
   The Run Exists  ${id}
@@ -230,8 +232,9 @@ Run System Utilization Recipe And Extract Run ID
 
 Run Instruction Mix Recipe In Dynamic Mode And Extract Run ID
   [Documentation]  Run instruction mix recipe in dynamic mode against the test target
-  ...    and return a run ID
-  Run Instruction Mix Recipe  --workload ${LAUNCH_WORKLOAD} --param mode=dynamic --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  ...  and return a run ID
+  Run Instruction Mix Recipe
+  ...  --workload ${LAUNCH_WORKLOAD} --param mode=dynamic --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   The Last Command Succeeded
   ${id} =  Extract The Run ID
   The Run Exists  ${id}
@@ -239,8 +242,9 @@ Run Instruction Mix Recipe In Dynamic Mode And Extract Run ID
 
 Run Instruction Mix Recipe In Static Mode And Extract Run ID
   [Documentation]  Run instruction mix recipe in static mode against the test target
-  ...    and return a run ID
-  Run Instruction Mix Recipe  --workload ${LAUNCH_WORKLOAD} --param mode=static --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  ...  and return a run ID
+  Run Instruction Mix Recipe
+  ...  --workload ${LAUNCH_WORKLOAD} --param mode=static --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   The Last Command Succeeded
   ${id} =  Extract The Run ID
   The Run Exists  ${id}
@@ -260,7 +264,9 @@ Deploy Tools For Recipe
   ...  TODO: Right now the only way to deploy recipe tools is to run it. Refactor after/with APAP-2506.
   [Arguments]  ${recipe_name}  ${args}=${EMPTY}
   ${timeout} =  Get Default Recipe Timeout  1
-  Run Recipe  ${recipe_name}  ${args} --workload ${LAUNCH_WORKLOAD} --timeout ${timeout} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  Run Recipe
+  ...  ${recipe_name}
+  ...  ${args} --workload ${LAUNCH_WORKLOAD} --timeout ${timeout} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   The Last Command Succeeded
   ${run_id} =  Extract The Run ID
   Delete Run  ${run_id}

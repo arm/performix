@@ -12,6 +12,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcconnection"
+	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 )
@@ -51,7 +52,7 @@ func (m *mockTargetConnection) Dialer() grpcconnection.TCPDialer {
 	return args.Get(0).(grpcconnection.TCPDialer)
 }
 
-func TestTargetSessionProviderReturnsSameSession(t *testing.T) {
+func TestTargetSessionProviderReturnsSameUnderlyingSession(t *testing.T) {
 	provider := &targetSessionProvider{}
 
 	tgtA := &target.LocalTarget{}
@@ -62,7 +63,30 @@ func TestTargetSessionProviderReturnsSameSession(t *testing.T) {
 	second, err := provider.TargetSession(tgtB)
 	require.NoError(t, err)
 
-	require.Same(t, first, second)
+	firstScoped, ok := first.(*localityScopedTargetSession)
+	require.True(t, ok)
+	secondScoped, ok := second.(*localityScopedTargetSession)
+	require.True(t, ok)
+	require.Same(t, firstScoped.base, secondScoped.base)
+	require.Equal(t, locality.Target, firstScoped.localityName)
+	require.Equal(t, locality.Target, secondScoped.localityName)
+}
+
+func TestTargetSessionProviderHostSessionSharesUnderlyingSession(t *testing.T) {
+	provider := &targetSessionProvider{}
+
+	targetSession, err := provider.TargetSession(&target.LocalTarget{})
+	require.NoError(t, err)
+	hostSession, err := provider.HostSession()
+	require.NoError(t, err)
+
+	targetScoped, ok := targetSession.(*localityScopedTargetSession)
+	require.True(t, ok)
+	hostScoped, ok := hostSession.(*localityScopedTargetSession)
+	require.True(t, ok)
+	require.Same(t, targetScoped.base, hostScoped.base)
+	require.Equal(t, locality.Target, targetScoped.localityName)
+	require.Equal(t, locality.Host, hostScoped.localityName)
 }
 
 func TestTargetSessionProviderRejectsRequestsAfterShutdown(t *testing.T) {
@@ -71,6 +95,8 @@ func TestTargetSessionProviderRejectsRequestsAfterShutdown(t *testing.T) {
 	require.NoError(t, provider.Shutdown())
 
 	_, err := provider.TargetSession(&target.LocalTarget{})
+	require.ErrorIs(t, err, message.New(message.EngineTargetSessionShuttingDown))
+	_, err = provider.HostSession()
 	require.ErrorIs(t, err, message.New(message.EngineTargetSessionShuttingDown))
 }
 

@@ -118,7 +118,11 @@ func TestWaitForTransfersStageErrorType(t *testing.T) {
 		client := &targetagentmocks.TargetAgentClient{}
 		cancelChan := make(chan struct{})
 		tm := startTestTransferManager(t, client, cancelChan)
-		stage := NewWaitForTransfersStage(tm)
+		phase1Done := make(chan struct{}, 1)
+		stage := NewWaitForTransfersStage(tm, func(hasPendingBackgroundTransfers bool) {
+			require.True(t, hasPendingBackgroundTransfers)
+			phase1Done <- struct{}{}
+		})
 
 		runCollection, err := run.NewRunCollection(t.TempDir())
 		require.NoError(t, err)
@@ -152,6 +156,7 @@ func TestWaitForTransfersStageErrorType(t *testing.T) {
 		}()
 
 		requireMessage(t, retrieveFileCalled, "background transfer did not start")
+		requireMessage(t, phase1Done, "phase1 callback was not invoked")
 		desc, err := runCollection.RunDescription(context.Background(), runID)
 		require.NoError(t, err)
 		require.Equal(t, string(run.RecipeInProgressPhase1Complete), desc.RunResult)
@@ -162,10 +167,46 @@ func TestWaitForTransfersStageErrorType(t *testing.T) {
 		client.AssertExpectations(t)
 	})
 
+	t.Run("does not invoke phase-1 callback when result persistence fails", func(t *testing.T) {
+		client := &targetagentmocks.TargetAgentClient{}
+		tm := startTestTransferManager(t, client, make(chan struct{}))
+		callbackCalled := false
+		stage := NewWaitForTransfersStage(tm, func(bool) { callbackCalled = true })
+
+		runCollection, err := run.NewRunCollection(t.TempDir())
+		require.NoError(t, err)
+		backgroundTransfer := testTransfer(t, "/remote/background.txt")
+		client.On(
+			"ListFiles",
+			mock.Anything,
+			&targetagentproto.ListFilesRequest{Paths: []string{backgroundTransfer.RemotePath}},
+		).Return(&targetagentproto.ListFilesResponse{Responses: []*targetagentproto.FileInfos{
+			{FileInfos: []*targetagentproto.FileInfo{{Path: backgroundTransfer.RemotePath, Size: 1}}},
+		}}, nil).Once()
+		mockRetrieveFile(client, backgroundTransfer.RemotePath)
+		tm.AddTransfer(recipe.TransferRequest{
+			FileTransfer:       backgroundTransfer,
+			AgentSupplier:      func() *agent.AgentConn { return &agent.AgentConn{Client: client} },
+			ImmediateRetrieval: false,
+			BackgroundTransfer: true,
+		})
+
+		_, err = stage.Execute(&recipe.StageContext{
+			Context:       context.Background(),
+			RunID:         run.RunID{Value: "missing"},
+			RunCollection: runCollection,
+		})
+
+		expectedErr := message.New(message.EngineRunDoesNotExist).WithMetadata(map[string]string{"runID": "missing"})
+		require.ErrorIs(t, err, expectedErr)
+		require.False(t, callbackCalled)
+		client.AssertExpectations(t)
+	})
+
 	t.Run("background error after required transfer success uses phase1-complete failure result", func(t *testing.T) {
 		client := &targetagentmocks.TargetAgentClient{}
 		tm := startTestTransferManager(t, client, make(chan struct{}))
-		stage := NewWaitForTransfersStage(tm)
+		stage := NewWaitForTransfersStage(tm, nil)
 
 		phase1Transfer := testTransfer(t, "/remote/phase1.txt")
 		client.On(
@@ -201,7 +242,7 @@ func TestWaitForTransfersStageErrorType(t *testing.T) {
 	t.Run("phase1 error keeps regular retrieve failure result", func(t *testing.T) {
 		client := &targetagentmocks.TargetAgentClient{}
 		tm := startTestTransferManager(t, client, make(chan struct{}))
-		stage := NewWaitForTransfersStage(tm)
+		stage := NewWaitForTransfersStage(tm, nil)
 
 		phase1Transfer := testTransfer(t, "/remote/phase1.txt")
 		mockListFilesError(client, phase1Transfer.RemotePath)
@@ -222,7 +263,7 @@ func TestWaitForTransfersStageErrorType(t *testing.T) {
 		client := &targetagentmocks.TargetAgentClient{}
 		cancelChan := make(chan struct{})
 		tm := startTestTransferManager(t, client, cancelChan)
-		stage := NewWaitForTransfersStage(tm)
+		stage := NewWaitForTransfersStage(tm, nil)
 
 		backgroundTransfer := testTransfer(t, "/remote/background.txt")
 		retrieveFileCalled := mockBlockingRetrieveUntilCancelled(client, backgroundTransfer.RemotePath)

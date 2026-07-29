@@ -93,6 +93,10 @@ type CommandResult struct {
 	Stderr string
 }
 
+// CommandNotFoundExitCode matches the exit code shells use when a command
+// cannot be resolved through PATH.
+const CommandNotFoundExitCode int32 = 127
+
 // ProcessState is platform agnostic wrapper around a process, providing
 // a channel to signify process termination
 type ProcessState struct {

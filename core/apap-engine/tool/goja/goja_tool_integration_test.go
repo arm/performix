@@ -22,6 +22,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
+	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	run_mocks "github.com/Arm-Debug/apap-cli/apap-engine/run/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
@@ -106,7 +107,7 @@ func integrationContext(engine tool.Engine, ic *tool.IntegrationContext) *tool.I
 	ic.Ctx = context.Background()
 	ic.DefaultEngineLocality = tool.EngineLocality{Engine: engine, ToolsRoot: "/target/tools"}
 	ic.ResolveLocality = func(name string) (tool.EngineLocality, error) {
-		if name != "target" {
+		if name != locality.Target {
 			return tool.EngineLocality{}, errors.New("unsupported locality")
 		}
 		return tool.EngineLocality{Engine: engine, FileCollector: ic.DefaultEngineLocality.FileCollector, ToolsRoot: "/target/tools"}, nil

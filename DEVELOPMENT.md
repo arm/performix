@@ -131,10 +131,16 @@ Once prepared, use the narrower tasks as needed:
 | `task core:lint`                            | Run core linters and apply supported fixes.                                         |
 | `task core:clean`                           | Remove local core build outputs.                                                    |
 
-The supported local `apx` build uses the `duckdb_arrow` build tag. Plain `go build` does not select the required DuckDB and Apache Arrow integration. When diagnosing outside Task, run the equivalent command from `core/apap-cli/`:
+The supported local `apx` development build uses the `duckdb_arrow` and `confidential_telemetry` build tags. To build with the public-safe feature set used by default release builds, override the tags:
 
 ```shell
-go build -tags=duckdb_arrow -o apx
+task core:build:apx APX_BUILD_TAGS=duckdb_arrow
+```
+
+Plain `go build` does not select the required build tags. When diagnosing outside Task, run the equivalent development command from `core/apap-cli/`:
+
+```shell
+go build -tags=duckdb_arrow,confidential_telemetry -o apx
 ```
 
 Start and stop the locally built daemon with:

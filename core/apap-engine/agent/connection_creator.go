@@ -20,6 +20,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcconnection"
+	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
@@ -36,14 +37,14 @@ const defaultConnectionTimeout = 2 * time.Second
 const launchScriptName = "verify-and-launch"
 const noAgentCtxPanic = "agent.AgentConn invariant violated: nil lifetime context"
 
-// GetAgentPath retrieves the path of the agent tool directory on the target machine.
-func GetAgentPath(dstToolDir string, platform conductor.TargetPlatform) string {
+// GetAgentPath retrieves the path of the agent tool directory for the given locality.
+func GetAgentPath(dstToolDir string, platform conductor.TargetPlatform, localityName string) string {
 	baseDir := dstToolDir
 	var cmdRunner conductor.CommandRunner
 	if platform.Actions != nil {
 		cmdRunner = platform.Actions.CommandRunner()
 	}
-	resolvedBaseDir, err := conductor.ResolveToolsBaseDir(baseDir, platform.OS, cmdRunner)
+	resolvedBaseDir, err := conductor.ResolveToolsBaseDir(baseDir, platform.OS, cmdRunner, localityName)
 	if err != nil {
 		log.WithError(err).Warn("unable to resolve temp directory for agent deployment")
 		return ""
@@ -234,7 +235,7 @@ func (a *AgentConn) BindContext(parent context.Context) (context.Context, contex
 
 // ConnectionCreator creates new agent connections.
 type ConnectionCreator interface {
-	NewConnection(id string, tp conductor.TargetPlatform, dialer grpcconnection.TCPDialer) (*AgentConn, error)
+	NewConnection(id string, localityName string, tp conductor.TargetPlatform, dialer grpcconnection.TCPDialer) (*AgentConn, error)
 }
 
 func NewConnectionCreator(toolsDir string, rootWorkerEnabled bool) ConnectionCreator {
@@ -252,8 +253,8 @@ func NewConnectionCreator(toolsDir string, rootWorkerEnabled bool) ConnectionCre
 type agentConnectionCreator struct {
 	toolsDir          string
 	rootWorkerEnabled bool
-	launch            func(tp conductor.TargetPlatform, agentPath string, rootWorkerEnabled bool) (int, error)
-	connect           func(conn grpcconnection.GRPCConnector, port int) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error)
+	launch            func(tp conductor.TargetPlatform, agentPath string, rootWorkerEnabled bool, localityName string) (int, error)
+	connect           func(conn grpcconnection.GRPCConnector, port int, localityName string) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error)
 	newTether         func(tether tetherproto.TetherClient, pulseEvery time.Duration) AgentTether
 	newLogger         func(client targetagentproto.TargetAgentClient, logger log.FieldLogger, id string) AgentLogger
 }
@@ -263,18 +264,19 @@ type agentConnectionCreator struct {
 // Tethering and logging streams are started and stored.
 func (p *agentConnectionCreator) NewConnection(
 	id string,
+	localityName string,
 	tp conductor.TargetPlatform,
 	dialer grpcconnection.TCPDialer,
 ) (*AgentConn, error) {
-	agentPath := GetAgentPath(p.toolsDir, tp)
-	port, err := p.launch(tp, agentPath, p.rootWorkerEnabled)
+	agentPath := GetAgentPath(p.toolsDir, tp, localityName)
+	port, err := p.launch(tp, agentPath, p.rootWorkerEnabled, localityName)
 	if err != nil {
 		return nil, err
 	}
 
 	// Create two agent connections: one for data, one for control (to avoid large data transfers interfering
 	// with control flow traffic)
-	dataClient, dataCc, err := p.connect(grpcconnection.NewConnector(dialer), port)
+	dataClient, dataCc, err := p.connect(grpcconnection.NewConnector(dialer), port, localityName)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +286,7 @@ func (p *agentConnectionCreator) NewConnection(
 	cleaner := util.ScopeCleaner{}
 	defer cleaner.MaybeCleanup(func() { _ = ac.Close() })
 
-	controlClient, controlCc, err := p.connect(grpcconnection.NewConnector(dialer), port)
+	controlClient, controlCc, err := p.connect(grpcconnection.NewConnector(dialer), port, localityName)
 	if err != nil {
 		return nil, err
 	}
@@ -326,6 +328,7 @@ func launchAgent(
 	tp conductor.TargetPlatform,
 	agentPath string,
 	rootWorkerEnabled bool,
+	localityName string,
 ) (int, error) {
 	scriptFile := GetAgentLaunchScript(tp)
 	cmd := tp.Path.GenerateRunScriptCommand(scriptFile, agentPath)
@@ -349,7 +352,7 @@ func launchAgent(
 	}
 
 	if err != nil || out.ReturnCode != 0 {
-		return 0, classifyLaunchFailure(tp, agentPath, out, err, !rootWorkerEnabled)
+		return 0, classifyLaunchFailure(tp, agentPath, out, err, !rootWorkerEnabled, localityName)
 	}
 
 	portString := strings.TrimSpace(out.Stdout)
@@ -372,11 +375,13 @@ func classifyLaunchFailure(
 	out conductor.RunCommandOutput,
 	runErr error,
 	requiresAdmin bool,
+	localityName string,
 ) error {
 	scriptFile := GetAgentLaunchScript(tp)
 	metadata := map[string]string{
 		"cmd":        scriptFile,
 		"workingDir": filepath.ToSlash(agentPath),
+		"locality":   localityName,
 	}
 
 	log.Warnf("working dir: %v", agentPath)
@@ -385,7 +390,7 @@ func classifyLaunchFailure(
 		hasAdmin, adminErr := tp.Actions.HasAdminPerms()
 		if !hasAdmin || adminErr != nil {
 			log.Errorf("failed to launch new target agent due to lack of admin or root privileges")
-			msg := message.New(message.EngineAgentConnectionCreatorInsufficientPrivileges)
+			msg := message.New(message.EngineAgentConnectionCreatorInsufficientPrivileges).WithMetadata(map[string]string{"locality": localityName})
 			if adminErr != nil {
 				msg = msg.WithCause(adminErr)
 			}
@@ -395,7 +400,11 @@ func classifyLaunchFailure(
 
 	if _, statErr := tp.Actions.Stat(filepath.Join(agentPath, scriptFile)); statErr != nil {
 		log.Errorf("failed to find verify-and-launch script when launching new target agent at %s", agentPath)
-		return message.New(message.EngineAgentConnectionCreatorAgentNotDeployed).WithCause(statErr).WithMetadata(metadata)
+		code := message.EngineAgentConnectionCreatorAgentNotDeployed
+		if localityName == locality.Host {
+			code = message.EngineAgentConnectionCreatorHostAgentNotDeployed
+		}
+		return message.New(code).WithCause(statErr).WithMetadata(metadata)
 	}
 
 	if out.ReturnCode != 0 {
@@ -412,11 +421,13 @@ func classifyLaunchFailure(
 func newAgentConnection(
 	conn grpcconnection.GRPCConnector,
 	port int,
+	localityName string,
 ) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
 	cc, err := conn.Connect("127.0.0.1", port, defaultConnectionTimeout)
 	if err != nil {
 		metadata := map[string]string{
-			"portNum": strconv.Itoa(port),
+			"portNum":  strconv.Itoa(port),
+			"locality": localityName,
 		}
 		return nil, nil, message.New(message.EngineAgentConnectionCreatorNewAgentConnection).WithCause(err).WithMetadata(metadata)
 	}

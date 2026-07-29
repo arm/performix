@@ -78,7 +78,9 @@ Run Remote Localhost CPU Microarchitecture Recipe As Non-Root User
   [Documentation]  Runs the cpu_microarchitecture recipe via the CLI deployed on the remote target
   ...  as the non-root user, profiling localhost.
   [Arguments]  ${args}
-  Run Remote ATPerf CLI Command As User  recipe run cpu_microarchitecture --target localhost ${args}  ${G_TARGET_USER_NON_ROOT}
+  Run Remote ATPerf CLI Command As User
+  ...  recipe run cpu_microarchitecture --target localhost ${args}
+  ...  ${G_TARGET_USER_NON_ROOT}
 
 Skip If Remote Localhost Is Not Set Up
   [Documentation]  Skips the current test if the remote-localhost apx binary is not present on the

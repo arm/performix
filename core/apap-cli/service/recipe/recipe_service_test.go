@@ -11,11 +11,13 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/client"
@@ -26,7 +28,99 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
 )
+
+type fakeRecipeIssueCommandClient struct {
+	grpc.ClientStream
+	responses []*apapproto.RecipeResponse
+}
+
+func (f *fakeRecipeIssueCommandClient) Recv() (*apapproto.RecipeResponse, error) {
+	if len(f.responses) == 0 {
+		return nil, io.EOF
+	}
+	response := f.responses[0]
+	f.responses = f.responses[1:]
+	return response, nil
+}
+
+func TestStreamProgressResponsesDetachedFinish(t *testing.T) {
+	previousJSONOutput := viper.GetBool("json")
+	viper.Set("json", false)
+	t.Cleanup(func() { viper.Set("json", previousJSONOutput) })
+	runID := &apapproto.RunId{Value: "run-id"}
+	stream := &fakeRecipeIssueCommandClient{responses: []*apapproto.RecipeResponse{
+		{
+			Id: runID,
+			SubMessage: &apapproto.RecipeResponse_StageStart{
+				StageStart: &apapproto.StageStart{StageName: "Waiting for transfers to complete"},
+			},
+		},
+		{
+			Id: runID,
+			SubMessage: &apapproto.RecipeResponse_RecipeFinish{
+				RecipeFinish: &apapproto.RecipeFinish{
+					ReturnCode:                   apapproto.StatusCode_SUCCESS,
+					BackgroundTransfersRemaining: true,
+				},
+			},
+		},
+	}}
+
+	type streamResult struct {
+		response RunResponse
+		err      error
+	}
+	resultCh := make(chan streamResult, 1)
+	go func() {
+		response, err := streamProgressResponses(stream, "recipe", io.Discard, nil)
+		resultCh <- streamResult{response: response, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		require.NoError(t, result.err)
+		require.Equal(t, "Required transfers completed; remaining transfers will continue in the background.", result.response.Stage)
+		require.Equal(t, runID, result.response.RunID)
+		require.True(t, result.response.BackgroundTransfersRemaining)
+	case <-time.After(time.Second):
+		t.Fatal("detached progress rendering did not stop after RecipeFinish")
+	}
+}
+
+func TestSendRecipeRunToEngineForwardsDetachBackgroundTransfers(t *testing.T) {
+	previousJSONOutput := viper.GetBool("json")
+	viper.Set("json", true)
+	t.Cleanup(func() { viper.Set("json", previousJSONOutput) })
+	client := apapprotomocks.NewApapClient(t)
+	stream := &fakeRecipeIssueCommandClient{responses: []*apapproto.RecipeResponse{{
+		Id: &apapproto.RunId{Value: "run-id"},
+		SubMessage: &apapproto.RecipeResponse_RecipeFinish{
+			RecipeFinish: &apapproto.RecipeFinish{ReturnCode: apapproto.StatusCode_SUCCESS},
+		},
+	}}}
+	client.On("RecipeIssueCommand", mock.Anything, mock.MatchedBy(func(command *apapproto.RecipeCommand) bool {
+		start := command.GetStartCommand()
+		return start != nil && start.GetDetachBackgroundTransfers()
+	})).Return(stream, nil).Once()
+
+	response, err := (RecipeRunner{}).SendRecipeRunToEngine(
+		client,
+		&recipe.Recipe{Name: "test"},
+		&RecipeExecutionCtx{
+			Target:                    &engine_target.LocalTarget{},
+			RecipeName:                "test",
+			Workload:                  Workload{PID: -1},
+			DetachBackgroundTransfers: true,
+		},
+		io.Discard,
+	)
+
+	require.NoError(t, err)
+	require.False(t, response.BackgroundTransfersRemaining)
+	client.AssertExpectations(t)
+}
 
 func TestParseInputParameters(t *testing.T) {
 	tests := []struct {
@@ -194,7 +288,7 @@ func TestProcessRunRecipe(t *testing.T) {
 			&recipe.Recipe{}, mock.AnythingOfType("*recipe.RecipeExecutionCtx"), out).Return(RunResponse{RunID: &apapproto.RunId{Value: runId}}, testError)
 
 		err := ProcessRunRecipe(cc, &readerService, &runnerService, recipeName, Workload{}, []string{}, out,
-			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, "test_target")
+			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, false, "test_target")
 
 		assert.Contains(t, out.String(), fmt.Sprintf("Run ID: %v", runId))
 		assert.ErrorContains(t, err, testError.Error())
@@ -213,7 +307,7 @@ func TestProcessRunRecipe(t *testing.T) {
 			&recipe.Recipe{}, mock.AnythingOfType("*recipe.RecipeExecutionCtx"), out).Return(RunResponse{RunID: &apapproto.RunId{Value: runId}}, testError)
 
 		err := ProcessRunRecipe(cc, &readerService, &runnerService, recipeName, Workload{}, []string{}, out,
-			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, "test_target")
+			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, false, "test_target")
 
 		assert.Contains(t, out.String(), fmt.Sprintf("\"run_id\":{\"value\":\"%v\"}", runId))
 		assert.ErrorContains(t, err, testError.Error())
@@ -233,7 +327,7 @@ func TestProcessRunRecipe(t *testing.T) {
 		reader.On("ReadRecipe", recipeName).Return(recipe.Recipe{}, nil)
 
 		err := ProcessRunRecipe(cc, &reader, &runnerService, recipeName, Workload{}, []string{}, out,
-			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, "test_target")
+			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, false, "test_target")
 
 		assert.ErrorIs(t, err, loginErr)
 		runnerService.AssertNotCalled(t, "SendRecipeRunToEngine", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -256,7 +350,7 @@ func TestProcessRunRecipe(t *testing.T) {
 		reader.On("ReadRecipe", recipeName).Return(recipe.Recipe{}, nil)
 
 		err := ProcessRunRecipe(cc, &reader, &runnerService, recipeName, Workload{}, []string{}, out,
-			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, "test_target")
+			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, false, "test_target")
 
 		assert.NoError(t, err)
 	})
@@ -279,7 +373,7 @@ func TestProcessRunRecipe(t *testing.T) {
 		reader.On("ReadRecipe", recipeName).Return(recipe.Recipe{}, nil)
 
 		err := ProcessRunRecipe(cc, &reader, &runnerService, recipeName, Workload{}, []string{}, out,
-			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, "")
+			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, false, "")
 
 		assert.NoError(t, err)
 	})
@@ -297,7 +391,7 @@ func TestProcessRunRecipe(t *testing.T) {
 		reader := MockRecipeReader{}
 
 		err := ProcessRunRecipe(cc, &reader, &runnerService, recipeName, Workload{}, []string{}, out,
-			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, "")
+			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, false, "")
 
 		assert.Error(t, err)
 	})
@@ -318,7 +412,7 @@ func TestProcessRunRecipe(t *testing.T) {
 		reader.On("ReadRecipe", recipeName).Return(recipe.Recipe{Status: recipe.RecipeStatusExperimental}, nil)
 
 		err := ProcessRunRecipe(cc, &reader, &runnerService, recipeName, Workload{}, []string{}, out,
-			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, "test_target")
+			&targetService, loginService, apapproto.ToolDeploy_NONE, run.HostSourceCodePath{}, false, false, "test_target")
 
 		assert.EqualError(t, err, "recipe doesn't exist")
 		assert.NoError(t, message.ValidateMetadataPlaceholders(err))

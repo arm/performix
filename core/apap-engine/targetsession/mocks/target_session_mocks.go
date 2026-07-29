@@ -65,6 +65,11 @@ func (m *MockTargetSessionProvider) TargetSession(tgt target.Target) (targetsess
 	return mockArgs.Get(0).(targetsession.TargetSession), mockArgs.Error(1)
 }
 
+func (m *MockTargetSessionProvider) HostSession() (targetsession.TargetSession, error) {
+	mockArgs := m.Called()
+	return mockArgs.Get(0).(targetsession.TargetSession), mockArgs.Error(1)
+}
+
 func (m *MockTargetSessionProvider) Shutdown() error {
 	mockArgs := m.Called()
 	return mockArgs.Error(0)

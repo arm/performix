@@ -22,13 +22,13 @@ The Target PID Info Contains
 The Target Output Directory Is Empty
   [Documentation]  Confirms that the remote machine does not contain any atperf output directories.
   Target Run Directories Exist
-  VAR  ${stdout}  ${G_LAST_RESULT.stdout.strip()}  scope=LOCAL
+  VAR  ${stdout} =  ${G_LAST_RESULT.stdout.strip()}  scope=LOCAL
   Should Be Equal As Strings  ${stdout}  EMPTY  There are atperf output directories on the remote machine.
 
 The Target Output Directory Is Not Empty
   [Documentation]  Confirms that the remote machine does contain atperf output directories.
   Target Run Directories Exist
-  VAR  ${stdout}  ${G_LAST_RESULT.stdout.strip()}  scope=LOCAL
+  VAR  ${stdout} =  ${G_LAST_RESULT.stdout.strip()}  scope=LOCAL
   Should Be Equal As Strings  ${stdout}  NOT_EMPTY  There are no atperf output directories on the remote machine.
 
 The Output Directory Is Removed From The Target

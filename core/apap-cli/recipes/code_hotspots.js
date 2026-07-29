@@ -4,8 +4,15 @@
 // Code Hotspots Recipe Definition
 
 // @ts-check
+const {
+  findTimelineCounterBindings,
+  buildTimelineSQLRendererBundle,
+} = require('./lib/timeline_sql_renderer');
+
 const TOOL_NEOPROF = { name: 'neoprof', version: '1.1.0' };
 const TOOL_WPERF = { name: 'wperf', version: '1.0.1' };
+const NEOPROF_TIMELINE_COUNTER_PARQUET_PATTERN =
+  'tool/neoprof/0/output/parquet/timeline/series_id=*/bin_duration=*/counter.parquet';
 const readinessMessageCode =
   'engine.recipeparser.js_recipe_stage.READINESS_MESSAGE';
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
@@ -264,15 +271,15 @@ function readyHotspots(context) {
   const workload = context.getWorkload();
   const samplingFreq = context.getParameter('sampling_freq');
   const targetInfo = context.targetInfo();
-  const windowsTarget = isWindowsTarget(targetInfo);
+  const hostReformatEnabled = context.getParameter('reformat_on_host');
+  const collectJitDumpsEnabled =
+    context.getParameter('collect_java_stacks') ||
+    context.getParameter('collect_dotnet_stacks');
 
-  if (windowsTarget) {
+  if (isWindowsTarget(targetInfo)) {
     const tools = generateWperfConfig(workload, buildWperfParams(samplingFreq));
     const toolResponses = context.probeTools(tools);
     const allAdvice = collectToolAdvice(tools, toolResponses);
-    const collectJitDumpsEnabled =
-      context.getParameter('collect_java_stacks') ||
-      context.getParameter('collect_dotnet_stacks');
     if (collectJitDumpsEnabled) {
       allAdvice.push({
         ToolName: TOOL_WPERF.name,
@@ -280,8 +287,21 @@ function readyHotspots(context) {
         MessageCode: readinessMessageCode,
         Metadata: {
           message:
-            'JIT dump collection is not supported on Windows, jitted symbols will not be available.',
+            'JIT dump collection is not supported for Windows targets. Jitted symbols will not be available.',
         },
+        Cause: '',
+      });
+    }
+    if (hostReformatEnabled) {
+      allAdvice.push({
+        ToolName: TOOL_WPERF.name,
+        AdviceSeverity: 'warning',
+        MessageCode: readinessMessageCode,
+        Metadata: {
+          message:
+            'Reformatting on the host is not supported for Windows targets. Reformatting will be done on the target.',
+        },
+        Cause: '',
       });
     }
     return {
@@ -294,6 +314,31 @@ function readyHotspots(context) {
   const tools = generateNeoprofConfig(workload, params);
   const toolResponses = context.probeTools(tools);
   const allAdvice = collectToolAdvice(tools, toolResponses);
+  if (collectJitDumpsEnabled) {
+    if (isAndroidTarget(targetInfo)) {
+      allAdvice.push({
+        ToolName: TOOL_NEOPROF.name,
+        AdviceSeverity: 'warning',
+        MessageCode: readinessMessageCode,
+        Metadata: {
+          message:
+            'JIT dump collection is not supported for Android targets. Jitted symbols will not be available.',
+        },
+        Cause: '',
+      });
+    } else if (hostReformatEnabled) {
+      allAdvice.push({
+        ToolName: TOOL_NEOPROF.name,
+        AdviceSeverity: 'warning',
+        MessageCode: readinessMessageCode,
+        Metadata: {
+          message:
+            'JIT dump collection is not supported when reformatting on the host. Jitted symbols will not be available.',
+        },
+        Cause: '',
+      });
+    }
+  }
   return {
     status: toolStatusToRecipeStatus(allAdvice),
     advice: allAdvice,
@@ -365,6 +410,144 @@ function getRenderRunTool(context) {
 function getRenderParameterIfExists(context, parameterId) {
   const param = context.getRenderParameter(parameterId);
   return param === null || param === undefined ? null : Number(param);
+}
+
+/**
+ * @param {number} binDuration
+ * @returns {string}
+ */
+function buildProvisionalTimelinePivotQuery(binDuration) {
+  return `
+    -- Presentation-layer query for provisional timeline charts.
+    --
+    -- The upstream timeline SQL bundle keeps source loading and interval
+    -- expansion faithful to the parquet inputs, so gaps remain absent there.
+    -- This final chart query intentionally builds a dense x/device-thread
+    -- domain and zero-fills uncovered bins to match current Streamline
+    -- rendering behaviour. Treat this as display-only policy for now.
+    PIVOT (
+      WITH series_points AS (
+        SELECT
+          x_start,
+          concat(
+            'dev',
+            CAST(device_no AS VARCHAR),
+            '_thread',
+            CAST(thread AS VARCHAR)
+          ) AS device_thread_key,
+          value
+        FROM {table}
+      ),
+      x_bounds AS (
+        SELECT
+          MIN(x_start) AS min_x_start,
+          MAX(x_start) AS max_x_start
+        FROM series_points
+      ),
+      x_domain AS (
+        SELECT generated.x_start
+        FROM x_bounds
+        CROSS JOIN generate_series(
+          CAST(x_bounds.min_x_start AS BIGINT),
+          CAST(x_bounds.max_x_start AS BIGINT),
+          ${binDuration}
+        ) AS generated(x_start)
+      ),
+      device_thread_domain AS (
+        SELECT DISTINCT device_thread_key
+        FROM series_points
+      )
+      SELECT
+        x_domain.x_start,
+        device_thread_domain.device_thread_key,
+        COALESCE(MAX(series_points.value), 0.0) AS value
+      FROM x_domain
+      CROSS JOIN device_thread_domain
+      LEFT JOIN series_points
+        ON series_points.x_start = x_domain.x_start
+       AND series_points.device_thread_key = device_thread_domain.device_thread_key
+      GROUP BY
+        x_domain.x_start,
+        device_thread_domain.device_thread_key
+    )
+    ON device_thread_key
+    USING MAX(value)
+    GROUP BY x_start
+    ORDER BY x_start
+  `.trim();
+}
+
+/**
+ * @param {Array<{
+ *   rawSeriesKey: string,
+ *   rendererId: string,
+ *   output: string,
+ *   seriesId: number,
+ *   binDuration: number,
+ * }>} timelineSources
+ * @returns {{ visualizations: any[] }}
+ */
+function buildProvisionalTimelineVisualization(timelineSources) {
+  if (timelineSources.length === 0) {
+    return { visualizations: [] };
+  }
+
+  const tables = {};
+  const groups = {};
+  const rendererId = timelineSources[0].rendererId;
+
+  for (const [groupIndex, source] of timelineSources.entries()) {
+    const groupKey = `${source.rawSeriesKey}_${source.binDuration}`;
+    const binDuration = source.binDuration;
+    const seriesLabel = `Series ${source.seriesId}`;
+    tables[groupKey] = [
+      {
+        renderer_id: source.rendererId,
+        output: source.output,
+      },
+    ];
+    groups[groupKey] = {
+      title: `${seriesLabel} (${binDuration} ns)`,
+      type: 'line',
+      index: groupIndex,
+      description: `Provisional timeline series ${seriesLabel} at ${binDuration} ns resolution.`,
+      config: {
+        xAxisTitle: 'Time (ns)',
+        yAxisTitle: 'Value',
+        customQuery: {
+          tableNamePlaceholder: '{table}',
+          query: buildProvisionalTimelinePivotQuery(binDuration),
+        },
+        series: [
+          {
+            type: 'pattern',
+            name: { template: 'Device {y1} Thread {y2}' },
+            xColumn: 'x_start',
+            yColumn: { pattern: '^dev(\\d+)_thread(\\d+)$' },
+          },
+        ],
+      },
+    };
+  }
+
+  return {
+    visualizations: [
+      {
+        type: 'timeline',
+        id: 'timeline',
+        rendererId,
+        title: 'Timeline',
+        description: 'Preview provisional timeline data for hotspots analysis.',
+        config: {
+          xAxisUnit: 'ns',
+          data_source: {
+            tables,
+          },
+          groups,
+        },
+      },
+    ],
+  };
 }
 
 const timeRangeFilter = {
@@ -1024,6 +1207,27 @@ function renderHotspots(context) {
           },
         },
   ];
+
+  if (context.isNeoprofTimelineEnabled() && !isComparison) {
+    const timelineBindings = findTimelineCounterBindings(
+      context,
+      0,
+      NEOPROF_TIMELINE_COUNTER_PARQUET_PATTERN,
+    );
+    if (timelineBindings.length > 0) {
+      const timelineSourceBundle = buildTimelineSQLRendererBundle({
+        bindings: timelineBindings,
+      });
+      if (timelineSourceBundle.renderers.length > 0) {
+        const timelineVisualization = buildProvisionalTimelineVisualization(
+          timelineSourceBundle.timelineSources,
+        );
+
+        renderers.push(...timelineSourceBundle.renderers);
+        visualizations.push(...timelineVisualization.visualizations);
+      }
+    }
+  }
 
   if (isComparison) {
     renderers.push({

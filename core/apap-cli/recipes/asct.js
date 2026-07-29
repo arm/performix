@@ -518,9 +518,8 @@ function getCreatedCsvFiles(context, entity) {
   try {
     const files = new Set(
       context
-        .listRunComponents(0, entity)
-        .map((component) => component.fileName)
-        .filter((fileName) => fileName.endsWith('.csv')),
+        .listRunComponents(0, `${entity}/**/*.csv`)
+        .map((component) => component.fileName),
     );
 
     if (files.size === 0) {

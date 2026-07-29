@@ -67,9 +67,9 @@ func NewReadyCommand(cc client.ClientConnector,
 			workloadCtx.AndroidPackageName = androidPackage
 			workloadCtx.AndroidActivityName = androidActivity
 
-			// System-wide pid (-1) should be set if no workload of any kind specified, as recipe probe fails otherwise
+			// Must specify one workload mode.
 			if !cmd.Flags().Changed("pid") && !cmd.Flags().Changed("workload") && !cmd.Flags().Changed("system-wide") && !workloadCtx.AndroidLaunch {
-				workloadCtx.PID = -1
+				return message.New(message.CliCmdRecipeReadyNoWorkloadSpecified)
 			}
 
 			if cmd.Flags().Changed("use-shell") && !cmd.Flags().Changed("workload") {

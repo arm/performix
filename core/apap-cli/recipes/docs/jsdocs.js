@@ -229,7 +229,7 @@
  * @property {string} engineVersion
  * @property {function(): RunDescription[]} getRunDescriptions - Provides general metadata associated with the runs to render.
  * @property {function(number, string): RunComponentDescription[]} listRunComponents
- * Lists manifest components for an indexed run under the given entity path.
+ * Lists manifest components for an indexed run matching the given component glob.
  * @property {function(string): any} getRenderParameter - Retrieves a render parameter by ID.
  * @property {function(): Object.<string, any>} getRenderParameters - Retrieves all render parameters by ID.
  * @property {function(string): void} logWarn
@@ -571,6 +571,7 @@
  * @property {(cmd:(string|string[]), opts?:ExecOptions) => Promise<CommandResult>} execCommand
  * Run a command and resolve with its full output.
  * - `cmd` defines the program to launch along with its arguments.
+ * - If the program cannot be found through `PATH`, resolves with exit code 127.
  *
  * @property {(cmd:(string|string[]), opts:ProcessOptions) => Promise<ProcessHandle>} startProcess
  * Launch a process and resolve to a `ProcessHandle` allowing interaction of the process

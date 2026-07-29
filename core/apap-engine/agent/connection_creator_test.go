@@ -29,6 +29,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	conductormocks "github.com/Arm-Debug/apap-cli/apap-engine/conductor/conductormocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcconnection"
+	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
@@ -48,7 +49,7 @@ func TestGetAgentPath(t *testing.T) {
 		Path:                  &conductor.LinuxPathUtils{},
 		Actions:               &conductormocks.MockTargetActions{CmdRunner: cmdRunner},
 	}
-	got := GetAgentPath(base, tp)
+	got := GetAgentPath(base, tp, locality.Target)
 	want := fmt.Sprintf("%v/%v/%v/%v/%v", base, terminology.GetProductBinaryName(), "tools", terminology.GetAgentBinaryName(), versions.GetVersion())
 	assert.Equal(t, want, got)
 	cmdRunner.AssertExpectations(t)
@@ -70,7 +71,7 @@ func TestGetAgentPath_WindowsDefault(t *testing.T) {
 		Actions:               &conductormocks.MockTargetActions{CmdRunner: cmdRunner},
 	}
 
-	got := GetAgentPath(base, tp)
+	got := GetAgentPath(base, tp, locality.Target)
 	expectedBase := filepath.Join("C:/Users/runner/AppData/Local", terminology.GetProductBinaryName(), "tools")
 	want := fmt.Sprintf(`%v\%v\%v`, tp.Path.ToOSPath(expectedBase), terminology.GetAgentBinaryName(), versions.GetVersion())
 	assert.Equal(t, want, got)
@@ -91,7 +92,7 @@ func TestGetAgentPath_WindowsConfiguredPathNoActions(t *testing.T) {
 		Actions:               &conductormocks.MockTargetActions{CmdRunner: cmdRunner},
 	}
 
-	got := GetAgentPath(base, tp)
+	got := GetAgentPath(base, tp, locality.Target)
 	expectedBase := filepath.Join("C:/tools", terminology.GetProductBinaryName(), "tools")
 	want := fmt.Sprintf(`%v\%v\%v`, tp.Path.ToOSPath(expectedBase), terminology.GetAgentBinaryName(), versions.GetVersion())
 	assert.Equal(t, want, got)
@@ -108,7 +109,7 @@ func TestGetAgentPath_ResolverErrorReturnsEmpty(t *testing.T) {
 		Actions:               &conductormocks.MockTargetActions{CmdRunner: cmdRunner},
 	}
 
-	got := GetAgentPath("", tp)
+	got := GetAgentPath("", tp, locality.Target)
 	assert.Empty(t, got)
 	cmdRunner.AssertExpectations(t)
 }
@@ -119,7 +120,7 @@ func TestNewAgentConnection_Success(t *testing.T) {
 		Return((*grpc.ClientConn)(nil), nil).
 		Once()
 
-	client, cc, err := newAgentConnection(mc, 4242)
+	client, cc, err := newAgentConnection(mc, 4242, locality.Target)
 	assert.NoError(t, err)
 	assert.NotNil(t, client)
 	assert.Nil(t, cc)
@@ -132,8 +133,8 @@ func TestNewAgentConnection_Fail(t *testing.T) {
 		Return((*grpc.ClientConn)(nil), errors.New("connect failed")).
 		Once()
 
-	_, _, err := newAgentConnection(mc, 7777)
-	expectedMetadata := map[string]string{"portNum": "7777"}
+	_, _, err := newAgentConnection(mc, 7777, locality.Target)
+	expectedMetadata := map[string]string{"portNum": "7777", "locality": locality.Target}
 	expectedErr := message.New(message.EngineAgentConnectionCreatorNewAgentConnection).WithCause(errors.New("connect failed")).WithMetadata(expectedMetadata)
 	assert.Equal(t, expectedErr, err)
 	assert.NoError(t, message.ValidateMetadataPlaceholders(err))
@@ -224,7 +225,7 @@ func TestLaunchAgent_Succeeds(t *testing.T) {
 			ReturnCode: 0,
 		}, nil).Once()
 
-		port, err := launchAgent(tp, agentPath, false)
+		port, err := launchAgent(tp, agentPath, false, locality.Target)
 		require.NoError(t, err)
 		assert.Equal(t, 4242, port)
 		actions.AssertExpectations(t)
@@ -243,7 +244,7 @@ func TestLaunchAgent_Succeeds(t *testing.T) {
 			ReturnCode: 0,
 		}, nil).Once()
 
-		port, err := launchAgent(tp, agentPath, true)
+		port, err := launchAgent(tp, agentPath, true, locality.Target)
 		require.NoError(t, err)
 		assert.Equal(t, 4242, port)
 		actions.AssertExpectations(t)
@@ -262,10 +263,11 @@ func TestLaunchAgent_FailsRunCommandError(t *testing.T) {
 	actions.On("HasAdminPerms").Return(true, nil).Once()
 	actions.On("Stat", filepath.Join(agentPath, GetAgentLaunchScript(tp))).Return(nil, nil).Once()
 
-	_, err := launchAgent(tp, agentPath, false)
+	_, err := launchAgent(tp, agentPath, false, locality.Target)
 	expectedMetadata := map[string]string{
 		"cmd":        GetAgentLaunchScript(tp),
 		"workingDir": filepath.ToSlash(agentPath),
+		"locality":   locality.Target,
 	}
 	expectedErr := message.New(message.EngineAgentConnectionCreatorRunLaunchCommand).WithCause(scriptErr).WithMetadata(expectedMetadata)
 	assert.Equal(t, expectedErr, err)
@@ -287,10 +289,11 @@ func TestLaunchAgent_FailsRunCommandError_NonRoot(t *testing.T) {
 	actions.On("RunCommand", expectedCmd).Return(conductor.RunCommandOutput{}, someErr).Once()
 	actions.On("Stat", filepath.Join(agentPath, GetAgentLaunchScript(tp))).Return(nil, nil).Once()
 
-	_, err := launchAgent(tp, agentPath, true)
+	_, err := launchAgent(tp, agentPath, true, locality.Target)
 	expectedMetadata := map[string]string{
 		"cmd":        GetAgentLaunchScript(tp),
 		"workingDir": filepath.ToSlash(agentPath),
+		"locality":   locality.Target,
 	}
 	expectedErr := message.New(message.EngineAgentConnectionCreatorRunLaunchCommand).WithCause(someErr).WithMetadata(expectedMetadata)
 	require.Equal(t, expectedErr, err)
@@ -317,11 +320,12 @@ func TestLaunchAgent_FailsBadReturnCode(t *testing.T) {
 	actions.On("HasAdminPerms").Return(true, nil).Once()
 	actions.On("Stat", filepath.Join(agentPath, GetAgentLaunchScript(tp))).Return(nil, nil).Once()
 
-	_, err := launchAgent(tp, agentPath, false)
+	_, err := launchAgent(tp, agentPath, false, locality.Target)
 	expectedMetadata := map[string]string{
 		"cmd":        GetAgentLaunchScript(tp),
 		"workingDir": filepath.ToSlash(agentPath),
 		"exitCode":   "1",
+		"locality":   locality.Target,
 	}
 	expectedErr := message.New(message.EngineAgentConnectionCreatorLaunchErrorCode).WithMetadata(expectedMetadata)
 	assert.Equal(t, expectedErr, err)
@@ -339,8 +343,8 @@ func TestLaunchAgent_FailsNoAdminPerms(t *testing.T) {
 	actions.On("RunCommandAsAdmin", expectedCmd).Return(conductor.RunCommandOutput{}, errors.New("run error")).Once()
 	actions.On("HasAdminPerms").Return(false, nil).Once()
 
-	_, err := launchAgent(tp, agentPath, false)
-	expectedErr := message.New(message.EngineAgentConnectionCreatorInsufficientPrivileges)
+	_, err := launchAgent(tp, agentPath, false, locality.Target)
+	expectedErr := message.New(message.EngineAgentConnectionCreatorInsufficientPrivileges).WithMetadata(map[string]string{"locality": locality.Target})
 	assert.Equal(t, expectedErr, err)
 	assert.NoError(t, message.ValidateMetadataPlaceholders(err))
 	actions.AssertExpectations(t)
@@ -358,8 +362,8 @@ func TestLaunchAgent_FailsAdminCheckError(t *testing.T) {
 	actions.On("RunCommandAsAdmin", expectedCmd).Return(conductor.RunCommandOutput{}, errors.New("run error")).Once()
 	actions.On("HasAdminPerms").Return(false, adminErr).Once()
 
-	_, err := launchAgent(tp, agentPath, false)
-	expectedErr := message.New(message.EngineAgentConnectionCreatorInsufficientPrivileges).WithCause(adminErr)
+	_, err := launchAgent(tp, agentPath, false, locality.Target)
+	expectedErr := message.New(message.EngineAgentConnectionCreatorInsufficientPrivileges).WithMetadata(map[string]string{"locality": locality.Target}).WithCause(adminErr)
 	assert.Equal(t, expectedErr, err)
 	assert.NoError(t, message.ValidateMetadataPlaceholders(err))
 	actions.AssertExpectations(t)
@@ -383,12 +387,46 @@ func TestLaunchAgent_FailsScriptMissing(t *testing.T) {
 	actions.On("HasAdminPerms").Return(true, nil).Once()
 	actions.On("Stat", filepath.Join(agentPath, GetAgentLaunchScript(tp))).Return(nil, statErr).Once()
 
-	_, err := launchAgent(tp, agentPath, false)
+	_, err := launchAgent(tp, agentPath, false, locality.Target)
 	expectedMetadata := map[string]string{
 		"cmd":        GetAgentLaunchScript(tp),
 		"workingDir": filepath.ToSlash(agentPath),
+		"locality":   locality.Target,
 	}
 	expectedErr := message.New(message.EngineAgentConnectionCreatorAgentNotDeployed).
+		WithCause(statErr).
+		WithMetadata(expectedMetadata)
+
+	assert.Equal(t, expectedErr, err)
+	assert.NoError(t, message.ValidateMetadataPlaceholders(err))
+	actions.AssertExpectations(t)
+}
+
+func TestLaunchAgent_FailsHostScriptMissing(t *testing.T) {
+	actions := &conductormocks.MockTargetActions{}
+	tp := conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}, Actions: actions}
+
+	agentPath := "/tmp/tools/agent"
+	expectedCmd := tp.Path.GenerateRunScriptCommand(GetAgentLaunchScript(tp), agentPath)
+
+	statErr := errors.New("file does not exist")
+
+	actions.On("RunCommandAsAdmin", expectedCmd).Return(conductor.RunCommandOutput{
+		Stdout:     "",
+		Stderr:     "not found",
+		ReturnCode: 1,
+	}, nil).Once()
+
+	actions.On("HasAdminPerms").Return(true, nil).Once()
+	actions.On("Stat", filepath.Join(agentPath, GetAgentLaunchScript(tp))).Return(nil, statErr).Once()
+
+	_, err := launchAgent(tp, agentPath, false, locality.Host)
+	expectedMetadata := map[string]string{
+		"cmd":        GetAgentLaunchScript(tp),
+		"workingDir": filepath.ToSlash(agentPath),
+		"locality":   locality.Host,
+	}
+	expectedErr := message.New(message.EngineAgentConnectionCreatorHostAgentNotDeployed).
 		WithCause(statErr).
 		WithMetadata(expectedMetadata)
 
@@ -425,7 +463,7 @@ func TestLaunchAgent_FailsInvalidPort(t *testing.T) {
 				ReturnCode: 0,
 			}, nil).Once()
 
-			port, err := launchAgent(tp, agentPath, false)
+			port, err := launchAgent(tp, agentPath, false, locality.Target)
 			assert.Zero(t, port)
 
 			var msgErr message.Message
@@ -453,15 +491,15 @@ func TestNewConnection_Success(t *testing.T) {
 
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp",
-		launch:   func(_ conductor.TargetPlatform, _ string, _ bool) (int, error) { return 4242, nil },
-		connect: func(_ grpcconnection.GRPCConnector, _ int) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
+		launch:   func(_ conductor.TargetPlatform, _ string, _ bool, _ string) (int, error) { return 4242, nil },
+		connect: func(_ grpcconnection.GRPCConnector, _ int, _ string) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
 			return client, nil, nil
 		},
 		newTether: func(_ tetherproto.TetherClient, _ time.Duration) AgentTether { return tetherMock },
 		newLogger: func(_ targetagentproto.TargetAgentClient, _ log.FieldLogger, _ string) AgentLogger { return loggerMock },
 	}
 
-	ac, err := p.NewConnection("target_agent", conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}}, nil)
+	ac, err := p.NewConnection("target_agent", locality.Target, conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}}, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, ac)
 
@@ -493,8 +531,8 @@ func TestNewConnection_RoutesDataAndControlTrafficSeparately(t *testing.T) {
 	var connectCalls int32
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp",
-		launch:   func(_ conductor.TargetPlatform, _ string, _ bool) (int, error) { return 4242, nil },
-		connect: func(_ grpcconnection.GRPCConnector, _ int) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
+		launch:   func(_ conductor.TargetPlatform, _ string, _ bool, _ string) (int, error) { return 4242, nil },
+		connect: func(_ grpcconnection.GRPCConnector, _ int, _ string) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
 			switch atomic.AddInt32(&connectCalls, 1) {
 			case 1:
 				return dataClient, dataCc, nil
@@ -525,7 +563,7 @@ func TestNewConnection_RoutesDataAndControlTrafficSeparately(t *testing.T) {
 		},
 	}
 
-	ac, err := p.NewConnection("target_agent", conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}}, nil)
+	ac, err := p.NewConnection("target_agent", locality.Target, conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, ac)
 
@@ -618,15 +656,15 @@ func TestNewConnection_TetherError(t *testing.T) {
 
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp",
-		launch:   func(_ conductor.TargetPlatform, _ string, _ bool) (int, error) { return 4242, nil },
-		connect: func(_ grpcconnection.GRPCConnector, _ int) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
+		launch:   func(_ conductor.TargetPlatform, _ string, _ bool, _ string) (int, error) { return 4242, nil },
+		connect: func(_ grpcconnection.GRPCConnector, _ int, _ string) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
 			return client, nil, nil
 		},
 		newTether: func(_ tetherproto.TetherClient, _ time.Duration) AgentTether { return tetherMock },
 		newLogger: func(_ targetagentproto.TargetAgentClient, _ log.FieldLogger, _ string) AgentLogger { return loggerMock },
 	}
 
-	ac, err := p.NewConnection("target_agent", conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}}, nil)
+	ac, err := p.NewConnection("target_agent", locality.Target, conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}}, nil)
 	assert.Equal(t, assert.AnError, err)
 	assert.Nil(t, ac)
 
@@ -649,15 +687,15 @@ func TestNewConnection_LoggerError(t *testing.T) {
 
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp",
-		launch:   func(_ conductor.TargetPlatform, _ string, _ bool) (int, error) { return 4242, nil },
-		connect: func(_ grpcconnection.GRPCConnector, _ int) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
+		launch:   func(_ conductor.TargetPlatform, _ string, _ bool, _ string) (int, error) { return 4242, nil },
+		connect: func(_ grpcconnection.GRPCConnector, _ int, _ string) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
 			return client, nil, nil
 		},
 		newTether: func(_ tetherproto.TetherClient, _ time.Duration) AgentTether { return tetherMock },
 		newLogger: func(_ targetagentproto.TargetAgentClient, _ log.FieldLogger, _ string) AgentLogger { return loggerMock },
 	}
 
-	ac, err := p.NewConnection("target_agent", conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}}, nil)
+	ac, err := p.NewConnection("target_agent", locality.Target, conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}}, nil)
 	assert.Equal(t, assert.AnError, err)
 	assert.Nil(t, ac)
 
@@ -863,7 +901,7 @@ func TestNewConnection_FailsWhenToolsPathDeletedAfterPrepare(t *testing.T) {
 	// Initial prepare succeeds
 	cmdRunner.On("RunCommand", "test -e /tmp/tools").Return("", "", nil).Once()
 	cmdRunner.On("RunCommand", "test -w /tmp/tools").Return("", "", nil).Once()
-	_, err := conductor.ResolveToolsBaseDir("/tmp/tools", conductor.Linux, cmdRunner)
+	_, err := conductor.ResolveToolsBaseDir("/tmp/tools", conductor.Linux, cmdRunner, locality.Target)
 	require.NoError(t, err)
 
 	// Later resolve (during GetAgentPath) sees the path missing
@@ -871,7 +909,7 @@ func TestNewConnection_FailsWhenToolsPathDeletedAfterPrepare(t *testing.T) {
 
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp/tools",
-		launch: func(_ conductor.TargetPlatform, agentPath string, _ bool) (int, error) {
+		launch: func(_ conductor.TargetPlatform, agentPath string, _ bool, _ string) (int, error) {
 			assert.Empty(t, agentPath)
 			return 0, assert.AnError
 		},
@@ -883,7 +921,7 @@ func TestNewConnection_FailsWhenToolsPathDeletedAfterPrepare(t *testing.T) {
 		Actions:               &conductormocks.MockTargetActions{CmdRunner: cmdRunner},
 	}
 
-	ac, err := p.NewConnection("target_agent", tp, nil)
+	ac, err := p.NewConnection("target_agent", locality.Target, tp, nil)
 	assert.Error(t, err)
 	assert.Nil(t, ac)
 	cmdRunner.AssertExpectations(t)
@@ -894,7 +932,7 @@ func TestNewConnection_FailsWhenToolsPathBecomesUnwritableAfterPrepare(t *testin
 	// Initial prepare succeeds
 	cmdRunner.On("RunCommand", "test -e /tmp/tools").Return("", "", nil).Once()
 	cmdRunner.On("RunCommand", "test -w /tmp/tools").Return("", "", nil).Once()
-	_, err := conductor.ResolveToolsBaseDir("/tmp/tools", conductor.Linux, cmdRunner)
+	_, err := conductor.ResolveToolsBaseDir("/tmp/tools", conductor.Linux, cmdRunner, locality.Target)
 	require.NoError(t, err)
 
 	// Later resolve (during GetAgentPath) finds it unwritable
@@ -903,7 +941,7 @@ func TestNewConnection_FailsWhenToolsPathBecomesUnwritableAfterPrepare(t *testin
 
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp/tools",
-		launch: func(_ conductor.TargetPlatform, agentPath string, _ bool) (int, error) {
+		launch: func(_ conductor.TargetPlatform, agentPath string, _ bool, _ string) (int, error) {
 			assert.Empty(t, agentPath)
 			return 0, assert.AnError
 		},
@@ -915,7 +953,7 @@ func TestNewConnection_FailsWhenToolsPathBecomesUnwritableAfterPrepare(t *testin
 		Actions:               &conductormocks.MockTargetActions{CmdRunner: cmdRunner},
 	}
 
-	ac, err := p.NewConnection("target_agent", tp, nil)
+	ac, err := p.NewConnection("target_agent", locality.Target, tp, nil)
 	assert.Error(t, err)
 	assert.Nil(t, ac)
 	cmdRunner.AssertExpectations(t)

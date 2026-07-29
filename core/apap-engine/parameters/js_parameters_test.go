@@ -4,6 +4,7 @@
 package parameters
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/dop251/goja"
@@ -220,6 +221,53 @@ func TestExtractRecipeParametersSuccess(t *testing.T) {
 	assert.Equal(t, ParameterConfigTypeMultiSelect, optionFns[0].ParameterType)
 	assert.Equal(t, 1, optionFns[0].ParameterIndex)
 	require.NotNil(t, optionFns[0].Callback)
+}
+
+func TestExtractRecipeParametersPreservesEmptyMultiSelectDefault(t *testing.T) {
+	defs := []ParameterDefinition{
+		{
+			ID: "metrics_group",
+			Config: map[string]any{
+				"type":         "multi_select",
+				"defaultValue": []string{},
+				"options":      []string{"basic"},
+			},
+		},
+	}
+
+	params, _, err := ExtractRecipeParameters(defs, "test-recipe", apiversion.LegacyRecipeRadioStringOptionsAPIVersion)
+	require.NoError(t, err)
+	require.Len(t, params.MultiSelect, 1)
+	require.NotNil(t, params.MultiSelect[0].DefaultValue)
+
+	bound, err := BindRecipeParameters(map[string]any{}, params, "test-recipe")
+	require.NoError(t, err)
+	metadata, err := json.Marshal(bound.CollapseToMap())
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"metrics_group":[]}`, string(metadata))
+}
+
+func TestExtractRecipeParametersPreservesOmittedMultiSelectDefault(t *testing.T) {
+	defs := []ParameterDefinition{
+		{
+			ID: "metrics_group",
+			Config: map[string]any{
+				"type":    "multi_select",
+				"options": []string{"basic"},
+			},
+		},
+	}
+
+	params, _, err := ExtractRecipeParameters(defs, "test-recipe", apiversion.LegacyRecipeRadioStringOptionsAPIVersion)
+	require.NoError(t, err)
+	require.Len(t, params.MultiSelect, 1)
+	require.Nil(t, params.MultiSelect[0].DefaultValue)
+
+	bound, err := BindRecipeParameters(map[string]any{}, params, "test-recipe")
+	require.NoError(t, err)
+	metadata, err := json.Marshal(bound.CollapseToMap())
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"metrics_group":null}`, string(metadata))
 }
 
 func TestExtractRenderParameters(t *testing.T) {

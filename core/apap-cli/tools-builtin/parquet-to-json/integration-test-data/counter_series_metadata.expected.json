@@ -1,0 +1,56 @@
+[
+  {
+    "counter_class": 0,
+    "description": "The counter counts every branch or other change in the program flow that the branch prediction resources are capable of predicting",
+    "mode": 0,
+    "name": "Possible Predictions",
+    "series_id": 20,
+    "title": "Branch Predictor",
+    "units": ""
+  },
+  {
+    "counter_class": 0,
+    "description": "The counter counts each correction to the predicted program flow that occurs because of a misprediction from, or no prediction from, a change in control flow that the branch prediction resources are capable of predicting",
+    "mode": 0,
+    "name": "Mispredictions",
+    "series_id": 18,
+    "title": "Branch Predictor",
+    "units": ""
+  },
+  {
+    "counter_class": 0,
+    "description": "The counter increments for every architecturally executed instruction",
+    "mode": 0,
+    "name": "All",
+    "series_id": 16,
+    "title": "Instructions (Executed)",
+    "units": "instructions"
+  },
+  {
+    "counter_class": 0,
+    "description": "This event counts any load or store operation or translation table walk access which looks up in the L1 data cache. In particular, any access which could count the 'L1 Data Cache: Refill' event causes this event to count. The following instructions are not counted; Cache maintenance instructions and prefetches and Non-cacheable accesses. This event counts the sum of 'L1 Data Cache: Access (due to read)' and 'L1 Data Cache: Access (due to write)'.",
+    "mode": 0,
+    "name": "Access",
+    "series_id": 14,
+    "title": "L1 Data Cache",
+    "units": ""
+  },
+  {
+    "counter_class": 0,
+    "description": "This event counts any load or store operation or translation table walk access which causes data to be read from outside the L1, including accesses which do not allocate into L1. The following instructions are not counted; Cache maintenance instructions and prefetches, Stores of an entire cache line, even if they make a coherency request outside the L1, Partial cache line writes which do not allocate into the L1 cache and Non-cacheable accesses. This event counts the sum of 'L1 Data Cache: Refill (due to read)' and 'L1 Data Cache: Refill (due to write)'.",
+    "mode": 0,
+    "name": "Refill",
+    "series_id": 12,
+    "title": "L1 Data Cache",
+    "units": ""
+  },
+  {
+    "counter_class": 0,
+    "description": "The counter increments on every cycle",
+    "mode": 0,
+    "name": "CPU Cycles",
+    "series_id": 10,
+    "title": "Cycles",
+    "units": "cycles"
+  }
+]

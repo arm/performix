@@ -3,6 +3,7 @@
 
 *** Settings ***
 Documentation  A resource file containing keywords for downloading Arm Performix packages.
+
 Library        ../libs/NetworkUtils.py
 Resource       common.resource
 Resource       install.resource
@@ -36,18 +37,21 @@ Ping GitHub
 
 Get Latest Release Tag
   [Documentation]  Gets the latest release tag from GitHub using the REST API.
-  Run Keyword Without Logging  Run Host Command  curl -L -H "Authorization: Bearer %{GITHUB_TOKEN}" ${RELEASES_API_LATEST} | jq -r .tag_name
+  Run Keyword Without Logging
+  ...  Run Host Command
+  ...  curl -L -H "Authorization: Bearer %{GITHUB_TOKEN}" ${RELEASES_API_LATEST} | jq -r .tag_name
   ${tag} =  Strip String  ${G_LAST_RESULT.stdout}
-  VAR  ${TAG}  ${tag}  scope=SUITE
+  VAR  ${TAG} =  ${tag}  scope=SUITE
   Should Not Be Empty  ${TAG}  msg=Failed to get latest release tag from GitHub
   RETURN  ${TAG}
 
 Get Release Asset ID
   [Documentation]  Gets the asset ID of the specified package for the specified release tag from GitHub using the REST API.
   [Arguments]  ${tag}  ${pkg}
-  Run Keyword Without Logging  Run Host Command
+  Run Keyword Without Logging
+  ...  Run Host Command
   ...  curl -s -H "Authorization: Bearer %{GITHUB_TOKEN}" ${TAGS_API}/${tag} | jq -r '.assets[] | select(.name == "${pkg}").id'
-  VAR  ${ASSET_ID}  ${G_LAST_RESULT.stdout}  scope=SUITE
+  VAR  ${ASSET_ID} =  ${G_LAST_RESULT.stdout}  scope=SUITE
   Should Not Be Empty  ${ASSET_ID}  msg=Failed to get release asset ID from GitHub
   RETURN  ${ASSET_ID}
 
@@ -57,7 +61,8 @@ Download Asset By ID
   [Arguments]  ${asset_id}  ${dst_dir}  ${pkg_name}
   Log  Downloading package ${pkg_name} with asset ID ${asset_id} to ${dst_dir}/${pkg_name}
   Create Directory  ${dst_dir}
-  Run Keyword Without Logging  Run Host Command
+  Run Keyword Without Logging
+  ...  Run Host Command
   ...  curl -L -H "Authorization: Bearer %{GITHUB_TOKEN}" -H "Accept: application/octet-stream" -o ${dst_dir}/${pkg_name} ${ASSETS_API}/${asset_id}
   File Should Exist  ${dst_dir}/${pkg_name}
   Get File Size  ${dst_dir}/${pkg_name}
@@ -102,7 +107,7 @@ Download Package
   ${pkg_name} =  Build APX Package Name  ${tag}  ${os}  ${arch}  ${extension}
   ${asset_id} =  Get Release Asset ID  ${tag}  ${pkg_name}
   Download Asset By ID  ${asset_id}  ${destination}  ${pkg_name}
-  VAR  ${DOWNLOADED_PKG_PATH}  ${destination}/${pkg_name}  scope=SUITE
+  VAR  ${DOWNLOADED_PKG_PATH} =  ${destination}/${pkg_name}  scope=SUITE
 
 Select First File
   [Documentation]  Selects the first file from the provided list.
@@ -113,7 +118,7 @@ Build APX Package Name
   [Documentation]  Builds the APX package name based on the tag, OS, architecture, and extension. Removes the
   ...  leading 'v' from the tag to get the version.
   [Arguments]  ${tag}  ${os}  ${arch}  ${extension}
-  VAR  ${version}  ${tag}[1:]  scope=LOCAL
+  VAR  ${version} =  ${tag}[1:]  scope=LOCAL
   RETURN  apx_${version}_${os}_${arch}.${extension}
 
 Remove Download Packages

@@ -17,6 +17,18 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
 )
 
+type failOnOpenFS struct {
+	afero.Fs
+	blockedPath string
+}
+
+func (f failOnOpenFS) Open(name string) (afero.File, error) {
+	if NormalizePath(name) == NormalizePath(f.blockedPath) {
+		return nil, fmt.Errorf("blocked path opened: %s", name)
+	}
+	return f.Fs.Open(name)
+}
+
 func TestModel(t *testing.T) {
 	t.Run("resolvecomponent finds item in manifest and makes it absolute", func(t *testing.T) {
 		cType := ComponentType{
@@ -68,6 +80,24 @@ func TestModel(t *testing.T) {
 		assert.Equal(t, "aaa/bbb", component.RelativePath)
 		assert.Equal(t, "unknown", component.Type.Name)
 		assert.Equal(t, filepath.FromSlash("/foo/bar/aaa/bbb"), component.AbsolutePath)
+	})
+
+	t.Run("resolvecomponent rejects paths that escape the model base", func(t *testing.T) {
+		model := NewOnDiskModel("/foo/bar", &Manifest{Entries: []ManifestEntry{}}, Metadata{})
+		model.FS = afero.NewMemMapFs()
+
+		err := model.FS.MkdirAll("/foo", perms.LocalDirPerm)
+		require.NoError(t, err)
+
+		file, err := model.FS.Create("/foo/outside.txt")
+		require.NoError(t, err)
+		require.NoError(t, file.Close())
+
+		component, err := model.ResolveComponent("../outside.txt")
+
+		require.Error(t, err)
+		require.ErrorContains(t, err, "escapes model base")
+		require.Equal(t, Component{}, component)
 	})
 }
 
@@ -235,6 +265,241 @@ func TestModelFindEntities(t *testing.T) {
 			{RelativePath: "entity1/sub1"},
 			{RelativePath: "entity1/sub1/sub2"},
 		}, entities)
+	})
+}
+
+func TestModelFindComponents(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	logType := ComponentType{
+		Name:          TypeLogText,
+		SchemaVersion: "0.1",
+	}
+	jsonType := ComponentType{
+		Name:          TypeLogJSON,
+		SchemaVersion: "0.1",
+	}
+	metricsType := ComponentType{
+		Name:          "metrics",
+		SchemaVersion: "0.1",
+	}
+
+	model := NewOnDiskModel("/a/model", &Manifest{Entries: []ManifestEntry{
+		{Path: "tool/logs/0/messages.txt", ComponentType: logType},
+		{Path: "tool/logs/1/events.jsonl", ComponentType: jsonType},
+		{Path: "tool/other/0/metrics.csv", ComponentType: metricsType},
+	}}, Metadata{})
+	model.FS = fs
+
+	require.NoError(t, fs.MkdirAll(`/a/model/tool/logs/0/nested`, perms.LocalDirPerm))
+	require.NoError(t, fs.MkdirAll(`/a/model/tool/logs/1`, perms.LocalDirPerm))
+	require.NoError(t, fs.MkdirAll(`/a/model/tool/other/0`, perms.LocalDirPerm))
+
+	file, err := fs.Create(`/a/model/tool/logs/0/messages.txt`)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	file, err = fs.Create(`/a/model/tool/logs/0/nested/ignored.txt`)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	file, err = fs.Create(`/a/model/tool/logs/1/events.jsonl`)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	file, err = fs.Create(`/a/model/tool/other/0/metrics.csv`)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	t.Run("finds components recursively by glob", func(t *testing.T) {
+		components, err := model.FindComponents("tool/logs/**")
+		require.NoError(t, err)
+		require.Equal(t, []Component{
+			{
+				Type:         logType,
+				RelativePath: "tool/logs/0/messages.txt",
+				AbsolutePath: filepath.FromSlash("/a/model/tool/logs/0/messages.txt"),
+			},
+			{
+				Type:         unknownComponentType,
+				RelativePath: "tool/logs/0/nested/ignored.txt",
+				AbsolutePath: filepath.FromSlash("/a/model/tool/logs/0/nested/ignored.txt"),
+			},
+			{
+				Type:         jsonType,
+				RelativePath: "tool/logs/1/events.jsonl",
+				AbsolutePath: filepath.FromSlash("/a/model/tool/logs/1/events.jsonl"),
+			},
+		}, components)
+	})
+
+	t.Run("backslashes in glob normalized", func(t *testing.T) {
+		components, err := model.FindComponents(`\tool\logs\**`)
+		require.NoError(t, err)
+		require.Len(t, components, 3)
+		require.Equal(t, "tool/logs/0/messages.txt", components[0].RelativePath)
+		require.Equal(t, "tool/logs/0/nested/ignored.txt", components[1].RelativePath)
+		require.Equal(t, "tool/logs/1/events.jsonl", components[2].RelativePath)
+	})
+
+	t.Run("leading slash is ignored", func(t *testing.T) {
+		components, err := model.FindComponents("/tool/other/**")
+		require.NoError(t, err)
+		require.Equal(t, []Component{
+			{
+				Type:         metricsType,
+				RelativePath: "tool/other/0/metrics.csv",
+				AbsolutePath: filepath.FromSlash("/a/model/tool/other/0/metrics.csv"),
+			},
+		}, components)
+	})
+
+	t.Run("accepts an exact component glob without widening it", func(t *testing.T) {
+		components, err := model.FindComponents("tool/other/0/metrics.csv")
+		require.NoError(t, err)
+		require.Equal(t, []Component{
+			{
+				Type:         metricsType,
+				RelativePath: "tool/other/0/metrics.csv",
+				AbsolutePath: filepath.FromSlash("/a/model/tool/other/0/metrics.csv"),
+			},
+		}, components)
+	})
+
+	t.Run("returns no matches for an exact component path that does not exist", func(t *testing.T) {
+		components, err := model.FindComponents("tool/other/0/missing.csv")
+		require.NoError(t, err)
+		require.Empty(t, components)
+	})
+
+	t.Run("returns unknown concrete components for files transferred from a former globbed request", func(t *testing.T) {
+		globbedManifestModel := NewOnDiskModel("/a/globbed-model", &Manifest{Entries: []ManifestEntry{
+			{
+				Path:          "tool/example/0/output/*.parquet",
+				ComponentType: ComponentType{Name: "example-data", SchemaVersion: "1.0"},
+			},
+		}}, Metadata{})
+		globbedManifestModel.FS = afero.NewMemMapFs()
+
+		require.NoError(t, globbedManifestModel.FS.MkdirAll(`/a/globbed-model/tool/example/0/output`, perms.LocalDirPerm))
+
+		file, err := globbedManifestModel.FS.Create(`/a/globbed-model/tool/example/0/output/one.parquet`)
+		require.NoError(t, err)
+		require.NoError(t, file.Close())
+
+		file, err = globbedManifestModel.FS.Create(`/a/globbed-model/tool/example/0/output/two.parquet`)
+		require.NoError(t, err)
+		require.NoError(t, file.Close())
+
+		components, err := globbedManifestModel.FindComponents("tool/example/0/output/**")
+		require.NoError(t, err)
+		require.Equal(t, []Component{
+			{
+				Type:         unknownComponentType,
+				RelativePath: "tool/example/0/output/one.parquet",
+				AbsolutePath: filepath.FromSlash("/a/globbed-model/tool/example/0/output/one.parquet"),
+			},
+			{
+				Type:         unknownComponentType,
+				RelativePath: "tool/example/0/output/two.parquet",
+				AbsolutePath: filepath.FromSlash("/a/globbed-model/tool/example/0/output/two.parquet"),
+			},
+		}, components)
+	})
+
+	t.Run("invalid glob returns an error", func(t *testing.T) {
+		_, err := model.FindComponents("[")
+		require.Error(t, err)
+		require.ErrorContains(t, err, "failure during pattern match")
+	})
+
+	t.Run("invalid glob returns an error even when the tree is empty", func(t *testing.T) {
+		emptyModel := NewOnDiskModel("/a/empty-model", &Manifest{}, Metadata{})
+		emptyModel.FS = afero.NewMemMapFs()
+
+		require.NoError(t, emptyModel.FS.MkdirAll(`/a/empty-model`, perms.LocalDirPerm))
+
+		_, err := emptyModel.FindComponents("[")
+		require.Error(t, err)
+		require.ErrorContains(t, err, "failure during pattern match")
+	})
+
+	t.Run("limits walking to the literal prefix before glob metacharacters", func(t *testing.T) {
+		baseFS := afero.NewMemMapFs()
+		scopedModel := NewOnDiskModel("/a/scoped-model", &Manifest{Entries: []ManifestEntry{
+			{Path: "tool/logs/0/messages.txt", ComponentType: logType},
+		}}, Metadata{})
+
+		require.NoError(t, baseFS.MkdirAll(`/a/scoped-model/tool/logs/0`, perms.LocalDirPerm))
+		require.NoError(t, baseFS.MkdirAll(`/a/scoped-model/unrelated/deep`, perms.LocalDirPerm))
+
+		file, err := baseFS.Create(`/a/scoped-model/tool/logs/0/messages.txt`)
+		require.NoError(t, err)
+		require.NoError(t, file.Close())
+
+		file, err = baseFS.Create(`/a/scoped-model/unrelated/deep/ignored.txt`)
+		require.NoError(t, err)
+		require.NoError(t, file.Close())
+
+		scopedModel.FS = failOnOpenFS{
+			Fs:          baseFS,
+			blockedPath: `/a/scoped-model/unrelated`,
+		}
+
+		components, err := scopedModel.FindComponents("tool/logs/**")
+		require.NoError(t, err)
+		require.Equal(t, []Component{
+			{
+				Type:         logType,
+				RelativePath: "tool/logs/0/messages.txt",
+				AbsolutePath: filepath.FromSlash("/a/scoped-model/tool/logs/0/messages.txt"),
+			},
+		}, components)
+	})
+
+	t.Run("returns no matches when the scoped glob root does not exist", func(t *testing.T) {
+		components, err := model.FindComponents("tool/missing/**")
+		require.NoError(t, err)
+		require.Empty(t, components)
+	})
+
+	t.Run("returns an error when the glob prefix escapes the model base", func(t *testing.T) {
+		components, err := model.FindComponents("../**/*.csv")
+		require.Nil(t, components)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "escapes model base")
+	})
+
+	t.Run("scopes walking to the last literal path segment before an in-segment wildcard", func(t *testing.T) {
+		baseFS := afero.NewMemMapFs()
+		scopedModel := NewOnDiskModel("/a/mid-segment-model", &Manifest{Entries: []ManifestEntry{
+			{Path: "tool/logs-app/0/messages.txt", ComponentType: logType},
+		}}, Metadata{})
+
+		require.NoError(t, baseFS.MkdirAll(`/a/mid-segment-model/tool/logs-app/0`, perms.LocalDirPerm))
+		require.NoError(t, baseFS.MkdirAll(`/a/mid-segment-model/elsewhere/deep`, perms.LocalDirPerm))
+
+		file, err := baseFS.Create(`/a/mid-segment-model/tool/logs-app/0/messages.txt`)
+		require.NoError(t, err)
+		require.NoError(t, file.Close())
+
+		file, err = baseFS.Create(`/a/mid-segment-model/elsewhere/deep/ignored.txt`)
+		require.NoError(t, err)
+		require.NoError(t, file.Close())
+
+		scopedModel.FS = failOnOpenFS{
+			Fs:          baseFS,
+			blockedPath: `/a/mid-segment-model/elsewhere`,
+		}
+
+		components, err := scopedModel.FindComponents("tool/logs-*/**")
+		require.NoError(t, err)
+		require.Equal(t, []Component{
+			{
+				Type:         logType,
+				RelativePath: "tool/logs-app/0/messages.txt",
+				AbsolutePath: filepath.FromSlash("/a/mid-segment-model/tool/logs-app/0/messages.txt"),
+			},
+		}, components)
 	})
 }
 

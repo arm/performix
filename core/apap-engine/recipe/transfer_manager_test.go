@@ -1087,7 +1087,9 @@ func TestTransferManagerFlushTransfers(t *testing.T) {
 		backgroundCalled, releaseBackground := mockBlockingRetrieveFile(client, backgroundTransfer.RemotePath, true)
 
 		phase1CompleteBeforeBackground := make(chan bool, 1)
-		tm.OnPhase1TransferComplete = func() {
+		hasPendingBackgroundTransfersAtPhase1 := make(chan bool, 1)
+		tm.OnPhase1TransferComplete = func(hasPendingBackgroundTransfers bool) {
+			hasPendingBackgroundTransfersAtPhase1 <- hasPendingBackgroundTransfers
 			select {
 			case <-backgroundCalled:
 				phase1CompleteBeforeBackground <- false
@@ -1101,6 +1103,7 @@ func TestTransferManagerFlushTransfers(t *testing.T) {
 		}()
 
 		assert.True(t, requireMessage(t, phase1CompleteBeforeBackground, "phase1 completion was not reported before background transfer started"))
+		assert.True(t, requireMessage(t, hasPendingBackgroundTransfersAtPhase1, "background work was not reported at phase1 completion"))
 		requireMessage(t, backgroundCalled, "background transfer did not start")
 		requireNoMessage(t, resultCh, func(got message.Message) string {
 			return "flushTransfers returned before background transfer finished"
@@ -1109,6 +1112,49 @@ func TestTransferManagerFlushTransfers(t *testing.T) {
 
 		got := waitForFlushResult(t, resultCh)
 		assert.NoError(t, got)
+		client.AssertExpectations(t)
+	})
+
+	t.Run("reports no pending background transfers when immediate background finishes before phase1", func(t *testing.T) {
+		defer goleak.VerifyNone(t)
+		client := &targetagentmocks.TargetAgentClient{}
+		tm, _, baseCancel, _ := newStartTransferTestManager(t, client, 1)
+
+		backgroundTransfer := fileTransfer(t, false)
+		backgroundTransfer.RemotePath = "/remote/background.txt"
+		mockSingleListFiles(client, backgroundTransfer.RemotePath)
+		mockRetrieveFile(client, backgroundTransfer.RemotePath)
+
+		tm.addTransferCount(backgroundTransferPhase)
+		tm.startTransferRequest(TransferRequest{
+			FileTransfer:       backgroundTransfer,
+			AgentSupplier:      agentSupplier(client),
+			ImmediateRetrieval: true,
+			BackgroundTransfer: true,
+		})
+		tm.backgroundWg.Wait()
+
+		phase1Transfer := fileTransfer(t, false)
+		phase1Transfer.RemotePath = "/remote/phase1.txt"
+		mockSingleListFiles(client, phase1Transfer.RemotePath)
+		mockRetrieveFile(client, phase1Transfer.RemotePath)
+		tm.deferredPhase1Transfers = []TransferRequest{{
+			FileTransfer:  phase1Transfer,
+			AgentSupplier: agentSupplier(client),
+		}}
+
+		phase1CallbackCalled := false
+		pendingAtPhase1 := true
+		tm.OnPhase1TransferComplete = func(hasPendingBackgroundTransfers bool) {
+			phase1CallbackCalled = true
+			pendingAtPhase1 = hasPendingBackgroundTransfers
+		}
+
+		got := tm.flushTransfers(FlushTransfersMessage{runSucceeded: true}, baseCancel)
+
+		assert.NoError(t, got)
+		require.True(t, phase1CallbackCalled, "phase1 callback was not invoked")
+		assert.False(t, pendingAtPhase1)
 		client.AssertExpectations(t)
 	})
 
@@ -1123,7 +1169,7 @@ func TestTransferManagerFlushTransfers(t *testing.T) {
 		_, releaseTransfer := mockBlockingRetrieveFile(client, transfer.RemotePath, false)
 
 		phase1Complete := make(chan struct{}, 1)
-		tm.OnPhase1TransferComplete = func() {
+		tm.OnPhase1TransferComplete = func(bool) {
 			phase1Complete <- struct{}{}
 		}
 		resultCh := make(chan message.Message, 1)
@@ -1163,7 +1209,8 @@ func TestTransferManagerFlushTransfers(t *testing.T) {
 		tm, _, baseCancel, _ := newStartTransferTestManager(t, client, 1)
 		notifier := &stageLifecycleRecordingNotifier{}
 		tm.notifier = notifier
-		tm.OnPhase1TransferComplete = func() {
+		tm.OnPhase1TransferComplete = func(hasPendingBackgroundTransfers bool) {
+			assert.False(t, hasPendingBackgroundTransfers)
 			// Assert that the stage has not ended yet
 			// This ensures that when the stage does end, the run result will already have been updated
 			// in the manifest and the run is therefore loadable in the GUI

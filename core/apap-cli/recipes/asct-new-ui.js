@@ -414,6 +414,22 @@ const ASCT_C2C_LATENCY_DATA_SOURCE = makeRendererDataSource(
 
 const ASCT_CSV_ANALYSIS_VISUALIZATIONS = [
   {
+    key: 'peakBandwidthGrid',
+    benchmarkName: 'peak-bandwidth',
+    config: {
+      customQuery: {
+        tableNamePlaceholder: '__table__',
+        query:
+          'SELECT "% of Peak Theoretical", "Peak BW [GB/s]", "Traffic type" ' +
+          'FROM __table__',
+      },
+      noDataMessage: 'Peak bandwidth data is unavailable for this run.',
+      noDataStatus: 'info',
+      showColumnFilters: false,
+      showColumnMenu: false,
+    },
+  },
+  {
     key: 'coreToCoreLatencyHeatmap',
     benchmarkName: 'c2c-latency',
     config: {
@@ -451,7 +467,14 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
     fileName: 'latency-sweep.ubench.json',
     config: {
       xAxisTitle: 'Message size (bytes)',
+      xAxisType: 'log',
+      xAxisLogBase: 2,
+      xAxisMin: 'dataMin',
       yAxisTitle: 'Latency (ns)',
+      yAxisType: 'log',
+      yAxisLogBase: 2,
+      yAxisMin: 'dataMin',
+      pointSize: 7,
       enableZoom: false,
       series: [
         {
@@ -487,6 +510,107 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
           ORDER BY size_bytes
         `,
       },
+    },
+  },
+  {
+    key: 'latencySweepGrid',
+    benchmarkName: 'latency-sweep',
+    fileName: 'latency-sweep.ubench.json',
+    config: {
+      customQuery: {
+        tableNamePlaceholder: '__table__',
+        query: `
+          WITH pivoted AS (
+            PIVOT __table__
+            ON metric
+            USING first(value)
+            GROUP BY row_key
+          )
+          SELECT * EXCLUDE (row_key)
+          FROM pivoted
+          ORDER BY try_cast(row_key AS INTEGER), row_key
+        `,
+      },
+      noDataMessage: 'Latency sweep data is unavailable for this run.',
+      noDataStatus: 'info',
+      showColumnFilters: false,
+      showColumnMenu: false,
+    },
+  },
+  {
+    key: 'bandwidthSweepLineChart',
+    benchmarkName: 'bandwidth-sweep',
+    fileName: 'bandwidth-sweep.ubench.json',
+    config: {
+      xAxisTitle: 'Message size (bytes)',
+      xAxisType: 'log',
+      xAxisLogBase: 2,
+      xAxisMin: 'dataMin',
+      yAxisTitle: 'Bandwidth (Mbps)',
+      yAxisType: 'log',
+      yAxisLogBase: 2,
+      yAxisMin: 'dataMin',
+      pointSize: 7,
+      enableZoom: false,
+      series: [
+        {
+          type: 'single',
+          name: 'Total bandwidth',
+          xColumn: 'sizes',
+          yColumn: 'total_bandwidth_mbps',
+        },
+      ],
+      customQuery: {
+        tableNamePlaceholder: '__table__',
+        query: `
+          WITH chart_values AS (
+            SELECT
+              row_key,
+              max(
+                CASE WHEN metric = 'sizes' THEN try_cast(value AS DOUBLE) END
+              ) AS sizes,
+              max(
+                CASE
+                  WHEN metric = 'total_bandwidth_mbps'
+                  THEN try_cast(value AS DOUBLE)
+                END
+              ) AS total_bandwidth_mbps
+            FROM __table__
+            WHERE metric IN ('sizes', 'total_bandwidth_mbps')
+            GROUP BY row_key
+          )
+          SELECT sizes, total_bandwidth_mbps
+          FROM chart_values
+          WHERE sizes IS NOT NULL
+            AND total_bandwidth_mbps IS NOT NULL
+          ORDER BY sizes
+        `,
+      },
+    },
+  },
+  {
+    key: 'bandwidthSweepGrid',
+    benchmarkName: 'bandwidth-sweep',
+    fileName: 'bandwidth-sweep.ubench.json',
+    config: {
+      customQuery: {
+        tableNamePlaceholder: '__table__',
+        query: `
+          WITH pivoted AS (
+            PIVOT __table__
+            ON metric
+            USING first(value)
+            GROUP BY row_key
+          )
+          SELECT * EXCLUDE (row_key)
+          FROM pivoted
+          ORDER BY try_cast(row_key AS INTEGER), row_key
+        `,
+      },
+      noDataMessage: 'Bandwidth sweep data is unavailable for this run.',
+      noDataStatus: 'info',
+      showColumnFilters: false,
+      showColumnMenu: false,
     },
   },
 ];
@@ -557,7 +681,7 @@ function buildAsctAnalysisConfig({ entity, selectedBenchmarks }) {
     if (selectedBenchmark === undefined) {
       return;
     }
-    const rendererId = `asct_json_${selectedBenchmark.id}`;
+    const rendererId = `asct_json_${selectedBenchmark.id}_${v.key}`;
 
     renderersToAdd.push({
       type: 'SQL',
@@ -595,6 +719,7 @@ function renderAsct(context) {
   const visualizations = [];
 
   const entity = 'tool/asct/0/output';
+  const createdCsvFiles = getCreatedCsvFiles(context, entity).files;
 
   const params =
     runDescriptions.length > 0 ? runDescriptions[0].Parameters : {};
@@ -628,6 +753,48 @@ function renderAsct(context) {
     config: asctAnalysisConfig.analysisConfig,
   });
 
+  if (createdCsvFiles.has('system-info.csv')) {
+    const rendererId = 'asct_key_value_system_info';
+
+    renderers.push({
+      type: 'SQL',
+      id: rendererId,
+      config: {
+        sql: `
+          SELECT *
+          FROM read_csv(
+            {{path:${entity}/system-info.csv}},
+            header = false,
+            columns = {'key': 'VARCHAR', 'value': 'VARCHAR'}
+          )
+        `,
+        output: {
+          name: 'table',
+          component_type: {
+            name: 'flat_table',
+            schema_version: '1.0',
+          },
+        },
+      },
+    });
+
+    visualizations.push({
+      type: 'asct_system_information',
+      id: 'asct_system_info_table',
+      rendererId: rendererId,
+      title: 'System Information',
+      description:
+        'System information collected by ASCT, including CPU, memory, and storage details.',
+      config: {
+        data_source: {
+          tables: {
+            systemInformation: [{ renderer_id: rendererId, output: 'table' }],
+          },
+        },
+      },
+    });
+  }
+
   return { renderers, visualizations };
 }
 
@@ -640,9 +807,8 @@ function getCreatedCsvFiles(context, entity) {
   try {
     const files = new Set(
       context
-        .listRunComponents(0, entity)
-        .map((component) => component.fileName)
-        .filter((fileName) => fileName.endsWith('.csv')),
+        .listRunComponents(0, `${entity}/**/*.csv`)
+        .map((component) => component.fileName),
     );
 
     if (files.size === 0) {

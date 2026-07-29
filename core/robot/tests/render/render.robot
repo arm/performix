@@ -3,12 +3,15 @@
 
 *** Settings ***
 Documentation   A test suite to exercise the 'render' and 'run render' CLI of Arm Total Performance.
+
 Resource        ../../resources/keywords/target.resource
 Resource        ../../resources/keywords/render.resource
 Resource        ../../resources/keywords/process.resource
 Resource        ../../resources/keywords/environment.resource
+
 Suite Setup     Render Suite Setup
 Suite Teardown  Render Suite Teardown
+
 Test Tags  render
 
 
@@ -38,7 +41,7 @@ ${PROC_NAME}  ${EMPTY}
 
 The Run Can Be Invoke-Rendered With StreamlineAnalyzeFlatFunctions2
   [Documentation]  Check that a run can be invoke-rendered with StreamlineAnalyzeFlatFunctions2
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   Given The Run Exists  ${CPU_MICROARCH_RUN_ID_1}
   When Run Invoke Render  ${CPU_MICROARCH_RUN_ID_1}  renderer_configs=${FLAT_RENDER_CONFIG}
   Then The Render Invocation Was Successful
@@ -46,7 +49,7 @@ The Run Can Be Invoke-Rendered With StreamlineAnalyzeFlatFunctions2
 
 The StreamlineAnalyzeFlatFunctions2 Invoke-Render Session Tables Are Queried Successfully
   [Documentation]  Checks that all tables for StreamlineAnalyzeFlatFunctions2 render session can be queried succssfully.
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   [Setup]  Run Keywords  The Run Exists  ${CPU_MICROARCH_RUN_ID_1}
   ...  AND  The Runs Are Invoke-Rendered Successfully  ${CPU_MICROARCH_RUN_ID_1}  renderer_configs=${FLAT_RENDER_CONFIG}
   Given The Render Session ID Is Valid  ${G_RENDER_SESSION_ID}
@@ -57,7 +60,7 @@ The StreamlineAnalyzeFlatFunctions2 Invoke-Render Session Tables Are Queried Suc
 
 The Run Can Be Invoke-Rendered With StreamlineAnalyzeFunctionProfileRenderer2
   [Documentation]  Check that a run can be rendererd with StreamlineAnalyzeFunctionProfileRenderer2
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   Given The Run Exists  ${CPU_MICROARCH_RUN_ID_1}
   When Run Invoke Render  ${CPU_MICROARCH_RUN_ID_1}  renderer_configs=${FLAT_RENDER_CONFIG}
   Then The Render Invocation Was Successful
@@ -65,7 +68,7 @@ The Run Can Be Invoke-Rendered With StreamlineAnalyzeFunctionProfileRenderer2
 
 The StreamlineAnalyzeFunctionProfileRenderer2 Invoke-Render Session Tables Are Queried Successfully
   [Documentation]  Checks that all tables for StreamlineAnalyzeFunctionProfileRenderer2 render session can be queried succssfully.
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   [Setup]  Run Keywords  The Run Exists  ${CPU_MICROARCH_RUN_ID_1}
   ...  AND  The Runs Are Invoke-Rendered Successfully  ${CPU_MICROARCH_RUN_ID_1}  renderer_configs=${FLAT_RENDER_CONFIG}
   ...  AND  Sleep  1s
@@ -77,7 +80,7 @@ The StreamlineAnalyzeFunctionProfileRenderer2 Invoke-Render Session Tables Are Q
 
 The Run Can Be Invoke-Rendered With TargetInfoRenderer
   [Documentation]  Check that a run can be rendererd with TargetInfoRenderer
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   Given The Run Exists  ${CODE_HOTSPOTS_RUN_ID_1}
   When Run Invoke Render  ${CODE_HOTSPOTS_RUN_ID_1}  renderer_configs=--renderer=TargetInfoRenderer={}
   Then The Render Invocation Was Successful
@@ -85,7 +88,7 @@ The Run Can Be Invoke-Rendered With TargetInfoRenderer
 
 The TargetInfoRenderer Invoke-Render Session Tables Are Queried Successfully
   [Documentation]  Checks that all tables for TargetInfoRenderer render session can be queried succssfully.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   [Setup]  Run Keywords  The Run Exists  ${CODE_HOTSPOTS_RUN_ID_1}
   ...  AND  The Runs Are Invoke-Rendered Successfully  ${CODE_HOTSPOTS_RUN_ID_1}  renderer_configs=--renderer=TargetInfoRenderer={}
   Given The Render Session ID Is Valid  ${G_RENDER_SESSION_ID}
@@ -94,7 +97,7 @@ The TargetInfoRenderer Invoke-Render Session Tables Are Queried Successfully
 
 The SlAnalyze Renderer Successfully Filters A CPU Microarchitecture Run by PID
   [Documentation]  Invoke-render SlAnalyze and flat functions using a PID filter from a running process.
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   [Setup]  Run Keywords  Skip Unless Target OS Is  ${OS_LINUX}
   ...  AND  Run Busy Loop Process On Target And Capture PID
   ...  AND  Run CPU Microarchitecture With System-Wide And Capture Run ID
@@ -107,7 +110,7 @@ The SlAnalyze Renderer Successfully Filters A CPU Microarchitecture Run by PID
 
 The SlAnalyze Renderer Successfully Filters A Code Hotspots Run by PID
   [Documentation]  Invoke-render SlAnalyze and flat functions using a PID filter from a running process.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   [Setup]  Run Keywords  Skip Unless Target OS Is  ${OS_LINUX}
   ...  AND  Run Busy Loop Process On Target And Capture PID
   ...  AND  Run Code Hotspots With System-Wide And Capture Run ID
@@ -120,7 +123,7 @@ The SlAnalyze Renderer Successfully Filters A Code Hotspots Run by PID
 
 Run Render Successfully Filters a Code Hotspots Run by PID with SlAnalyze Renderer
   [Documentation]  Run render a Code Hotspots Run with PID filter and confirm it's successful.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   [Setup]  Run Keywords  Skip Unless Target OS Is  ${OS_LINUX}
   ...  AND  Run Busy Loop Process On Target And Capture PID
   ...  AND  Run Code Hotspots With System-Wide And Capture Run ID
@@ -137,16 +140,19 @@ Run Render Successfully Filters a Code Hotspots Run by PID with SlAnalyze Render
 
 The Runs Can Be Invoke-Rendered With CompareDrilldownFlat
   [Documentation]  Check that a run can be rendererd with CompareDrilldownFlat
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   Given The Run Exists  ${CPU_MICROARCH_RUN_ID_1}
   And The Run Exists  ${CPU_MICROARCH_RUN_ID_2}
-  When Run Invoke Render  ${CPU_MICROARCH_RUN_ID_1}  ${CPU_MICROARCH_RUN_ID_2}  renderer_configs=${FLAT_COMPARISON_RENDER_CONFIG}
+  When Run Invoke Render
+  ...  ${CPU_MICROARCH_RUN_ID_1}
+  ...  ${CPU_MICROARCH_RUN_ID_2}
+  ...  renderer_configs=${FLAT_COMPARISON_RENDER_CONFIG}
   Then The Render Invocation Was Successful
   And The Render Session ID Is Valid  ${G_RENDER_SESSION_ID}
 
 The CompareDrilldownFlat Invoke-Render Session Tables Are Queried Successfully
   [Documentation]  Checks that all tables for CompareDrilldownFlat render session can be queried succssfully.
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   [Setup]  Run Keywords  The Run Exists  ${CPU_MICROARCH_RUN_ID_1}
   ...  AND  The Run Exists  ${CPU_MICROARCH_RUN_ID_2}
   ...  AND  The Runs Are Invoke-Rendered Successfully
@@ -160,7 +166,7 @@ The CompareDrilldownFlat Invoke-Render Session Tables Are Queried Successfully
 
 The Runs Can Be Invoke-Rendered With DisassemblyRenderer
   [Documentation]  Check that two runs can be rendered with the DisassemblyRenderer
-  [Tags]  code_hotspots  disassembly
+  [Tags]  code-hotspots  disassembly
   Given The Run Exists  ${CODE_HOTSPOTS_RUN_ID_1}
   And The Run Exists  ${CODE_HOTSPOTS_RUN_ID_2}
   When Run Render  ${CODE_HOTSPOTS_RUN_ID_1}  ${CODE_HOTSPOTS_RUN_ID_2}
@@ -173,7 +179,7 @@ The Runs Can Be Invoke-Rendered With DisassemblyRenderer
 
 The Run Can Be Invoke-Rendered With A Renderer ID
   [Documentation]  Check that a run can be invoke-rendered with an explicit renderer ID supplied.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   Given The Run Exists  ${CODE_HOTSPOTS_RUN_ID_1}
   When Run Invoke Render  ${CODE_HOTSPOTS_RUN_ID_1}  renderer_configs=--renderer=Log:foo={}
   Then The Render Invocation Was Successful
@@ -183,28 +189,28 @@ The Run Can Be Invoke-Rendered With A Renderer ID
 
 The CPU Microarchitecture Run Renders Successfully
   [Documentation]  Check that CPU Microarchitecture run can be rendered.
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   Given The Run Exists  ${CPU_MICROARCH_RUN_ID_1}
   When Run Render  ${CPU_MICROARCH_RUN_ID_1}
   Then The Render Invocation Was Successful
 
 The Instruction Mix Dynamic Run Renders Successfully
   [Documentation]  Check that Instruction Mix Dynamic run can be rendered.
-  [Tags]  instruction_mix
+  [Tags]  instruction-mix
   Given The Run Exists  ${INSTRUCTION_MIX_DYNAMIC_RUN_ID_1}
   When Run Render  ${INSTRUCTION_MIX_DYNAMIC_RUN_ID_1}
   Then The Render Invocation Was Successful
 
 The Instruction Mix Static Run Renders Successfully
   [Documentation]  Check that Instruction Mix Static run can be rendered.
-  [Tags]  instruction_mix
+  [Tags]  instruction-mix
   Given The Run Exists  ${INSTRUCTION_MIX_STATIC_RUN_ID_1}
   When Run Render  ${INSTRUCTION_MIX_STATIC_RUN_ID_1}
   Then The Render Invocation Was Successful
 
 The Code Hotspots Run Renders Successfully
   [Documentation]  Check that Code Hotspots run can be rendered.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   Given The Run Exists  ${CODE_HOTSPOTS_RUN_ID_1}
   When Run Render  ${CODE_HOTSPOTS_RUN_ID_1}
   Then The Render Invocation Was Successful
@@ -212,29 +218,28 @@ The Code Hotspots Run Renders Successfully
 The Memory Access Run Renders Successfully
   [Documentation]  Check that Memory Access run can be rendered.
   ...  Disabled as there's no SPE data with the 1s timeout
-  [Tags]  disabled  memory_access
+  [Tags]  disabled  memory-access
   Given The Run Exists  ${MEMORY_ACCESS_RUN_ID}
   When Run Render  ${MEMORY_ACCESS_RUN_ID}
   Then The Render Invocation Was Successful
 
 The System Utilization Run Renders Successfully
   [Documentation]  Check that a System Utilization run can be rendered.
-  [Tags]  system_utilization
-  Skip Unless System Utilization Is Supported On Target
+  [Tags]  system-utilization
+  [Setup]  Skip Unless System Utilization Is Supported On Target
   Given The Run Exists  ${SYSTEM_UTILIZATION_RUN_ID}
   When Run Render  ${SYSTEM_UTILIZATION_RUN_ID}
   Then The Render Invocation Was Successful
 
 A Localhost Code Hotspots Run Can Be Rendered
-  [Documentation]  Tests that a code_hotspots run created on localhost can be rendered.
-  [Tags]  code_hotspots  localhost
-  [Setup]  Run Keywords  Set Localhost As Test Target
-  ...  AND  The Target Is Set To Default Successfully  ${G_TARGET_NAME}
-  ...  AND  The Test Target Is Prepared Successfully
-  ...  AND  The Target Exists  ${G_TARGET_NAME}
-  ${localhost_run_id} =  Run Code Hotspots Recipe And Extract Run ID
-  Given The Run Exists  ${localhost_run_id}
-  When Run Render  ${localhost_run_id}
+  [Documentation]  Tests that a code_hotspots run created on localhost can be rendered. Localhost runs are generated
+  ...  inline instead of during suite setup, so that only the test gets skipped (rather than the whole suite) if
+  ...  localhost isn't supported.
+  [Tags]  code-hotspots  localhost
+  [Setup]  Run Keywords  Skip If Localhost Is Not Supported
+  ...  AND  Generate Local Code Hotspots Runs
+  Given The Run Exists  ${CODE_HOTSPOTS_LOCAL_RUN_ID}
+  When Run Render  ${CODE_HOTSPOTS_LOCAL_RUN_ID}
   Then The Render Invocation Was Successful
   [Teardown]  Run Keywords  The Target Is Unprepared Successfully
   ...  AND  Restore Remote Test Target
@@ -247,21 +252,21 @@ A Localhost Code Hotspots Run Can Be Rendered
 
 The Two CPU Microarchitecture Runs Render Successfully
   [Documentation]  Check that two CPU Microarchitecture runs can be rendered.
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   Given The Run Exists  ${CPU_MICROARCH_RUN_ID_1}
   When Run Render  ${CPU_MICROARCH_RUN_ID_1}  ${CPU_MICROARCH_RUN_ID_2}
   Then The Render Invocation Was Successful
 
 The Two Instruction Mix Dynamic Runs Render Successfully
   [Documentation]  Check that two Instruction Mix Dynamic runs can be rendered.
-  [Tags]  instruction_mix
+  [Tags]  instruction-mix
   Given The Run Exists  ${INSTRUCTION_MIX_DYNAMIC_RUN_ID_1}
   When Run Render  ${INSTRUCTION_MIX_DYNAMIC_RUN_ID_1}  ${INSTRUCTION_MIX_DYNAMIC_RUN_ID_2}
   Then The Render Invocation Was Successful
 
 The Two Instruction Mix Static Runs Render Successfully
   [Documentation]  Check that two Instruction Mix Static runs can be rendered.
-  [Tags]  instruction_mix
+  [Tags]  instruction-mix
   Given The Run Exists  ${INSTRUCTION_MIX_STATIC_RUN_ID_1}
   And The Run Exists  ${INSTRUCTION_MIX_STATIC_RUN_ID_2}
   When Run Render  ${INSTRUCTION_MIX_STATIC_RUN_ID_1}  ${INSTRUCTION_MIX_STATIC_RUN_ID_2}
@@ -269,7 +274,7 @@ The Two Instruction Mix Static Runs Render Successfully
 
 The Two Code Hotspots Runs Render Successfully
   [Documentation]  Check that two Code Hotspots runs can be rendered.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   Given The Run Exists  ${CODE_HOTSPOTS_RUN_ID_1}
   When Run Render  ${CODE_HOTSPOTS_RUN_ID_1}  ${CODE_HOTSPOTS_RUN_ID_2}
   Then The Render Invocation Was Successful
@@ -277,7 +282,7 @@ The Two Code Hotspots Runs Render Successfully
 The Two Memory Access Runs Render Successfully
   [Documentation]  Check that two Memory Access runs can be rendered.
   ...  Disabled as there's no SPE data with the 1s timeout
-  [Tags]  disabled  memory_access
+  [Tags]  disabled  memory-access
   Given The Run Exists  ${MEMORY_ACCESS_RUN_ID}
   When Run Render  ${MEMORY_ACCESS_RUN_ID}  ${MEMORY_ACCESS_RUN_ID}
   Then The Render Invocation Was Successful
@@ -296,33 +301,41 @@ Run Recipes For Suite
 
 Generate CPU Microarchitecture Runs
   ${run_id} =  Run CPU Microarchitecture Recipe And Extract Run ID
-  VAR  ${CPU_MICROARCH_RUN_ID_1}  ${run_id}  scope=SUITE
+  VAR  ${CPU_MICROARCH_RUN_ID_1} =  ${run_id}  scope=SUITE
   ${run_id} =  Run CPU Microarchitecture Recipe And Extract Run ID
-  VAR  ${CPU_MICROARCH_RUN_ID_2}  ${run_id}  scope=SUITE
+  VAR  ${CPU_MICROARCH_RUN_ID_2} =  ${run_id}  scope=SUITE
 
 Generate Instruction Mix Runs
   ${run_id} =  Run Instruction Mix Recipe In Dynamic Mode And Extract Run ID
-  VAR  ${INSTRUCTION_MIX_DYNAMIC_RUN_ID_1}  ${run_id}  scope=SUITE
+  VAR  ${INSTRUCTION_MIX_DYNAMIC_RUN_ID_1} =  ${run_id}  scope=SUITE
   ${run_id} =  Run Instruction Mix Recipe In Dynamic Mode And Extract Run ID
-  VAR  ${INSTRUCTION_MIX_DYNAMIC_RUN_ID_2}  ${run_id}  scope=SUITE
+  VAR  ${INSTRUCTION_MIX_DYNAMIC_RUN_ID_2} =  ${run_id}  scope=SUITE
   ${run_id} =  Run Instruction Mix Recipe In Static Mode And Extract Run ID
-  VAR  ${INSTRUCTION_MIX_STATIC_RUN_ID_1}  ${run_id}  scope=SUITE
+  VAR  ${INSTRUCTION_MIX_STATIC_RUN_ID_1} =  ${run_id}  scope=SUITE
   ${run_id} =  Run Instruction Mix Recipe In Static Mode And Extract Run ID
-  VAR  ${INSTRUCTION_MIX_STATIC_RUN_ID_2}  ${run_id}  scope=SUITE
+  VAR  ${INSTRUCTION_MIX_STATIC_RUN_ID_2} =  ${run_id}  scope=SUITE
 
 Generate Code Hotspots Runs
   ${run_id} =  Run Recipe And Extract Run ID  code_hotspots
-  VAR  ${CODE_HOTSPOTS_RUN_ID_1}  ${run_id}  scope=SUITE
+  VAR  ${CODE_HOTSPOTS_RUN_ID_1} =  ${run_id}  scope=SUITE
   ${run_id} =  Run Recipe And Extract Run ID  code_hotspots
-  VAR  ${CODE_HOTSPOTS_RUN_ID_2}  ${run_id}  scope=SUITE
+  VAR  ${CODE_HOTSPOTS_RUN_ID_2} =  ${run_id}  scope=SUITE
+
+Generate Local Code Hotspots Runs
+  Set Localhost As Test Target
+  The Target Is Set To Default Successfully  ${G_TARGET_NAME}
+  The Test Target Is Prepared Successfully
+  The Target Exists  ${G_TARGET_NAME}
+  ${run_id} =  Run Code Hotspots Recipe And Extract Run ID
+  VAR  ${CODE_HOTSPOTS_LOCAL_RUN_ID} =  ${run_id}  scope=SUITE
 
 Generate Memory Access Run
   ${run_id} =  Run Memory Access Recipe And Extract Run ID
-  VAR  ${MEMORY_ACCESS_RUN_ID}  ${run_id}  scope=SUITE
+  VAR  ${MEMORY_ACCESS_RUN_ID} =  ${run_id}  scope=SUITE
 
 Generate System Utilization Run
   ${run_id} =  Run System Utilization Recipe And Extract Run ID
-  VAR  ${SYSTEM_UTILIZATION_RUN_ID}  ${run_id}  scope=SUITE
+  VAR  ${SYSTEM_UTILIZATION_RUN_ID} =  ${run_id}  scope=SUITE
 
 Render Suite Setup
   Common Setup
@@ -351,7 +364,7 @@ Set Long Comparison Renderer Configs
   ...  {\\"drilldown\\": [{\\"name\\": \\"drilldown\\"}, {\\"name\\": \\"drilldown_1\\"}],
   ...  \\"symbols\\": [{\\"name\\": \\"symbols\\"}, {\\"name\\": \\"symbols_1\\"}], \
   ...  \\"images\\": [{\\"name\\": \\"images\\"},{\\"name\\": \\"images_1\\"}]}}}"
-  VAR  ${FLAT_COMPARISON_RENDER_CONFIG}  ${comparison_render_config}  scope=SUITE
+  VAR  ${FLAT_COMPARISON_RENDER_CONFIG} =  ${comparison_render_config}  scope=SUITE
 
 Set Long Source Code Renderer Configs
   ${render_config} =  Catenate
@@ -361,7 +374,7 @@ Set Long Source Code Renderer Configs
   ...  {\\"tables\\": {\\"symbols\\": [{\\"name\\": \\"symbols\\"}], \
   ...  \\"images\\": [{\\"name\\": \\"images\\"}], \
   ...  \\"target_info_cpus\\": [{\\"name\\": \\"target_info_cpus\\"}]}}}"
-  VAR  ${FLAT_RENDER_CONFIG}  ${render_config}  scope=SUITE
+  VAR  ${FLAT_RENDER_CONFIG} =  ${render_config}  scope=SUITE
   ${periodic_render_config} =  Catenate
   ...  --renderer=StreamlineAnalyzeSymbols={} \
   ...  --renderer=TargetInfoRenderer={} \
@@ -369,18 +382,18 @@ Set Long Source Code Renderer Configs
   ...  {\\"tables\\": {\\"symbols\\": [{\\"name\\": \\"symbols\\"}], \
   ...  \\"images\\": [{\\"name\\": \\"images\\"}], \
   ...  \\"target_info_cpus\\": [{\\"name\\": \\"target_info_cpus\\"}]}}}"
-  VAR  ${FLAT_PERIODIC_RENDER_CONFIG}  ${periodic_render_config}  scope=SUITE
+  VAR  ${FLAT_PERIODIC_RENDER_CONFIG} =  ${periodic_render_config}  scope=SUITE
   VAR  ${slanalyze_render_config} =  --renderer=SlAnalyzeRenderer="{\\"filter_pid\\": __PID__}"
-  VAR  ${SLANALYZE_RENDER_CONFIG_TEMPLATE}  ${slanalyze_render_config}  scope=SUITE
+  VAR  ${SLANALYZE_RENDER_CONFIG_TEMPLATE} =  ${slanalyze_render_config}  scope=SUITE
 
 Run Busy Loop Process On Target And Capture PID
   [Documentation]  Start a busy-loop process and a yes process on the target, capture PIDs and process name.
   ${python_pid} =  Start Process On Target And Capture PID  python3 -c "for i in range(10**9): i*i"  python3 -c
-  VAR  ${PYTHON_PID}  ${python_pid}  scope=TEST
+  VAR  ${PYTHON_PID} =  ${python_pid}  scope=TEST
   ${proc_name} =  Get Process Command Name On Target  ${PYTHON_PID}
-  VAR  ${PROC_NAME}  ${proc_name}  scope=TEST
+  VAR  ${PROC_NAME} =  ${proc_name}  scope=TEST
   ${yes_pid} =  Start Process On Target And Capture PID  yes > /dev/null  yes > /dev/null
-  VAR  ${YES_PID}  ${yes_pid}  scope=TEST
+  VAR  ${YES_PID} =  ${yes_pid}  scope=TEST
 
 Run CPU Microarchitecture With System-Wide And Capture Run ID
   [Documentation]  Run cpu_microarchitecture system-wide and capture the run ID in a test variable
@@ -388,7 +401,7 @@ Run CPU Microarchitecture With System-Wide And Capture Run ID
   The Last Command Succeeded
   ${run_id} =  Extract The Run ID
   The Run Exists  ${run_id}
-  VAR  ${RUN_ID}  ${run_id}  scope=TEST
+  VAR  ${RUN_ID} =  ${run_id}  scope=TEST
 
 Run Code Hotspots With System-Wide And Capture Run ID
   [Documentation]  Run code_hotspots system-wide and capture the run ID in a test variable
@@ -396,7 +409,7 @@ Run Code Hotspots With System-Wide And Capture Run ID
   The Last Command Succeeded
   ${run_id} =  Extract The Run ID
   The Run Exists  ${run_id}
-  VAR  ${RUN_ID}  ${run_id}  scope=TEST
+  VAR  ${RUN_ID} =  ${run_id}  scope=TEST
 
 Invoke-Render Is Run With SlAnalyze Filtered By PID
   [Documentation]  Invoke-render slanalyze, symbols, and flat functions with PID filtering.

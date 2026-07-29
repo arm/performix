@@ -3,6 +3,7 @@
 
 *** Settings ***
 Documentation  A resource file containing daemon keywords for the Arm Performance Analysis Platform CLI.
+
 Library        OperatingSystem
 Library        String
 Resource       common.resource
@@ -46,11 +47,11 @@ Check Process List For Daemon
   [Documentation]  Lists running processes on the host and checks whether the daemon is present.
   ${os} =  Determine Operating System
   IF  '${os}' == 'Linux'
-    VAR  ${cmd}  pgrep -f "${PRODUCT_BINARY_NAME} daemon start"  scope=LOCAL
+    VAR  ${cmd} =  pgrep -f "${PRODUCT_BINARY_NAME} daemon start"  scope=LOCAL
   ELSE IF  '${os}' == 'Darwin'
-    VAR  ${cmd}  pgrep -f "${PRODUCT_BINARY_NAME} daemon start"  scope=LOCAL
+    VAR  ${cmd} =  pgrep -f "${PRODUCT_BINARY_NAME} daemon start"  scope=LOCAL
   ELSE IF  '${os}' == 'Windows'
-    VAR  ${cmd}  "tasklist /fi "Imagename eq ${PRODUCT_BINARY_NAME}.exe"  scope=LOCAL
+    VAR  ${cmd} =  "tasklist /fi "Imagename eq ${PRODUCT_BINARY_NAME}.exe"  scope=LOCAL
   END
   Run Host Command  ${cmd}
 

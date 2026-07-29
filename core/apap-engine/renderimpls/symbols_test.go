@@ -86,6 +86,9 @@ type stubTargetSessionProvider struct{ session targetsession.TargetSession }
 func (p *stubTargetSessionProvider) TargetSession(target.Target) (targetsession.TargetSession, error) {
 	return p.session, nil
 }
+func (p *stubTargetSessionProvider) HostSession() (targetsession.TargetSession, error) {
+	return p.session, nil
+}
 func (p *stubTargetSessionProvider) Shutdown() error { return nil }
 
 func TestLoadSourceContentUsesHostPath(t *testing.T) {

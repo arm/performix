@@ -2055,6 +2055,67 @@ func (f *fakeRecipeIssueCommandServer) SendMsg(interface{}) error            { r
 func (f *fakeRecipeIssueCommandServer) RecvMsg(interface{}) error            { return nil }
 func (f *fakeRecipeIssueCommandServer) Send(*apapproto.RecipeResponse) error { return nil }
 
+func TestAwaitRecipeJob(t *testing.T) {
+	t.Run("returns when phase 1 completes while the job continues", func(t *testing.T) {
+		done := make(chan error, 1)
+		phase1Done := make(chan struct{})
+		close(phase1Done)
+
+		jobCompleted, err := awaitRecipeJob(
+			context.Background(),
+			done,
+			phase1Done,
+			func() { t.Fatal("detached job was cancelled") },
+			true,
+		)
+
+		require.NoError(t, err)
+		assert.False(t, jobCompleted)
+	})
+
+	t.Run("returns the final job error", func(t *testing.T) {
+		for _, detachBackgroundTransfers := range []bool{false, true} {
+			t.Run(fmt.Sprintf("detach=%t", detachBackgroundTransfers), func(t *testing.T) {
+				wantErr := errors.New("recipe failed")
+				done := make(chan error, 1)
+				done <- wantErr
+
+				jobCompleted, err := awaitRecipeJob(
+					context.Background(),
+					done,
+					make(chan struct{}),
+					func() { t.Fatal("completed job was cancelled") },
+					detachBackgroundTransfers,
+				)
+
+				require.ErrorIs(t, err, wantErr)
+				assert.True(t, jobCompleted)
+			})
+		}
+	})
+
+	t.Run("cancels and waits for cleanup when the client disconnects before phase 1", func(t *testing.T) {
+		for _, detachBackgroundTransfers := range []bool{false, true} {
+			t.Run(fmt.Sprintf("detach=%t", detachBackgroundTransfers), func(t *testing.T) {
+				ctx, cancelCtx := context.WithCancel(context.Background())
+				cancelCtx()
+				done := make(chan error, 1)
+				cancelled := false
+
+				jobCompleted, err := awaitRecipeJob(ctx, done, make(chan struct{}), func() {
+					cancelled = true
+					done <- context.Canceled
+				}, detachBackgroundTransfers)
+
+				require.ErrorIs(t, err, context.Canceled)
+				assert.False(t, jobCompleted)
+				assert.True(t, cancelled)
+				assert.Empty(t, done)
+			})
+		}
+	})
+}
+
 func TestRecipeIssueCommandCancelAndStop(t *testing.T) {
 	tests := []struct {
 		name          string

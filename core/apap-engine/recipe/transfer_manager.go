@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/sirupsen/logrus"
 
@@ -107,7 +108,7 @@ type TransferManager struct {
 	transferRequestChannel      chan AddTransferMessage
 	flushTransfersChannel       chan FlushTransfersMessage
 	transfersCompleteChannel    chan message.Message
-	OnPhase1TransferComplete    func()
+	OnPhase1TransferComplete    func(hasPendingBackgroundTransfers bool)
 	phase1TransferCount         int
 	backgroundTransferCount     int
 	deferredPhase1Transfers     []TransferRequest
@@ -119,6 +120,11 @@ type TransferManager struct {
 	baseWg                      sync.WaitGroup
 	phase1Wg                    sync.WaitGroup
 	backgroundWg                sync.WaitGroup
+
+	// pendingBackgroundConcreteTransfers counts concrete background transfers
+	// that have been scheduled but have not finished.
+	pendingBackgroundConcreteTransfers atomic.Int64
+
 	// transferErrors is shared by transfer goroutines. recordTransferError
 	// writes to it before the goroutine returns and decrements its phase wait
 	// group, so phase wait completion also means phase errors are visible.
@@ -372,7 +378,7 @@ func (t *TransferManager) flushTransfers(flush FlushTransfersMessage, baseCancel
 	t.phase1Wg.Wait()
 	phase1Msg := t.transferErrorMessage(flush, t.transferErrors.phase1Copy())
 	if flush.runSucceeded && phase1Msg == nil && t.OnPhase1TransferComplete != nil {
-		t.OnPhase1TransferComplete()
+		t.OnPhase1TransferComplete(t.hasPendingBackgroundTransfers())
 	}
 	t.endPhaseStage(phase1TransferPhase, phase1Msg)
 
@@ -392,6 +398,10 @@ func (t *TransferManager) flushTransfers(flush FlushTransfersMessage, baseCancel
 	t.endPhaseStage(backgroundTransferPhase, backgroundMsg)
 
 	return t.transferErrorMessage(flush, t.transferErrors.combined())
+}
+
+func (t *TransferManager) hasPendingBackgroundTransfers() bool {
+	return len(t.deferredBackgroundTransfers) > 0 || t.pendingBackgroundConcreteTransfers.Load() > 0
 }
 
 func (t *TransferManager) flushPhase1DeferredTransfers(flush FlushTransfersMessage) {
@@ -695,13 +705,13 @@ func (t *TransferManager) startConcreteTransfer(
 	if wg != nil {
 		wg.Add(1)
 	}
-	t.addPhaseWaitGroup(phase)
+	t.registerPhaseTransfer(phase)
 	go func() {
 		success := false
 		if wg != nil {
 			defer wg.Done()
 		}
-		defer t.donePhaseWaitGroup(phase)
+		defer t.finishPhaseTransfer(phase)
 		defer func() {
 			if onComplete != nil {
 				onComplete(success)
@@ -741,18 +751,20 @@ func (t *TransferManager) recordTransferError(err error, transfer conductor.File
 	t.transferErrors.add(phase, transfer, err)
 }
 
-func (t *TransferManager) addPhaseWaitGroup(phase transferPhase) {
+func (t *TransferManager) registerPhaseTransfer(phase transferPhase) {
 	switch phase {
 	case backgroundTransferPhase:
 		t.backgroundWg.Add(1)
+		t.pendingBackgroundConcreteTransfers.Add(1)
 	default:
 		t.phase1Wg.Add(1)
 	}
 }
 
-func (t *TransferManager) donePhaseWaitGroup(phase transferPhase) {
+func (t *TransferManager) finishPhaseTransfer(phase transferPhase) {
 	switch phase {
 	case backgroundTransferPhase:
+		t.pendingBackgroundConcreteTransfers.Add(-1)
 		t.backgroundWg.Done()
 	default:
 		t.phase1Wg.Done()

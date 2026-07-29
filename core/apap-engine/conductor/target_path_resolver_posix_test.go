@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 )
@@ -21,7 +22,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner.On("RunCommand", "test -e /custom/tools").Return("", "", nil).Once()
 		cmdRunner.On("RunCommand", "test -w /custom/tools").Return("", "", nil).Once()
 
-		baseDir, err := ResolveToolsBaseDir("/custom/tools", Linux, cmdRunner)
+		baseDir, err := ResolveToolsBaseDir("/custom/tools", Linux, cmdRunner, locality.Target)
 		assert.NoError(t, err)
 		assert.Equal(t, "/custom/tools/"+terminology.GetProductBinaryName()+"/tools", filepath.ToSlash(baseDir))
 		cmdRunner.AssertExpectations(t)
@@ -33,7 +34,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner.On("RunCommand", "test -e /home/testuser/custom/tools").Return("", "", nil).Once()
 		cmdRunner.On("RunCommand", "test -w /home/testuser/custom/tools").Return("", "", nil).Once()
 
-		baseDir, err := ResolveToolsBaseDir("~/custom/tools", Linux, cmdRunner)
+		baseDir, err := ResolveToolsBaseDir("~/custom/tools", Linux, cmdRunner, locality.Target)
 		assert.NoError(t, err)
 		assert.Equal(t, "/home/testuser/custom/tools/"+terminology.GetProductBinaryName()+"/tools", filepath.ToSlash(baseDir))
 		cmdRunner.AssertExpectations(t)
@@ -44,7 +45,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner.On("RunCommand", "test -e /custom/tools").Return("", "", nil).Once()
 		cmdRunner.On("RunCommand", "test -w /custom/tools").Return("", "", assert.AnError).Once()
 
-		_, err := ResolveToolsBaseDir("/custom/tools", Linux, cmdRunner)
+		_, err := ResolveToolsBaseDir("/custom/tools", Linux, cmdRunner, locality.Target)
 		var msgErr message.Message
 		assert.ErrorAs(t, err, &msgErr)
 		assert.Equal(t, message.EngineToolTargetPathNoWritableToolsPath, msgErr.Code())
@@ -57,7 +58,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner.On("RunCommand", "test -e /home/testuser").Return("", "", nil).Once()
 		cmdRunner.On("RunCommand", "test -w /home/testuser").Return("", "", nil).Once()
 
-		baseDir, err := ResolveToolsBaseDir("", Linux, cmdRunner)
+		baseDir, err := ResolveToolsBaseDir("", Linux, cmdRunner, locality.Target)
 		assert.NoError(t, err)
 		defaultDir := fmt.Sprintf("/home/testuser/.local/share/%v/tools", terminology.GetProductBinaryName())
 		assert.Equal(t, filepath.ToSlash(defaultDir), filepath.ToSlash(baseDir))
@@ -69,7 +70,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner.On("RunCommand", "test -e "+DefaultAndroidTempDir).Return("", "", nil).Once()
 		cmdRunner.On("RunCommand", "test -w "+DefaultAndroidTempDir).Return("", "", nil).Once()
 
-		baseDir, err := ResolveToolsBaseDir("", Android, cmdRunner)
+		baseDir, err := ResolveToolsBaseDir("", Android, cmdRunner, locality.Target)
 		assert.NoError(t, err)
 		assert.Equal(t, DefaultAndroidTempDir+"/"+terminology.GetProductBinaryName()+"/tools", filepath.ToSlash(baseDir))
 		cmdRunner.AssertExpectations(t)
@@ -79,7 +80,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
 		cmdRunner.On("RunCommand", "printenv HOME").Return("", "", nil).Once()
 
-		_, err := ResolveToolsBaseDir("", Linux, cmdRunner)
+		_, err := ResolveToolsBaseDir("", Linux, cmdRunner, locality.Target)
 		assert.Error(t, err)
 		cmdRunner.AssertExpectations(t)
 	})
@@ -90,7 +91,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner.On("RunCommand", "test -e /home/testuser").Return("", "", nil).Once()
 		cmdRunner.On("RunCommand", "test -w /home/testuser").Return("", "", assert.AnError).Once()
 
-		_, err := ResolveToolsBaseDir("", Linux, cmdRunner)
+		_, err := ResolveToolsBaseDir("", Linux, cmdRunner, locality.Target)
 		assert.Error(t, err)
 		cmdRunner.AssertExpectations(t)
 	})
@@ -99,7 +100,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
 		cmdRunner.On("RunCommand", "test -e /missing/tools").Return("", "", assert.AnError).Once()
 
-		_, err := ResolveToolsBaseDir("/missing/tools", Linux, cmdRunner)
+		_, err := ResolveToolsBaseDir("/missing/tools", Linux, cmdRunner, locality.Target)
 		var msgErr message.Message
 		assert.ErrorAs(t, err, &msgErr)
 		assert.Equal(t, message.EngineToolTargetPathDirMissing, msgErr.Code())
@@ -112,7 +113,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner.On("RunCommand", "test -e /home/testuser/rel/path").Return("", "", nil).Once()
 		cmdRunner.On("RunCommand", "test -w /home/testuser/rel/path").Return("", "", nil).Once()
 
-		baseDir, err := ResolveToolsBaseDir("rel/path", Linux, cmdRunner)
+		baseDir, err := ResolveToolsBaseDir("rel/path", Linux, cmdRunner, locality.Target)
 		assert.NoError(t, err)
 		assert.Equal(t, "/home/testuser/rel/path/"+terminology.GetProductBinaryName()+"/tools", filepath.ToSlash(baseDir))
 		cmdRunner.AssertExpectations(t)
@@ -123,7 +124,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner.On("RunCommand", "printenv HOME").Return("/home/testuser", "", nil).Once()
 		cmdRunner.On("RunCommand", mock.Anything).Return("", "", nil).Maybe()
 
-		baseDir, err := ResolveToolsBaseDir(`~\tools\back`, Linux, cmdRunner)
+		baseDir, err := ResolveToolsBaseDir(`~\tools\back`, Linux, cmdRunner, locality.Target)
 		assert.NoError(t, err)
 		assert.Equal(t, "/home/testuser/tools/back/"+terminology.GetProductBinaryName()+"/tools", filepath.ToSlash(baseDir))
 		cmdRunner.AssertExpectations(t)
@@ -134,7 +135,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner.On("RunCommand", "printenv HOME").Return("/home/testuser", "", nil).Once()
 		cmdRunner.On("RunCommand", mock.Anything).Return("", "", nil).Maybe()
 
-		baseDir, err := ResolveToolsBaseDir(`rel\back`, Linux, cmdRunner)
+		baseDir, err := ResolveToolsBaseDir(`rel\back`, Linux, cmdRunner, locality.Target)
 		assert.NoError(t, err)
 		assert.Equal(t, "/home/testuser/rel/back/"+terminology.GetProductBinaryName()+"/tools", filepath.ToSlash(baseDir))
 		cmdRunner.AssertExpectations(t)
@@ -144,7 +145,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
 		cmdRunner.On("RunCommand", "printenv HOME").Return("", "", nil).Once()
 
-		_, err := ResolveToolsBaseDir("~/custom/tools", Linux, cmdRunner)
+		_, err := ResolveToolsBaseDir("~/custom/tools", Linux, cmdRunner, locality.Target)
 		var msgErr message.Message
 		assert.ErrorAs(t, err, &msgErr)
 		assert.Equal(t, message.EngineToolTargetPathTargetHomeUnavailable, msgErr.Code())
@@ -155,7 +156,7 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
 		lockDir := "/tmp/" + terminology.GetProductBinaryName()
 
-		_, err := ResolveToolsBaseDir(lockDir, Linux, cmdRunner)
+		_, err := ResolveToolsBaseDir(lockDir, Linux, cmdRunner, locality.Target)
 		var msgErr message.Message
 		assert.ErrorAs(t, err, &msgErr)
 		assert.Equal(t, "engine.tool.target_path.LOCK_DIR_CONFLICT", msgErr.Code())
@@ -166,10 +167,22 @@ func TestResolveToolsBaseDir_Posix(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
 		lockDir := `\tmp\` + terminology.GetProductBinaryName()
 
-		_, err := ResolveToolsBaseDir(lockDir, Linux, cmdRunner)
+		_, err := ResolveToolsBaseDir(lockDir, Linux, cmdRunner, locality.Target)
 		var msgErr message.Message
 		assert.ErrorAs(t, err, &msgErr)
 		assert.Equal(t, "engine.tool.target_path.LOCK_DIR_CONFLICT", msgErr.Code())
+		cmdRunner.AssertExpectations(t)
+	})
+
+	t.Run("marks host locality in resolver errors", func(t *testing.T) {
+		cmdRunner := &MockCommandRunner{}
+		cmdRunner.On("RunCommand", "test -e /missing/tools").Return("", "", assert.AnError).Once()
+
+		_, err := ResolveToolsBaseDir("/missing/tools", Linux, cmdRunner, locality.Host)
+		var msgErr message.Message
+		assert.ErrorAs(t, err, &msgErr)
+		assert.Equal(t, message.EngineToolTargetPathDirMissing, msgErr.Code())
+		assert.Equal(t, map[string]string{"locality": locality.Host, "path": "/missing/tools"}, msgErr.Metadata())
 		cmdRunner.AssertExpectations(t)
 	})
 }

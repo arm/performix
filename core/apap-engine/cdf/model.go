@@ -4,9 +4,11 @@
 package cdf
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/bmatcuk/doublestar"
@@ -28,6 +30,7 @@ type ModelView interface {
 	ResolveComponentExpectTypeV(componentPath string, typeName string, vr semver.VersionRange) (Component, semver.SemVer, error)
 	ResolveComponentByPatternExpectTypeV(componentPath string, expectedTypeName string, vr semver.VersionRange) (Component, semver.SemVer, error)
 	FindEntities(glob string) ([]Entity, error)
+	FindComponents(glob string) ([]Component, error)
 	ListEntityComponents(entity Entity) ([]Component, error)
 	ListEntityComponentsByTypeName(entity Entity, componentTypeName string) ([]Component, error)
 	ListEntityComponentsMatching(entity Entity, pred func(*Component) bool) ([]Component, error)
@@ -119,7 +122,10 @@ func (m *OnDiskModel) ResolveComponent(componentPath string) (Component, error) 
 	}
 
 	// fell through—no component in manifest
-	absolute = filepath.Join(m.basePath, normalized)
+	absolute, err = m.resolveModelPath(normalized)
+	if err != nil {
+		return Component{}, err
+	}
 	if info, err := m.fs().Stat(absolute); err == nil && !info.IsDir() {
 		log.Warnf("Component %q missing manifest entry but exists on disk", absolute)
 		return Component{unknownComponentType, normalized, absolute}, nil
@@ -143,7 +149,10 @@ FOUND:
 			}
 		}
 	}
-	absolute = filepath.Join(m.basePath, entry.Path)
+	absolute, err = m.resolveModelPath(entry.Path)
+	if err != nil {
+		return Component{}, err
+	}
 	return Component{entry.ComponentType, entry.Path, absolute}, nil
 }
 
@@ -214,7 +223,10 @@ func (m *OnDiskModel) ResolveComponentByManifestPattern(componentPath string) (C
 			}
 			// entry.Path may contain wildcards; we return that as RelativePath,
 			// but the actual file lives at `want`.
-			abs := filepath.Join(m.basePath, want)
+			abs, err := m.resolveModelPath(want)
+			if err != nil {
+				return Component{}, err
+			}
 			return Component{
 				e.ComponentType,
 				e.Path,
@@ -240,7 +252,10 @@ func (m *OnDiskModel) ResolveComponentByManifestPattern(componentPath string) (C
 				if e.Pending {
 					return Component{}, ErrComponentPending
 				}
-				abs := filepath.Join(m.basePath, rewrote)
+				abs, err := m.resolveModelPath(rewrote)
+				if err != nil {
+					return Component{}, err
+				}
 				return Component{
 					e.ComponentType,
 					e.Path,
@@ -266,6 +281,45 @@ func (m *OnDiskModel) fs() afero.Fs {
 		return afero.NewOsFs()
 	}
 	return m.FS
+}
+
+func (m *OnDiskModel) resolveModelPath(path string) (string, error) {
+	basePath := filepath.Clean(m.basePath)
+	resolvedPath := filepath.Join(basePath, filepath.FromSlash(path))
+
+	rel, err := filepath.Rel(basePath, resolvedPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve path %q relative to model %q: %w", path, m.basePath, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("path %q escapes model base %q", path, m.basePath)
+	}
+
+	return resolvedPath, nil
+}
+
+func normalizeGlob(glob string) string {
+	glob = strings.ReplaceAll(glob, "\\", "/")
+	if len(glob) > 0 && glob[0] == '/' {
+		glob = glob[1:]
+	}
+	return glob
+}
+
+func hasGlobMeta(path string) bool {
+	return strings.ContainsAny(path, "*?[{")
+}
+
+func literalGlobPrefix(glob string) string {
+	segments := strings.Split(glob, "/")
+	prefixEnd := 0
+	for i, segment := range segments {
+		if hasGlobMeta(segment) {
+			break
+		}
+		prefixEnd = i + 1
+	}
+	return strings.Join(segments[:prefixEnd], "/")
 }
 
 // FindEntities lists all entities in the model matching the supplied glob pattern; glob pattern supports wildcard
@@ -302,6 +356,80 @@ func (m *OnDiskModel) FindEntities(glob string) ([]Entity, error) {
 	if err := afero.Walk(m.fs(), m.basePath, walkFunc); err != nil {
 		return nil, fmt.Errorf("failed to list entities for pattern '%s' in model '%s': %w", glob, m.basePath, err)
 	}
+
+	return matches, nil
+}
+
+// FindComponents lists all components in the model matching the supplied glob pattern.
+func (m *OnDiskModel) FindComponents(glob string) ([]Component, error) {
+	glob = normalizeGlob(glob)
+
+	// Check the pattern is valid before we start walking the filesystem. This will catch errors in the pattern even if
+	// no files are matched.
+	if _, err := doublestar.Match(glob, glob); err != nil {
+		return nil, fmt.Errorf("failure during pattern match: %w", err)
+	}
+
+	if !hasGlobMeta(glob) {
+		component, err := m.ResolveComponent(glob)
+		if err != nil {
+			if errors.Is(err, ErrComponentNotFound) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("failed to resolve component %q: %w", glob, err)
+		}
+		return []Component{component}, nil
+	}
+
+	searchRoot, err := m.resolveModelPath(literalGlobPrefix(glob))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list components for pattern '%s' in model '%s': %w", glob, m.basePath, err)
+	}
+	rootInfo, err := m.fs().Stat(searchRoot)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to list components for pattern '%s' in model '%s': %w", glob, m.basePath, err)
+	}
+	if !rootInfo.IsDir() {
+		return nil, nil
+	}
+
+	var matches []Component
+	walkFunc := func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		subpath := path[min(len(path), len(m.basePath)+1):]
+		subpath = strings.ReplaceAll(subpath, "\\", "/")
+		isMatch, err := doublestar.Match(glob, subpath)
+		if err != nil {
+			return fmt.Errorf("failure during pattern match: %w", err)
+		}
+		if !isMatch {
+			return nil
+		}
+
+		component, err := m.ResolveComponent(subpath)
+		if err != nil {
+			return fmt.Errorf("failed to resolve component %q: %w", subpath, err)
+		}
+		matches = append(matches, component)
+		return nil
+	}
+
+	if err := afero.Walk(m.fs(), searchRoot, walkFunc); err != nil {
+		return nil, fmt.Errorf("failed to list components for pattern '%s' in model '%s': %w", glob, m.basePath, err)
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].RelativePath < matches[j].RelativePath
+	})
 
 	return matches, nil
 }
@@ -471,10 +599,14 @@ func (m *OnDiskModel) findManifestPatternComponentByType(originalPath string, ma
 				if e.Pending {
 					return &Component{}, ErrComponentPending
 				}
+				absolutePath, err := m.resolveModelPath(matchPath)
+				if err != nil {
+					return nil, err
+				}
 				return &Component{
 					Type:         e.ComponentType,
 					RelativePath: e.Path,
-					AbsolutePath: filepath.Join(m.basePath, matchPath),
+					AbsolutePath: absolutePath,
 				}, nil
 			}
 			if firstMatch == nil {

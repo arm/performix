@@ -156,7 +156,7 @@ func (f *RunStageFactory) BuildStages(config *StageConfiguration, notifier notif
 	s = append(s, releaseTargetLockStage)
 	if config.TransferManagerEnabled {
 		tm := collector.FileRetriever.(*recipe.TransferManagerRetriever).TransferManager
-		waitForTransfersStage := stages.NewWaitForTransfersStage(tm)
+		waitForTransfersStage := stages.NewWaitForTransfersStage(tm, config.OnPhase1TransferComplete)
 		s = append(s, waitForTransfersStage)
 	} else {
 		// Fall back to old RetrieveAgentFiles path

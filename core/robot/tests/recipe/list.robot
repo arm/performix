@@ -3,11 +3,14 @@
 
 *** Settings ***
 Documentation   A test suite to exercise the 'recipe list' CLI of Arm Total Performance.
+
 Resource        ../../resources/keywords/common.resource
 Resource        ../../resources/keywords/recipe.resource
 Resource        ../../resources/keywords/target.resource
+
 Suite Setup     Recipe List Suite Setup
 Suite Teardown  Recipe List Suite Teardown
+
 Test Tags       recipe  list
 
 

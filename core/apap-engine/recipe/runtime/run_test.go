@@ -30,6 +30,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
+	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
 
 func newRunCollectionWithLogHook(t *testing.T) (*log.Logger, *logging.DeferredFileOpenLogHook, *run.RunCollection, *run.RunID) {
@@ -475,18 +476,48 @@ func TestBuildStages(t *testing.T) {
 	})
 
 	t.Run("includes transfer manager stages if feature flag is enabled", func(t *testing.T) {
+		phase1CallbackCalled := false
 		cfg := &StageConfiguration{
 			Ctx:                    &recipe.RecipeCtx{},
 			Recipe:                 &recipe.Recipe{},
 			TransferManagerEnabled: true,
 			CollectionState:        &recipe.CollectionState{},
+			OnPhase1TransferComplete: func(bool) {
+				phase1CallbackCalled = true
+			},
 		}
 		ss, _ := factory.BuildStages(cfg, nil)
 		startStage, ok := ss[len(ss)-3].(*stages.StartTransferManagerStage)
-		assert.True(t, ok)
+		require.True(t, ok)
 		assert.NotNil(t, startStage.TransferManager)
-		_, ok = ss[len(ss)-1].(*stages.WaitForTransfersStage)
-		assert.True(t, ok)
+		waitStage, ok := ss[len(ss)-1].(*stages.WaitForTransfersStage)
+		require.True(t, ok)
+
+		runCollection, err := run.NewRunCollection(t.TempDir())
+		require.NoError(t, err)
+		builder, err := runCollection.RunBuilder()
+		require.NoError(t, err)
+		builder.AddEntity("test")
+		runID, err := runCollection.CreateRun(builder, &cdf.Metadata{
+			RunResult: string(run.RecipeInProgress),
+			EndTime:   util.InvalidTime(),
+		})
+		require.NoError(t, err)
+
+		stageCtx := &recipe.StageContext{
+			Context: context.Background(),
+			CommandStateChannel: &cmdsync.CommandStateChannel{
+				CancelChan: make(chan struct{}),
+			},
+			RunID:         runID,
+			RunCollection: runCollection,
+			StageNotifier: &recipe.NullStageNotifier{},
+		}
+		_, err = startStage.Execute(stageCtx)
+		require.NoError(t, err)
+		_, err = waitStage.Execute(stageCtx)
+		require.NoError(t, err)
+		assert.True(t, phase1CallbackCalled)
 	})
 }
 

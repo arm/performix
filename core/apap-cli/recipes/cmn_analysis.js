@@ -302,7 +302,7 @@ function renderCMNAnalysis(context) {
 
   const meshContentIndex = isComparison ? 1 : 0;
   const meshSvgComponents = context
-    .listRunComponents(meshContentIndex, `${entity}cmn-mesh-svg`)
+    .listRunComponents(meshContentIndex, `${entity}cmn-mesh-svg/**`)
     .filter((component) => component.componentType.name === 'cmn-mesh-svg');
 
   for (const component of meshSvgComponents) {

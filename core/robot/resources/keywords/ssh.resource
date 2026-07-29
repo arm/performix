@@ -3,6 +3,7 @@
 
 *** Settings ***
 Documentation  A resource file containing SSH keywords.
+
 Resource       common.resource
 Library        Collections
 Library        OperatingSystem

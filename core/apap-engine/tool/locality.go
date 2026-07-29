@@ -4,13 +4,11 @@
 package tool
 
 import (
-	"fmt"
+	"errors"
 	"sync"
-)
 
-const (
-	LocalityTarget = "target"
-	LocalityHost   = "host"
+	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 )
 
 type CopyFromFunc func(sourceLocality string, sourcePath string, destinationPath string) error
@@ -42,14 +40,14 @@ func (r *engineLocalityResolver) Resolve(name string) (EngineLocality, error) {
 	defer r.mu.Unlock()
 
 	switch name {
-	case LocalityTarget:
+	case locality.Target:
 		return r.target, nil
-	case LocalityHost:
+	case locality.Host:
 		if r.host != nil {
 			return *r.host, nil
 		}
 		if r.resolveHost == nil {
-			return EngineLocality{}, fmt.Errorf("unsupported engine locality %q", name)
+			return EngineLocality{}, message.New(message.CommonUnknownError).WithCause(errors.New("no host resolver provided"))
 		}
 
 		host, cleanup, err := r.resolveHost()
@@ -60,7 +58,7 @@ func (r *engineLocalityResolver) Resolve(name string) (EngineLocality, error) {
 		r.hostCleanup = cleanup
 		return host, nil
 	default:
-		return EngineLocality{}, fmt.Errorf("unsupported engine locality %q", name)
+		return EngineLocality{}, message.New(message.EngineToolLocalityUnsupported).WithMetadata(map[string]string{"locality": name})
 	}
 }
 

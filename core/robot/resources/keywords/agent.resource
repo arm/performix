@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 *** Settings ***
-Documentation       A resource file containg keywords for the Target Agent robot tests.
+Documentation       A resource file containing target agent keywords for the Performix CLI.
+
+Library             ../libs/AgentHelper.py
 
 Resource            target.resource
-Library             ../libs/AgentHelper.py
 
 
 *** Variables ***
@@ -18,24 +19,6 @@ ${G_TARGET_AGENT_GROUP_CONTROLLER_CMD}  ${EMPTY}
 
 
 *** Keywords ***
-Group Controller Suite Setup
-  [Documentation]  Prepares the test target for group controller suite tests.
-  Common Setup
-  Skip Unless Target OS Is  ${OS_LINUX}
-  Clear Test Target Output Directories
-  Ensure Target Does Not Exist  ${G_TARGET_NAME}
-  The Test Target Is Added Successfully
-  The Target Is Set To Default Successfully  ${G_TARGET_NAME}
-  The Test Target Is Prepared Successfully
-  Populate Test Target Global Variables
-
-Group Controller Suite Teardown
-  [Documentation]  Cleans up after the group controller suite tests.
-  Skip Unless Target OS Is  ${OS_LINUX}
-  The Test Target Is Removed Successfully
-  Clear Test Target Output Directories
-  Common Teardown
-
 Root Worker Suite Setup
   [Documentation]  Prepares the test target for root worker suite tests.
   Common Setup
@@ -44,7 +27,7 @@ Root Worker Suite Setup
   The Test Target Is Added Successfully
   The Target Is Set To Default Successfully  ${G_TARGET_NAME}
   The Test Target Is Prepared Successfully
-  Populate Test Target Global Variables
+  Populate Agent Test Target Global Variables
   Configure Non-Root User On Target
   The Test Target With Non-Root User Is Added Successfully
 
@@ -73,12 +56,11 @@ Remove Non-Root User From Target
   Revoke User Passwordless Sudo On The Test Target  ${G_TARGET_USER_NON_ROOT}
   The User Is Removed From The Test Target Successfully  ${G_TARGET_USER_NON_ROOT}
 
-Populate Test Target Global Variables
+Populate Agent Test Target Global Variables
   [Documentation]  Populates global variables required for the agent suite tests.
   Should Not Be Empty  ${AGENT_BINARY_FILE_NAME}  msg=AGENT_BINARY_FILE_NAME must be set for agent tests.
   VAR  ${G_TARGET_AGENT_CONTROLLER_CMD} =  ${AGENT_BINARY_FILE_NAME} start  scope=GLOBAL
   VAR  ${G_TARGET_AGENT_ROOTWORKER_CMD} =  ${AGENT_BINARY_FILE_NAME} start-root-worker  scope=GLOBAL
-  VAR  ${G_TARGET_AGENT_GROUP_CONTROLLER_CMD} =  ${AGENT_BINARY_FILE_NAME} start-group-controller  scope=GLOBAL
 
 Populate Test Target With Non-Root User Global Variables
   [Documentation]  Populates global variables required for the agent suite tests.

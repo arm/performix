@@ -3,18 +3,20 @@
 
 import time
 import shlex
-import paramiko
 from robot.libraries.BuiltIn import BuiltIn
 from robot.api.deco import keyword, library
 from robot.api import logger
 
 from deployment_paths import resolve_deployment_dir_for_user_posix
+from SSHCommandExecutor import SSHCommandExecutor
 
 @library(scope='TEST')
 class AgentHelper:
     """
     Robot Framework library for managing the atperf-agent group controller process on a remote target via SSH.
     """
+
+    DEFAULT_REMOTE_COMMAND_TIMEOUT = 3
 
     def __init__(self):
         self._gc_pid = None
@@ -29,13 +31,11 @@ class AgentHelper:
         self._ssh_host = None
         self._ssh_user = None
         self._ssh_key = None
-        self._ssh_client = paramiko.SSHClient()
+        self._ssh_executor = SSHCommandExecutor('AgentHelper')
 
     def __del__(self):
         self._cleanup()
-        
-        if self._ssh_client:
-            self._ssh_client.close()
+        self._ssh_executor.close()
 
     def _set_global(self, name, value):
         self._built_in.set_global_variable(f'${{{name}}}', value)
@@ -44,9 +44,37 @@ class AgentHelper:
         return self._built_in.get_variable_value(f'${{{name}}}', default)
 
     def _run_remote(self, cmd: str):
-        _, stdout, _ = self._ssh_client.exec_command(cmd, timeout=3)
-        rc = stdout.channel.recv_exit_status()
-        return rc, stdout.read().decode().strip()
+        rc, stdout, _ = self._exec_remote_command(cmd)
+        return rc, stdout
+
+    def _exec_remote_command(self, cmd: str, *, timeout=DEFAULT_REMOTE_COMMAND_TIMEOUT):
+        stdin = None
+        stdout = None
+        stderr = None
+        channel = None
+        try:
+            stdin, stdout, stderr = self._ssh_executor.exec_command(
+                cmd,
+                timeout=timeout,
+            )
+            channel = stdout.channel
+            rc = channel.recv_exit_status()
+            stdout_text = stdout.read().decode("utf-8", errors="replace").strip()
+            stderr_text = stderr.read().decode("utf-8", errors="replace").strip()
+            return rc, stdout_text, stderr_text
+        finally:
+            for stream in (stdin, stdout, stderr):
+                if stream is None:
+                    continue
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+            if channel is not None:
+                try:
+                    channel.close()
+                except Exception:
+                    pass
 
     def _resolve_deployment_dir_for_user(self, username: str) -> str:
         """
@@ -71,15 +99,13 @@ class AgentHelper:
                 raise AssertionError("Variable ${ATPERF_DIR} not set.")
             cmd = f'find {atperf_dir} -name {agent_name} -type f'
 
-        _, stdout, _ = self._ssh_client.exec_command(cmd, timeout=3)
-        found = stdout.read().decode().strip()
+        _, found, _ = self._exec_remote_command(cmd)
         if not found:
             raise AssertionError(f"Could not find '{agent_name}' in '{atperf_dir}' on target.")
         return found.splitlines()[0]  # Take the first match
 
     def _connect_ssh(self):
-        tp = self._ssh_client.get_transport()
-        if tp and tp.is_active():
+        if self._ssh_executor.is_connected():
             return
         
         self._ssh_host = self._get_var('G_TARGET_HOST', '').strip()
@@ -89,12 +115,14 @@ class AgentHelper:
         if not self._ssh_host or not self._ssh_user or not self._ssh_key:
             raise AssertionError("SSH connection details are not fully set in variables.")
 
-        self._ssh_client = paramiko.SSHClient()
-        self._ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self._ssh_client.connect(self._ssh_host, username=self._ssh_user, key_filename=self._ssh_key)
+        self._ssh_executor.connect(
+            hostname=self._ssh_host,
+            username=self._ssh_user,
+            key_filename=self._ssh_key,
+        )
 
-        _, stdout, _ = self._ssh_client.exec_command('echo connected')
-        if stdout.read().decode().strip() != 'connected':
+        rc, stdout, _ = self._exec_remote_command('echo connected')
+        if rc != 0 or stdout != 'connected':
             raise AssertionError("Failed to verify SSH connection to target.")
         else:
             print(f"Connected to target {self._ssh_host} as {self._ssh_user}")
@@ -109,14 +137,16 @@ class AgentHelper:
         self._connect_ssh()
 
         # Ignore if directory does not exist
-        _, stdout, _ = self._ssh_client.exec_command(f'find {self._tmpdir} -type d -maxdepth 0', timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, _, _ = self._exec_remote_command(
+            f'find {self._tmpdir} -type d -maxdepth 0',
+        )
+        if rc != 0:
             return
 
-        _, stdout, stderr = self._ssh_client.exec_command(f'rm -rf {self._tmpdir}', timeout=3)
-        exit_status = stdout.channel.recv_exit_status()
+        exit_status, _, err_msg = self._exec_remote_command(
+            f'rm -rf {self._tmpdir}',
+        )
         if exit_status != 0:
-            err_msg = stderr.read().decode().strip()
             raise AssertionError(f"Failed to remove temp directory {self._tmpdir} on target: {err_msg}")
 
     @keyword('Resolve Target Agent Binary Path')
@@ -131,15 +161,14 @@ class AgentHelper:
             raise AssertionError("Target agent binary path must not be empty.")
         return agent_binary_path
 
-    @keyword('Group Controller Running')
-    def group_controller_running(self):
+    @keyword('Group Controller Is Running')
+    def group_controller_is_running(self):
         """
         Returns True if the group controller process is still running.
         """
         if not self._gc_pid:
             return False
-        _, stdout, _ = self._ssh_client.exec_command(f'ps -p {self._gc_pid}', timeout=3)
-        output = stdout.read().decode().strip()
+        _, output, _ = self._exec_remote_command(f'ps -p {self._gc_pid}')
         return self._gc_pid in output
 
     @keyword('Start Group Controller With Command')
@@ -151,66 +180,89 @@ class AgentHelper:
         self._connect_ssh()
 
         if self._gc_pid:
-            _, stdout, _ = self._ssh_client.exec_command(f'ps -p {self._gc_pid}', timeout=3)
-            output = stdout.read().decode().strip()
+            _, output, _ = self._exec_remote_command(f'ps -p {self._gc_pid}')
             if self._gc_pid in output:
                 raise AssertionError("Group controller is already running.")
             else:
                 self._gc_pid = None
 
         binary_path = self._resolve_agent_binary()
-        _, stdout, _ = self._ssh_client.exec_command(f'test -x {binary_path}', timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, _, _ = self._exec_remote_command(f'test -x {binary_path}')
+        if rc != 0:
             raise AssertionError(f"Agent binary '{binary_path}' is not executable on target.")
     
         # Create tempdir, log file and FIFO on target
-        _, stdout, _ = self._ssh_client.exec_command('mktemp -d', timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, stdout, _ = self._exec_remote_command('mktemp -d')
+        if rc != 0:
             raise AssertionError("Failed to create temporary directory on target.")
-        self._tmpdir = stdout.read().decode().strip()
+        self._tmpdir = stdout
 
-        _, stdout, _ = self._ssh_client.exec_command(f'touch {self._tmpdir}/gc_stdout.log {self._tmpdir}/gc_stderr.log', timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, _, _ = self._exec_remote_command(
+            f'touch {self._tmpdir}/gc_stdout.log {self._tmpdir}/gc_stderr.log',
+        )
+        if rc != 0:
             raise AssertionError("Failed to create log files on target.")
         
-        _, stdout, _ = self._ssh_client.exec_command(f'mkfifo {self._tmpdir}/gc_stdin_fifo', timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, _, _ = self._exec_remote_command(
+            f'mkfifo {self._tmpdir}/gc_stdin_fifo',
+        )
+        if rc != 0:
             raise AssertionError("Failed to create FIFO on target.")
         self._fifo_path = f"{self._tmpdir}/gc_stdin_fifo"
 
         # Open the FIFO write end
-        _, stdout, _ = self._ssh_client.exec_command(f'tail -f /dev/null > {self._fifo_path} 2>&1 &', timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
-            raise AssertionError("Failed to start FIFO keeper process on target.")
-        
-        _, stdout, _ = self._ssh_client.exec_command(f'pgrep -f "tail -f /dev/null > {self._fifo_path}"', timeout=3)
-        pids = stdout.read().decode().strip().splitlines()
+        keeper_cmd = (
+            f"/bin/sh -c {shlex.quote(f'exec tail -f /dev/null > {self._fifo_path} 2>&1')}"
+            " </dev/null >/dev/null 2>&1"
+        )
+        keeper_wrapper = f'{keeper_cmd} & printf "%s\\n" "$!"'
+        _, stdout, _ = self._exec_remote_command(
+            f'/bin/sh -lc {shlex.quote(keeper_wrapper)}',
+        )
+        pids = stdout.splitlines()
         if not pids:
             raise AssertionError("Failed to retrieve PID of the FIFO keeper process.")
         self._writer_pid = pids[0]
+        rc, _, _ = self._exec_remote_command(f'ps -p {self._writer_pid}')
+        if rc != 0:
+            raise AssertionError("FIFO keeper process exited immediately after launch.")
 
         # Start the group controller process
         cmd = ' '.join(cmd)
-        full_cmd = f'bash -lc "{binary_path} start-group-controller -- {cmd} < {self._fifo_path} 1>> {self._tmpdir}/gc_stdout.log 2>> {self._tmpdir}/gc_stderr.log" &'
+        full_cmd = (
+            f'bash -lc "{binary_path} start-group-controller -- {cmd} '
+            f'< {self._fifo_path} 1>> {self._tmpdir}/gc_stdout.log '
+            f'2>> {self._tmpdir}/gc_stderr.log"'
+        )
         if sudo:
             full_cmd = f'sudo -n {full_cmd}'
         logger.info(f'Full command: {full_cmd}')
-        _, stdout, _ = self._ssh_client.exec_command(full_cmd, timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        launcher_cmd = (
+            f"/bin/sh -c {shlex.quote(f'exec {full_cmd}')}"
+            " </dev/null >/dev/null 2>&1"
+        )
+        rc, _, _ = self._exec_remote_command(
+            f'/bin/sh -lc {shlex.quote(f"{launcher_cmd} &")}',
+        )
+        if rc != 0:
             raise AssertionError(f"Failed to {full_cmd}. Check {self._tmpdir}/gc_stderr.log for details.")
         time.sleep(1)
 
         # Get its PID
-        _, stdout, _ = self._ssh_client.exec_command(f'pgrep -f "{binary_path} start-group-controller"', timeout=3)
-        pids = stdout.read().decode().strip().splitlines()
+        _, stdout, _ = self._exec_remote_command(
+            f'pgrep -f "{binary_path} start-group-controller"',
+        )
+        pids = stdout.splitlines()
         if not pids:
             raise AssertionError(f"Failed to retrieve PID of the group controller process. Check {self._tmpdir}/gc_stderr.log for details. Or {full_cmd}")
         
         # Pick the PID with its /proc/[pid]/cmdline starting exactly with the binary path and start-group-controller
         valid_pid = None
         for pid in pids:
-            _, stdout, _ = self._ssh_client.exec_command(f'cat /proc/{pid}/cmdline', timeout=3)
-            cmdline = stdout.read().decode().strip().replace('\x00', ' ')
+            _, stdout, _ = self._exec_remote_command(
+                f'cat /proc/{pid}/cmdline',
+            )
+            cmdline = stdout.replace('\x00', ' ')
             if cmdline.startswith(f"{binary_path} start-group-controller"):
                 valid_pid = pid
                 break
@@ -228,26 +280,27 @@ class AgentHelper:
         self._connect_ssh()
 
         if self._gc_pid:
-            _, stdout, _ = self._ssh_client.exec_command(f'ps -p {self._gc_pid}', timeout=3)
-            output = stdout.read().decode().strip()
+            _, output, _ = self._exec_remote_command(f'ps -p {self._gc_pid}')
             if self._gc_pid in output:
                 raise AssertionError("Group controller is already running.")
             else:
                 self._gc_pid = None
 
         binary_path = self._resolve_agent_binary()
-        _, stdout, _ = self._ssh_client.exec_command(f'test -x {binary_path}', timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, _, _ = self._exec_remote_command(f'test -x {binary_path}')
+        if rc != 0:
             raise AssertionError(f"Agent binary '{binary_path}' is not executable on target.")
 
         # Create tempdir, log file
-        _, stdout, _ = self._ssh_client.exec_command('mktemp -d', timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, stdout, _ = self._exec_remote_command('mktemp -d')
+        if rc != 0:
             raise AssertionError("Failed to create temporary directory on target.")
-        self._tmpdir = stdout.read().decode().strip()
+        self._tmpdir = stdout
 
-        _, stdout, _ = self._ssh_client.exec_command(f'touch {self._tmpdir}/gc_stdout.log {self._tmpdir}/gc_stderr.log', timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, _, _ = self._exec_remote_command(
+            f'touch {self._tmpdir}/gc_stdout.log {self._tmpdir}/gc_stderr.log',
+        )
+        if rc != 0:
             raise AssertionError("Failed to create log files on target.")
 
         # Start the group controller process
@@ -256,8 +309,7 @@ class AgentHelper:
         if sudo:
             full_cmd = f'sudo -n {full_cmd}'
         logger.info(f'Full command: {full_cmd}')
-        _, stdout, _ = self._ssh_client.exec_command(full_cmd, timeout=10)
-        exit_code = stdout.channel.recv_exit_status()
+        exit_code, _, _ = self._exec_remote_command(full_cmd, timeout=10)
 
         return exit_code
 
@@ -271,14 +323,13 @@ class AgentHelper:
             return
         
         if self._writer_pid:
-            _, stdout, _ = self._ssh_client.exec_command(f'kill {self._writer_pid}', timeout=3)
-            if stdout.channel.recv_exit_status() != 0:
+            rc, _, _ = self._exec_remote_command(f'kill {self._writer_pid}')
+            if rc != 0:
                 raise AssertionError("Failed to kill FIFO writer process on target.")
 
         end_time = time.time() + timeout
         while time.time() < end_time:
-            _, stdout, _ = self._ssh_client.exec_command(f'ps -p {self._gc_pid}', timeout=3)
-            output = stdout.read().decode().strip()
+            _, output, _ = self._exec_remote_command(f'ps -p {self._gc_pid}')
             if self._gc_pid not in output:
                 break
             time.sleep(1)
@@ -295,8 +346,10 @@ class AgentHelper:
         
         end_time = time.time() + timeout
         while time.time() < end_time:
-            _, stdout, _ = self._ssh_client.exec_command(f'grep -q "{text}" {self._tmpdir}/gc_stdout.log && echo found', timeout=3)
-            if 'found' in stdout.read().decode():
+            _, stdout, _ = self._exec_remote_command(
+                f'grep -q "{text}" {self._tmpdir}/gc_stdout.log && echo found',
+            )
+            if 'found' in stdout:
                 return
             time.sleep(1)
         
@@ -312,8 +365,10 @@ class AgentHelper:
         
         end_time = time.time() + timeout
         while time.time() < end_time:
-            _, stdout, _ = self._ssh_client.exec_command(f'grep -q "{text}" {self._tmpdir}/gc_stderr.log && echo found', timeout=3)
-            if 'found' in stdout.read().decode():
+            _, stdout, _ = self._exec_remote_command(
+                f'grep -q "{text}" {self._tmpdir}/gc_stderr.log && echo found',
+            )
+            if 'found' in stdout:
                 return
             time.sleep(1)
         
@@ -327,11 +382,12 @@ class AgentHelper:
         if not self._gc_pid:
             return 0
 
-        _, stdout, _ = self._ssh_client.exec_command(f"ps --ppid {self._gc_pid} --no-headers | wc -l", timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, output, _ = self._exec_remote_command(
+            f"ps --ppid {self._gc_pid} --no-headers | wc -l",
+        )
+        if rc != 0:
             return 0
 
-        output = stdout.read().decode().strip()
         try:
             return int(output)
         except ValueError:
@@ -343,10 +399,11 @@ class AgentHelper:
         Returns True if cgroupv2 is available on the target system.
         """
         self._connect_ssh()
-        _, stdout, _ = self._ssh_client.exec_command('stat -fc %T /sys/fs/cgroup', timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, output, _ = self._exec_remote_command(
+            'stat -fc %T /sys/fs/cgroup',
+        )
+        if rc != 0:
             return False
-        output = stdout.read().decode().strip()
         return output == 'cgroup2fs'
 
     @keyword('Group Controller Cgroupv2 Process List')
@@ -364,13 +421,16 @@ class AgentHelper:
         # Since our targets are mostly systemd-based, we assume that here.
         # See https://github.com/systemd/systemd/blob/main/docs/CGROUP_DELEGATION.md
         cgroup_path = f"/sys/fs/cgroup/{agent_binary_name}-gc-{self._gc_pid}"
-        _, stdout, _ = self._ssh_client.exec_command(f"test -d {cgroup_path} && echo {cgroup_path}", timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, stdout, _ = self._exec_remote_command(
+            f"test -d {cgroup_path} && echo {cgroup_path}",
+        )
+        if rc != 0:
             return []
-        cgroup_path = stdout.read().decode().strip()
+        cgroup_path = stdout
 
-        _, stdout, _ = self._ssh_client.exec_command(f'cat {cgroup_path}/cgroup.procs', timeout=3)
-        if stdout.channel.recv_exit_status() != 0:
+        rc, output, _ = self._exec_remote_command(
+            f'cat {cgroup_path}/cgroup.procs',
+        )
+        if rc != 0:
             return []
-        output = stdout.read().decode().strip()
         return output.splitlines() if output else []

@@ -3,6 +3,7 @@
 
 *** Settings ***
 Documentation  A resource file containing 'help' keywords for the Arm Total Performance CLI.
+
 Resource       common.resource
 
 

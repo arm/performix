@@ -55,6 +55,14 @@
             "Message": "{$PRODUCT_FULL_NAME} cannot process one or more recipe files:"
           }
         },
+        "ready": {
+          "NO_WORKLOAD_SPECIFIED": {
+            "Severity": "Error",
+            "Message": "You did not specify a workload type.",
+            "Explanation": "The `recipe ready` command requires you to specify the type of workload to check using one of these flags: `--pid`, `--workload`, or `--system-wide`. You did not provide any of these flags.",
+            "Advice": "Run `recipe ready --help` to learn more about each flag. Provide one workload flag to continue."
+          }
+        },
         "run": {
           "NO_WORKLOAD_SPECIFIED": {
             "Severity": "Error",
@@ -655,32 +663,38 @@
       "connection_creator": {
         "INSUFFICIENT_PRIVILEGES": {
           "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} could not start the agent server on the target.",
-          "Explanation": "The agent server must run with administrator or root privileges, but privilege elevation was not allowed on the target.",
-          "Advice": "See the 'Prepare your target for {$PRODUCT_FULL_NAME} connections' section of the {$PRODUCT_FULL_NAME} User Guide for more information. Check that privilege elevation (for example, sudo) is configured correctly on the target. If {$PRODUCT_FULL_NAME} still cannot start the agent server, contact Arm support."
+          "Message": "{$PRODUCT_FULL_NAME} could not start the agent server on the {locality}.",
+          "Explanation": "The agent server must run with administrator or root privileges, but privilege elevation is not allowed on the {locality}.",
+          "Advice": "Check that privilege elevation, such as `sudo`, is configured correctly on the {locality}. For more information, see 'Prepare your target for {$PRODUCT_FULL_NAME} connections' in the {$PRODUCT_FULL_NAME} User Guide. If {$PRODUCT_FULL_NAME} still cannot start the agent server, contact Arm support."
         },
         "AGENT_NOT_DEPLOYED": {
           "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot locate the launch script for the agent server on the target.",
-          "Explanation": "This operation needs the agent server to be running. {$PRODUCT_FULL_NAME} tried to run the `{cmd}` script in `{workingDir}`, but the script was missing. The {$PRODUCT_FULL_NAME} tools might be missing from the target or they might have been manually modified.",
+          "Message": "{$PRODUCT_FULL_NAME} could not find the launch script for the agent server on the target.",
+          "Explanation": "This operation requires a running agent server. {$PRODUCT_FULL_NAME} tried to run `{cmd}` in `{workingDir}`, but the script was missing. The {$PRODUCT_FULL_NAME} tools might be missing from the target or they might have been manually modified.",
           "Advice": "Run `target prepare` to deploy the agent. If {$PRODUCT_FULL_NAME} still cannot launch the agent server, contact Arm support."
+        },
+        "HOST_AGENT_NOT_DEPLOYED": {
+          "Severity": "Error",
+          "Message": "{$PRODUCT_FULL_NAME} could not locate the launch script for the agent server on the host.",
+          "Explanation": "This operation requires a running agent server. {$PRODUCT_FULL_NAME} tried to run `{cmd}` in `{workingDir}`, but the script was missing. The {$PRODUCT_FULL_NAME} tools might be missing from the host or they might have been manually modified.",
+          "Advice": "Run a recipe that deploys host-side tools with `--deploy-tools` to deploy the host agent. If {$PRODUCT_FULL_NAME} still cannot launch the agent server, contact Arm support."
         },
         "LAUNCH_ERROR_CODE": {
           "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot launch the agent server on the target.",
-          "Explanation": "This operation needs the agent server to be running. {$PRODUCT_FULL_NAME} tried to run the `{cmd}` script in `{workingDir}`, but it returned exit code `{exitCode}`. Possible causes include resource limits such as a lack of memory or file descriptors, an internal script error, or manual changes to the {$PRODUCT_FULL_NAME} tools directory.",
-          "Advice": "Check the target has sufficient resources to run the agent server. Ensure the {$PRODUCT_FULL_NAME} tools directory has not been manually modified. If {$PRODUCT_FULL_NAME} still cannot launch the agent server, contact Arm support."
+          "Message": "{$PRODUCT_FULL_NAME} could not launch the agent server on the {locality}.",
+          "Explanation": "This operation requires a running agent server. {$PRODUCT_FULL_NAME} tried to run `{cmd}` in `{workingDir}`, but it returned exit code `{exitCode}`. Possible causes include resource limits such insufficient memory or file descriptors, an internal script error, or manual changes to the {$PRODUCT_FULL_NAME} tools directory.",
+          "Advice": "Check the {locality} has sufficient resources to run the agent server. Ensure the {$PRODUCT_FULL_NAME} tools directory has not been manually modified. If {$PRODUCT_FULL_NAME} still cannot launch the agent server, contact Arm support."
         },
         "RUN_LAUNCH_COMMAND": {
           "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot launch the agent server on the target.",
-          "Explanation": "This operation needs the agent server to be running. {$PRODUCT_FULL_NAME} tried to run the `{cmd}` script in `{workingDir}`, but an error occurred while trying to execute this command. Possible causes include the script not being executable, resource limits such as a lack of memory or file descriptors, a broken connection to the target, or manual changes to the {$PRODUCT_FULL_NAME} tools directory.",
-          "Advice": "Ensure that the '{cmd}' script exists and is executable. Check that the target has sufficient resources to run the agent server. Ensure that the {$PRODUCT_FULL_NAME} tools directory has not been manually modified. If {$PRODUCT_FULL_NAME} still cannot launch the agent server, contact Arm support."
+          "Message": "{$PRODUCT_FULL_NAME} could not launch the agent server on the {locality}.",
+          "Explanation": "This operation requires a running agent server. {$PRODUCT_FULL_NAME} tried to run `{cmd}` in `{workingDir}`, but an error occurred. Possible causes include the script not being executable, resource limits such as insufficient memory or file descriptors, a broken connection to the {locality}, or manual changes to the {$PRODUCT_FULL_NAME} tools directory.",
+          "Advice": "Ensure that the '{cmd}' script exists and is executable. Check that the {locality} has sufficient resources to run the agent server. Ensure that the {$PRODUCT_FULL_NAME} tools directory has not been manually modified. If {$PRODUCT_FULL_NAME} still cannot launch the agent server, contact Arm support."
         },
         "NEW_AGENT_CONNECTION": {
           "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot connect to the agent server on the target.",
-          "Explanation": "This operation needs the {$PRODUCT_FULL_NAME} agent server to be running on the target. {$PRODUCT_FULL_NAME} launched a new agent, but could not connect to it. The agent might have shut down or there might be a connection issue.",
+          "Message": "{$PRODUCT_FULL_NAME} could not connect to the agent server on the {locality}.",
+          "Explanation": "This operation needs a running {$PRODUCT_FULL_NAME} agent server on the {locality}. {$PRODUCT_FULL_NAME} launched a new agent but could not connect to it. The agent might have shut down or there might be a connection issue.",
           "Advice": "Try the operation again. Check that the agent server is listening on port `{portNum}`. If {$PRODUCT_FULL_NAME} still cannot connect to the agent server, contact Arm support."
         }
       },
@@ -990,38 +1004,6 @@
           "Message": "{$PRODUCT_FULL_NAME} cannot identify a shell to run the workload through.",
           "Explanation": "The `--use-shell` flag requires a shell on the target to run the workload through. {$PRODUCT_FULL_NAME} tried to use the shell specified by the `{envVar}` environment variable, but this is not set or is empty. The fallback shell `{fallback}` also does not exist or failed to execute.",
           "Advice": "Check that the `{envVar}` environment variable is set when connecting to the target manually using SSH. Alternatively, verify that the fallback shell `{fallback}` is usable. If {$PRODUCT_FULL_NAME} still cannot run the workload through a shell, contact Arm support."
-        }
-      },
-      "sl_collect": {
-        "CONNECTION_FAILED": {
-          "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot connect to the daemon on the target.",
-          "Explanation": "{$PRODUCT_FULL_NAME} cannot connect to the target daemon, which manages communication with the target, collects information, and performs profiling.",
-          "Advice": "Run `target prepare` to deploy the daemon on the target, and check that it is running before you retry the operation. If {$PRODUCT_FULL_NAME} still cannot connect, contact Arm support."
-        },
-        "NO_SUDO": {
-          "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot launch the target daemon because it lacks the required privileges.",
-          "Explanation": "To communicate with the target, run profiling, and collect data, the {$PRODUCT_FULL_NAME} target daemon must run with passwordless superuser privileges. {$PRODUCT_FULL_NAME} cannot elevate privileges with passwordless sudo, so it cannot launch the daemon.",
-          "Advice": "Ensure that your user account is configured with passwordless sudo on the target. If {$PRODUCT_FULL_NAME} still cannot launch the daemon on the target, contact Arm support."
-        },
-        "NOT_DEPLOYED": {
-          "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot launch the daemon on the target system.",
-          "Explanation": "The daemon enables communication with the target, data collection, and profiling. {$PRODUCT_FULL_NAME} cannot launch the daemon because it is not deployed or is not executable.",
-          "Advice": "Run `target prepare` to deploy the daemon, and then run the command again. If {$PRODUCT_FULL_NAME} still cannot launch the daemon, contact Arm support."
-        },
-        "NOT_RUNNING": {
-          "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot connect to the daemon on the target.",
-          "Explanation": "The daemon enables communication with the target, data collection, and profiling. {$PRODUCT_FULL_NAME} cannot connect to the target daemon because it is not running.",
-          "Advice": "Run `target prepare` to deploy the daemon. Then, use a command such as `target info` to start it. If the connection still fails, contact Arm support."
-        },
-        "LAUNCH_FAIL": {
-          "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot launch the daemon on the target.",
-          "Explanation": "The {$PRODUCT_FULL_NAME} target daemon must be running to enable communication with the target, data collection, and profiling. The daemon is deployed on the target, but an error occurred when {$PRODUCT_FULL_NAME} attempted to launch it.",
-          "Advice": "If the issue continues, contact Arm support."
         }
       },
       "ssh": {
@@ -2390,6 +2372,34 @@
       }
     },
     "tool": {
+      "copy_from": {
+        "UNSUPPORTED_SOURCE_LOCALITY": {
+          "Severity": "Error",
+          "Message": "Copying files from source locality `{sourceLocality}` is not supported.",
+          "Explanation": "A tool integration requested a file copy from `{sourceLocality}` to `{destinationLocality}`, but {$PRODUCT_FULL_NAME} currently supports copying files only from `target` to `host`.",
+          "Advice": "Contact support or the tool integration author."
+        },
+        "UNSUPPORTED_DESTINATION_LOCALITY": {
+          "Severity": "Error",
+          "Message": "Copying files is not supported for the destination locality `{destinationLocality}`.",
+          "Explanation": "A tool integration requested a file copy from `{sourceLocality}` to `{destinationLocality}`, but {$PRODUCT_FULL_NAME} currently supports copying files only from `target` to `host`.",
+          "Advice": "Contact support or the tool integration author."
+        },
+        "TRANSFER_MANAGER_DISABLED": {
+          "Severity": "Error",
+          "Message": "File copy from the target to the host is not available.",
+          "Explanation": "A tool integration requested a file copy from `target` to `host`, but this file copy support is disabled in the current run.",
+          "Advice": "Set the `APXD_ENABLE_TRANSFER_MANAGER` environment variable and restart the engine daemon, then try again. If the issue continues, contact Arm support."
+        }
+      },
+      "locality": {
+        "UNSUPPORTED": {
+          "Severity": "Error",
+          "Message": "The engine locality `{locality}` is not supported.",
+          "Explanation": "A tool integration requested the {locality} engine locality, but {$PRODUCT_FULL_NAME} supports only `target` and `host` localities for this run.",
+          "Advice": "Specify one of `target` or `host` as the locality. If the issue continues, contact Arm support."
+        }
+      },
       "deployer": {
         "REMOVE_EXISTING_TOOL": {
           "Severity": "Error",
@@ -2443,32 +2453,32 @@
       "target_path": {
         "WIN_LOCALAPPDATA_UNAVAILABLE": {
           "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot deploy tools to the target because the tool deployment directory could not be resolved.",
-          "Explanation": "{$PRODUCT_FULL_NAME} must resolve the tool deployment directory in order to install tools on the target. {$PRODUCT_FULL_NAME} tried to resolve the tool deployment directory but %LOCALAPPDATA is either unavailable or not writable.",
-          "Advice": "Ensure %LOCALAPPDATA is available with write permissions. Alternatively, configure the tool deployment directory by setting the APXD_DEPLOYMENT_TOOLS_DIR environment variable. Then retry the operation. If the issue persists, contact Arm support."
+          "Message": "{$PRODUCT_FULL_NAME} could not deploy tools to the {locality} because it could not resolve the tool deployment directory.",
+          "Explanation": "{$PRODUCT_FULL_NAME} tried to resolve the tool deployment directory but %LOCALAPPDATA is either unavailable or not writable.",
+          "Advice": "Ensure %LOCALAPPDATA is available with write permissions. Alternatively, configure the tool deployment directory by setting the APXD_DEPLOYMENT_TOOLS_DIR environment variable., then retry the operation. If the issue persists, contact Arm support."
         },
         "TARGET_HOME_UNAVAILABLE": {
           "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot deploy tools to the target because the tool deployment directory could not be resolved.",
-          "Explanation": "{$PRODUCT_FULL_NAME} must resolve the tool deployment directory in order to install tools on the target. {$PRODUCT_FULL_NAME} tried to resolve the tool deployment directory but could not determine the target user's home directory.",
-          "Advice": "Ensure $HOME is set and accessible on the target. Alternatively, configure the tool deployment directory by setting the APXD_DEPLOYMENT_TOOLS_DIR environment variable. Then retry the operation. If the issue persists, contact Arm support."
+          "Message": "{$PRODUCT_FULL_NAME} could not deploy tools to the {locality} because it could not resolve the tool deployment directory.",
+          "Explanation": "{$PRODUCT_FULL_NAME} must resolve the tool deployment directory in order to install tools on the {locality}. {$PRODUCT_FULL_NAME} tried to resolve the tool deployment directory but could not determine the {locality} user's home directory.",
+          "Advice": "Ensure $HOME is set and accessible on the {locality}. Alternatively, configure the tool deployment directory by setting the APXD_DEPLOYMENT_TOOLS_DIR environment variable., then retry the operation. If the issue persists, contact Arm support."
         },
         "NO_WRITABLE_TOOLS_PATH": {
           "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot deploy tools to the target because the tool deployment directory could not be resolved.",
-          "Explanation": "{$PRODUCT_FULL_NAME} must resolve the tool deployment directory in order to install tools on the target. {$PRODUCT_FULL_NAME} tried to resolve the tool deployment directory but the resolved path is not writable",
-          "Advice": "Ensure `{path}` is writable on the target. Alternatively, configure the tool deployment directory by setting the APXD_DEPLOYMENT_TOOLS_DIR environment variable to a writable location. Then retry the operation. If the issue persists, contact Arm support."
+          "Message": "{$PRODUCT_FULL_NAME} cannot deploy tools to the {locality} because the tool deployment directory could not be resolved.",
+          "Explanation": "{$PRODUCT_FULL_NAME} must resolve the tool deployment directory in order to install tools on the {locality}. {$PRODUCT_FULL_NAME} tried to resolve the tool deployment directory but the resolved path is not writable",
+          "Advice": "Ensure `{path}` is writable on the {locality}. Alternatively, configure the tool deployment directory by setting the APXD_DEPLOYMENT_TOOLS_DIR environment variable to a writable location. Then retry the operation. If the issue persists, contact Arm support."
         },
         "DIR_MISSING": {
           "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot deploy tools to the target because the tool deployment directory could not be resolved.",
-          "Explanation": "{$PRODUCT_FULL_NAME} must resolve the tool deployment directory in order to install tools on the target. {$PRODUCT_FULL_NAME} tried to resolve the tool deployment directory but the resolved path does not exist.",
-          "Advice": "Create `{path}` on the target and ensure it is writable. Alternatively, configure the tool deployment directory by setting the APXD_DEPLOYMENT_TOOLS_DIR environment variable to an existing writable location. Then retry the operation. If the issue persists, contact Arm support."
+          "Message": "{$PRODUCT_FULL_NAME} could not deploy tools to the {locality} because it could not resolve the tool deployment directory.",
+          "Explanation": "{$PRODUCT_FULL_NAME} tried to resolve the tool deployment directory but the resolved path does not exist.",
+          "Advice": "Create `{path}` on the {locality} and ensure it is writable. Alternatively, configure the tool deployment directory by setting the APXD_DEPLOYMENT_TOOLS_DIR environment variable to an existing writable location, then retry the operation. If the issue persists, contact Arm support."
         },
         "LOCK_DIR_CONFLICT": {
           "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} cannot use the requested tools directory because it conflicts with the agent lock directory.",
-          "Explanation": "{$PRODUCT_FULL_NAME} resolved the tools directory on the target to `{path}`, but that path is reserved for the agent lock and cannot be made private to the current user for tool deployment.",
+          "Message": "{$PRODUCT_FULL_NAME} could not use the requested tools directory because it is reserved for the agent lock.",
+          "Explanation": "{$PRODUCT_FULL_NAME} resolved the tools directory on the {locality} to `{path}`, but that path is reserved for the agent lock and cannot be made private to the current user for tool deployment.",
           "Advice": "Choose a different tools path by setting the APXD_DEPLOYMENT_TOOLS_DIR environment variable to a user-specific location that can be owned by the current user, then retry the operation. If the issue persists, contact Arm support."
         }
       },
@@ -2509,6 +2519,14 @@
     }
   },
   "recipes": {
+    "cpu_microarchitecture": {
+      "TELEMETRY_SPECIFICATION_UNAVAILABLE": {
+        "Severity": "Error",
+        "Message": "{$PRODUCT_FULL_NAME} cannot collect CPU Microarchitecture data.",
+        "Explanation": "The CPU Microarchitecture recipe requires a telemetry specification for the primary CPU, `{cpuName}`, to determine which metric groups to collect, but no compatible specification is available.",
+        "Advice": "Use a target whose primary CPU is supported by the CPU Microarchitecture recipe."
+      }
+    },
     "instruction_mix": {
       "NO_WORKLOAD_STATIC": {
         "Severity": "Error",
@@ -2635,6 +2653,12 @@
         "Message": "Failed to find the login name on the target.",
         "Explanation": "The tool integration needs to know the login name used on the target, but determining the login name failed. The `logname` exited with code `{lognameRc}` and the `env` exited with code `{envRc}`.",
         "Advice": "Ensure the connection to the target has a valid login user and that the commands `logname` or `env` can report it. If the issue continues, contact Arm support."
+      },
+      "GET_PRIMARY_GROUP_FAILED": {
+        "Severity": "Error",
+        "Message": "Failed to find the primary group of `{username}` on the target.",
+        "Explanation": "The tool integration needs to know the primary group of the user `{username}` on the target, but the command `{cmd}` failed with exit code `{exitCode}`.",
+        "Advice": "Ensure that the user `{username}` has a valid primary group on the target and that the `id` command can report it. If the issue continues, contact Arm support."
       },
       "PRIVILEGE_CHECK_FAILED_PERF_PARANOID": {
         "Severity": "Error",

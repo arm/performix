@@ -87,12 +87,23 @@ func SendRecipeStartMessage(out apapproto.Apap_RecipeIssueCommandServer, runID r
 }
 
 func (p *GRPCRecipeStageNotifier) SendRecipeFinishMessage(out apapproto.Apap_RecipeIssueCommandServer, returnCode apapproto.StatusCode, err *apapproto.ErrorChain) {
-	recipeFinishResponse := &apapproto.RecipeResponse_RecipeFinish{RecipeFinish: &apapproto.RecipeFinish{ReturnCode: returnCode, Error: err}}
+	p.sendRecipeFinishMessage(out, &apapproto.RecipeFinish{ReturnCode: returnCode, Error: err})
+}
+
+func (p *GRPCRecipeStageNotifier) SendDetachedRecipeFinishMessage(out apapproto.Apap_RecipeIssueCommandServer) {
+	p.sendRecipeFinishMessage(out, &apapproto.RecipeFinish{
+		ReturnCode:                   apapproto.StatusCode_SUCCESS,
+		BackgroundTransfersRemaining: true,
+	})
+}
+
+func (p *GRPCRecipeStageNotifier) sendRecipeFinishMessage(out apapproto.Apap_RecipeIssueCommandServer, finish *apapproto.RecipeFinish) {
+	recipeFinishResponse := &apapproto.RecipeResponse_RecipeFinish{RecipeFinish: finish}
 	sendErr := out.Send(&apapproto.RecipeResponse{SubMessage: recipeFinishResponse, Id: &p.Run})
 	if sendErr != nil {
 		log.WithFields(log.Fields{
 			"runId":      p.Run.Value,
-			"returnCode": returnCode,
+			"returnCode": finish.ReturnCode,
 		}).WithError(sendErr).Error("failed to send recipe finish proto message")
 	}
 }
