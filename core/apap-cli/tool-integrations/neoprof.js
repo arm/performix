@@ -49,6 +49,23 @@ function getNeoprofPaths(engine) {
 }
 
 /**
+ * Creates a file as the non-root user and makes it readable by all users.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {string} path
+ * @returns {Promise<void>}
+ */
+async function createNonRootReadableFile(engine, path) {
+  const touchResult = await engine.execCommand(['touch', path], {
+    asPrivileged: false,
+  });
+  if (touchResult.rc === 0) {
+    await engine.execCommand(['chmod', '644', path], {
+      asPrivileged: false,
+    });
+  }
+}
+
+/**
  * @type {import("../recipes/docs/jsdocs").ToolIntegration}
  */
 let tool = {
@@ -350,13 +367,9 @@ let tool = {
     // permission to write the file.
     // We also set the permissions to 644 to ensure the file is readable by ALL users, otherwise the copy created
     // in the capture.apc will be root owned when sl-record is ran as root and not readable by the (non-root) agent.
-    await engine.execCommand(
-      [
-        'bash',
-        '-c',
-        `touch ${paths.slRecordDeployPath}/gator-log.txt && chmod 644 ${paths.slRecordDeployPath}/gator-log.txt`,
-      ],
-      { asPrivileged: false },
+    await createNonRootReadableFile(
+      engine,
+      `${paths.slRecordDeployPath}/gator-log.txt`,
     );
 
     let outputDirectory = await engine.createTempDir();
@@ -887,10 +900,7 @@ async function probeSlRecord(engine, ctx) {
   // sl-record writes probe_report.json to the bin directory. Create it as the
   // non-root user first so a root probe cannot leave a stale root-owned report
   // that a later non-root probe cannot overwrite.
-  await engine.execCommand(
-    ['bash', '-c', `touch ${probeReportPath} && chmod 644 ${probeReportPath}`],
-    { asPrivileged: false },
-  );
+  await createNonRootReadableFile(engine, probeReportPath);
 
   let commandResult = await engine.execCommand(args, {
     asPrivileged: ctx.metadata.neoprofAsPrivileged,
@@ -1954,10 +1964,63 @@ function emitDisassemblyFiles(engine, outputDir) {
  * @returns {void}
  */
 function emitNeoprofTimelineFiles(engine, outputDir) {
-  engine.emitOutput(outputDir + '/report-new/apx/**/*', 'output/parquet/**/*', {
-    name: 'neoprof_timeline',
-    version: '1.0',
-  });
+  engine.emitOutput(
+    outputDir + '/report-new/apx/metadata/capture_metadata.parquet',
+    'output/parquet/metadata/capture_metadata.parquet',
+    {
+      name: 'timeline-capture-metadata',
+      version: '1.0',
+    },
+  );
+  engine.emitOutput(
+    outputDir + '/report-new/apx/metadata/counter_series_metadata.parquet',
+    'output/parquet/metadata/counter_series_metadata.parquet',
+    {
+      name: 'timeline-counter-series-metadata',
+      version: '1.0',
+    },
+  );
+  engine.emitOutput(
+    outputDir + '/report-new/apx/metadata/devices.parquet',
+    'output/parquet/metadata/devices.parquet',
+    {
+      name: 'timeline-devices-metadata',
+      version: '1.0',
+    },
+  );
+  engine.emitOutput(
+    outputDir + '/report-new/apx/metadata/processes.parquet',
+    'output/parquet/metadata/processes.parquet',
+    {
+      name: 'timeline-processes-metadata',
+      version: '1.0',
+    },
+  );
+  engine.emitOutput(
+    outputDir + '/report-new/apx/metadata/threads.parquet',
+    'output/parquet/metadata/threads.parquet',
+    {
+      name: 'timeline-threads-metadata',
+      version: '1.0',
+    },
+  );
+  engine.emitOutput(
+    outputDir + '/report-new/apx/timeline/counter_series_files.parquet',
+    'output/parquet/timeline/counter_series_files.parquet',
+    {
+      name: 'timeline-counter-series-files-metadata',
+      version: '1.0',
+    },
+  );
+  engine.emitOutput(
+    outputDir +
+      '/report-new/apx/timeline/series_id=*/bin_duration=*/counter.parquet',
+    'output/parquet/timeline/series_id=*/bin_duration=*/counter.parquet',
+    {
+      name: 'timeline-counter-series-binned-deltas',
+      version: '1.0',
+    },
+  );
 }
 
 /**

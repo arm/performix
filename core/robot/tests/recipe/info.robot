@@ -3,18 +3,21 @@
 
 *** Settings ***
 Documentation   A test suite to exercise the 'recipe info' CLI of Arm Total Performance.
+
 Resource        ../../resources/keywords/common.resource
 Resource        ../../resources/keywords/recipe.resource
 Resource        ../../resources/keywords/target.resource
+
 Suite Setup     Recipe Info Suite Setup
 Suite Teardown  Recipe Info Suite Teardown
+
 Test Tags       recipe  info
 
 
 *** Test Cases ***
 The CPU Microarchitecture Recipe Info Can Be Listed
   [Documentation]  Tests that the cpu_microarchitecture recipe full definition can be displayed.
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   Given The ATPerf CLI Is Installed
   When List Recipe Info  cpu_microarchitecture
   Then The Last Command Succeeded
@@ -22,21 +25,21 @@ The CPU Microarchitecture Recipe Info Can Be Listed
 
 The CPU Microarchitecture Recipe Info Shows Correct Static Options
   [Documentation]  Tests that the cpu_microarchitecture recipe shows static parameter options.
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   Given The CPU Microarchitecture Recipe Is Listed
   When List Recipe Info  cpu_microarchitecture
   Then The Last Command Succeeded
-  The Recipe Info Parameter Options Contain The Default Static Options
+  And The Recipe Info Parameter Options Contain The Default Static Options
 
 The CPU Microarchitecture Recipe Info Shows Correct Computed Options
   [Documentation]  Tests that the cpu_microarchitecture recipe shows computed parameter options requiring a target.
-  [Tags]   cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   [Setup]  Run Keywords  The Test Target Is Added Successfully
   ...  AND  Prepare The Test Target
   Given The ATPerf CLI Is Installed
   When List Recipe Info With Target  cpu_microarchitecture  ${G_TARGET_NAME}
   Then The Last Command Succeeded
-  The Recipe Info Parameter Options Contains Basic Metric Groups
+  And The Recipe Info Parameter Options Contains Basic Metric Groups
   [Teardown]  Run Keywords  The Target Is Unprepared Successfully
   ...  AND  The Test Target Is Removed Successfully
 
@@ -50,13 +53,13 @@ Recipe Info Uses Correct Target When Multiple Targets Exist
   And The Target Is Not The Default  ${G_TARGET_NAME}
   When List Recipe Info With Target  cpu_microarchitecture  ${G_TARGET_NAME}
   Then The Last Command Succeeded
-  The Recipe Info Parameter Options Contains Basic Metric Groups
+  And The Recipe Info Parameter Options Contains Basic Metric Groups
   [Teardown]  Run Keywords  The Target Is Unprepared Successfully
   ...  AND  Remove All Targets
 
 The Code Hotspots Recipe Info Can Be Listed
   [Documentation]  Tests that the code hotspots recipe full definition can be displayed.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   Given The ATPerf CLI Is Installed
   When List Recipe Info  code_hotspots
   Then The Last Command Succeeded
@@ -64,7 +67,7 @@ The Code Hotspots Recipe Info Can Be Listed
 
 The Instruction Mix Recipe Info Can Be Listed
   [Documentation]  Tests that the instruction mix recipe full definition can be displayed.
-  [Tags]  instruction_mix
+  [Tags]  instruction-mix
   Given The ATPerf CLI Is Installed
   When List Recipe Info  instruction_mix
   Then The Last Command Succeeded
@@ -72,7 +75,7 @@ The Instruction Mix Recipe Info Can Be Listed
 
 The Memory Access Recipe Info Can Be Listed
   [Documentation]  Tests that the memory access recipe full definition can be displayed.
-  [Tags]  memory_access
+  [Tags]  memory-access
   Given The ATPerf CLI Is Installed
   When List Recipe Info  memory_access
   Then The Last Command Succeeded
@@ -80,7 +83,7 @@ The Memory Access Recipe Info Can Be Listed
 
 The System Utilization Recipe Info Can Be Listed
   [Documentation]  Tests that the system utilization recipe full definition can be displayed.
-  [Tags]  system_utilization
+  [Tags]  system-utilization
   Given The ATPerf CLI Is Installed
   When List Recipe Info  system_utilization
   Then The Last Command Succeeded

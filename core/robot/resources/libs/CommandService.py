@@ -7,9 +7,10 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
-import paramiko
 from robot.api import logger
 from robot.libraries.BuiltIn import BuiltIn
+
+from SSHCommandExecutor import SSHCommandExecutor
 
 
 @dataclass(slots=True)
@@ -33,8 +34,7 @@ class CommandService:
     def __init__(self, built_in: BuiltIn) -> None:
         self._built_in = built_in
         self._process_lib = None
-        self._paramiko_client = None
-        self._paramiko_client_info = None
+        self._ssh_executor = SSHCommandExecutor("CommandService")
 
     def run_host_command(self, cmd: str) -> CommandResult:
         process = self._get_process_library()
@@ -99,7 +99,9 @@ class CommandService:
             )
 
         # Run in background and print the child PID.
-        wrapped = f"{normalized} > /tmp/background-process.log 2>&1 & echo $!"
+        wrapped = (
+            f"{normalized} </dev/null > /tmp/background-process.log 2>&1 & echo $!"
+        )
         return f"/bin/sh -lc {shlex.quote(wrapped)}"
 
     def _get_process_library(self):
@@ -126,7 +128,7 @@ class CommandService:
         )
 
     def _run_remote_command(self, cmd: str, target_os: str) -> CommandResult:
-        client = self._get_paramiko_client()
+        self._connect_ssh()
 
         os_lower = (target_os or "").strip().lower()
         is_linux = os_lower == "linux"
@@ -137,30 +139,66 @@ class CommandService:
 
         logger.info(f"Running remote command:\n{remote_command}")
 
-        _, stdout, stderr = client.exec_command(remote_command, get_pty=is_linux)
-        stdout_data = stdout.read().decode("utf-8", errors="replace")
-        stderr_data = stderr.read().decode("utf-8", errors="replace")
-        exit_status = stdout.channel.recv_exit_status()
-
-        return CommandResult(rc=exit_status, stdout=stdout_data, stderr=stderr_data)
+        stdin = None
+        stdout = None
+        stderr = None
+        channel = None
+        try:
+            stdin, stdout, stderr = self._ssh_executor.exec_command(
+                remote_command,
+                get_pty=is_linux,
+            )
+            channel = stdout.channel
+            stdout_data = stdout.read().decode("utf-8", errors="replace")
+            stderr_data = stderr.read().decode("utf-8", errors="replace")
+            exit_status = channel.recv_exit_status()
+            return CommandResult(rc=exit_status, stdout=stdout_data, stderr=stderr_data)
+        finally:
+            for stream in (stdin, stdout, stderr):
+                if stream is None:
+                    continue
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+            if channel is not None:
+                try:
+                    channel.close()
+                except Exception:
+                    pass
 
     def _run_remote_command_background(self, cmd: str, target_os: str) -> CommandResult:
-        client = self._get_paramiko_client()
+        self._connect_ssh()
+        logger.info(f"Running remote background command:\n{cmd}")
+        stdin = None
+        stdout = None
+        stderr = None
+        channel = None
+        try:
+            stdin, stdout, stderr = self._ssh_executor.exec_command(
+                cmd,
+                get_pty=False,
+            )
+            channel = stdout.channel
+            stdout_data = stdout.read().decode("utf-8", errors="replace")
+            stderr_data = stderr.read().decode("utf-8", errors="replace")
+            exit_status = channel.recv_exit_status()
+            return CommandResult(rc=exit_status, stdout=stdout_data, stderr=stderr_data)
+        finally:
+            for stream in (stdin, stdout, stderr):
+                if stream is None:
+                    continue
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+            if channel is not None:
+                try:
+                    channel.close()
+                except Exception:
+                    pass
 
-        remote_command = cmd
-
-        logger.info(f"Running remote background command:\n{remote_command}")
-
-        transport = client.get_transport()
-        channel = transport.open_session()
-        channel.exec_command(remote_command)
-        stdout_data = channel.makefile("r").read()
-        stderr_data = channel.makefile_stderr("r").read()
-        exit_status = channel.recv_exit_status()
-
-        return CommandResult(rc=exit_status, stdout=stdout_data, stderr=stderr_data)
-
-    def _get_paramiko_client(self) -> paramiko.SSHClient:
+    def _connect_ssh(self) -> None:
         host = self._get_var("G_TARGET_HOST")
         user = self._get_var("G_TARGET_USER")
         key_path = self._get_var("G_TARGET_KEY")
@@ -171,26 +209,9 @@ class CommandService:
                 "SSH connection details (host, user, key) must be set before running target commands."
             )
 
-        expanded_key = os.path.expanduser(key_path)
-        connection_info = (host, port, user, expanded_key)
-
-        if self._paramiko_client:
-            if self._paramiko_client_info == connection_info:
-                transport = self._paramiko_client.get_transport()
-                if transport and transport.is_active():
-                    return self._paramiko_client
-            self._paramiko_client.close()
-            self._paramiko_client = None
-            self._paramiko_client_info = None
-
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(
+        self._ssh_executor.connect(
             hostname=host,
             username=user,
-            key_filename=expanded_key,
+            key_filename=key_path,
             port=port,
         )
-        self._paramiko_client = client
-        self._paramiko_client_info = connection_info
-        return client

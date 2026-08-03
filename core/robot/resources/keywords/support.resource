@@ -3,6 +3,7 @@
 
 *** Settings ***
 Documentation   A resource file containing support keywords for the Arm Performix CLI.
+
 Library         Collections
 Library         OperatingSystem
 Library         String
@@ -29,11 +30,11 @@ Support Package Suite Teardown
 A Support Package Is Collected
   [Arguments]  ${args}=${EMPTY}
   ${pkg_path} =  Collect Support Package  ${args}
-  VAR  ${SUPPORT_PKG_PATH}  ${pkg_path}  scope=TEST
+  VAR  ${SUPPORT_PKG_PATH} =  ${pkg_path}  scope=TEST
   # Determine the file name from the package path (everything after the last path separator and.zip extension removed)
   ${_}  ${zip_name} =  Split Path  ${SUPPORT_PKG_PATH}
   ${zip_name_no_ext} =  Remove String  ${zip_name}  .zip
-  VAR  ${EXTRACTED_PKG_PATH}  ${EXTRACTED_PKG_DIR}${/}${zip_name_no_ext}  scope=TEST
+  VAR  ${EXTRACTED_PKG_PATH} =  ${EXTRACTED_PKG_DIR}${/}${zip_name_no_ext}  scope=TEST
 
 The Support Package Is Created Successfully
   [Documentation]  Validate the contents of the extracted support package. Expects logs by default unless overridden.
@@ -131,7 +132,7 @@ Generate Dummy Engine Log
   [Documentation]  Create a dummy engine log file in the log directory. Create the dummy file in the Data Dir as that's
   ...  where APX looks for engine logs to include in the support package.
   ${engine_log_dir} =  Determine Engine Log Directory Path
-  VAR  ${DUMMY_ENGINE_LOG}  ${engine_log_dir}${/}2026-Mar-17_09-31-57.log  scope=TEST
+  VAR  ${DUMMY_ENGINE_LOG} =  ${engine_log_dir}${/}2026-Mar-17_09-31-57.log  scope=TEST
   Create File  ${DUMMY_ENGINE_LOG}  This is a dummy engine log.
 
 Remove Dummy Logs
@@ -142,7 +143,7 @@ Generate Dummy Runs
   The Test Target Is Added Successfully
   The Target Is Set To Default Successfully  ${G_TARGET_NAME}
   ${run_id} =  Run Recipe And Extract Run ID  code_hotspots
-  VAR  ${SUPPORT_PKG_RUN_1_ID}  ${run_id}  scope=SUITE
+  VAR  ${SUPPORT_PKG_RUN_1_ID} =  ${run_id}  scope=SUITE
   The Test Target Is Removed Successfully
 
 Remove Dummy Runs

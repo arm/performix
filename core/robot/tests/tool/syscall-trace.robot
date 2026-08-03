@@ -25,7 +25,8 @@ The Syscall Trace Summary Recipe Is Not Ready For System-Wide Workloads
   When Check Recipe Is Ready  syscall_trace_summary  --system-wide --target ${G_TARGET_NAME}
   Then The Last Command Succeeded
   And The Recipe Is Not Ready
-  And Check Advice Messages Contain  "Syscall Trace Summary supports launch and attach workloads. System-wide tracing is not supported."
+  And Check Advice Messages Contain
+  ...  "Syscall Trace Summary supports launch and attach workloads. System-wide tracing is not supported."
 
 The Syscall Trace Summary Recipe Fails When Workload Type Is System-Wide
   [Documentation]  Tests that the syscall-trace tool integration returns the expected error
@@ -44,7 +45,8 @@ The Syscall Trace Tool Passes Environment Variables To The Workload Script
   Given The Syscall Trace Summary Recipe Is Listed
   And The Target Exists  ${G_TARGET_NAME}
   And The Script Is Created On The Target  ${TEMP_FILE_PATH}  echo "this is \$FOO"
-  When Run Syscall Trace Summary Recipe  --workload ${TEMP_FILE_PATH} --env FOO=bar --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  When Run Syscall Trace Summary Recipe
+  ...  --workload ${TEMP_FILE_PATH} --env FOO=bar --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   Then The Last Command Succeeded
   And The Syscall Trace Parquet Artifact Exists
   And The Syscall Trace Strace Stdout Contains  this is bar
@@ -58,7 +60,8 @@ The Syscall Trace Tool Uses The Specified Working Dir To Launch The Workload
   Given The Syscall Trace Summary Recipe Is Listed
   And The Target Exists  ${G_TARGET_NAME}
   And The Script Is Created On The Target  ${TEMP_FILE_PATH}  pwd
-  When Run Syscall Trace Summary Recipe  --workload ./${TEMP_FILE_NAME} --working-dir ${ATPERF_DIR} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  When Run Syscall Trace Summary Recipe
+  ...  --workload ./${TEMP_FILE_NAME} --working-dir ${ATPERF_DIR} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   Then The Last Command Succeeded
   And The Syscall Trace Parquet Artifact Exists
   And The Syscall Trace Strace Stdout Contains  ${ATPERF_DIR}
@@ -82,13 +85,13 @@ Syscall Trace Suite Teardown
   Common Teardown
 
 Set Suite Variables
-  VAR  ${TEMP_FILE_PATH}  ${ATPERF_DIR}/${TEMP_FILE_NAME}  scope=SUITE
+  VAR  ${TEMP_FILE_PATH} =  ${ATPERF_DIR}/${TEMP_FILE_NAME}  scope=SUITE
 
 Skip Unless Syscall Trace Can Run On Target
   [Documentation]  Skips tests that require a Linux target with strace installed.
   Skip Unless Target OS Is  ${OS_LINUX}
   Run Target Command  command -v strace >/dev/null 2>&1
-  Skip If  ${G_LAST_RESULT.rc} != 0  Test skipped. syscall-trace requires strace on the target.
+  Skip If  ${G_LAST_RESULT.rc}  Test skipped. syscall-trace requires strace on the target.
 
 The Syscall Trace Parquet Artifact Exists
   [Documentation]  Verifies that the syscall-trace parquet output was saved in the run.
@@ -99,6 +102,6 @@ The Syscall Trace Strace Stdout Contains
   [Documentation]  Checks that the strace stdout artifact contains the expected text.
   [Arguments]  ${expected}
   ${run_id} =  Extract The Run ID
-  VAR  ${stdout_path}  ${G_RUNS_DIR}${/}${run_id}${/}tool${/}syscall-trace${/}0${/}syscall_trace_strace_stdout.txt
+  VAR  ${stdout_path} =  ${G_RUNS_DIR}${/}${run_id}${/}tool${/}syscall-trace${/}0${/}syscall_trace_strace_stdout.txt
   ${stdout_text} =  Get File  ${stdout_path}
   Should Contain  ${stdout_text}  ${expected}

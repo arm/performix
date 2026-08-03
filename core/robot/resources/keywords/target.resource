@@ -38,7 +38,7 @@ Count Targets
   List Targets
   ${targets} =  Get Targets As Dictionary
   ${num_targets} =  Get Length  ${targets}
-  VAR  ${G_NUM_TARGETS}  ${num_targets}  scope=GLOBAL
+  VAR  ${G_NUM_TARGETS} =  ${num_targets}  scope=GLOBAL
 
 The Number Of Targets Is
   [Arguments]  ${expected}
@@ -55,9 +55,9 @@ The Number Of Targets Has Increased By
   [Documentation]  Checks the number of targets has increased by the specified amount, by
   ...  taking note of the old count, re-counting the number of targets, and finding the difference.
   [Arguments]  ${expected}
-  VAR  ${old_num}  ${G_NUM_TARGETS}  scope=LOCAL
+  VAR  ${old_num} =  ${G_NUM_TARGETS}  scope=LOCAL
   Count Targets
-  VAR  ${new_num}  ${G_NUM_TARGETS}  scope=LOCAL
+  VAR  ${new_num} =  ${G_NUM_TARGETS}  scope=LOCAL
   ${increase} =  Evaluate  ${new_num} - ${old_num}
   Should Be Equal As Integers  ${increase}  ${expected}
 
@@ -65,9 +65,9 @@ The Number Of Targets Has Decreased By
   [Documentation]  Checks the number of targets has decreased by the specified amount, by
   ...  taking note of the old count, re-counting the number of targets, and finding the difference.
   [Arguments]  ${expected}
-  VAR  ${old_num}  ${G_NUM_TARGETS}  scope=LOCAL
+  VAR  ${old_num} =  ${G_NUM_TARGETS}  scope=LOCAL
   Count Targets
-  VAR  ${new_num}  ${G_NUM_TARGETS}  scope=LOCAL
+  VAR  ${new_num} =  ${G_NUM_TARGETS}  scope=LOCAL
   ${decrease} =  Evaluate  ${old_num} - ${new_num}
   Should Be Equal As Integers  ${decrease}  ${expected}
 
@@ -280,26 +280,6 @@ The Target Agent Is Not Deployed
   Check Tool Not Deployed  ${AGENT_BINARY_FILE_NAME}  ${G_TEST_USERNAME}
   The Last Command Succeeded
 
-Jitdump-JVM Is Deployed
-  [Documentation]  Check that Jitdump-JVM has been deployed to the target (AArch64 only).
-  ${target_arch} =  Get Variable Value  ${G_TARGET_ARCH}  ${EMPTY}
-  IF  '${target_arch}' != '${ARCH_AARCH64}'
-    Log  Skipping jitdump-jvm deployment check for non-AArch64 target.  DEBUG
-    RETURN
-  END
-  Check Tool Deployed  ${JITDUMP_JVM_BINARY_FILE_NAME}  ${G_TEST_USERNAME}
-  The Last Command Succeeded
-
-Jitdump-JVM Is Not Deployed
-  [Documentation]  Check that Jitdump-JVM has not been deployed to the target (AArch64 only).
-  ${target_arch} =  Get Variable Value  ${G_TARGET_ARCH}  ${EMPTY}
-  IF  '${target_arch}' != '${ARCH_AARCH64}'
-    Log  Skipping jitdump-jvm deployment check for non-AArch64 target.  DEBUG
-    RETURN
-  END
-  Check Tool Not Deployed  ${JITDUMP_JVM_BINARY_FILE_NAME}  ${G_TEST_USERNAME}
-  The Last Command Succeeded
-
 The Dotnet Agent Is Deployed
   [Documentation]  Check that the .NET agent has been deployed to the target (Linux only).
   ${target_os} =  Get Variable Value  ${G_TARGET_OS}  ${EMPTY}
@@ -413,7 +393,7 @@ The Target Info Contains
   [Documentation]  Check that the target info for a particular target contains the expected value
   [Arguments]  ${os_field}  ${expected_os}  ${arch_field}  ${expected_arch}
   ${result} =  Parse JSON To Dictionary  ${G_LAST_RESULT.stdout}
-  VAR  ${system_info}  ${result}[data][info][sl-collect-target-info][Info][System]
+  VAR  ${system_info} =  ${result}[data][info][sl-collect-target-info][Info][System]
   ${os_map} =  Create Dictionary  ${OS_LINUX}=${1}  ${OS_DARWIN}=${2}  ${OS_WINDOWS}=${3}
   ${arch_map} =  Create Dictionary  ${ARCH_AARCH64}=${1}  ${ARCH_X86_64}=${2}
   ${os_value} =  Get From Dictionary  ${os_map}  ${expected_os}
@@ -439,9 +419,9 @@ Set Localhost Target Architecture
   ${arch_is_arm} =  Run Keyword And Return Status  The Architecture Is Arm
   ${arch_is_x86} =  Run Keyword And Return Status  The Architecture Is X86
   IF  ${arch_is_arm}
-    VAR  ${G_TARGET_ARCH}  ${ARCH_AARCH64}  scope=GLOBAL
+    VAR  ${G_TARGET_ARCH} =  ${ARCH_AARCH64}  scope=GLOBAL
   ELSE IF  ${arch_is_x86}
-    VAR  ${G_TARGET_ARCH}  ${ARCH_X86_64}  scope=GLOBAL
+    VAR  ${G_TARGET_ARCH} =  ${ARCH_X86_64}  scope=GLOBAL
   ELSE
     Fail  Unable to determine host architecture
   END
@@ -449,10 +429,10 @@ Set Localhost Target Architecture
 Set Localhost As Test Target
   [Documentation]  Sets up localhost as the test target
   Skip If Localhost Is Not Supported
-  VAR  ${G_TARGET_NAME}  ${LOCALHOST_TARGET_NAME}  scope=GLOBAL
+  VAR  ${G_TARGET_NAME} =  ${LOCALHOST_TARGET_NAME}  scope=GLOBAL
   Set Localhost Target Architecture
   ${host_os} =  Determine Operating System
-  VAR  ${G_TARGET_OS}  ${host_os}  scope=GLOBAL
+  VAR  ${G_TARGET_OS} =  ${host_os}  scope=GLOBAL
   Set Default Launch Workload
   ${localhost_user} =  Get Localhost User
   Set Test Username  ${localhost_user}

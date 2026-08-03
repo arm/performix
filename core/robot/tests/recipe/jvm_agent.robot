@@ -3,12 +3,15 @@
 
 *** Settings ***
 Documentation   A test suite to exercise Java stack collection in Arm Total Performance.
+
 Resource        ../../resources/keywords/common.resource
 Resource        ../../resources/keywords/target.resource
 Resource        ../../resources/keywords/render.resource
+
 Suite Setup     Java Recipe Suite Setup
 Suite Teardown  Java Recipe Suite Teardown
-Test Tags       java_workload
+
+Test Tags  java-workload
 
 
 *** Variables ***
@@ -30,49 +33,49 @@ ${HOTSPOTS_JAVA_MISSING_FLAGS_RUN_ID}  ${EMPTY}
 *** Test Cases ***
 CPU Microarchitecture Recipe Produces Java Symbols When Stack Collection Enabled
   [Documentation]  Render the Java-enabled cpu_microarchitecture run and verify Java symbols are produced.
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   Given The Run Exists  ${CPU_MICROARCH_JAVA_ENABLED_RUN_ID}
   When Runs Are Rendered Successfully  ${CPU_MICROARCH_JAVA_ENABLED_RUN_ID}
   Then The Render Produced Java Symbols
 
 CPU Microarchitecture Recipe Does Not Produce Java Symbols When Stack Collection Disabled
   [Documentation]  Render the Java-disabled cpu_microarchitecture run and verify Java symbols aren't produced.
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   Given The Run Exists  ${CPU_MICROARCH_JAVA_DISABLED_RUN_ID}
   When Runs Are Rendered Successfully  ${CPU_MICROARCH_JAVA_DISABLED_RUN_ID}
   Then The Render Did Not Produce Java Symbols
 
 Code Hotspots Recipe Produces Java Symbols When Stack Collection Enabled
   [Documentation]  Render the Java-enabled Code Hotspots run and verify Java symbols are produced.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   Given The Run Exists  ${HOTSPOTS_JAVA_ENABLED_RUN_ID}
   When Runs Are Rendered Successfully  ${HOTSPOTS_JAVA_ENABLED_RUN_ID}
   Then The Render Produced Java Symbols
 
 Code Hotspots Recipe Does Not Produce Java Symbols When Stack Collection Disabled
   [Documentation]  Render the Java-disabled Code Hotspots run and verify Java symbols aren't produced.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   Given The Run Exists  ${HOTSPOTS_JAVA_DISABLED_RUN_ID}
   When Runs Are Rendered Successfully  ${HOTSPOTS_JAVA_DISABLED_RUN_ID}
   Then The Render Did Not Produce Java Symbols
 
 Java Workload Missing Flags Emit User Messages
   [Documentation]  Verify that omitting recommended JVM flags emits user messages.
-  [Tags]  code_hotspots  user_messages
+  [Tags]  code-hotspots  user-messages
   Given The Run Exists  ${HOTSPOTS_JAVA_MISSING_FLAGS_RUN_ID}
   When Render User Messages  ${HOTSPOTS_JAVA_MISSING_FLAGS_RUN_ID}
   Then The Render Produced JVM User Messages
 
 Java Workload With Required Flags Emits No User Message
   [Documentation]  Verify that no user messages are emitted when the recommended flags are used.
-  [Tags]  code_hotspots  user_messages
+  [Tags]  code-hotspots  user-messages
   Given The Run Exists  ${HOTSPOTS_JAVA_ENABLED_RUN_ID}
   When Render User Messages  ${HOTSPOTS_JAVA_ENABLED_RUN_ID}
   Then The Render Produced No JVM User Messages
 
 Jitdump-JVM Is Killed For A Successful Run
   [Documentation]  For a successful Java-enabled Code Hotspots run, verify Jitdump-JVM is killed.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   Given The Code Hotspots Recipe Is Listed
   When Run Code Hotspots Recipe
   ...  --timeout 5 --workload ${JAVA_WORKLOAD_CMD} --param collect_java_stacks=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
@@ -81,7 +84,7 @@ Jitdump-JVM Is Killed For A Successful Run
 
 Jitdump-JVM Is Killed For A Failed Run
   [Documentation]  For a failed Java-enabled Code Hotspots run, verify Jitdump-JVM is killed.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   Given The Code Hotspots Recipe Is Listed
   When Run Code Hotspots Recipe
   ...  --timeout 5 --workload non_existent_workload --param collect_java_stacks=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
@@ -90,7 +93,7 @@ Jitdump-JVM Is Killed For A Failed Run
 
 Jitdump-JVM Is Killed For A Stopped Run
   [Documentation]  For a stopped Java-enabled Code Hotspots run, verify the Jitdump-JVM is killed.
-  [Tags]  code_hotspots  stop
+  [Tags]  code-hotspots  stop
   Given No Processes Are Running On The Target  ${JITDUMP_JVM_PROCESS_NAME}  match_on_proc_name=${True}
   And Start Code Hotspots Recipe
   ...  --timeout 5 --workload ${JAVA_WORKLOAD_CMD} --param collect_java_stacks=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
@@ -100,7 +103,7 @@ Jitdump-JVM Is Killed For A Stopped Run
 
 Jitdump-JVM Is Killed For A Cancelled Run
   [Documentation]  For a cancelled Java-enabled Code Hotspots run, verify the Jitdump-JVM is killed.
-  [Tags]  code_hotspots  cancel
+  [Tags]  code-hotspots  cancel
   Given No Processes Are Running On The Target  ${JITDUMP_JVM_PROCESS_NAME}  match_on_proc_name=${True}
   And Start Code Hotspots Recipe
   ...  --timeout 5 --workload ${JAVA_WORKLOAD_CMD} --param collect_java_stacks=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
@@ -128,7 +131,7 @@ Java Recipe Suite Teardown
 
 Set Java Workload Cmd
   [Documentation]  Sets the Java workload command variable.
-  VAR  ${JAVA_WORKLOAD_CMD}  "java ${JAVA_FLAGS} ${JAVA_WORKLOAD_PATH}"  scope=SUITE
+  VAR  ${JAVA_WORKLOAD_CMD} =  "java ${JAVA_FLAGS} ${JAVA_WORKLOAD_PATH}"  scope=SUITE
 
 Ensure Java Workload Is Available
   [Documentation]  Ensure the Java workload is prepared on the target or skip the suite.
@@ -136,7 +139,7 @@ Ensure Java Workload Is Available
   IF  "${workload_path}" == ""
     Skip  Skipping test because workload ${JAVA_WORKLOAD_NAME} was not provided.
   END
-  VAR  ${JAVA_WORKLOAD_PATH}  ${workload_path}  scope=SUITE
+  VAR  ${JAVA_WORKLOAD_PATH} =  ${workload_path}  scope=SUITE
 
 Generate Java Runs
   [Documentation]  Generate Java workload runs.
@@ -148,18 +151,18 @@ Generate CPU Microarchitecture Java Runs
   ${is_supported} =  CPU Microarchitecture Is Supported On Target
   IF  not ${is_supported}  RETURN
   ${enabled} =  Run Java CPU Microarchitecture Recipe  collect=true
-  VAR  ${CPU_MICROARCH_JAVA_ENABLED_RUN_ID}  ${enabled}  scope=SUITE
+  VAR  ${CPU_MICROARCH_JAVA_ENABLED_RUN_ID} =  ${enabled}  scope=SUITE
   ${disabled} =  Run Java CPU Microarchitecture Recipe  collect=false
-  VAR  ${CPU_MICROARCH_JAVA_DISABLED_RUN_ID}  ${disabled}  scope=SUITE
+  VAR  ${CPU_MICROARCH_JAVA_DISABLED_RUN_ID} =  ${disabled}  scope=SUITE
 
 Generate Code Hotspots Java Runs
   [Documentation]  Generate Code Hotspots Java workload runs.
   ${hotspots_enabled} =  Run Java Hotspots Recipe  collect=true
-  VAR  ${HOTSPOTS_JAVA_ENABLED_RUN_ID}  ${hotspots_enabled}  scope=SUITE
+  VAR  ${HOTSPOTS_JAVA_ENABLED_RUN_ID} =  ${hotspots_enabled}  scope=SUITE
   ${hotspots_disabled} =  Run Java Hotspots Recipe  collect=false
-  VAR  ${HOTSPOTS_JAVA_DISABLED_RUN_ID}  ${hotspots_disabled}  scope=SUITE
+  VAR  ${HOTSPOTS_JAVA_DISABLED_RUN_ID} =  ${hotspots_disabled}  scope=SUITE
   ${hotspots_missing_flags} =  Run Java Hotspots Recipe With Flags  collect=true  flags=${EMPTY}
-  VAR  ${HOTSPOTS_JAVA_MISSING_FLAGS_RUN_ID}  ${hotspots_missing_flags}  scope=SUITE
+  VAR  ${HOTSPOTS_JAVA_MISSING_FLAGS_RUN_ID} =  ${hotspots_missing_flags}  scope=SUITE
 
 Run Java CPU Microarchitecture Recipe
   [Documentation]  Run the cpu_microarchitecture recipe with the Java workload, specifying whether to collect Java stacks.
@@ -180,7 +183,7 @@ Run Java Hotspots Recipe
 Run Java Hotspots Recipe With Flags
   [Documentation]  Run the Code Hotspots recipe with the Java workload, overriding the JVM flags if desired.
   [Arguments]  ${collect}=${True}  ${flags}=${JAVA_FLAGS}
-  VAR  ${workload_cmd}  "java ${flags} ${JAVA_WORKLOAD_PATH}"  scope=LOCAL
+  VAR  ${workload_cmd} =  "java ${flags} ${JAVA_WORKLOAD_PATH}"  scope=LOCAL
   Run Code Hotspots Recipe
   ...  --timeout 5 --workload ${workload_cmd} --param collect_java_stacks=${collect} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   The Last Command Succeeded
@@ -206,16 +209,24 @@ The Render Produced JVM User Messages
   [Documentation]  Verify that the most recently rendered session produced JVM user messages.
   ${session} =  Get Variable Value  ${G_RENDER_SESSION_ID}  ${EMPTY}
   The Render Session ID Is Valid  ${session}
-  ${row_count} =  Count Rows For Render Session Query  ${session}  "select * from log WHERE message LIKE '%${PRESERVE_FRAME_POINTER_FLAG}%'"
+  ${row_count} =  Count Rows For Render Session Query
+  ...  ${session}
+  ...  "select * from log WHERE message LIKE '%${PRESERVE_FRAME_POINTER_FLAG}%'"
   Should Be Equal As Integers  ${row_count}  1
-  ${row_count} =  Count Rows For Render Session Query  ${session}  "select * from log WHERE message LIKE '%${ENABLE_DYNAMIC_AGENT_FLAG}%'"
+  ${row_count} =  Count Rows For Render Session Query
+  ...  ${session}
+  ...  "select * from log WHERE message LIKE '%${ENABLE_DYNAMIC_AGENT_FLAG}%'"
   Should Be Equal As Integers  ${row_count}  1
 
 The Render Produced No JVM User Messages
   [Documentation]  Verify that the most recently rendered session did not produce JVM user messages.
   ${session} =  Get Variable Value  ${G_RENDER_SESSION_ID}  ${EMPTY}
   The Render Session ID Is Valid  ${session}
-  ${row_count} =  Count Rows For Render Session Query  ${session}  "select * from log WHERE message LIKE '%${PRESERVE_FRAME_POINTER_FLAG}%'"
+  ${row_count} =  Count Rows For Render Session Query
+  ...  ${session}
+  ...  "select * from log WHERE message LIKE '%${PRESERVE_FRAME_POINTER_FLAG}%'"
   Should Be Equal As Integers  ${row_count}  0
-  ${row_count} =  Count Rows For Render Session Query  ${session}  "select * from log WHERE message LIKE '%${ENABLE_DYNAMIC_AGENT_FLAG}%'"
+  ${row_count} =  Count Rows For Render Session Query
+  ...  ${session}
+  ...  "select * from log WHERE message LIKE '%${ENABLE_DYNAMIC_AGENT_FLAG}%'"
   Should Be Equal As Integers  ${row_count}  0

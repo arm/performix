@@ -3,6 +3,7 @@
 
 *** Settings ***
 Documentation  A resource file containing keywords for compatibility matrix tests
+
 Library        Process
 Resource       common.resource
 

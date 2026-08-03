@@ -82,7 +82,7 @@ The Neoprof Tool Requires Elevated Privileges If Perf Event Paranoid Is Greater 
 The CPU Microarchitecture Recipe Runs On Localhost with A Privileged User, Launch New Process and Perf Event Paranoid Is -1
   [Documentation]  Tests that the CPU Microarchitecture recipe runs successfully on localhost as a privileged user,
   ...  launching a new process workload when perf_event_paranoid is set to -1.
-  [Tags]  cpu_microarchitecture  remote_localhost
+  [Tags]  cpu-microarchitecture  remote-localhost
   [Setup]  Skip If Remote Localhost Is Not Set Up
   Given The Remote Localhost CPU Microarchitecture Recipe Is Listed
   And Target Platform Perf Event Paranoid Should Be  -1
@@ -93,7 +93,7 @@ The CPU Microarchitecture Recipe Runs On Localhost with A Privileged User, Launc
 The CPU Microarchitecture Recipe Runs On Localhost with A Privileged User, Systemwide Profiling and Perf Event Paranoid Is -1
   [Documentation]  Tests that the CPU Microarchitecture recipe runs successfully on localhost as a privileged user,
   ...  with systemwide profiling when perf_event_paranoid is set to -1.
-  [Tags]  cpu_microarchitecture  remote_localhost
+  [Tags]  cpu-microarchitecture  remote-localhost
   [Setup]  Skip If Remote Localhost Is Not Set Up
   Given The Remote Localhost CPU Microarchitecture Recipe Is Listed
   And Target Platform Perf Event Paranoid Should Be  -1
@@ -104,22 +104,24 @@ The CPU Microarchitecture Recipe Runs On Localhost with A Privileged User, Syste
 The CPU Microarchitecture Recipe Runs On Localhost with A Non-Privileged User, Launch New Process and Perf Event Paranoid Is -1
   [Documentation]  Tests that the CPU Microarchitecture recipe runs successfully on localhost as a non-privileged user,
   ...  launching a new process workload when perf_event_paranoid is set to -1.
-  [Tags]  cpu_microarchitecture  remote_localhost
+  [Tags]  cpu-microarchitecture  remote-localhost
   [Setup]  Skip If Remote Localhost Is Not Set Up
   Given The Remote Localhost CPU Microarchitecture Recipe Is Listed As Non-Root User
   And Target Platform Perf Event Paranoid Should Be  -1
-  When Run Remote Localhost CPU Microarchitecture Recipe As Non-Root User  --workload ${LAUNCH_WORKLOAD} ${DEPLOY_TOOLS_FLAG}
+  When Run Remote Localhost CPU Microarchitecture Recipe As Non-Root User
+  ...  --workload ${LAUNCH_WORKLOAD} ${DEPLOY_TOOLS_FLAG}
   Then The Last Command Succeeded
   [Teardown]  Run Keywords  Clean Up Remote Localhost  ${G_TARGET_USER_NON_ROOT}  AND  Target Platform Perf Event Paranoid Should Be  -1
 
 The CPU Microarchitecture Recipe Runs On Localhost with A Non-Privileged User, Launch New Process and Perf Event Paranoid Is 0
   [Documentation]  Tests that the CPU Microarchitecture recipe runs successfully on localhost as a non-privileged user,
   ...  launching a new process workload when perf_event_paranoid is set to 0.
-  [Tags]  cpu_microarchitecture  remote_localhost
+  [Tags]  cpu-microarchitecture  remote-localhost
   [Setup]  Skip If Remote Localhost Is Not Set Up
   Given The Remote Localhost CPU Microarchitecture Recipe Is Listed As Non-Root User
   And Target Platform Perf Event Paranoid Should Be  0
-  When Run Remote Localhost CPU Microarchitecture Recipe As Non-Root User  --workload ${LAUNCH_WORKLOAD} ${DEPLOY_TOOLS_FLAG}
+  When Run Remote Localhost CPU Microarchitecture Recipe As Non-Root User
+  ...  --workload ${LAUNCH_WORKLOAD} ${DEPLOY_TOOLS_FLAG}
   Then The Last Command Succeeded
   [Teardown]  Run Keywords  Clean Up Remote Localhost  ${G_TARGET_USER_NON_ROOT}  AND  Target Platform Perf Event Paranoid Should Be  -1
 
@@ -152,7 +154,7 @@ Verify Neoprof Privilege Requirement
   [Documentation]  Helper keyword to check neoprof privilege requirement in run log.
   [Arguments]  ${expected}
   ${run_id} =  Extract The Run ID
-  VAR  ${log_path}  ${G_RUNS_DIR}${/}${run_id}${/}log.json
+  VAR  ${log_path} =  ${G_RUNS_DIR}${/}${run_id}${/}log.json
   ${log_text} =  Get File  ${log_path}
   ${expected_value} =  Evaluate  str(${expected}).lower()
   Should Contain  ${log_text}  Neoprof privilege requirement: ${expected_value}

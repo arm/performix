@@ -45,6 +45,9 @@ type stubTargetSessionProvider struct {
 func (p *stubTargetSessionProvider) TargetSession(target target.Target) (targetsession.TargetSession, error) {
 	return p.session, nil
 }
+func (p *stubTargetSessionProvider) HostSession() (targetsession.TargetSession, error) {
+	return p.session, nil
+}
 func (p *stubTargetSessionProvider) Shutdown() error { return nil }
 
 type stubTarget struct{ username string }

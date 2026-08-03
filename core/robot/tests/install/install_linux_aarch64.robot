@@ -3,11 +3,14 @@
 
 *** Settings ***
 Documentation   A test suite to verify that the CLI can be downloaded and installed correctly on Linux arm64 hosts.
+
 Resource        ../../resources/keywords/common.resource
 Resource        ../../resources/keywords/download.resource
 Resource        ../../resources/keywords/install.resource
+
 Suite Setup     Install Linux Arm64 Suite Setup
 Suite Teardown  Install Linux Arm64 Suite Teardown
+
 Test Tags       install  linux  arm64  disabled
 
 

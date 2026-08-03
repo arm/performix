@@ -3,9 +3,12 @@
 
 *** Settings ***
 Documentation   A test suite to exercise the 'support collect' CLI of Arm Performix.
+
 Resource        ../../resources/keywords/support.resource
+
 Suite Setup     Support Package Suite Setup
 Suite Teardown  Support Package Suite Teardown
+
 Test Tags       support  package
 
 

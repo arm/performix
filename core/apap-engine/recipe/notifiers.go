@@ -4,6 +4,8 @@
 package recipe
 
 import (
+	"sync"
+
 	"github.com/sirupsen/logrus"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
@@ -21,6 +23,70 @@ func (n *NullStageNotifier) OnStageProgress(stageInfo notifiers.StageInfo, stage
 }
 func (n *NullStageNotifier) OnStageCancelled(stageInfo notifiers.StageInfo)      {}
 func (n *NullStageNotifier) OnRunCreated(runID run.RunID, rc *run.RunCollection) {}
+
+// BackgroundTransferDetachableNotifier stops forwarding notifications after Detach returns and suppresses background transfer notification.
+// Detach waits for any in-flight notification to complete.
+type BackgroundTransferDetachableNotifier struct {
+	mu       sync.Mutex
+	notifier notifiers.StageNotifier
+	detached bool
+}
+
+func NewBackgroundTransferDetachableNotifier(notifier notifiers.StageNotifier) *BackgroundTransferDetachableNotifier {
+	return &BackgroundTransferDetachableNotifier{notifier: notifier}
+}
+
+func (d *BackgroundTransferDetachableNotifier) Detach() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.detached = true
+}
+
+func (d *BackgroundTransferDetachableNotifier) notify(fn func(notifiers.StageNotifier)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.detached {
+		fn(d.notifier)
+	}
+}
+
+// suppresses reports whether the notification is for the background transfer stage.
+// These notifications can start before phase 1 completes, so the notifier suppresses them immediately.
+func (d *BackgroundTransferDetachableNotifier) suppresses(stageInfo notifiers.StageInfo) bool {
+	return stageInfo.Name == transferPhaseStageInfo(backgroundTransferPhase).Name
+}
+
+func (d *BackgroundTransferDetachableNotifier) OnStageStart(stageInfo notifiers.StageInfo) {
+	if d.suppresses(stageInfo) {
+		return
+	}
+	d.notify(func(n notifiers.StageNotifier) { n.OnStageStart(stageInfo) })
+}
+
+func (d *BackgroundTransferDetachableNotifier) OnStageEnd(stageInfo notifiers.StageInfo, err error) {
+	if d.suppresses(stageInfo) {
+		return
+	}
+	d.notify(func(n notifiers.StageNotifier) { n.OnStageEnd(stageInfo, err) })
+}
+
+func (d *BackgroundTransferDetachableNotifier) OnStageProgress(stageInfo notifiers.StageInfo, stageProgress notifiers.StageProgress) {
+	if d.suppresses(stageInfo) {
+		return
+	}
+	d.notify(func(n notifiers.StageNotifier) { n.OnStageProgress(stageInfo, stageProgress) })
+}
+
+func (d *BackgroundTransferDetachableNotifier) OnStageCancelled(stageInfo notifiers.StageInfo) {
+	if d.suppresses(stageInfo) {
+		return
+	}
+	d.notify(func(n notifiers.StageNotifier) { n.OnStageCancelled(stageInfo) })
+}
+
+func (d *BackgroundTransferDetachableNotifier) OnRunCreated(runID run.RunID, rc *run.RunCollection) {
+	d.notify(func(n notifiers.StageNotifier) { n.OnRunCreated(runID, rc) })
+}
 
 // CompositeStageNotifier dispatches stage notifications to multiple notifiers.
 type CompositeStageNotifier struct {

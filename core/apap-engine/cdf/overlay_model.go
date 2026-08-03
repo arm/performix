@@ -202,6 +202,31 @@ func (m *OverlayModel) FindEntities(glob string) ([]Entity, error) {
 	), nil
 }
 
+// FindComponents returns the de-duplicated union of overlay and base components.
+func (m *OverlayModel) FindComponents(glob string) ([]Component, error) {
+	overlayComponents, overlayErr := m.overlay.FindComponents(glob)
+	if overlayErr != nil && !isNotExist(overlayErr) {
+		return nil, overlayErr
+	}
+
+	baseComponents, baseErr := m.base.FindComponents(glob)
+	if baseErr != nil && !isNotExist(baseErr) {
+		return nil, baseErr
+	}
+	if isNotExist(overlayErr) && isNotExist(baseErr) {
+		return nil, fs.ErrNotExist
+	}
+
+	baseComponents = filterOutsideOverlayRoot(m.base.BasePath(), m.overlay.BasePath(), baseComponents, func(component Component) string {
+		return component.RelativePath
+	})
+	return mergeByRelativePath(
+		overlayComponents,
+		baseComponents,
+		func(component Component) string { return component.RelativePath },
+	), nil
+}
+
 // ListEntityComponents returns the de-duplicated union of overlay and base components for an entity.
 func (m *OverlayModel) ListEntityComponents(entity Entity) ([]Component, error) {
 	overlayComponents, overlayErr := m.overlay.ListEntityComponents(entity)

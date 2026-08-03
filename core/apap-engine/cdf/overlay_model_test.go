@@ -78,6 +78,12 @@ func (m *mockModelView) FindEntities(glob string) ([]Entity, error) {
 	return args.Get(0).([]Entity), args.Error(1)
 }
 
+// FindComponents returns the mocked components and error for a glob.
+func (m *mockModelView) FindComponents(glob string) ([]Component, error) {
+	args := m.Called(glob)
+	return args.Get(0).([]Component), args.Error(1)
+}
+
 // ListEntityComponents returns the mocked components and error for an entity.
 func (m *mockModelView) ListEntityComponents(entity Entity) ([]Component, error) {
 	args := m.Called(entity)
@@ -376,6 +382,45 @@ func TestOverlayModel(t *testing.T) {
 		overlay.AssertExpectations(t)
 	})
 
+	t.Run("find components ignores overlay not-exist", func(t *testing.T) {
+		base := &mockModelView{}
+		overlay := &mockModelView{}
+		expected := []Component{{RelativePath: "tool/base/0/a.txt"}}
+
+		base.On("BasePath").Return("")
+		overlay.On("BasePath").Return("")
+		overlay.On("FindComponents", "g").Return([]Component(nil), fs.ErrNotExist)
+		base.On("FindComponents", "g").Return(expected, nil)
+
+		model, err := NewOverlayModel(base, overlay)
+		require.NoError(t, err)
+
+		components, err := model.FindComponents("g")
+		require.NoError(t, err)
+		assert.Equal(t, expected, components)
+
+		base.AssertExpectations(t)
+		overlay.AssertExpectations(t)
+	})
+
+	t.Run("find components returns overlay error for non-not-exist", func(t *testing.T) {
+		base := &mockModelView{}
+		overlay := &mockModelView{}
+		overlayErr := errors.New("boom")
+
+		overlay.On("FindComponents", "g").Return([]Component(nil), overlayErr)
+
+		model, err := NewOverlayModel(base, overlay)
+		require.NoError(t, err)
+
+		_, err = model.FindComponents("g")
+		require.Error(t, err)
+		assert.EqualError(t, err, "boom")
+
+		base.AssertNotCalled(t, "FindComponents", mock.Anything)
+		overlay.AssertExpectations(t)
+	})
+
 	t.Run("find entities returns overlay error for non-not-exist", func(t *testing.T) {
 		base := &mockModelView{}
 		overlay := &mockModelView{}
@@ -468,6 +513,23 @@ func TestOverlayModel(t *testing.T) {
 		base.AssertExpectations(t)
 		overlay.AssertExpectations(t)
 	})
+	t.Run("find components returns not-exist when both base and overlay missing", func(t *testing.T) {
+		base := &mockModelView{}
+		overlay := &mockModelView{}
+
+		overlay.On("FindComponents", "g").Return([]Component(nil), fs.ErrNotExist)
+		base.On("FindComponents", "g").Return([]Component(nil), fs.ErrNotExist)
+
+		model, err := NewOverlayModel(base, overlay)
+		require.NoError(t, err)
+
+		_, err = model.FindComponents("g")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, fs.ErrNotExist)
+
+		base.AssertExpectations(t)
+		overlay.AssertExpectations(t)
+	})
 	t.Run("list components returns not-exist when both base and overlay missing", func(t *testing.T) {
 		base := &mockModelView{}
 		overlay := &mockModelView{}
@@ -542,5 +604,46 @@ func TestOverlayModel(t *testing.T) {
 		components, err := model.ListEntityComponents(Entity{RelativePath: entity})
 		require.NoError(t, err)
 		assert.Empty(t, components)
+	})
+
+	t.Run("find components de-duplicates with overlay precedence", func(t *testing.T) {
+		base := &mockModelView{}
+		overlay := &mockModelView{}
+
+		overlayComponent := Component{
+			Type:         ComponentType{Name: TypeLogText, SchemaVersion: "0.1"},
+			RelativePath: "tool/logs/0/messages.txt",
+			AbsolutePath: "/overlay/tool/logs/0/messages.txt",
+		}
+		overlayExtra := Component{
+			Type:         ComponentType{Name: TypeLogJSON, SchemaVersion: "0.1"},
+			RelativePath: "tool/logs/1/events.jsonl",
+			AbsolutePath: "/overlay/tool/logs/1/events.jsonl",
+		}
+		baseDuplicate := Component{
+			Type:         ComponentType{Name: "base", SchemaVersion: "0.1"},
+			RelativePath: "tool/logs/0/messages.txt",
+			AbsolutePath: "/base/tool/logs/0/messages.txt",
+		}
+		baseExtra := Component{
+			Type:         ComponentType{Name: "metrics", SchemaVersion: "0.1"},
+			RelativePath: "tool/other/0/metrics.csv",
+			AbsolutePath: "/base/tool/other/0/metrics.csv",
+		}
+
+		base.On("BasePath").Return("/base")
+		overlay.On("BasePath").Return("/overlay")
+		overlay.On("FindComponents", "tool/**").Return([]Component{overlayComponent, overlayExtra}, nil)
+		base.On("FindComponents", "tool/**").Return([]Component{baseDuplicate, baseExtra}, nil)
+
+		model, err := NewOverlayModel(base, overlay)
+		require.NoError(t, err)
+
+		components, err := model.FindComponents("tool/**")
+		require.NoError(t, err)
+		assert.Equal(t, []Component{overlayComponent, overlayExtra, baseExtra}, components)
+
+		base.AssertExpectations(t)
+		overlay.AssertExpectations(t)
 	})
 }

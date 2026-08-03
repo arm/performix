@@ -3,11 +3,14 @@
 
 *** Settings ***
 Documentation   A test suite to verify that the CLI can be downloaded and installed correctly on MacOS arm64 hosts.
+
 Resource        ../../resources/keywords/common.resource
 Resource        ../../resources/keywords/download.resource
 Resource        ../../resources/keywords/install.resource
+
 Suite Setup     Install MacOs Arm64 Suite Setup
 Suite Teardown  Install MacOs Arm64 Suite Teardown
+
 Test Tags       install  macos  arm64  disabled
 
 

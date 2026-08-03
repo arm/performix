@@ -3,11 +3,14 @@
 
 *** Settings ***
 Documentation   A test suite to exercise the 'run' CLI of Arm Total Performance.
+
 Resource        ../../resources/keywords/recipe.resource
 Resource        ../../resources/keywords/run.resource
 Resource        ../../resources/keywords/target.resource
+
 Suite Setup     Runs Suite Setup
 Suite Teardown  Runs Suite Teardown
+
 Test Tags  run
 
 
@@ -148,7 +151,7 @@ Runs Suite Setup
   The Test Target Is Added Successfully
   The Target Is Set To Default Successfully  ${G_TARGET_NAME}
   ${run_id} =  Run Recipe And Extract Run ID  code_hotspots
-  VAR  ${CODE_HOTSPOTS_RUN_ID_1}  ${run_id}  scope=SUITE
+  VAR  ${CODE_HOTSPOTS_RUN_ID_1} =  ${run_id}  scope=SUITE
   The Test Target Is Removed Successfully
 
 Runs Suite Teardown

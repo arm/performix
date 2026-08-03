@@ -219,8 +219,8 @@ func (r *ConcreteRecipeAPI) listRunComponents(call goja.FunctionCall) goja.Value
 		panic(r.vm.ToValue(err))
 	}
 
-	var entityPath string
-	if err := gojautils.ParseObjectFromJS(call.Arguments[1], &entityPath); err != nil {
+	var componentGlob string
+	if err := gojautils.ParseObjectFromJS(call.Arguments[1], &componentGlob); err != nil {
 		panic(r.vm.ToValue(err))
 	}
 
@@ -229,9 +229,7 @@ func (r *ConcreteRecipeAPI) listRunComponents(call goja.FunctionCall) goja.Value
 		panic(r.vm.ToValue(fmt.Sprintf("run index out of range: %d", runIndex)))
 	}
 
-	components, err := runModels[runIndex].ListEntityComponents(
-		cdf.Entity{RelativePath: entityPath},
-	)
+	components, err := runModels[runIndex].FindComponents(componentGlob)
 	if err != nil {
 		panic(r.vm.ToValue(err))
 	}

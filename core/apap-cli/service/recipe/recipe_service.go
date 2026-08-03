@@ -31,9 +31,10 @@ import (
 )
 
 type RunResponse struct {
-	Stage    string           `json:"stage"`
-	Progress int              `json:"progress"`
-	RunID    *apapproto.RunId `json:"run_id"`
+	Stage                        string           `json:"stage"`
+	Progress                     int              `json:"progress"`
+	RunID                        *apapproto.RunId `json:"run_id"`
+	BackgroundTransfersRemaining bool             `json:"background_transfers_remaining"`
 }
 
 type ParsedRecipe struct {
@@ -105,16 +106,17 @@ func workloadToProto(workload Workload, includeEnvironment bool) *apapproto.Reci
 // This is data accompanying the recipe definition, which will all be send together to the engine
 // as part of a RecipeData gRPC.
 type RecipeExecutionCtx struct {
-	Target               engine_target.Target
-	TargetName           string
-	RecipeName           string
-	Workload             Workload
-	ToolInstallPath      string // user should be able to specify this
-	Output               string // user should be able to specify this
-	ToolDeploymentType   apapproto.ToolDeploy
-	Params               map[string]*structpb.Value
-	HostSourceCodePaths  run.HostSourceCodePath
-	NoCleanupWorkingArea bool
+	Target                    engine_target.Target
+	TargetName                string
+	RecipeName                string
+	Workload                  Workload
+	ToolInstallPath           string // user should be able to specify this
+	Output                    string // user should be able to specify this
+	ToolDeploymentType        apapproto.ToolDeploy
+	Params                    map[string]*structpb.Value
+	HostSourceCodePaths       run.HostSourceCodePath
+	NoCleanupWorkingArea      bool
+	DetachBackgroundTransfers bool
 }
 
 type RecipeReadyResponse struct {
@@ -226,6 +228,7 @@ func (s RecipeRunner) SendRecipeRunToEngine(client apapproto.ApapClient, recipeI
 	recipeCommand.Parameters = recipeCtx.Params
 
 	recipeCommand.NoCleanupWorkingArea = util.Ptr(recipeCtx.NoCleanupWorkingArea)
+	recipeCommand.DetachBackgroundTransfers = util.Ptr(recipeCtx.DetachBackgroundTransfers)
 
 	// Run the recipe on the engine
 	recipeCommandStart := &apapproto.RecipeCommand_StartCommand{StartCommand: recipeCommand}
@@ -437,6 +440,7 @@ func ProcessRunRecipe(
 	deployToolType apapproto.ToolDeploy,
 	hostSourceCodePaths run.HostSourceCodePath,
 	noCleanupWorkingArea bool,
+	detachBackgroundTransfers bool,
 	target string) error {
 
 	jsonOut := viper.GetBool("json")
@@ -479,17 +483,21 @@ func ProcessRunRecipe(
 	// Output path and tool install path are empty at the moment. We may want to keep them in the struct for allowing them to be
 	// filled in with user input (from CLI / GUI). In engine layer we use defaults if they're not set here.
 	recipeCtx := &RecipeExecutionCtx{
-		Target:               tgt,
-		TargetName:           targetName,
-		Workload:             workload,
-		Params:               recipeParams,
-		RecipeName:           recipeName,
-		HostSourceCodePaths:  hostSourceCodePaths,
-		NoCleanupWorkingArea: noCleanupWorkingArea,
+		Target:                    tgt,
+		TargetName:                targetName,
+		Workload:                  workload,
+		Params:                    recipeParams,
+		RecipeName:                recipeName,
+		HostSourceCodePaths:       hostSourceCodePaths,
+		NoCleanupWorkingArea:      noCleanupWorkingArea,
+		DetachBackgroundTransfers: detachBackgroundTransfers,
 	}
 	recipeCtx.ToolDeploymentType = deployToolType
 
 	response, runErr := runnerService.SendRecipeRunToEngine(client, recipeInfo, recipeCtx, out)
+	if runErr == nil && response.BackgroundTransfersRemaining && !jsonOut {
+		fmt.Fprintln(out, "Required transfers completed; remaining transfers will continue in the background.")
+	}
 	// Printing run ID before error check
 	if response.RunID != nil && response.RunID.Value != "" {
 		if !jsonOut {
@@ -605,7 +613,25 @@ func streamProgressResponses(recipeClient apapproto.Apap_RecipeIssueCommandClien
 				return RunResponse{Stage: fmt.Sprintf("Recipe failed: %s", recipeName), Progress: 100, RunID: recipeResponse.Id}, runErr
 
 			}
-			return RunResponse{Stage: fmt.Sprintf("Recipe completed: %s", recipeName), Progress: 100, RunID: recipeResponse.Id}, nil
+			backgroundTransfersRemaining := event.RecipeFinish.GetBackgroundTransfersRemaining()
+			if backgroundTransfersRemaining {
+				for _, tracker := range stageTrackers {
+					tracker.MarkAsDone()
+				}
+				if !jsonOut {
+					pw.Stop()
+				}
+			}
+			stage := fmt.Sprintf("Recipe completed: %s", recipeName)
+			if backgroundTransfersRemaining {
+				stage = "Required transfers completed; remaining transfers will continue in the background."
+			}
+			return RunResponse{
+				Stage:                        stage,
+				Progress:                     100,
+				RunID:                        recipeResponse.Id,
+				BackgroundTransfersRemaining: backgroundTransfersRemaining,
+			}, nil
 		case *apapproto.RecipeResponse_StageStart:
 			tracker := addStageTracker(event.StageStart.StageName, 0, stageTrackers)
 			if tracker != nil {

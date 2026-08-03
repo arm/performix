@@ -236,7 +236,7 @@ let tool = {
       if (isElevatePrivilegeError(err)) {
         throw err;
       }
-      if (isUserInterruptionError(err)) {
+      if (isUserInterruptionError(err) || err.code !== undefined) {
         runError = err;
       } else {
         runError = {

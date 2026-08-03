@@ -24,7 +24,7 @@ const tools = "tools"
 //   - Windows: uses an explicit baseDir when provided (supports ~ via USERPROFILE and relative paths, checks existence/writability),
 //     otherwise uses LOCALAPPDATA/<product>/tools; no fallback.
 //   - Android: uses an explicit baseDir when provided, otherwise uses /data/local/tmp/<product>/tools.
-func ResolveToolsBaseDir(baseDir string, platformOS OS, cmdRunner CommandRunner) (string, error) {
+func ResolveToolsBaseDir(baseDir string, platformOS OS, cmdRunner CommandRunner, localityName string) (string, error) {
 	switch platformOS {
 	case Linux, Darwin:
 		return resolve(baseDir, cmdRunner, resolverOps{
@@ -41,9 +41,10 @@ func ResolveToolsBaseDir(baseDir string, platformOS OS, cmdRunner CommandRunner)
 				return agentconfig.GetDefaultLockRootDirectory(runtime.GOOS)
 			},
 			errRootMissing: func(base string) error {
-				return message.New(message.EngineToolTargetPathTargetHomeUnavailable).WithMetadata(map[string]string{"path": base})
+				return message.New(message.EngineToolTargetPathTargetHomeUnavailable).WithMetadata(map[string]string{"path": base, "locality": localityName})
 			},
-			isWindows: false,
+			isWindows:    false,
+			localityName: localityName,
 		})
 	case Win:
 		readRoot := readWindowsLocalAppData
@@ -64,9 +65,10 @@ func ResolveToolsBaseDir(baseDir string, platformOS OS, cmdRunner CommandRunner)
 				return agentconfig.GetDefaultLockRootDirectory(runtime.GOOS)
 			},
 			errRootMissing: func(_ string) error {
-				return message.New(message.EngineToolTargetPathWinLocalappdataUnavailable)
+				return message.New(message.EngineToolTargetPathWinLocalappdataUnavailable).WithMetadata(map[string]string{"locality": localityName})
 			},
-			isWindows: true,
+			isWindows:    true,
+			localityName: localityName,
 		})
 	case Android:
 		return resolve(baseDir, cmdRunner, resolverOps{
@@ -85,9 +87,10 @@ func ResolveToolsBaseDir(baseDir string, platformOS OS, cmdRunner CommandRunner)
 				return agentconfig.GetDefaultLockRootDirectory(runtime.GOOS)
 			},
 			errRootMissing: func(base string) error {
-				return message.New(message.EngineToolTargetPathTargetHomeUnavailable).WithMetadata(map[string]string{"path": base})
+				return message.New(message.EngineToolTargetPathTargetHomeUnavailable).WithMetadata(map[string]string{"path": base, "locality": localityName})
 			},
-			isWindows: false,
+			isWindows:    false,
+			localityName: localityName,
 		})
 	default:
 		return baseDir, nil
@@ -105,6 +108,7 @@ type resolverOps struct {
 	lockRoot       func() string
 	errRootMissing func(base string) error
 	isWindows      bool
+	localityName   string
 }
 
 func resolve(baseDir string, cmdRunner CommandRunner, ops resolverOps) (string, error) {
@@ -125,7 +129,7 @@ func resolve(baseDir string, cmdRunner CommandRunner, ops resolverOps) (string, 
 	lockRoot := normalizeForCompare(ops.isWindows, ops.lockRoot())
 	normalisedBase := normalizeForCompare(ops.isWindows, base)
 	if normalisedBase == lockRoot {
-		return "", message.New("engine.tool.target_path.LOCK_DIR_CONFLICT").WithMetadata(map[string]string{"path": base})
+		return "", message.New(message.EngineToolTargetPathLockDirConflict).WithMetadata(map[string]string{"path": base, "locality": ops.localityName})
 	}
 
 	exists, err := ops.exists(cmdRunner, base)
@@ -133,7 +137,7 @@ func resolve(baseDir string, cmdRunner CommandRunner, ops resolverOps) (string, 
 		return "", err
 	}
 	if !exists {
-		return "", message.New(message.EngineToolTargetPathDirMissing).WithMetadata(map[string]string{"path": base})
+		return "", message.New(message.EngineToolTargetPathDirMissing).WithMetadata(map[string]string{"path": base, "locality": ops.localityName})
 	}
 
 	ok, err := ops.writable(cmdRunner, base)
@@ -141,7 +145,7 @@ func resolve(baseDir string, cmdRunner CommandRunner, ops resolverOps) (string, 
 		return "", err
 	}
 	if !ok {
-		return "", message.New(message.EngineToolTargetPathNoWritableToolsPath).WithMetadata(map[string]string{"path": base})
+		return "", message.New(message.EngineToolTargetPathNoWritableToolsPath).WithMetadata(map[string]string{"path": base, "locality": ops.localityName})
 	}
 
 	if baseDir == "" && ops.defaultBase != nil {

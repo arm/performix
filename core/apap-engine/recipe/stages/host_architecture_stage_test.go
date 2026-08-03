@@ -16,7 +16,6 @@ import (
 	conductormocks "github.com/Arm-Debug/apap-cli/apap-engine/conductor/conductormocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
-	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
 )
@@ -55,10 +54,7 @@ func TestHostArchitectureStage(t *testing.T) {
 		session.On("TargetPlatform").Return(hostPlatform, nil).Once()
 
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
-		provider.On("TargetSession", mock.MatchedBy(func(tgt target.Target) bool {
-			_, ok := tgt.(*target.LocalTarget)
-			return ok
-		})).Return(session, nil).Once()
+		provider.On("HostSession").Return(session, nil).Once()
 
 		stage := NewHostArchitectureStage(provider, hostBundlesSupplier)
 		require.Equal(t, "Identifying host architecture", stage.Name())
@@ -78,10 +74,7 @@ func TestHostArchitectureStage(t *testing.T) {
 	t.Run("Execute failure when session provider fails", func(t *testing.T) {
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
 		sessionErr := errors.New("cant get session")
-		provider.On("TargetSession", mock.MatchedBy(func(tgt target.Target) bool {
-			_, ok := tgt.(*target.LocalTarget)
-			return ok
-		})).Return((*targetsessionmocks.MockTargetSession)(nil), sessionErr).Once()
+		provider.On("HostSession").Return((*targetsessionmocks.MockTargetSession)(nil), sessionErr).Once()
 
 		stage := NewHostArchitectureStage(provider, hostBundlesSupplier)
 
@@ -97,10 +90,7 @@ func TestHostArchitectureStage(t *testing.T) {
 		session.On("TargetPlatform").Return((*conductor.TargetPlatform)(nil), errors.New("platform unavailable")).Once()
 
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
-		provider.On("TargetSession", mock.MatchedBy(func(tgt target.Target) bool {
-			_, ok := tgt.(*target.LocalTarget)
-			return ok
-		})).Return(session, nil).Once()
+		provider.On("HostSession").Return(session, nil).Once()
 
 		stage := NewHostArchitectureStage(provider, hostBundlesSupplier)
 		_, err := stage.Execute(&recipe.StageContext{})

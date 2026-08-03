@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 )
 
 func TestEngineLocalityResolverCachesHostAndCleansUpOnce(t *testing.T) {
@@ -70,5 +72,8 @@ func TestEngineLocalityResolverResolvesTargetAndRejectsUnknown(t *testing.T) {
 	assert.Equal(t, "/target/tools", targetLocality.ToolsRoot)
 
 	_, err = resolve("unknown")
-	require.ErrorContains(t, err, `unsupported engine locality "unknown"`)
+	var msgErr *message.MessageImpl
+	require.ErrorAs(t, err, &msgErr)
+	assert.Equal(t, message.EngineToolLocalityUnsupported, msgErr.Code())
+	assert.Equal(t, map[string]string{"locality": "unknown"}, msgErr.Metadata())
 }

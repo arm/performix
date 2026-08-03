@@ -107,6 +107,19 @@ func TestStartProcessRedirects(t *testing.T) {
 	}
 }
 
+func TestExecCommandReturnsResultWhenCommandIsNotFound(t *testing.T) {
+	pm := NewProcessManager()
+
+	result, err := pm.ExecCommand(&LaunchCommand{
+		Command: []string{"performix-command-that-does-not-exist"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, CommandNotFoundExitCode, result.Rc)
+	assert.Empty(t, result.Stdout)
+	assert.NotEmpty(t, result.Stderr)
+}
+
 func TestValidateFilePath(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	pm := newProcessCommon(fs)

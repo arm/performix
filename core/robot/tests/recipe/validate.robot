@@ -3,18 +3,21 @@
 
 *** Settings ***
 Documentation   A test suite to exercise the 'recipe validate-parameters' CLI of Arm Total Performance.
+
 Resource        ../../resources/keywords/common.resource
 Resource        ../../resources/keywords/recipe.resource
 Resource        ../../resources/keywords/target.resource
+
 Suite Setup     Recipe Validate Suite Setup
 Suite Teardown  Recipe Validate Suite Teardown
+
 Test Tags       recipe  validate
 
 
 *** Test Cases ***
 The Code Hotspots Recipe Successfully Validates Parameters
   [Documentation]  Tests that the code_hotspots recipe validates valid parameter values when a target is provided.
-  [Tags]  code_hotspots
+  [Tags]  code-hotspots
   [Setup]  Run Keywords  The Test Target Is Added Successfully
   ...  AND  The Test Target Is Prepared Successfully
   Given The Recipe Is Listed  code_hotspots
@@ -27,7 +30,7 @@ The Code Hotspots Recipe Successfully Validates Parameters
 
 The Custom Tool Recipe Successfully Validates Parameters
   [Documentation]  Tests that the custom recipe successfully validates parameter values
-  [Tags]  custom_tool
+  [Tags]  custom-tool
   [Setup]  Run Keywords  The Test Target Is Added Successfully
   ...  AND  The Target Is Set To Default Successfully  ${G_TARGET_NAME}
   ...  AND  The Test Target Is Prepared Successfully
@@ -43,7 +46,7 @@ The Custom Tool Recipe Successfully Validates Parameters
 
 The Custom Tool Recipe Fails To Validate Parameters With Invalid Values
   [Documentation]  Tests that the custom recipe fails when invalid parameter values are used
-  [Tags]  custom_tool
+  [Tags]  custom-tool
   [Setup]  Run Keywords  The Test Target Is Added Successfully
   ...  AND  The Target Is Set To Default Successfully  ${G_TARGET_NAME}
   ...  AND  The Test Target Is Prepared Successfully
@@ -59,7 +62,7 @@ The Custom Tool Recipe Fails To Validate Parameters With Invalid Values
 
 The CPU Microarchitecture Recipe Fails To Validate Parameters Without Target
   [Documentation]  Ensures cpu_microarchitecture validation fails without a target (as valid options cannot be computed)
-  [Tags]  cpu_microarchitecture
+  [Tags]  cpu-microarchitecture
   Given The Recipe Is Listed  cpu_microarchitecture
   When Validate Recipe Parameters  cpu_microarchitecture  ${EMPTY}
   And The Last Command Failed

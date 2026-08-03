@@ -104,7 +104,22 @@ func initializeCompressedCatalog(db *sql.DB) error {
 // open creates the shared DuckDB connector and SQL DB handle for a dbKey.
 func open() (*DuckDBConnector, error) {
 	sc := util.ScopeCleaner{}
-	connector, err := duckdb.NewConnector("", nil)
+
+	/*
+		Prevent DuckDB from selecting a slow path in its ASOF join implementation, due to grossly underestimating the number of rows in a CSV.
+		(Slow when we have 1.7 million rows, since the path it selects is an optimisation for small input sizes.)
+		Currently, the disassembly renderer is the only renderer using ASOF join, see insert_disassembly_table.sql.
+		If another renderer were to use ASOF join in the future and used only small inputs then this setting may need to be re-evaluated.
+		The threshold is applied in PlanAsOfJoin here: https://github.com/duckdb/duckdb/blob/6ddac802ffa9bcfbcc3f5f0d71de5dff9b0bc250/src/execution/physical_plan/plan_asof_join.cpp#L281.
+		The estimated cardinality comes from here: https://github.com/duckdb/duckdb/blob/6ddac802ffa9bcfbcc3f5f0d71de5dff9b0bc250/src/execution/operator/csv_scanner/table_function/csv_multi_file_info.cpp#L392,
+		where the fallback threshold is hardcoded to 42 rows.
+		csv_multi_file_info.cpp line 391:
+			// determined through the scientific method as the average amount of rows in a CSV file
+			idx_t per_file_cardinality = 42;
+	*/
+	const options = "asof_loop_join_threshold=0"
+
+	connector, err := duckdb.NewConnector("?"+options, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create duckdb connector: %w", err)
 	}

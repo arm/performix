@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
+	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 )
@@ -26,6 +27,8 @@ func NewTargetSessionProvider(toolsDir string, rootWorkerEnabled bool) TargetSes
 type TargetSessionProvider interface {
 	// TargetSession returns the TargetSession for the given target.
 	TargetSession(target target.Target) (TargetSession, error)
+	// HostSession returns the TargetSession for host-side operations.
+	HostSession() (TargetSession, error)
 	// Shutdown shuts down all target sessions and stops new sessions from being created.
 	Shutdown() error
 }
@@ -42,6 +45,24 @@ type targetSessionProvider struct {
 func (tsp *targetSessionProvider) TargetSession(target target.Target) (TargetSession, error) {
 	tsp.mu.Lock()
 	defer tsp.mu.Unlock()
+	entry, err := tsp.session(target)
+	if err != nil {
+		return nil, err
+	}
+	return &localityScopedTargetSession{base: entry, localityName: locality.Target}, nil
+}
+
+func (tsp *targetSessionProvider) HostSession() (TargetSession, error) {
+	tsp.mu.Lock()
+	defer tsp.mu.Unlock()
+	entry, err := tsp.session(&target.LocalTarget{})
+	if err != nil {
+		return nil, err
+	}
+	return &localityScopedTargetSession{base: entry, localityName: locality.Host}, nil
+}
+
+func (tsp *targetSessionProvider) session(target target.Target) (*targetSession, error) {
 	if tsp.closed {
 		return nil, message.New(message.EngineTargetSessionShuttingDown)
 	}

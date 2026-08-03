@@ -14,6 +14,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
@@ -44,7 +45,7 @@ type TargetSession interface {
 type sshConnect func(ctx context.Context, sshTgt target.SSHTarget, promptProviders conductor.PromptProviders) (conductor.SecureClient, error)
 type androidConnect func(androidTgt target.AndroidTarget) (*conductor.ADBClient, error)
 type createTargetPlatform func(cmdRunner conductor.CommandRunner, fs conductor.TargetFilesystem, platformGate conductor.PlatformGate) (*conductor.TargetPlatform, error)
-type resolveToolsDir func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner) (string, error)
+type resolveToolsDir func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner, localityName string) (string, error)
 
 type ConnectOptions struct {
 	PromptProviders conductor.PromptProviders
@@ -77,12 +78,19 @@ type targetSession struct {
 	mu sync.Mutex
 }
 
+// localityScopedTargetSession wraps a targetSession with a locality.
+// The same underlying localhost session can be reused for both target-locality and host-locality sessions.
+type localityScopedTargetSession struct {
+	base         *targetSession
+	localityName string
+}
+
 func newTargetSession(tgt target.Target, agentConnCreator agent.ConnectionCreator, baseToolsDir string) *targetSession {
 	return &targetSession{
 		target:       tgt,
 		baseToolsDir: baseToolsDir,
-		toolsDirResolver: func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner) (string, error) {
-			return conductor.ResolveToolsBaseDir(baseDir, platformOS, cmdRunner)
+		toolsDirResolver: func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner, localityName string) (string, error) {
+			return conductor.ResolveToolsBaseDir(baseDir, platformOS, cmdRunner, localityName)
 		},
 		sshConnect: func(ctx context.Context, sshTgt target.SSHTarget, promptProviders conductor.PromptProviders) (conductor.SecureClient, error) {
 			secureConnector := conductor.NewDefaultSecureConnector()
@@ -111,14 +119,18 @@ func newTargetSession(tgt target.Target, agentConnCreator agent.ConnectionCreato
 }
 
 func (ts *targetSession) Connect(ctx context.Context, opts ...ConnectOptions) (TargetConnection, error) {
+	return ts.connect(ctx, locality.Target, opts...)
+}
+
+func (ts *targetSession) connect(ctx context.Context, localityName string, opts ...ConnectOptions) (TargetConnection, error) {
 	options := ConnectOptions{PlatformGate: conductor.TargetSupported}
 	if len(opts) > 0 {
 		options = opts[0]
 	}
-	return ts.connectWithOptions(ctx, options)
+	return ts.connectWithOptions(ctx, options, localityName)
 }
 
-func (ts *targetSession) connectWithOptions(ctx context.Context, options ConnectOptions) (TargetConnection, error) {
+func (ts *targetSession) connectWithOptions(ctx context.Context, options ConnectOptions, localityName string) (TargetConnection, error) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
@@ -171,7 +183,7 @@ func (ts *targetSession) connectWithOptions(ctx context.Context, options Connect
 	}
 	ts.platform = platform
 
-	resolvedDir, err := ts.toolsDirResolver(ts.baseToolsDir, platform.OS, ts.connection.CommandRunner())
+	resolvedDir, err := ts.toolsDirResolver(ts.baseToolsDir, platform.OS, ts.connection.CommandRunner(), localityName)
 	if err != nil {
 		_ = ts.close()
 		return nil, err
@@ -191,6 +203,10 @@ func (ts *targetSession) TargetPlatform() (*conductor.TargetPlatform, error) {
 }
 
 func (ts *targetSession) TargetAgent(ctx context.Context) (*agent.AgentConn, error) {
+	return (&localityScopedTargetSession{base: ts, localityName: locality.Target}).TargetAgent(ctx)
+}
+
+func (ts *targetSession) targetAgent(ctx context.Context, localityName string) (*agent.AgentConn, error) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	if ts.connection == nil || ts.platform == nil {
@@ -217,7 +233,7 @@ func (ts *targetSession) TargetAgent(ctx context.Context) (*agent.AgentConn, err
 		}
 		ts.agent = nil
 	}
-	conn, err := ts.agentCreator.NewConnection(ts.target.DisplayHost(), *ts.platform, ts.connection.Dialer())
+	conn, err := ts.agentCreator.NewConnection(ts.target.DisplayHost(), localityName, *ts.platform, ts.connection.Dialer())
 	if err != nil {
 		return nil, err
 	}
@@ -238,8 +254,10 @@ func (ts *targetSession) CloseTargetAgent() error {
 	return err
 }
 
-func (ts *targetSession) ResolveToolsDir() string {
-	return ts.resolvedToolsDir
+func (ls *localityScopedTargetSession) ResolveToolsDir() string {
+	ls.base.mu.Lock()
+	defer ls.base.mu.Unlock()
+	return ls.base.resolvedToolsDir
 }
 
 func (ts *targetSession) Close() error {
@@ -267,4 +285,29 @@ func (ts *targetSession) close() error {
 		return nil
 	}
 	return fmt.Errorf("error closing target session: %w", joined)
+}
+
+func (ls *localityScopedTargetSession) Connect(ctx context.Context, opts ...ConnectOptions) (TargetConnection, error) {
+	return ls.base.connect(ctx, ls.localityName, opts...)
+}
+
+func (ls *localityScopedTargetSession) TargetAgent(ctx context.Context) (*agent.AgentConn, error) {
+	return ls.base.targetAgent(ctx, ls.localityName)
+}
+
+func (ts *targetSession) ResolveToolsDir() string {
+	ls := &localityScopedTargetSession{base: ts, localityName: locality.Target}
+	return ls.ResolveToolsDir()
+}
+
+func (ls *localityScopedTargetSession) TargetPlatform() (*conductor.TargetPlatform, error) {
+	return ls.base.TargetPlatform()
+}
+
+func (ls *localityScopedTargetSession) CloseTargetAgent() error {
+	return ls.base.CloseTargetAgent()
+}
+
+func (ls *localityScopedTargetSession) Close() error {
+	return ls.base.Close()
 }

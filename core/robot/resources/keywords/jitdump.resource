@@ -3,6 +3,7 @@
 
 *** Settings ***
 Documentation   Keywords for JIT dump robot tests.
+
 Resource        ./common.resource
 Resource        ./target.resource
 Resource        ./recipe.resource
@@ -45,8 +46,8 @@ JIT Dump Suite Teardown
 Setup JIT Dump Workloads
   ${dotnet_path} =  Ensure Workload Is Available  ${DOTNET_WORKLOAD_NAME}
   ${java_path} =  Ensure Workload Is Available  ${JAVA_WORKLOAD_NAME}
-  VAR  ${DOTNET_WORKLOAD_PATH}  ${dotnet_path}  scope=SUITE
-  VAR  ${JAVA_WORKLOAD_PATH}  ${java_path}  scope=SUITE
+  VAR  ${DOTNET_WORKLOAD_PATH} =  ${dotnet_path}  scope=SUITE
+  VAR  ${JAVA_WORKLOAD_PATH} =  ${java_path}  scope=SUITE
   Set Dotnet Workload Cmd
   Set Java Workload Cmd
 
@@ -60,10 +61,12 @@ Verify JIT Dump Recipes Are Listed
   The Code Hotspots Recipe Is Listed
 
 Set Dotnet Workload Cmd
-  VAR  ${DOTNET_WORKLOAD_CMD}  "env ${DOTNET_WORKLOAD_ENV} ${DOTNET_WORKLOAD_PATH} ${DOTNET_WORKLOAD_ARGS}"  scope=SUITE
+  VAR  ${DOTNET_WORKLOAD_CMD} =
+  ...  "env ${DOTNET_WORKLOAD_ENV} ${DOTNET_WORKLOAD_PATH} ${DOTNET_WORKLOAD_ARGS}"
+  ...  scope=SUITE
 
 Set Java Workload Cmd
-  VAR  ${JAVA_WORKLOAD_CMD}  "java ${JAVA_FLAGS} ${JAVA_WORKLOAD_ARGS} ${JAVA_WORKLOAD_PATH}"  scope=SUITE
+  VAR  ${JAVA_WORKLOAD_CMD} =  "java ${JAVA_FLAGS} ${JAVA_WORKLOAD_ARGS} ${JAVA_WORKLOAD_PATH}"  scope=SUITE
 
 Target Supports JIT Dump Tests
   Skip Unless Target Arch Is  ${ARCH_AARCH64}
@@ -71,12 +74,12 @@ Target Supports JIT Dump Tests
 Dotnet Workload Is Running
   Verify Dotnet Workload Is Present On Target
   ${pid} =  Start Process On Target And Capture PID  ${DOTNET_WORKLOAD_CMD}  ${DOTNET_WORKLOAD_PATH}
-  VAR  ${DOTNET_PID}  ${pid}  scope=TEST
+  VAR  ${DOTNET_PID} =  ${pid}  scope=TEST
 
 Java Workload Is Running
   Verify Java Workload Is Present On Target
   ${pid} =  Start Process On Target And Capture PID  ${JAVA_WORKLOAD_CMD}  ${JAVA_WORKLOAD_PATH}
-  VAR  ${JAVA_PID}  ${pid}  scope=TEST
+  VAR  ${JAVA_PID} =  ${pid}  scope=TEST
 
 Dotnet And Java Workloads Are Running
   Dotnet Workload Is Running
@@ -129,7 +132,7 @@ Run Code Hotspots Recipe With JIT Dump Collection
   ${full_args} =  Catenate  SEPARATOR=${SPACE}  ${args}  ${jit_args}
   Run Code Hotspots Recipe  ${full_args}
   ${run_id} =  Verify Run Succeeded And Capture Run ID
-  VAR  ${RUN_ID}  ${run_id}  scope=TEST
+  VAR  ${RUN_ID} =  ${run_id}  scope=TEST
 
 Run CPU Microarchitecture Recipe With JIT Dump Collection
   [Documentation]  Run cpu_microarchitecture with Java + .NET stack collection enabled.
@@ -139,10 +142,48 @@ Run CPU Microarchitecture Recipe With JIT Dump Collection
   ${full_args} =  Catenate  SEPARATOR=${SPACE}  ${args}  ${jit_args}
   Run CPU Microarchitecture Recipe  ${full_args}
   ${run_id} =  Verify Run Succeeded And Capture Run ID
-  VAR  ${RUN_ID}  ${run_id}  scope=TEST
+  VAR  ${RUN_ID} =  ${run_id}  scope=TEST
 
 Verify Run Succeeded And Capture Run ID
   The Last Command Succeeded
   ${run_id} =  Extract The Run ID
   The Run Exists  ${run_id}
   RETURN  ${run_id}
+
+Jitdump-JVM Is Deployed
+  [Documentation]  Check that Jitdump-JVM has been deployed to the target (AArch64 only).
+  ${target_arch} =  Get Variable Value  ${G_TARGET_ARCH}  ${EMPTY}
+  IF  '${target_arch}' != '${ARCH_AARCH64}'
+    Log  Skipping jitdump-jvm deployment check for non-AArch64 target.  DEBUG
+    RETURN
+  END
+  Check Tool Deployed  ${JITDUMP_JVM_BINARY_FILE_NAME}  ${G_TEST_USERNAME}
+  The Last Command Succeeded
+
+Jitdump-JVM Is Not Deployed
+  [Documentation]  Check that Jitdump-JVM has not been deployed to the target (AArch64 only).
+  ${target_arch} =  Get Variable Value  ${G_TARGET_ARCH}  ${EMPTY}
+  IF  '${target_arch}' != '${ARCH_AARCH64}'
+    Log  Skipping jitdump-jvm deployment check for non-AArch64 target.  DEBUG
+    RETURN
+  END
+  Check Tool Not Deployed  ${JITDUMP_JVM_BINARY_FILE_NAME}  ${G_TEST_USERNAME}
+  The Last Command Succeeded
+
+Tools Are Deployed For Recipe With Jitdump-JVM Tool Successfully
+  [Documentation]  Verifies that tools are deployed successfully and the Jitdump-JVM tool exists on the target.
+  [Arguments]  ${recipe}
+  Prepare The Test Target
+  The Target Is Prepared
+  Deploy Tools For Recipe  ${recipe}  --param collect_java_stacks=true
+  The Last Command Succeeded
+  Jitdump-JVM Is Deployed
+
+Tools Are Deployed For Recipe Without Jitdump-JVM Tool Successfully
+  [Documentation]  Verifies that tools are deployed successfully and the Jitdump-JVM tool does not on the target.
+  [Arguments]  ${recipe}
+  Prepare The Test Target
+  The Target Is Prepared
+  Deploy Tools For Recipe  ${recipe}
+  The Last Command Succeeded
+  Jitdump-JVM Is Not Deployed

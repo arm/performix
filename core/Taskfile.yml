@@ -71,7 +71,7 @@ tasks:
     desc: Build the APX binary
     dir: apap-cli
     cmds:
-      - go build -tags=duckdb_arrow -v -o {{.APX_BINARY}}
+      - go build -tags={{default "duckdb_arrow,confidential_telemetry" .APX_BUILD_TAGS}} -v -o {{.APX_BINARY}}
 
   build:agent:
     desc: Build the Performix agent; requires deps:tools:python

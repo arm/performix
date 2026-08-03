@@ -9,7 +9,6 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
-	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 )
 
@@ -39,7 +38,7 @@ func (t *HostArchitectureStage) Execute(ctx *recipe.StageContext) (func(), error
 		return nil, nil
 	}
 
-	hostSession, err := t.TargetSessions.TargetSession(&target.LocalTarget{})
+	hostSession, err := t.TargetSessions.HostSession()
 	if err != nil {
 		return nil, err
 	}

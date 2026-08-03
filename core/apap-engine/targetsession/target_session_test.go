@@ -19,6 +19,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	conductormocks "github.com/Arm-Debug/apap-cli/apap-engine/conductor/conductormocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcconnection"
+	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
@@ -28,8 +29,8 @@ type mockAgentCreator struct {
 	mock.Mock
 }
 
-func (m *mockAgentCreator) NewConnection(id string, tp conductor.TargetPlatform, dialer grpcconnection.TCPDialer) (*agent.AgentConn, error) {
-	args := m.Called(id, tp, dialer)
+func (m *mockAgentCreator) NewConnection(id string, localityName string, tp conductor.TargetPlatform, dialer grpcconnection.TCPDialer) (*agent.AgentConn, error) {
+	args := m.Called(id, localityName, tp, dialer)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -50,7 +51,8 @@ func TestTargetSessionConnect(t *testing.T) {
 			require.Equal(t, conductor.TargetSupported, platformGate)
 			return cachedPlatform, nil
 		}
-		ts.toolsDirResolver = func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner) (string, error) {
+		ts.toolsDirResolver = func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner, localityName string) (string, error) {
+			require.Equal(t, locality.Target, localityName)
 			return "/tools/base", nil
 		}
 
@@ -75,8 +77,9 @@ func TestTargetSessionConnect(t *testing.T) {
 			require.Equal(t, conductor.TargetSupported, platformGate)
 			return ts.platform, nil
 		}
-		ts.toolsDirResolver = func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner) (string, error) {
+		ts.toolsDirResolver = func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner, localityName string) (string, error) {
 			require.Equal(t, conductor.Linux, platformOS)
+			require.Equal(t, locality.Target, localityName)
 			return "/tools/base", nil
 		}
 		ts.sshConnect = func(ctx context.Context, sshTgt target.SSHTarget, promptProviders conductor.PromptProviders) (conductor.SecureClient, error) {
@@ -160,7 +163,8 @@ func TestTargetSessionConnect(t *testing.T) {
 			require.Equal(t, conductor.TargetSupported, platformGate)
 			return &conductor.TargetPlatform{PlatformConfiguration: conductor.PlatformConfiguration{OS: osType}}, nil
 		}
-		ts.toolsDirResolver = func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner) (string, error) {
+		ts.toolsDirResolver = func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner, localityName string) (string, error) {
+			require.Equal(t, locality.Target, localityName)
 			return "/tools/base", nil
 		}
 		ts.connection = connection
@@ -179,8 +183,9 @@ func TestTargetSessionConnect(t *testing.T) {
 			require.Equal(t, conductor.HostSupported, platformGate)
 			return hostPlatform, nil
 		}
-		ts.toolsDirResolver = func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner) (string, error) {
+		ts.toolsDirResolver = func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner, localityName string) (string, error) {
 			require.Equal(t, conductor.Darwin, platformOS)
+			require.Equal(t, locality.Target, localityName)
 			return "/tools/base", nil
 		}
 
@@ -254,7 +259,7 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		connection.On("Dialer").Return(dialer).Once()
 
 		agentCreator := &mockAgentCreator{}
-		agentCreator.On("NewConnection", mock.Anything, mock.Anything, dialer).Return(nil, agentErr).Once()
+		agentCreator.On("NewConnection", mock.Anything, locality.Target, mock.Anything, dialer).Return(nil, agentErr).Once()
 
 		ts := newTargetSession(&target.LocalTarget{}, agentCreator, t.TempDir())
 		ts.connection = connection
@@ -278,7 +283,7 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		oldConn := &agent.AgentConn{Client: oldClient}
 
 		agentCreator := &mockAgentCreator{}
-		agentCreator.On("NewConnection", mock.Anything, mock.Anything, dialer).Return(newConn, nil).Once()
+		agentCreator.On("NewConnection", mock.Anything, locality.Target, mock.Anything, dialer).Return(newConn, nil).Once()
 
 		connection := &mockTargetConnection{}
 		connection.On("Dialer").Return(dialer).Once()
@@ -310,7 +315,7 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		oldConn := &agent.AgentConn{Client: oldClient}
 
 		agentCreator := &mockAgentCreator{}
-		agentCreator.On("NewConnection", mock.Anything, mock.Anything, dialer).Return(newConn, nil).Once()
+		agentCreator.On("NewConnection", mock.Anything, locality.Target, mock.Anything, dialer).Return(newConn, nil).Once()
 
 		connection := &mockTargetConnection{}
 		connection.On("Dialer").Return(dialer).Once()
@@ -327,6 +332,33 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		require.NoError(t, err)
 		require.Same(t, newConn, conn)
 		oldClient.AssertExpectations(t)
+		agentCreator.AssertExpectations(t)
+		connection.AssertExpectations(t)
+	})
+}
+
+func TestLocalityScopedTargetSessionUsesHostLocality(t *testing.T) {
+	t.Run("TargetAgent creates host agent", func(t *testing.T) {
+		dialer := grpcconnection.TCPDialer(nil)
+		newConn := &agent.AgentConn{}
+
+		connection := &mockTargetConnection{}
+		connection.On("Dialer").Return(dialer).Once()
+
+		agentCreator := &mockAgentCreator{}
+		agentCreator.On("NewConnection", mock.Anything, locality.Host, mock.Anything, dialer).Return(newConn, nil).Once()
+
+		base := newTargetSession(&target.LocalTarget{}, agentCreator, t.TempDir())
+		base.connection = connection
+		base.platform = &conductor.TargetPlatform{
+			PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64},
+		}
+
+		session := &localityScopedTargetSession{base: base, localityName: locality.Host}
+		conn, err := session.TargetAgent(context.Background())
+
+		require.NoError(t, err)
+		require.Same(t, newConn, conn)
 		agentCreator.AssertExpectations(t)
 		connection.AssertExpectations(t)
 	})

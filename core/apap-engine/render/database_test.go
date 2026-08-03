@@ -97,6 +97,15 @@ func TestDatabase(t *testing.T) {
 
 		assert.NotContains(t, buf.String(), query)
 	})
+
+	t.Run("disables ASOF loop joins", func(t *testing.T) {
+		factory := DuckDBFactory{}
+		db, err := factory.Connect(t.Name())
+		require.NoError(t, err)
+		defer db.Close()
+
+		require.EqualValues(t, 0, currentSetting(t, db, "asof_loop_join_threshold"))
+	})
 }
 
 func TestGetRawDuckDBConn_Appender_Works_WithAndWithoutLogger(t *testing.T) {

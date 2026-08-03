@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -18,6 +22,14 @@ EVALUATION_SPEC = importlib.util.spec_from_file_location(
 evaluation = importlib.util.module_from_spec(EVALUATION_SPEC)
 sys.modules[EVALUATION_SPEC.name] = evaluation
 EVALUATION_SPEC.loader.exec_module(evaluation)
+
+CONFTEST_SPEC = importlib.util.spec_from_file_location(
+    "ai_insights_evaluation_conftest_test_module",
+    HARNESS_DIR / "conftest.py",
+)
+conftest = importlib.util.module_from_spec(CONFTEST_SPEC)
+sys.modules[CONFTEST_SPEC.name] = conftest
+CONFTEST_SPEC.loader.exec_module(conftest)
 
 REST_MODE_SPEC = importlib.util.spec_from_file_location(
     "ai_insights_rest_mode_test_module",
@@ -39,6 +51,32 @@ class FakePytestConfig:
         if option == "--ai-modes":
             return self.modes
         raise AssertionError(f"unexpected option: {option}")
+
+
+class FakeXdistConfig:
+    def __init__(self, manifest_path: Path):
+        self.option = SimpleNamespace(collectonly=False)
+        self.manifest_path = manifest_path
+
+    def getoption(self, option: str):
+        if option == "--ai-manifest":
+            return str(self.manifest_path)
+        raise AssertionError(f"unexpected option: {option}")
+
+
+class FakeXdistNode:
+    def __init__(self, config: FakeXdistConfig):
+        self.config = config
+
+
+def selected_testcases_from_nodeids(manifest_tests: list[dict], nodeids: list[str]):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        manifest_path = Path(tmpdir) / "manifest.json"
+        manifest_path.write_text(json.dumps({"tests": manifest_tests}), encoding="utf-8")
+        return conftest._selected_testcases_from_nodeids(
+            FakeXdistConfig(manifest_path),
+            nodeids,
+        )
 
 
 class AiInsightsManifestSelectionTests(unittest.TestCase):
@@ -93,6 +131,138 @@ class AiInsightsManifestSelectionTests(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("Unknown AI Insights act selection: act2", message)
         self.assertIn("Available acts: act1", message)
+
+
+class AiInsightsPreRecordedInputTests(unittest.TestCase):
+    def test_selected_testcases_from_xdist_nodeids_deduplicates_modes(self):
+        testcases = selected_testcases_from_nodeids(
+            [
+                {"id": "case-alpha", "run_artifact": "case-alpha/latest.zip"},
+                {"id": "test_case_27", "run_artifact": "test_case_27/latest.zip"},
+            ],
+            [
+                "test_ai_insights_evaluation.py::test_ai_insights[case-alpha-summary-rest-attempt_001]",
+                "test_ai_insights_evaluation.py::test_ai_insights[case-alpha-summary-hackathon_mcp-attempt_001]",
+                "test_ai_insights_evaluation.py::test_ai_insights[test_case_27-summary-rest-attempt_001]",
+            ],
+        )
+
+        self.assertEqual(
+            ["case-alpha", "test_case_27"],
+            [test_case["id"] for test_case in testcases],
+        )
+
+    def test_selected_testcases_from_xdist_nodeids_rejects_unmapped_testcase(self):
+        with self.assertRaises(pytest.UsageError) as ctx:
+            selected_testcases_from_nodeids(
+                [{"id": "test_case_26", "run_artifact": "test_case_26/latest.zip"}],
+                [
+                    "test_ai_insights_evaluation.py::test_ai_insights[unknown-summary-rest-attempt_001]",
+                ],
+            )
+
+        self.assertIn("Could not map AI Insights pytest node ID", str(ctx.exception))
+        self.assertIn("unknown-summary-rest-attempt_001", str(ctx.exception))
+
+    def test_xdist_collection_prepares_once_from_worker_collection(self):
+        nodeids = [
+            "test_ai_insights_evaluation.py::test_ai_insights[test_case_26-summary-rest-attempt_001]",
+            "test_ai_insights_evaluation.py::test_ai_insights[test_case_26-summary-performix_mcp-attempt_001]",
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manifest_path = Path(tmpdir) / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "tests": [
+                            {
+                                "id": "test_case_26",
+                                "run_artifact": "test_case_26/latest.zip",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = FakeXdistConfig(manifest_path)
+            prepared = []
+
+            with mock.patch.object(
+                conftest,
+                "_prepare_selected_testcases",
+                side_effect=lambda _config, testcases: prepared.append(
+                    [test_case["id"] for test_case in testcases]
+                ),
+            ):
+                conftest.pytest_xdist_node_collection_finished(
+                    FakeXdistNode(config),
+                    nodeids,
+                )
+                conftest.pytest_xdist_node_collection_finished(
+                    FakeXdistNode(config),
+                    nodeids,
+                )
+                conftest.pytest_xdist_node_collection_finished(
+                    FakeXdistNode(config),
+                    nodeids,
+                )
+
+        self.assertEqual([["test_case_26"]], prepared)
+
+    def test_download_missing_run_artifacts_raises_for_artifactory_misses(self):
+        lines = []
+        calls = []
+
+        def write_line(line: str, **markup):
+            lines.append((line, markup))
+
+        def fail_download(
+            artifactory_run_base,
+            test_id,
+            filename,
+            destination_dir,
+            destination_name,
+            required=True,
+        ):
+            calls.append((filename, required))
+            raise pytest.UsageError("download failed")
+
+        testcases = [
+            {
+                "id": "test_case_26",
+                "run_artifact": "test_case_26/latest.zip",
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.object(conftest, "_download_artifactory_input", side_effect=fail_download):
+                with self.assertRaises(pytest.UsageError):
+                    conftest._download_missing_run_artifacts(
+                        testcases,
+                        Path(tmpdir),
+                        "its.apx-prerecorded-runs/ai-insights-evaluation",
+                        write_line,
+                    )
+
+        self.assertEqual([("latest.zip", True)], calls)
+        self.assertTrue(any("test_case_26: latest.zip" in line for line, _ in lines))
+        self.assertFalse(any("WARNING" in line for line, _ in lines))
+
+    def test_prepare_run_inputs_raises_for_missing_local_inputs(self):
+        testcases = [{"id": "test_case_26", "run_artifact": "test_case_26/latest.zip"}]
+
+        with tempfile.TemporaryDirectory() as tmpdir, self.assertRaisesRegex(
+            pytest.UsageError,
+            "(?s)test_case_26 run archive.*test_case_26 source archive",
+        ):
+            conftest._prepare_run_inputs(
+                testcases,
+                Path(tmpdir),
+                "",
+                Path(tmpdir) / "results",
+                lambda _line: None,
+            )
 
 
 class AiInsightsExpectedFailureTests(unittest.TestCase):

@@ -3,10 +3,13 @@
 
 *** Settings ***
 Documentation   A test suite to exercise the 'help' CLI of Arm Total Performance.
+
 Resource        ../../resources/keywords/common.resource
 Resource        ../../resources/keywords/help.resource
+
 Suite Setup     Help Suite Setup
 Suite Teardown  Help Suite Teardown
+
 Test Tags       help
 
 

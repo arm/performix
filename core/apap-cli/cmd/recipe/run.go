@@ -49,6 +49,7 @@ func NewRunCommand(cc client.ClientConnector,
 	var target string
 	var noCleanup bool
 	var useShell bool
+	var detachBackgroundTransfers bool
 
 	runCmd := &cobra.Command{
 		Use:   runCommandUse(),
@@ -124,6 +125,7 @@ func NewRunCommand(cc client.ClientConnector,
 				deploymentType,
 				hostSourceCodePath,
 				noCleanup,
+				detachBackgroundTransfers,
 				target)
 		},
 	}
@@ -142,6 +144,7 @@ func NewRunCommand(cc client.ClientConnector,
 	runCmd.Flags().StringVar(&sourceCodePaths, "source", "", "Specifies the host-based source code path(s) that will be used for source code attribution")
 	runCmd.Flags().StringVar(&target, "target", "", "Specify the target for the specified action.")
 	runCmd.Flags().BoolVar(&noCleanup, "no-cleanup", false, "If set, the working area on the target will not be removed after the run completes")
+	runCmd.Flags().BoolVar(&detachBackgroundTransfers, "background-transfer", false, "Return after required transfers complete while background transfers continue in the engine")
 	setAndroidLaunchFlagVisibility(runCmd)
 
 	return runCmd

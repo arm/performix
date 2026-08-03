@@ -716,6 +716,7 @@ message RecipeStartCommand {
   HostSourceCodePaths host_source_code_paths = 10;
   optional bool no_cleanup_working_area = 11;
   optional string target_name = 12;
+  optional bool detach_background_transfers = 13;
 }
 
 // Recipe has begun message
@@ -727,6 +728,7 @@ message RecipeStart {
 message RecipeFinish {
   StatusCode return_code = 1;
   ErrorChain error = 2;
+  bool background_transfers_remaining = 3;
 }
 
 // Stage has begun, taking up a portion of the duration of the recipe

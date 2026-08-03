@@ -147,30 +147,32 @@ var recipe = {
   ],
 };
 
-const defaultTelemetryCPUName = 'Neoverse-N1';
+const telemetrySpecificationUnavailableMessageCode =
+  'recipes.cpu_microarchitecture.TELEMETRY_SPECIFICATION_UNAVAILABLE';
+
+/**
+ * @param {import("./docs/jsdocs").ReadyExecutionContext | import("./docs/jsdocs").RunExecutionContext} context
+ */
+function getPrimaryCPUTelemetrySpecification(context) {
+  const cpuName = context.targetInfo().PrimaryCPUName;
+  return {
+    cpuName,
+    telemetrySpecification: context.getTelemetrySpecification(cpuName),
+  };
+}
 
 /**
  * @param {import("./docs/jsdocs").ReadyExecutionContext | import("./docs/jsdocs").RunExecutionContext} context
  */
 function getPMUSpec(context) {
-  const cpuName = context.targetInfo().PrimaryCPUName;
-  let telemetrySpecification = context.getTelemetrySpecification(cpuName);
-  if (!telemetrySpecification) {
-    context.logWarn(
-      `Unknown CPU "${cpuName}" defaulting to ${defaultTelemetryCPUName}`,
-    );
-    telemetrySpecification = context.getTelemetrySpecification(
-      defaultTelemetryCPUName,
-    );
-  }
-
-  if (!telemetrySpecification) {
+  const primaryCPUTelemetry = getPrimaryCPUTelemetrySpecification(context);
+  if (!primaryCPUTelemetry.telemetrySpecification) {
     throw new Error(
-      `Telemetry specification for ${defaultTelemetryCPUName} is unavailable`,
+      `Telemetry specification for ${primaryCPUTelemetry.cpuName} is unavailable`,
     );
   }
 
-  return JSON.parse(telemetrySpecification);
+  return JSON.parse(primaryCPUTelemetry.telemetrySpecification);
 }
 
 /**
@@ -219,6 +221,22 @@ function generateNeoprofConfig(workload, params) {
  * @param {import("./docs/jsdocs").ReadyExecutionContext} context
  */
 function readyCPUMicroarchitecture(context) {
+  const primaryCPUTelemetry = getPrimaryCPUTelemetrySpecification(context);
+  if (!primaryCPUTelemetry.telemetrySpecification) {
+    return {
+      status: 'error',
+      advice: [
+        {
+          ToolName: tool_name,
+          AdviceSeverity: 'error',
+          MessageCode: telemetrySpecificationUnavailableMessageCode,
+          Metadata: { cpuName: primaryCPUTelemetry.cpuName },
+          Cause: '',
+        },
+      ],
+    };
+  }
+
   let workload = context.getWorkload();
   let samplingFreq = context.getParameter('sampling_freq');
   let metricsGroup = getMetricsGroup(context);
@@ -245,7 +263,11 @@ function readyCPUMicroarchitecture(context) {
  * @param {import("./docs/jsdocs").ReadyExecutionContext} context
  */
 function computeValidValues(context) {
-  const pmuSpec = getPMUSpec(context);
+  const primaryCPUTelemetry = getPrimaryCPUTelemetrySpecification(context);
+  if (!primaryCPUTelemetry.telemetrySpecification) {
+    return [];
+  }
+  const pmuSpec = JSON.parse(primaryCPUTelemetry.telemetrySpecification);
 
   // Generate a list of unique metric groups from pmuSpec.methodologies.topdown_methodology.decision_tree.metrics
   // Include metrics.group and all items in metrics.next_items, as the main group is usually Topdown_L1,

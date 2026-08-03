@@ -6,6 +6,7 @@ package recipe
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -250,6 +251,51 @@ func TestRunRecipe(t *testing.T) {
 		localMtm.AssertCalled(t, "GetTarget", "valid_target")
 	})
 
+	t.Run("Run recipe reports remaining background transfers", func(t *testing.T) {
+		for _, remaining := range []bool{false, true} {
+			t.Run(fmt.Sprintf("remaining=%t", remaining), func(t *testing.T) {
+				tgt := &engine_target.SSHTarget{Jumps: []engine_target.SSHHostConfig{{Host: testHost, Port: testPort}}}
+				loginService := targetloginmocks.NewMockLoginService(t).WithLogin(t, tgt, nil)
+				localMtm := target.MockTargetManager{}
+				localMtm.On("GetTarget", "valid_target").Return(tgt, nil)
+
+				recipeInfo := recipes["cpu_microarchitecture"]
+				localReader := mocks.MockRecipeReader{}
+				localReader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
+				localReader.On("ReadRecipe", testRecipeJSFile).Return(recipeInfo, nil)
+				localRunner := &mocks.MockRecipeRunner{}
+				localRunner.On(
+					"SendRecipeRunToEngine",
+					client,
+					&recipeInfo,
+					mock.MatchedBy(func(ctx *recipe.RecipeExecutionCtx) bool {
+						return ctx.DetachBackgroundTransfers
+					}),
+				).Return(recipe.RunResponse{
+					Stage:                        "complete",
+					Progress:                     100,
+					RunID:                        &apapproto.RunId{Value: "123"},
+					BackgroundTransfersRemaining: remaining,
+				}, nil)
+
+				cmd := NewRunCommand(cc, &localReader, localRunner, &localMtm, loginService)
+				cmdBuf := &bytes.Buffer{}
+				cmd.SetOut(cmdBuf)
+				utils.SetPersistentFlags(cmd)
+				cmd.SetArgs([]string{testRecipeName, "--workload", testWorkload, "--target", "valid_target", "--background-transfer", "--json=false"})
+
+				require.NoError(t, cmd.Execute())
+				if remaining {
+					require.Contains(t, cmdBuf.String(), "Required transfers completed; remaining transfers will continue in the background.")
+				} else {
+					require.NotContains(t, cmdBuf.String(), "remaining transfers")
+				}
+				require.Contains(t, cmdBuf.String(), "Run ID: 123")
+				localRunner.AssertExpectations(t)
+			})
+		}
+	})
+
 }
 
 func TestRunCommandMissingArgs(t *testing.T) {
@@ -275,6 +321,20 @@ func TestRunCommandMissingArgs(t *testing.T) {
 		expectedErr := "unknown flag: --invalid"
 		assert.Equal(t, expectedErr, err.Error())
 	})
+}
+
+func TestRunCommandBackgroundTransferDefaultsFalse(t *testing.T) {
+	cmd := NewRunCommand(
+		&mocks.MockAutostartClientConnector{},
+		&mocks.MockRecipeReader{},
+		recipe.RecipeRunner{},
+		&target.MockTargetManager{},
+		targetloginmocks.NewMockLoginService(t),
+	)
+
+	flag := cmd.Flags().Lookup("background-transfer")
+	require.NotNil(t, flag)
+	require.Equal(t, "false", flag.DefValue)
 }
 
 func TestRunCommandWorkloadAndPidValidation(t *testing.T) {

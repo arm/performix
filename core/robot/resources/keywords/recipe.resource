@@ -151,7 +151,7 @@ The Recipe Info Parameter Options Contain The Default Static Options
 
 The Recipe Info Plain Text Parameter Options Contain The Default Static Options
   ${expected_options} =  Create List  low (Low)  normal (Normal)  high (High)
-  VAR  ${stdout}  ${G_LAST_RESULT.stdout}
+  VAR  ${stdout} =  ${G_LAST_RESULT.stdout}
   Should Contain  ${stdout}  sampling_freq - single_select
   Should Contain  ${stdout}  - Options:
   FOR  ${expected_option}  IN  @{expected_options}
@@ -200,7 +200,7 @@ The Recipe Ready Status Is Not
 Check Advice Messages Contain
   [Arguments]  ${expected_string}
   ${advice_messages} =  Get Advice Messages
-  VAR  ${found}  ${False}  scope=LOCAL
+  VAR  ${found} =  ${False}  scope=LOCAL
   ${expected_string} =  Evaluate  ${expected_string}.strip('""')
 
   FOR  ${message}  IN  @{advice_messages}
@@ -337,7 +337,7 @@ The Neoprof Capture Log Contains
   [Documentation]  Helper keyword to check for the presence of a string in the neoprof capture log.
   [Arguments]  ${expected}
   ${run_id} =  Extract The Run ID
-  VAR  ${log_path}  ${G_RUNS_DIR}${/}${run_id}${/}tool${/}neoprof${/}0${/}capture_log.txt
+  VAR  ${log_path} =  ${G_RUNS_DIR}${/}${run_id}${/}tool${/}neoprof${/}0${/}capture_log.txt
   ${log_text} =  Get File  ${log_path}
   Should Contain  ${log_text}  ${expected}
 
@@ -371,7 +371,7 @@ The Recipe Parameter Validate Response Contains
     ${msg} =  Get From Dictionary  ${item}  message
     ${msg_code} =  Get From Dictionary  ${msg}  message_code
     IF  '${param}' == '${parameter_id}' and '${msg_code}' == '${expected_message_code}'
-      VAR  ${found}  ${True}  scope=LOCAL
+      VAR  ${found} =  ${True}  scope=LOCAL
       BREAK
     END
   END

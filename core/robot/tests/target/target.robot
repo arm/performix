@@ -3,9 +3,12 @@
 
 *** Settings ***
 Documentation   A test suite to exercise the 'target' CLI of Arm Total Performance.
+
 Resource        ../../resources/keywords/target.resource
+
 Suite Setup     Target Suite Setup
 Suite Teardown  Target Suite Teardown
+
 Test Tags       target
 
 
@@ -21,7 +24,12 @@ A Target Can Be Added
   When Add Target  supergator@1.2.3.4:${123}:${CURDIR}${/}id_supergator --name my_cool_target
   Then The Last Command Succeeded
   And The Number Of Targets Has Increased By  1
-  And The Target Is Displayed Correctly  host=1.2.3.4  user=supergator  key=${CURDIR}${/}id_supergator  port=${123}  name=my_cool_target
+  And The Target Is Displayed Correctly
+  ...  host=1.2.3.4
+  ...  user=supergator
+  ...  key=${CURDIR}${/}id_supergator
+  ...  port=${123}
+  ...  name=my_cool_target
   [Teardown]  Run Keywords  Remove Target  my_cool_target
   ...  AND  Delete SSH Key Pair  ${CURDIR}  id_supergator
 
@@ -113,7 +121,10 @@ Target SSH Key Can Be Updated
   ...  AND  Add Target  supergator@1.2.3.4:${123}:${CURDIR}${/}id_supergator --name my_cool_target
   Given The Target Exists  my_cool_target
   When Update Target  my_cool_target  host  supergator@1.2.3.4:${123}:${CURDIR}${/}id_megagator
-  Then The Target Is Single SSH With Details Containing  my_cool_target  private_key_filename  ${CURDIR}${/}id_megagator
+  Then The Target Is Single SSH With Details Containing
+  ...  my_cool_target
+  ...  private_key_filename
+  ...  ${CURDIR}${/}id_megagator
   [Teardown]  Run Keywords  Delete SSH Key Pair  ${CURDIR}  id_supergator
   ...  AND  Delete SSH Key Pair  ${CURDIR}  id_megagator
 
@@ -127,7 +138,10 @@ Target SSH Key Cannot Be Set To An Invalid Key File
   Given The Target Exists  my_cool_target
   When Update Target  my_cool_target  host  supergator@1.2.3.4:${123}:${CURDIR}${/}totally_a_valid_key_file
   Then The Last Command Failed
-  And The Target Is Single SSH With Details Containing  my_cool_target  private_key_filename  ${CURDIR}${/}id_supergator
+  And The Target Is Single SSH With Details Containing
+  ...  my_cool_target
+  ...  private_key_filename
+  ...  ${CURDIR}${/}id_supergator
   [Teardown]  Run Keywords  Delete SSH Key Pair  ${CURDIR}  id_supergator
   ...  AND  Remove File  ${CURDIR}${/}totally_a_valid_key_file
 
@@ -266,10 +280,10 @@ The Target Prepare Closes The Target Agent Connection
   [Setup]  Run Keywords  Remove All Targets
   ...  AND  The Test Target Is Added Successfully
   Given Prepare The Test Target
-  AND Run Target Info  ${G_TARGET_NAME}
-  AND Target Process Is Running  ${AGENT_BINARY_FILE_NAME}
+  And Run Target Info  ${G_TARGET_NAME}
+  And Target Process Is Running  ${AGENT_BINARY_FILE_NAME}
   When Remove The Target Deployment Directory
-  AND Prepare The Test Target
+  And Prepare The Test Target
   Then Target Process Is Not Running  ${AGENT_BINARY_FILE_NAME}
   [Teardown]  Run Keywords  The Target Is Unprepared Successfully
   ...  AND  The Test Target Is Removed Successfully

@@ -154,9 +154,6 @@ AGENTS.override.md
 
 .codex
 
-# Ignore any local open-sourcing worktrees created by 'task release'
-.release-worktrees/
-
 # Don't check in auto-generated Go code
 core/apap-engine/message/codes.go
 

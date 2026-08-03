@@ -950,7 +950,7 @@ func TestRenderStages(t *testing.T) {
 		renderStageJS := `
 			function renderCPUMicroarchitecture(apap) {
 				const csvFiles = apap
-					.listRunComponents(0, "tool/example_tool/0/output")
+					.listRunComponents(0, "tool/example_tool/0/output/**")
 					.filter((component) => component.componentType.name === "example-csv-data")
 
 				return {
@@ -980,6 +980,10 @@ func TestRenderStages(t *testing.T) {
 				ComponentType: cdf.ComponentType{Name: "example-csv-data", SchemaVersion: "1.0"},
 			},
 			{
+				Path:          "tool/example_tool/0/output/nested/metrics_0500.csv",
+				ComponentType: cdf.ComponentType{Name: "example-csv-data", SchemaVersion: "1.0"},
+			},
+			{
 				Path:          "tool/example_tool/0/output/readme.txt",
 				ComponentType: cdf.ComponentType{Name: "log-text", SchemaVersion: "1.0"},
 			},
@@ -1003,7 +1007,7 @@ func TestRenderStages(t *testing.T) {
 		_, err = recipeStage.Execute(stageContext)
 		require.NoError(t, err)
 
-		require.Len(t, renderNotifier.Output.Renderers, 2)
+		require.Len(t, renderNotifier.Output.Renderers, 3)
 		assert.Equal(t, recipe.RendererConfig{
 			Type: "CSV",
 			ID:   "example_csv_0",
@@ -1018,16 +1022,23 @@ func TestRenderStages(t *testing.T) {
 				"component": "tool/example_tool/0/output/metrics_2000.csv",
 			},
 		}, renderNotifier.Output.Renderers[1])
+		assert.Equal(t, recipe.RendererConfig{
+			Type: "CSV",
+			ID:   "example_csv_2",
+			Config: map[string]interface{}{
+				"component": "tool/example_tool/0/output/nested/metrics_0500.csv",
+			},
+		}, renderNotifier.Output.Renderers[2])
 		assert.Empty(t, renderNotifier.Output.Widgets)
 	})
 
-	t.Run("Render stage fails when listRunComponents entity is missing", func(t *testing.T) {
+	t.Run("Render stage allows listRunComponents when entity is missing", func(t *testing.T) {
 		renderNotifier := &runtime.RendererStageCollector{}
 		stageContext := &recipe.StageContext{RendererNotifier: renderNotifier}
 
 		renderStageJS := `
 			function renderCPUMicroarchitecture(apap) {
-				apap.listRunComponents(0, "tool/example_tool/0/output")
+				apap.listRunComponents(0, "tool/example_tool/0/output/**")
 
 				return {
 					renderers: [],
@@ -1051,13 +1062,8 @@ func TestRenderStages(t *testing.T) {
 		}
 
 		_, err = recipeStage.Execute(stageContext)
-		require.Error(t, err)
+		require.NoError(t, err)
 
-		var msgErr message.Message
-		require.ErrorAs(t, err, &msgErr)
-		assert.Equal(t, message.EngineRecipeStagesScriptedStageError, msgErr.Code())
-		assert.Equal(t, "Create Render", msgErr.Metadata()["stage"])
-		assert.ErrorContains(t, err, "failed to list components in entity 'tool/example_tool/0/output'")
 		assert.Empty(t, renderNotifier.Output.Renderers)
 		assert.Empty(t, renderNotifier.Output.Widgets)
 	})

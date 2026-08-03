@@ -83,7 +83,9 @@ Run the narrowest relevant checks for the files changed, then broaden coverage i
 
 ## Sensitive Changes
 
-- This internal repository is periodically mirrored to an open-source public repository. Pull requests containing sensitive information should be carefully reviewed before merging.
+This internal repository is periodically mirrored to an open-source public repository. Pull requests containing sensitive information should be carefully reviewed before merging.
+
+- `.ossmosis.json` is the source of truth for classifying repository paths for the public mirror. Paths are classified as public by default, while exclusion rules identify internal-only paths that must be omitted from the open-source repository. These classifications are also used when scanning content intended for publication for restricted or sensitive terms.
 - If the `restricted-terms.yaml` workflow detects sensitive changes, the check will fail, but it is not configured as a required check for merging PRs. Consider whether any offending usages need fixing.
 - If the change must be delivered to the internal repository despite containing sensitive information (e.g. so that a sensitive feature can be delivered):
   - Consider whether the sensitive information can be removed or replaced with a placeholder.

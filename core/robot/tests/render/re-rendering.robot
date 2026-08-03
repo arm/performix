@@ -3,12 +3,15 @@
 
 *** Settings ***
 Documentation   A test suite to exercise re-rendering parameter propagation.
+
 Resource        ../../resources/keywords/target.resource
 Resource        ../../resources/keywords/run.resource
 Resource        ../../resources/keywords/recipe.resource
+
 Suite Setup     Re-Rendering Suite Setup
 Suite Teardown  Re-Rendering Suite Teardown
-Test Tags  render  Re-Rendering
+
+Test Tags  render  re-rendering
 
 
 *** Variables ***
@@ -33,10 +36,10 @@ The Prepare Render Response Uses Null for Unset Render Parameters
 Generate Re-Rendering Run
   ${recipe_path} =  Get External Recipe Path  render_params_recipe.js
   ${run_id} =  Run Recipe And Extract Run ID  ${recipe_path}
-  VAR  ${RERENDER_RUN_ID}  ${run_id}  scope=SUITE
+  VAR  ${RERENDER_RUN_ID} =  ${run_id}  scope=SUITE
 
 The Re-Rendering Run Exists
-  Given The Run Exists  ${RERENDER_RUN_ID}
+  The Run Exists  ${RERENDER_RUN_ID}
 
 Prepare Render Is Run With Params
   [Arguments]  ${params}

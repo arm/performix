@@ -225,10 +225,29 @@ func TestSendRecipeFinishMessage_SendsSuccessFinish(t *testing.T) {
 		return ok &&
 			rf.RecipeFinish.ReturnCode == apapproto.StatusCode_SUCCESS &&
 			rf.RecipeFinish.Error == nil &&
+			!rf.RecipeFinish.BackgroundTransfersRemaining &&
 			resp.Id.Value == "test-run-id"
 	})).Return(nil).Once()
 
 	notifier.SendRecipeFinishMessage(stream, apapproto.StatusCode_SUCCESS, nil)
+
+	stream.AssertExpectations(t)
+}
+
+func TestSendDetachedRecipeFinishMessage_SendsDetachedSuccess(t *testing.T) {
+	stream := new(mockRecipeStream)
+	notifier := newNotifier(stream)
+
+	stream.On("Send", mock.MatchedBy(func(resp *apapproto.RecipeResponse) bool {
+		rf, ok := resp.SubMessage.(*apapproto.RecipeResponse_RecipeFinish)
+		return ok &&
+			rf.RecipeFinish.ReturnCode == apapproto.StatusCode_SUCCESS &&
+			rf.RecipeFinish.Error == nil &&
+			rf.RecipeFinish.BackgroundTransfersRemaining &&
+			resp.Id.Value == "test-run-id"
+	})).Return(nil).Once()
+
+	notifier.SendDetachedRecipeFinishMessage(stream)
 
 	stream.AssertExpectations(t)
 }

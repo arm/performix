@@ -16,7 +16,9 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
@@ -242,7 +244,7 @@ func (c *RunExecutionContext) newEngineLocalities(runCtx context.Context, preser
 	sharedExecCtx, cancelSharedExec := context.WithCancelCause(runCtx)
 
 	targetLocality, targetCleanup := c.newEngineLocality(
-		tool.LocalityTarget,
+		locality.Target,
 		sharedExecCtx,
 		cancelSharedExec,
 		agentConn,
@@ -254,7 +256,7 @@ func (c *RunExecutionContext) newEngineLocalities(runCtx context.Context, preser
 		targetLocality,
 		targetCleanup,
 		func() (tool.EngineLocality, func(), error) {
-			hostSession, err := c.TargetSessions.TargetSession(&target.LocalTarget{})
+			hostSession, err := c.TargetSessions.HostSession()
 			if err != nil {
 				return tool.EngineLocality{}, nil, err
 			}
@@ -272,7 +274,7 @@ func (c *RunExecutionContext) newEngineLocalities(runCtx context.Context, preser
 			}
 
 			hostLocality, hostCleanup := c.newEngineLocality(
-				tool.LocalityHost,
+				locality.Host,
 				sharedExecCtx,
 				cancelSharedExec,
 				agentConn,
@@ -337,16 +339,22 @@ func (c *RunExecutionContext) newEngineLocality(
 }
 
 func (c *RunExecutionContext) copyFile(sourceLocality string, destinationLocality string, sourcePath string, destinationPath string) error {
-	if sourceLocality != tool.LocalityTarget {
-		return fmt.Errorf("unsupported source locality %q", sourceLocality)
+	if sourceLocality != locality.Target {
+		return message.New(message.EngineToolCopyFromUnsupportedSourceLocality).WithMetadata(map[string]string{
+			"sourceLocality":      sourceLocality,
+			"destinationLocality": destinationLocality,
+		})
 	}
-	if destinationLocality != tool.LocalityHost {
-		return fmt.Errorf("unsupported destination locality %q", destinationLocality)
+	if destinationLocality != locality.Host {
+		return message.New(message.EngineToolCopyFromUnsupportedDestinationLocality).WithMetadata(map[string]string{
+			"sourceLocality":      sourceLocality,
+			"destinationLocality": destinationLocality,
+		})
 	}
 
 	retriever, ok := c.Collector.FileRetriever.(*TransferManagerRetriever)
 	if !ok {
-		return fmt.Errorf("copyFrom requires APXD_ENABLE_TRANSFER_MANAGER=true")
+		return message.New(message.EngineToolCopyFromTransferManagerDisabled)
 	}
 
 	sourcePath = c.TargetPlatform().Path.GetFullPath(sourcePath, "")

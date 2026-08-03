@@ -11,6 +11,9 @@
 version: 2
 project_name: apx
 
+env:
+  - 'GOFLAGS=-tags={{ envOrDefault "APX_BUILD_TAGS" "duckdb_arrow" }}'
+
 before:
   hooks:
     - bash ./core/scripts/go/generate-all.sh
@@ -35,8 +38,6 @@ builds:
       - CGO_LDFLAGS=-Wl,-rpath,\$ORIGIN/lib/amd64-linux -L{{ .Env.PWD }}/core/apap-cli/lib/amd64-linux
     flags:
       - -trimpath
-    tags:
-      - duckdb_arrow
     ldflags:
       - >
         -s -w
@@ -59,8 +60,6 @@ builds:
       - CGO_LDFLAGS=-Wl,-rpath,\$ORIGIN/lib/arm64-linux -L{{ .Env.PWD }}/core/apap-cli/lib/arm64-linux
     flags:
       - -trimpath
-    tags:
-      - duckdb_arrow
     ldflags:
       - >
         -s -w
@@ -83,8 +82,6 @@ builds:
       - CGO_LDFLAGS=-Wl,-rpath,@executable_path/lib/amd64-darwin -L{{ .Env.PWD }}/core/apap-cli/lib/amd64-darwin
     flags:
       - -trimpath
-    tags:
-      - duckdb_arrow
     ldflags:
       - >
         -s -w
@@ -107,8 +104,6 @@ builds:
       - CGO_LDFLAGS=-Wl,-rpath,@executable_path/lib/arm64-darwin -L{{ .Env.PWD }}/core/apap-cli/lib/arm64-darwin
     flags:
       - -trimpath
-    tags:
-      - duckdb_arrow
     ldflags:
       - >
         -s -w
@@ -131,8 +126,6 @@ builds:
       - CGO_ENABLED=1
     flags:
       - -trimpath
-    tags:
-      - duckdb_arrow
 
     # Insert version number.
     ldflags:
@@ -161,6 +154,7 @@ builds:
       # Actually set CC and CXX using current Os and Arch
       - 'CC={{ index .Env (print "CC_" .Os "_" .Arch ) }}'
       - 'CXX={{ index .Env (print "CXX_" .Os "_" .Arch ) }}'
+      - 'GOFLAGS={{ .Env.GOFLAGS }},duckdb_use_lib'
     flags:
       - -trimpath
 
@@ -169,10 +163,6 @@ builds:
         flags:
           - -trimpath
           - -buildmode=exe
-
-    tags:
-      - duckdb_use_lib
-      - duckdb_arrow
 
     # Insert version number.
     ldflags:

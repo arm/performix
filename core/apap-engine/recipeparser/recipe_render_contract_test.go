@@ -4,6 +4,7 @@
 package recipeparser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe/runtime"
@@ -19,7 +21,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 )
 
-func TestCPUMicroarchitectureOptionsFallBackToN1Telemetry(t *testing.T) {
+func TestCPUMicroarchitectureOptionsAreEmptyWithoutTelemetry(t *testing.T) {
 	recipeData, err := os.ReadFile(filepath.Join("..", "..", "..", "core/apap-cli/recipes/cpu_microarchitecture.js"))
 	require.NoError(t, err)
 
@@ -45,10 +47,48 @@ func TestCPUMicroarchitectureOptionsFallBackToN1Telemetry(t *testing.T) {
 
 	_, err = recipeStage.Execute(stageContext)
 	require.NoError(t, err)
-	assert.Contains(t, stageContext.ParameterOptions.MultiSelectOptions[0], parameters.ParameterOption{
-		Value: "cycle_accounting",
-		Label: "cycle_accounting",
-	})
+	assert.Empty(t, stageContext.ParameterOptions.MultiSelectOptions[0])
+}
+
+func TestCPUMicroarchitectureReadinessFailsWithoutTelemetry(t *testing.T) {
+	recipeData, err := os.ReadFile(filepath.Join("..", "..", "..", "core/apap-cli/recipes/cpu_microarchitecture.js"))
+	require.NoError(t, err)
+
+	parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
+	recipeDefinition, err := parser.ParseRecipe("core/apap-cli/recipes/cpu_microarchitecture.js", string(recipeData))
+	require.NoError(t, err)
+	require.Len(t, recipeDefinition.ReadyStages, 1)
+
+	readinessCollector := &runtime.ReadinessCollector{}
+	stageContext := &recipe.StageContext{
+		Context:           context.Background(),
+		ReadinessNotifier: readinessCollector,
+	}
+	recipeStage := &stages.CustomRecipeStage{
+		ScriptedStage: recipeDefinition.ReadyStages[0],
+		Ctx: &recipe.RunExecutionContext{
+			RecipeCtx: &recipe.RecipeCtx{
+				RecipeMetadata: recipe.RecipeMetadata{Name: recipeDefinition.Name},
+			},
+			TargetInfoSupplier: func() *target.Description {
+				return &target.Description{PrimaryCPUName: "Cortex-A76"}
+			},
+		},
+	}
+
+	_, err = recipeStage.Execute(stageContext)
+	require.NoError(t, err)
+	require.Len(t, readinessCollector.ReadinessOutput, 1)
+	readiness := readinessCollector.ReadinessOutput[0]
+	assert.Equal(t, recipe.ReadyStatusError, readiness.Status)
+	require.Len(t, readiness.Advice, 1)
+	assert.Equal(t, recipe.AdviceSeverityError, readiness.Advice[0].AdviceSeverity)
+	assert.Equal(
+		t,
+		"recipes.cpu_microarchitecture.TELEMETRY_SPECIFICATION_UNAVAILABLE",
+		readiness.Advice[0].AdviceMessage.Code(),
+	)
+	assert.Equal(t, map[string]string{"cpuName": "Cortex-A76"}, readiness.Advice[0].AdviceMessage.Metadata())
 }
 
 func TestRerenderCapableRecipesWireTimeFilterParameters(t *testing.T) {
@@ -168,6 +208,7 @@ func executeTimeFilterRenderStage(
 
 	renderNotifier := &runtime.RendererStageCollector{}
 	stageContext := &recipe.StageContext{RendererNotifier: renderNotifier}
+	runModel := cdf.NewOnDiskModel(t.TempDir(), &cdf.Manifest{}, cdf.Metadata{})
 	recipeStage := &stages.CustomRecipeStage{
 		StageName:     recipeProp.RenderStages[0].Name(),
 		ScriptedStage: recipeProp.RenderStages[0],
@@ -178,6 +219,7 @@ func executeTimeFilterRenderStage(
 			RunDescriptions: []*run.RunDescription{
 				{Parameters: map[string]any{"mode": "dynamic"}},
 			},
+			RunModels:          []cdf.ModelView{runModel},
 			RerenderingEnabled: rerenderingEnabled,
 		},
 	}

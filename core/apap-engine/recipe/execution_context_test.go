@@ -15,6 +15,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
@@ -34,18 +35,24 @@ func TestRunExecutionContextCopyFileRejectsUnsupportedLocalities(t *testing.T) {
 		name                string
 		sourceLocality      string
 		destinationLocality string
-		wantError           string
+		wantCode            message.MessageCode
 	}{
-		{name: "host to host", sourceLocality: "host", destinationLocality: "host", wantError: `unsupported source locality "host"`},
-		{name: "target to target", sourceLocality: "target", destinationLocality: "target", wantError: `unsupported destination locality "target"`},
-		{name: "host to target", sourceLocality: "host", destinationLocality: "target", wantError: `unsupported source locality "host"`},
+		{name: "host to host", sourceLocality: "host", destinationLocality: "host", wantCode: message.EngineToolCopyFromUnsupportedSourceLocality},
+		{name: "target to target", sourceLocality: "target", destinationLocality: "target", wantCode: message.EngineToolCopyFromUnsupportedDestinationLocality},
+		{name: "host to target", sourceLocality: "host", destinationLocality: "target", wantCode: message.EngineToolCopyFromUnsupportedSourceLocality},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := &RunExecutionContext{}
 			err := ctx.copyFile(tt.sourceLocality, tt.destinationLocality, "/remote/file", "/local/file")
-			require.ErrorContains(t, err, tt.wantError)
+			var msgErr *message.MessageImpl
+			require.ErrorAs(t, err, &msgErr)
+			require.Equal(t, tt.wantCode, msgErr.Code())
+			require.Equal(t, map[string]string{
+				"sourceLocality":      tt.sourceLocality,
+				"destinationLocality": tt.destinationLocality,
+			}, msgErr.Metadata())
 		})
 	}
 }
@@ -57,7 +64,9 @@ func TestRunExecutionContextCopyFileRequiresTransferManager(t *testing.T) {
 
 	err := ctx.copyFile("target", "host", "/remote/file", "/local/file")
 
-	require.ErrorContains(t, err, "copyFrom requires APXD_ENABLE_TRANSFER_MANAGER=true")
+	var msgErr *message.MessageImpl
+	require.ErrorAs(t, err, &msgErr)
+	require.Equal(t, message.EngineToolCopyFromTransferManagerDisabled, msgErr.Code())
 }
 
 func TestCollectMonitorTargets(t *testing.T) {
@@ -194,7 +203,7 @@ func TestHostLocalityCreatesHostEngine(t *testing.T) {
 	session.On("TargetAgent", mock.Anything).Return(agentConn, nil).Once()
 	session.On("ResolveToolsDir").Return("/host/tools").Once()
 	provider := &targetsessionmocks.MockTargetSessionProvider{}
-	provider.On("TargetSession", mock.Anything).Return(session, nil).Once()
+	provider.On("HostSession").Return(session, nil).Once()
 
 	execCtx := &RunExecutionContext{
 		TargetSessions: provider,
@@ -233,7 +242,7 @@ func TestHostLocalityCreationErrors(t *testing.T) {
 		t.Cleanup(targetAgentConn.Abort)
 		expectedErr := errors.New("target session lookup failed")
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
-		provider.On("TargetSession", mock.Anything).Return(&targetsessionmocks.MockTargetSession{}, expectedErr).Once()
+		provider.On("HostSession").Return((*targetsessionmocks.MockTargetSession)(nil), expectedErr).Once()
 
 		execCtx := &RunExecutionContext{
 			TargetSessions: provider,
@@ -269,7 +278,7 @@ func TestHostLocalityCreationErrors(t *testing.T) {
 			targetsession.ConnectOptions{PlatformGate: conductor.HostSupported},
 		).Return(nil, expectedErr).Once()
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
-		provider.On("TargetSession", mock.Anything).Return(session, nil).Once()
+		provider.On("HostSession").Return(session, nil).Once()
 
 		execCtx := &RunExecutionContext{
 			TargetSessions: provider,
@@ -308,7 +317,7 @@ func TestHostLocalityCreationErrors(t *testing.T) {
 		session.On("TargetPlatform").Return(targetPlatform, nil).Once()
 		session.On("TargetAgent", mock.Anything).Return(&agent.AgentConn{}, expectedErr).Once()
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
-		provider.On("TargetSession", mock.Anything).Return(session, nil).Once()
+		provider.On("HostSession").Return(session, nil).Once()
 
 		execCtx := &RunExecutionContext{
 			TargetSessions: provider,
@@ -352,7 +361,7 @@ func TestContextCancelledOnHostAgentDisconnect(t *testing.T) {
 	session.On("TargetAgent", mock.Anything).Return(hostAgentConn, nil).Once()
 	session.On("ResolveToolsDir").Return("/host/tools").Once()
 	provider := &targetsessionmocks.MockTargetSessionProvider{}
-	provider.On("TargetSession", mock.Anything).Return(session, nil).Once()
+	provider.On("HostSession").Return(session, nil).Once()
 
 	execCtx := &RunExecutionContext{
 		TargetSessions: provider,
@@ -406,7 +415,7 @@ func TestHostLocalityCleanupSurvivesTargetDisconnect(t *testing.T) {
 	session.On("TargetAgent", mock.Anything).Return(hostAgentConn, nil).Once()
 	session.On("ResolveToolsDir").Return("/host/tools").Once()
 	provider := &targetsessionmocks.MockTargetSessionProvider{}
-	provider.On("TargetSession", mock.Anything).Return(session, nil).Once()
+	provider.On("HostSession").Return(session, nil).Once()
 
 	hostClient.On("StartProcess", mock.Anything, mock.MatchedBy(func(req *targetagentproto.StartProcessRequest) bool {
 		return req != nil && len(req.Command) == 1 && req.Command[0] == "host-helper"

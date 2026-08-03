@@ -3,6 +3,7 @@
 
 *** Settings ***
 Documentation  A resource file containing keywords for extracting and installing Arm Performix packages.
+
 Resource       common.resource
 
 
@@ -15,10 +16,10 @@ ${EXTRACTED_ZIP_PATH}            ${EXTRACTED_PKG_DIR}/extracted_zip
 ${EXPECTED_ATPERF_LOCATION_DEB}  opt/apx/apx
 ${EXPECTED_ATPERF_LOCATION_TAR}  apx
 ${EXPECTED_ATPERF_LOCATION_ZIP}  apx.exe
-${EXPECTED_TPIP_LOCATION}        license_terms/
-${EXPECTED_TPIP_MAIN}            Arm Performix
-${EXPECTED_TPIP_TOOLS}           asct  jitdump-jvm  dotnet-agent  sl-analyze  sl-record  instruction_mix  wperf  cache_sharing
-${EXPECTED_CHANGELOG_FILE}       CHANGELOG.md
+${EXPECTED_TPIP_LOCATION}  license_terms/
+${EXPECTED_TPIP_MAIN}  Arm Performix
+${EXPECTED_TPIP_TOOLS}  asct  jitdump-jvm  dotnet-agent  sl-analyze  sl-record  instruction_mix  wperf  cache_sharing
+${EXPECTED_CHANGELOG_FILE}  CHANGELOG.md
 
 
 *** Keywords ***
@@ -61,21 +62,21 @@ Extract Package
 Extract Deb Package
   [Documentation]  Extracts the specified .deb package and sets the extracted path variable.
   [Arguments]  ${pkg}
-  VAR  ${EXTRACTED_PKG_PATH}  ${EXTRACTED_DEB_PATH}  scope=SUITE
+  VAR  ${EXTRACTED_PKG_PATH} =  ${EXTRACTED_DEB_PATH}  scope=SUITE
   Create Directory  ${EXTRACTED_PKG_PATH}
   Run Host Command  dpkg-deb -R ${pkg} ${EXTRACTED_PKG_PATH}
 
 Extract Tar Package
   [Documentation]  Extracts the specified .tar.gz package and sets the extracted path variable.
   [Arguments]  ${pkg}
-  VAR  ${EXTRACTED_PKG_PATH}  ${EXTRACTED_TAR_PATH}  scope=SUITE
+  VAR  ${EXTRACTED_PKG_PATH} =  ${EXTRACTED_TAR_PATH}  scope=SUITE
   Create Directory  ${EXTRACTED_PKG_PATH}
   Run Host Command  tar -xzf ${pkg} -C ${EXTRACTED_PKG_PATH}
 
 Extract Zip Package
   [Documentation]  Extracts the specified .zip package and sets the extracted path variable.
   [Arguments]  ${pkg}
-  VAR  ${EXTRACTED_PKG_PATH}  ${EXTRACTED_ZIP_PATH}  scope=SUITE
+  VAR  ${EXTRACTED_PKG_PATH} =  ${EXTRACTED_ZIP_PATH}  scope=SUITE
   Create Directory  ${EXTRACTED_PKG_PATH}
   Run Host Command  unzip ${pkg} -d ${EXTRACTED_PKG_PATH}
 

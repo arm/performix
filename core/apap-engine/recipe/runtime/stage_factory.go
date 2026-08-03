@@ -18,23 +18,24 @@ import (
 
 // StageConfiguration contains information required for configuring the execution stages
 type StageConfiguration struct {
-	Recipe                 *recipe.Recipe
-	Ctx                    *recipe.RecipeCtx
-	RunCollection          *run.RunCollection
-	ToolBasePaths          deployer.BaseToolDeploymentPaths
-	ToolDeploymentType     deployer.ToolDeploymentMode
-	CollectionState        *recipe.CollectionState
-	TargetSessions         targetsession.TargetSessionProvider
-	OperationName          string
-	IsRootWorkerEnabled    bool
-	IsFullCaptureEnabled   bool
-	RerenderingEnabled     bool
-	TransferManagerEnabled bool
-	NeoprofTimelineEnabled bool
-	PackageManager         *packages.PackageManager
-	DeferredActions        notifiers.DeferredActions
-	UsrMessageWriter       *run.ConcreteUserMessageWriter
-	RunModels              []cdf.ModelView
+	Recipe                   *recipe.Recipe
+	Ctx                      *recipe.RecipeCtx
+	RunCollection            *run.RunCollection
+	ToolBasePaths            deployer.BaseToolDeploymentPaths
+	ToolDeploymentType       deployer.ToolDeploymentMode
+	CollectionState          *recipe.CollectionState
+	TargetSessions           targetsession.TargetSessionProvider
+	OperationName            string
+	IsRootWorkerEnabled      bool
+	IsFullCaptureEnabled     bool
+	RerenderingEnabled       bool
+	TransferManagerEnabled   bool
+	NeoprofTimelineEnabled   bool
+	PackageManager           *packages.PackageManager
+	DeferredActions          notifiers.DeferredActions
+	UsrMessageWriter         *run.ConcreteUserMessageWriter
+	RunModels                []cdf.ModelView
+	OnPhase1TransferComplete func(hasPendingBackgroundTransfers bool)
 }
 
 func (c *StageConfiguration) ConfigureRunManifestUpdater() {

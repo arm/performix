@@ -85,39 +85,14 @@ func TestRecipeReady(t *testing.T) {
 		assert.Contains(t, cmdBuf.String(), "Recipe is ready")
 	})
 
-	t.Run("Recipe ready defaults to system-wide if no workload provided", func(t *testing.T) {
-		loginService := targetloginmocks.NewMockLoginService(t).WithLogin(t, tgt, nil)
-		mr := mocks.MockRecipeReader{}
-		var systemWidePid int32 = -1
-
-		// Needs to be local for each test case
-		singleSelectParams := []parameters.SingleSelectParameter{
-			{Parameter: parameters.Parameter{ID: "metrics_group"}, DefaultValue: "frontend_bound"},
-			{Parameter: parameters.Parameter{ID: "samplingFrez"}, DefaultValue: "low"},
-		}
-		testRecipe := engine_recipe.Recipe{Name: "cpu_microarchitecture", Parameters: parameters.Parameters{SingleSelect: singleSelectParams}}
-		recipes := map[string]engine_recipe.Recipe{"cpu_microarchitecture": testRecipe}
-		recipeInfo := recipes["cpu_microarchitecture"]
-		mr.On("ReadRecipes", mock.Anything).Return(recipes, nil)
-		mr.On("ReadRecipe", testRecipeJSFile).Return(recipeInfo, nil)
-
-		// Checking that specified workload is passed correctly into execution context
-		rr := mocks.MockReadyRecipe{}
-		rr.On("ReadyRecipe", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-			execContext := args.Get(2).(*recipe.RecipeExecutionCtx)
-			assert.Equal(t, systemWidePid, execContext.Workload.PID)
-		}).Return(&recipe.RecipeReadyResponse{ReadyStatus: apapproto.ReadyStatus_READY_STATUS_READY, AdviceMessages: []*apapproto.Advice{{AdviceMessage: message.BuildErrorChain(readyMessage), AdviceSeverity: apapproto.AdviceSeverity_ADVICE_SEVERITY_MESSAGE}}}, nil)
-
-		cmd := NewReadyCommand(cc, &mr, &rr, &mtm, loginService)
-		cmdBuf := &bytes.Buffer{}
-		cmd.SetOut(cmdBuf)
+	t.Run("Recipe ready requires a workload mode", func(t *testing.T) {
+		cmd := NewReadyCommand(cc, &mocks.MockRecipeReader{}, recipe.RecipeReady{}, &target.MockTargetManager{}, &targetloginmocks.MockLoginService{})
 		utils.SetPersistentFlags(cmd)
 		cmd.SetArgs([]string{"cpu_microarchitecture", "--json"})
 		err := cmd.Execute()
 
-		assert.NoError(t, err)
-		assert.True(t, utils.IsValidJSON(cmdBuf.String()))
-		assert.Contains(t, cmdBuf.String(), "Recipe is ready")
+		assert.Equal(t, message.New(message.CliCmdRecipeReadyNoWorkloadSpecified), err)
+		assert.NoError(t, message.ValidateMetadataPlaceholders(err))
 	})
 
 	t.Run("Recipe ready works with valid parameters", func(t *testing.T) {
@@ -128,7 +103,7 @@ func TestRecipeReady(t *testing.T) {
 		cmdBuf := &bytes.Buffer{}
 		cmd.SetOut(cmdBuf)
 		utils.SetPersistentFlags(cmd)
-		cmd.SetArgs([]string{"cpu_microarchitecture", "--json"})
+		cmd.SetArgs([]string{"cpu_microarchitecture", "--system-wide", "--json"})
 
 		singleSelectParams := []parameters.SingleSelectParameter{
 			{Parameter: parameters.Parameter{ID: "metrics_group"}, DefaultValue: "frontend_bound"},
@@ -180,7 +155,7 @@ func TestRecipeReady(t *testing.T) {
 		cmdBuf := &bytes.Buffer{}
 		cmd.SetOut(cmdBuf)
 		utils.SetPersistentFlags(cmd)
-		cmd.SetArgs([]string{"cpu_microarchitecture", "--target", "valid_target", "--json"})
+		cmd.SetArgs([]string{"cpu_microarchitecture", "--system-wide", "--target", "valid_target", "--json"})
 
 		err := cmd.Execute()
 

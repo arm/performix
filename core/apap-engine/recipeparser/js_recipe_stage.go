@@ -303,6 +303,7 @@ func ExecuteOptionsFunction(
 	ctx recipe.ExecutionContext,
 	stageContext *recipe.StageContext,
 	paramName string,
+	allowEmpty bool,
 	converter func([]interface{}) ([]string, []parameters.ParameterOption, error),
 ) ([]string, []parameters.ParameterOption, error) {
 	// Create an apap JS context, to which we attach all the built-in APIs
@@ -331,7 +332,7 @@ func ExecuteOptionsFunction(
 			return nil, nil, err
 		}
 		if values != nil {
-			if len(values) == 0 {
+			if len(values) == 0 && !allowEmpty {
 				metadata := map[string]string{
 					"paramName":  paramName,
 					"recipeName": ctx.GetRecipeCtx().RecipeMetadata.Name,
@@ -348,7 +349,7 @@ func ExecuteOptionsFunction(
 func (s *GojaSingleSelectedParameterOptionStage) Execute(ctx recipe.ExecutionContext, stageContext *recipe.StageContext) (func(), error) {
 	var err error
 	paramName := ctx.GetRecipeCtx().ParamValues.Parameters.SingleSelect[s.ssi].ID
-	_, stageContext.ParameterOptions.SingleSelectOptions[s.ssi], err = ExecuteOptionsFunction(&s.GojaScriptedRecipeStage, ctx, stageContext, paramName, func(data []interface{}) ([]string, []parameters.ParameterOption, error) {
+	_, stageContext.ParameterOptions.SingleSelectOptions[s.ssi], err = ExecuteOptionsFunction(&s.GojaScriptedRecipeStage, ctx, stageContext, paramName, false, func(data []interface{}) ([]string, []parameters.ParameterOption, error) {
 		return parameters.ConvertRecipeSelectOptionValuesAndItems(data, s.apiVersion)
 	})
 	return s.DeferredActions.InvokeAll, err
@@ -363,7 +364,7 @@ type GojaMultiSelectedParameterOptionStage struct {
 func (s *GojaMultiSelectedParameterOptionStage) Execute(ctx recipe.ExecutionContext, stageContext *recipe.StageContext) (func(), error) {
 	var err error
 	paramName := ctx.GetRecipeCtx().ParamValues.Parameters.MultiSelect[s.msi].ID
-	_, stageContext.ParameterOptions.MultiSelectOptions[s.msi], err = ExecuteOptionsFunction(&s.GojaScriptedRecipeStage, ctx, stageContext, paramName, func(data []interface{}) ([]string, []parameters.ParameterOption, error) {
+	_, stageContext.ParameterOptions.MultiSelectOptions[s.msi], err = ExecuteOptionsFunction(&s.GojaScriptedRecipeStage, ctx, stageContext, paramName, true, func(data []interface{}) ([]string, []parameters.ParameterOption, error) {
 		return parameters.ConvertRecipeSelectOptionValuesAndItems(data, s.apiVersion)
 	})
 	return s.DeferredActions.InvokeAll, err
@@ -383,6 +384,7 @@ func (s *GojaRadioParameterOptionStage) Execute(ctx recipe.ExecutionContext, sta
 		ctx,
 		stageContext,
 		paramName,
+		false,
 		func(data []interface{}) ([]string, []parameters.ParameterOption, error) {
 			return parameters.ConvertRecipeRadioOptionValuesAndItems(data, s.apiVersion)
 		},

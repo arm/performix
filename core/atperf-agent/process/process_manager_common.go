@@ -649,6 +649,17 @@ func (pc *processCommon) ExecCommandCommon(lc *LaunchCommand, builder ProcessMan
 		return nil, fmt.Errorf("failed to build command: %w", err)
 	}
 
+	// Treat a command that cannot be resolved through PATH like any other
+	// non-zero command result. This lets callers probe optional executables
+	// without requiring a shell to translate the lookup failure into an exit
+	// code. Other launch failures remain errors.
+	if errors.Is(cmd.Err, exec.ErrNotFound) {
+		return &CommandResult{
+			Rc:     CommandNotFoundExitCode,
+			Stderr: cmd.Err.Error(),
+		}, nil
+	}
+
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
