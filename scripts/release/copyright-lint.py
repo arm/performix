@@ -74,7 +74,7 @@ def run_in_scope(reuse_args: list[str]) -> int:
             "reuse",
             "--no-multiprocessing",
             "--root",
-            str(scope_root),
+            ".",
             *reuse_args,
         ]
         result = run(command, cwd=scope_root)

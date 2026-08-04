@@ -7,6 +7,7 @@ Documentation       A test suite to verify the functionality of the 'neoprof' to
 Resource            ../../resources/keywords/common.resource
 Resource            ../../resources/keywords/process.resource
 Resource            ../../resources/keywords/recipe.resource
+Resource            ../../resources/keywords/render.resource
 Resource            ../../resources/keywords/run.resource
 Resource            ../../resources/keywords/target.resource
 
@@ -171,6 +172,17 @@ The Neoprof Tool Reports As Ready When Workload Exists Using Working Dir
   Then The Recipe Is Ready
   [Teardown]  The File Is Removed From The Target  ${TEMP_FILE_PATH}
 
+The Neoprof Tool Supports Reformat On Host
+  [Documentation]  Tests the host-side reformat path using Linux targets
+  [Tags]  reformat-on-host
+  [Setup]  Skip Unless Target OS Is  ${OS_LINUX}
+  Given The Code Hotspots Recipe Is Listed
+  And The Test Target Exists
+  When Run Code Hotspots Recipe  --param reformat_on_host=true --workload ${LAUNCH_WORKLOAD} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  Then The Last Command Succeeded
+  And The Reformat On Host Run Is Recorded
+  And Runs Are Rendered Successfully  ${RUN_ID}
+
 
 *** Keywords ***
 # This section is for throwaway keywords that only exist to this test suite.
@@ -213,6 +225,31 @@ The Target Home Dir Is Stored
   ${homeDir} =  Get Home Dir On Target
   ${sanitised} =  Strip String  ${homeDir.stdout}
   VAR  ${TARGET_HOME_DIR} =  ${sanitised}  scope=SUITE
+
+The Reformat On Host Run Is Recorded
+  [Documentation]  Captures the reformat-on-host run ID and checks the host analysis artifacts.
+  ${run_id} =  Extract The Run ID
+  VAR  ${RUN_ID} =  ${run_id}  scope=TEST
+  The Run Exists  ${RUN_ID}
+  The Host Analysis Logs Exist  ${RUN_ID}
+
+Verify No Samples Collected
+  [Documentation]  Runs a recipe and verifies that a no samples collected error is returned
+  ...  This is a separate keyword to allow it to be retried multiple times; we can't deterministically
+  ...  ensure that no samples are collected on any single attempt.
+  Run Keyword And Ignore Error  The Output Directory Is Removed From The Target
+  Run Code Hotspots Recipe  --workload "true" --param sampling_freq=low --target ${G_TARGET_NAME}
+  The Last Command Failed With Message Code  tool_integrations.neoprof.NO_SAMPLES_COLLECTED
+  The Target Output Directory Is Empty
+
+The Host Analysis Logs Exist
+  [Documentation]  Check for the existence of log files that are only created during host reformat
+  [Arguments]  ${run_id}
+  VAR  ${neoprof_dir}  ${G_RUNS_DIR}${/}${run_id}${/}tool${/}neoprof${/}0
+  File Should Exist  ${neoprof_dir}${/}host_analysis_phase1.log
+  File Should Exist  ${neoprof_dir}${/}host_analysis_phase1_stderr.txt
+  File Should Exist  ${neoprof_dir}${/}host_analysis_phase2.log
+  File Should Exist  ${neoprof_dir}${/}host_analysis_phase2_stderr.txt
 
 Run Code Hotspots Recipe With Environment Variables In Workload
   ${code_hotspots_args} =  Catenate  --workload "bash -c \\"echo \\\\\\"this is \$FOO\\\\\\"\\""

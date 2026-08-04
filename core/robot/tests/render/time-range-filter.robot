@@ -124,16 +124,12 @@ The CPU Microarchitecture Run Rendered With Partial Time Filter Keeps Original T
 Time Range Filter Suite Setup
   Common Setup
   Skip Unless Target OS Is  ${OS_LINUX}
-  Set Enable Rerendering Env Var
-  Set Enable Full Capture Support Env Var
   The Test Target Is Added Successfully
   The Target Is Set To Default Successfully  ${G_TARGET_NAME}
   Generate Time Range Filter Runs
 
 Time Range Filter Suite Teardown
   The Test Target Is Removed Successfully
-  Clear Enable Full Capture Support Env Var
-  Clear Enable Rerendering Env Var
   Common Teardown
 
 Generate Time Range Filter Runs
@@ -166,7 +162,7 @@ Run Time Range Filter Recipe And Extract Run ID
   [Arguments]  ${recipe}  ${extra_args}=${EMPTY}
   Run Recipe
   ...  ${recipe}
-  ...  --workload ${LAUNCH_WORKLOAD} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG} ${extra_args}
+  ...  --workload ${LAUNCH_WORKLOAD} --param rich_data_capture=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG} ${extra_args}
   The Last Command Succeeded
   ${id} =  Extract The Run ID
   The Run Exists  ${id}

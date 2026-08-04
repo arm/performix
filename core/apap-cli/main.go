@@ -9,10 +9,13 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd"
 )
 
+const logTimestampFormat = "2006-01-02T15:04:05.000Z07:00"
+
 func init() {
-	// Use full timestamp in log messages
+	// Use full timestamps with millisecond precision in log messages.
 	log.SetFormatter(&log.TextFormatter{
-		FullTimestamp: true,
+		FullTimestamp:   true,
+		TimestampFormat: logTimestampFormat,
 	})
 	// Log infos and above.
 	log.SetLevel(log.InfoLevel)

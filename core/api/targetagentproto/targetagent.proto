@@ -336,11 +336,13 @@ message SudoPassword {
 //  b. **sudo -n** (non‑interactive NOPASSWD)               - supported 
 //  c. **sudo -S** with password from `PrivilegeProof`      - not supported
 //  d. **set‑uid helper** if sudo/userns unavailable        - not supported
+//  e. **Android su** on a rooted Android target             - supported
 message PrivilegeProof {
     oneof mech {
         bool no_passwd_userns = 1;
         bool no_passwd_sudo = 2;
         SudoPassword sudo_password = 3;
         bool setuid_helper = 4;
+        bool android_su = 5;
     }
 }

@@ -51,6 +51,7 @@ func FromViper() grpcserver.GrpcServerConfig {
 		LogLevel:                  viper.GetString("log-level"),
 		SrcToolsDirectory:         viper.GetString("source-tools-dir"),
 		DeploymentToolsDir:        viper.GetString("deployment-tools-dir"),
+		ADBPath:                   viper.GetString("adb-path"),
 		IsRootWorkerEnabled:       viper.GetBool("enable-on-demand-privilege"),
 		EnableFullCaptureSupport:  viper.GetBool("enable-full-capture-support"),
 		EnableRerendering:         viper.GetBool("enable-rerendering"),

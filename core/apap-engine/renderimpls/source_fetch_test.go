@@ -8,20 +8,25 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	duckdb "github.com/duckdb/duckdb-go/v2"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
+	agentmocks "github.com/Arm-Debug/apap-cli/apap-engine/agent/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcconnection"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
 	targetagentproto "github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
@@ -162,6 +167,230 @@ CREATE TABLE source_files (source_file_id INTEGER, host_location VARCHAR, target
 	var content string
 	require.NoError(t, sqlConn.QueryRowContext(context.Background(), `SELECT load_source_content('run1', 1)`).Scan(&content))
 	require.Equal(t, "hello", content)
+}
+
+func TestLoadSourceContentsReturnsPartialResults(t *testing.T) {
+	tmpDir := t.TempDir()
+	firstPath := filepath.Join(tmpDir, "first.cpp")
+	missingPath := filepath.Join(tmpDir, "missing.cpp")
+	thirdPath := filepath.Join(tmpDir, "third.cpp")
+	require.NoError(t, os.WriteFile(firstPath, []byte("first"), 0o600))
+	require.NoError(t, os.WriteFile(thirdPath, []byte("third\r\nline\n"), 0o600))
+
+	connector, err := duckdb.NewConnector("", nil)
+	require.NoError(t, err)
+	db := sql.OpenDB(connector)
+	t.Cleanup(func() { _ = db.Close() })
+
+	sqlConn, err := db.Conn(context.Background())
+	require.NoError(t, err)
+	defer sqlConn.Close()
+
+	_, err = sqlConn.ExecContext(context.Background(), `
+CREATE TABLE source_files (source_file_id INTEGER, host_location VARCHAR, target_location VARCHAR);
+`)
+	require.NoError(t, err)
+	_, err = sqlConn.ExecContext(
+		context.Background(),
+		`INSERT INTO source_files VALUES (1, ?, NULL), (2, ?, NULL), (3, ?, NULL), (4, NULL, '/target/fourth.cpp');`,
+		firstPath,
+		missingPath,
+		thirdPath,
+	)
+	require.NoError(t, err)
+	require.NoError(t, createSourceFilesUnionView(
+		sqlConn,
+		"source_files_union",
+		map[string]string{"run1": "source_files"},
+	))
+	require.NoError(t, registerLoadSourceContentFunction(
+		sqlConn,
+		"source_files_union",
+		nil,
+		nil,
+		"s1",
+	))
+
+	rows, err := sqlConn.QueryContext(context.Background(), `
+SELECT
+  source_file_id,
+  content,
+  failure_reasons[1] AS first_failure_reason,
+  failure_reasons[2] AS second_failure_reason,
+  len(failure_reasons) AS failure_count
+FROM load_source_contents('run1', [3, 2, 3, 999, NULL, 1, 4])
+ORDER BY source_file_id NULLS FIRST, content NULLS FIRST;
+`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	type sourceContent struct {
+		sourceFileID  sql.NullInt64
+		content       sql.NullString
+		firstFailure  sql.NullString
+		secondFailure sql.NullString
+		failureCount  int64
+	}
+	var contents []sourceContent
+	for rows.Next() {
+		var content sourceContent
+		require.NoError(t, rows.Scan(
+			&content.sourceFileID,
+			&content.content,
+			&content.firstFailure,
+			&content.secondFailure,
+			&content.failureCount,
+		))
+		contents = append(contents, content)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []sourceContent{
+		{firstFailure: sql.NullString{String: sourceContentsFailureInvalidSourceFileID, Valid: true}, failureCount: 1},
+		{sourceFileID: sql.NullInt64{Int64: 1, Valid: true}, content: sql.NullString{String: "first", Valid: true}},
+		{sourceFileID: sql.NullInt64{Int64: 2, Valid: true}, firstFailure: sql.NullString{String: "host_source_path_failed", Valid: true}, failureCount: 1},
+		{sourceFileID: sql.NullInt64{Int64: 3, Valid: true}, content: sql.NullString{String: "third\r\nline\n", Valid: true}},
+		{sourceFileID: sql.NullInt64{Int64: 3, Valid: true}, content: sql.NullString{String: "third\r\nline\n", Valid: true}},
+		{sourceFileID: sql.NullInt64{Int64: 4, Valid: true}, firstFailure: sql.NullString{String: "missing_host_mapping", Valid: true}, secondFailure: sql.NullString{String: "target_not_reachable", Valid: true}, failureCount: 2},
+		{sourceFileID: sql.NullInt64{Int64: 999, Valid: true}, firstFailure: sql.NullString{String: sourceContentsFailureSourceFileNotFound, Valid: true}, failureCount: 1},
+	}, contents)
+
+	var count int
+	require.NoError(t, sqlConn.QueryRowContext(
+		context.Background(),
+		`SELECT count(*) FROM load_source_contents('run1', []);`,
+	).Scan(&count))
+	require.Zero(t, count)
+
+	// Source ID lists may be computed by the surrounding query rather than
+	// supplied as literals to the table macro.
+	var computedContents string
+	require.NoError(t, sqlConn.QueryRowContext(context.Background(), `
+WITH source_ids AS (
+  SELECT list(source_file_id ORDER BY source_file_id) AS values
+  FROM source_files
+  WHERE source_file_id IN (1, 3)
+)
+SELECT string_agg(content, ',' ORDER BY source_file_id)
+FROM source_ids, LATERAL load_source_contents('run1', source_ids.values);
+`).Scan(&computedContents))
+	require.Equal(t, "first,third\r\nline\n", computedContents)
+}
+
+func TestLoadSourceContentsUDFFetchesDuplicateSourceOnce(t *testing.T) {
+	tgt := fakeTarget{}
+	provider := &targetsessionmocks.MockTargetSessionProvider{}
+	session := &targetsessionmocks.MockTargetSession{}
+	client := &targetagentmocks.TargetAgentClient{}
+	stream := &agentmocks.MockRetrieveFileStream{}
+	agentConn := agent.NewAgentConn(client)
+
+	provider.On("TargetSession", tgt).Return(session, nil).Once()
+	session.On("Connect", mock.Anything).Return(&dummyConn{}, nil).Once()
+	session.On("TargetAgent", mock.Anything).Return(agentConn, nil).Once()
+	session.On("TargetPlatform").Return(&conductor.TargetPlatform{
+		Path:                  &conductor.LinuxPathUtils{},
+		PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux},
+	}, nil).Once()
+	stream.On("RecvMsg", mock.Anything).Run(func(args mock.Arguments) {
+		args.Get(0).(*targetagentproto.FileContent).Content = []byte("target content")
+	}).Return(nil).Once()
+	stream.On("RecvMsg", mock.Anything).Return(io.EOF).Once()
+	client.On(
+		"RetrieveFile",
+		mock.Anything,
+		&targetagentproto.FileRequest{Path: "/target/file.c"},
+		mock.Anything,
+	).Return(stream, nil).Once()
+
+	udf := &loadSourceContentsUDF{
+		targetSessions: provider,
+		runTargets:     map[string]target.Target{"run1": tgt},
+	}
+	descriptor := map[string]any{
+		"source_file_id":    int64(1),
+		"source_file_found": true,
+		"host_location":     nil,
+		"target_location":   "/target/file.c",
+	}
+	results, err := udf.execute(context.Background(), []driver.Value{
+		"run1",
+		[]any{descriptor, descriptor},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []any{
+		sourceContentsResult(int64(1), "target content", []string{}),
+		sourceContentsResult(int64(1), "target content", []string{}),
+	}, results)
+	provider.AssertExpectations(t)
+	session.AssertExpectations(t)
+	client.AssertExpectations(t)
+	stream.AssertExpectations(t)
+}
+
+func TestLoadSourceContentsUDFCancellation(t *testing.T) {
+	tgt := fakeTarget{}
+	provider := &targetsessionmocks.MockTargetSessionProvider{}
+	session := &targetsessionmocks.MockTargetSession{}
+	client := &targetagentmocks.TargetAgentClient{}
+	agentConn := agent.NewAgentConn(client)
+
+	provider.On("TargetSession", tgt).Return(session, nil).Once()
+	session.On("Connect", mock.Anything).Return(&dummyConn{}, nil).Once()
+	session.On("TargetAgent", mock.Anything).Return(agentConn, nil).Once()
+	session.On("TargetPlatform").Return(&conductor.TargetPlatform{
+		Path:                  &conductor.LinuxPathUtils{},
+		PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux},
+	}, nil).Once()
+
+	retrieveStarted := make(chan struct{})
+	client.On(
+		"RetrieveFile",
+		mock.Anything,
+		&targetagentproto.FileRequest{Path: "/target/file.c"},
+		mock.Anything,
+	).Run(func(args mock.Arguments) {
+		close(retrieveStarted)
+		<-args.Get(0).(context.Context).Done()
+	}).Return((targetagentproto.TargetAgent_RetrieveFileClient)(nil), context.Canceled).Once()
+
+	udf := &loadSourceContentsUDF{
+		targetSessions: provider,
+		runTargets:     map[string]target.Target{"run1": tgt},
+	}
+	values := []driver.Value{
+		"run1",
+		[]any{map[string]any{
+			"source_file_id":    int64(1),
+			"source_file_found": true,
+			"host_location":     nil,
+			"target_location":   "/target/file.c",
+		}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := udf.Executor().RowContextExecutor(ctx, values)
+		result <- err
+	}()
+
+	select {
+	case <-retrieveStarted:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "target source retrieval did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "source retrieval did not stop after cancellation")
+	}
+	provider.AssertExpectations(t)
+	session.AssertExpectations(t)
+	client.AssertExpectations(t)
 }
 
 func TestRegisterLoadSourceContentFunctionSameSessionCollides(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/grpcserver/conversion"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/grpcserver/transport"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
@@ -77,6 +78,7 @@ func fillDefaultDeps(d *deps) {
 
 type RootWorkerProcessConfig struct {
 	TransportLoggingEnabled bool // Enable transport logging for debugging
+	ProofMechanism          ProofMechanism
 	LaunchTiming            LaunchTiming
 	deps                    deps
 }
@@ -199,11 +201,7 @@ func (r *rootWorkerProcessImpl) Launch(ctx context.Context) (
 }
 
 func (r *rootWorkerProcessImpl) startProcess(ipcAddress string) (*os.Process, error) {
-	// Prepare and launch the subprocess via GroupController.
-	// We currently rely on NoPassswdSudo privilege proof mechanism.
-	// TODO: Need a bettter way to handle different privilege proof mechanisms to launch the root-worker.
-	cmdLine := []string{
-		"sudo", "-E", "-n", // -E preserves the environment, -n disables password prompt
+	workerCommand := []string{
 		r.execPath,
 		"start-group-controller",
 		"--",
@@ -212,7 +210,12 @@ func (r *rootWorkerProcessImpl) startProcess(ipcAddress string) (*os.Process, er
 		"--ipc-socket", ipcAddress,
 	}
 	if r.TransportLoggingEnabled {
-		cmdLine = append(cmdLine, "--transport-logging")
+		workerCommand = append(workerCommand, "--transport-logging")
+	}
+
+	cmdLine, err := r.buildLaunchCommand(workerCommand)
+	if err != nil {
+		return nil, err
 	}
 
 	sp := &process.StartProcess{
@@ -230,6 +233,22 @@ func (r *rootWorkerProcessImpl) startProcess(ipcAddress string) (*os.Process, er
 	log.Info("Root-worker started with PID: ", proc.Pid)
 
 	return proc, nil
+}
+
+func (r *rootWorkerProcessImpl) buildLaunchCommand(workerCommand []string) ([]string, error) {
+	switch r.ProofMechanism {
+	case NoPasswdSudo:
+		return append([]string{"sudo", "-E", "-n"}, workerCommand...), nil
+	case AndroidSu:
+		return buildAndroidSuCommand(workerCommand)
+	default:
+		return nil, fmt.Errorf("unsupported root-worker proof mechanism: %d", r.ProofMechanism)
+	}
+}
+
+// TODO: implement Android su support
+func buildAndroidSuCommand(_ []string) ([]string, error) {
+	return nil, message.New(message.AgentElevatePrivilegesMechanismAndroidSuNotImplemented)
 }
 
 type acceptState struct {

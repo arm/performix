@@ -116,7 +116,7 @@ func TestCodeHotspotsTimelineVisibilityRules(t *testing.T) {
 	})
 }
 
-func TestCodeHotspotsTimelinePresentationQueryZeroFillsDisplayGaps(t *testing.T) {
+func TestCodeHotspotsTimelinePresentationQuerySumsDevicesAndThreadsAndZeroFillsGaps(t *testing.T) {
 	runRoot := t.TempDir()
 	fixture := writeTimelineBinnedDeltaParquetFixture(t, runRoot, []timelineCounterSeriesFixture{
 		{
@@ -128,14 +128,21 @@ func TestCodeHotspotsTimelinePresentationQueryZeroFillsDisplayGaps(t *testing.T)
 					EndTimestamp:   1_000_020_000,
 					DeviceNo:       7,
 					Thread:         23,
-					Value:          2,
+					Value:          3,
 				},
 				{
 					StartTimestamp: 1_000_000_000,
 					EndTimestamp:   1_000_010_000,
 					DeviceNo:       7,
 					Thread:         31,
-					Value:          4,
+					Value:          6,
+				},
+				{
+					StartTimestamp: 1_000_000_000,
+					EndTimestamp:   1_000_010_000,
+					DeviceNo:       8,
+					Thread:         41,
+					Value:          9,
 				},
 				{
 					StartTimestamp: 1_000_030_000,
@@ -179,43 +186,35 @@ func TestCodeHotspotsTimelinePresentationQueryZeroFillsDisplayGaps(t *testing.T)
 
 	columns, err := rows.Columns()
 	require.NoError(t, err)
-	require.Equal(t, []string{"x_start", "dev7_thread23", "dev7_thread31"}, columns)
+	require.Equal(t, []string{"x_start", "value"}, columns)
 
 	require.True(t, rows.Next())
 	var row1XStart int64
-	var row1Thread23 float64
-	var row1Thread31 float64
-	require.NoError(t, rows.Scan(&row1XStart, &row1Thread23, &row1Thread31))
+	var row1Value float64
+	require.NoError(t, rows.Scan(&row1XStart, &row1Value))
 	require.Equal(t, int64(1_000_000_000), row1XStart)
-	require.Equal(t, 2.0, row1Thread23)
-	require.Equal(t, 4.0, row1Thread31)
+	require.Equal(t, 18.0, row1Value)
 
 	require.True(t, rows.Next())
 	var row2XStart int64
-	var row2Thread23 float64
-	var row2Thread31 float64
-	require.NoError(t, rows.Scan(&row2XStart, &row2Thread23, &row2Thread31))
+	var row2Value float64
+	require.NoError(t, rows.Scan(&row2XStart, &row2Value))
 	require.Equal(t, int64(1_000_010_000), row2XStart)
-	require.Equal(t, 2.0, row2Thread23)
-	require.Equal(t, 0.0, row2Thread31)
+	require.Equal(t, 3.0, row2Value)
 
 	require.True(t, rows.Next())
 	var row3XStart int64
-	var row3Thread23 float64
-	var row3Thread31 float64
-	require.NoError(t, rows.Scan(&row3XStart, &row3Thread23, &row3Thread31))
+	var row3Value float64
+	require.NoError(t, rows.Scan(&row3XStart, &row3Value))
 	require.Equal(t, int64(1_000_020_000), row3XStart)
-	require.Equal(t, 0.0, row3Thread23)
-	require.Equal(t, 0.0, row3Thread31)
+	require.Equal(t, 0.0, row3Value)
 
 	require.True(t, rows.Next())
 	var row4XStart int64
-	var row4Thread23 float64
-	var row4Thread31 float64
-	require.NoError(t, rows.Scan(&row4XStart, &row4Thread23, &row4Thread31))
+	var row4Value float64
+	require.NoError(t, rows.Scan(&row4XStart, &row4Value))
 	require.Equal(t, int64(1_000_030_000), row4XStart)
-	require.Equal(t, 0.0, row4Thread23)
-	require.Equal(t, 6.0, row4Thread31)
+	require.Equal(t, 6.0, row4Value)
 
 	require.False(t, rows.Next())
 	require.NoError(t, rows.Err())

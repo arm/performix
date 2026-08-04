@@ -6,12 +6,22 @@ package daemon
 import (
 	"bytes"
 	"fmt"
+	"os/exec"
+	"syscall"
 	"testing"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestIsolateDaemonProcess(t *testing.T) {
+	cmd := exec.Command("unused")
+
+	isolateDaemonProcess(cmd)
+
+	assert.Equal(t, uint32(syscall.CREATE_NEW_PROCESS_GROUP), cmd.SysProcAttr.CreationFlags)
+}
 
 func TestStart(t *testing.T) {
 	daemon := NewDaemon()

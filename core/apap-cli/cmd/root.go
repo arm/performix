@@ -99,6 +99,7 @@ func NewRootCmd() *cobra.Command {
 func configAwareHelpFunc(next func(*cobra.Command, []string)) func(*cobra.Command, []string) {
 	return func(cmd *cobra.Command, args []string) {
 		initConfig()
+		utils.RefreshPersistentFlagsHelp(cmd.Root())
 		target.RefreshTargetAddHelp()
 		target.RefreshTargetUpdateHelp()
 		target.RefreshTargetListHelp()
@@ -164,6 +165,7 @@ func initConfig() {
 		viper.SetDefault(serverconfig.EnableAndroidTargetsConfigKey, serverconfig.DefaultEnableAndroidTargets)
 		viper.SetDefault("enable-render-db-sandbox", serverconfig.DefaultEnableRenderDBSandbox)
 		viper.SetDefault("enable-neoprof-timeline", serverconfig.DefaultEnableNeoprofTimeline)
+		viper.SetDefault("adb-path", serverconfig.DefaultADBPath)
 
 		// read in environment variables that match
 		viper.AutomaticEnv()

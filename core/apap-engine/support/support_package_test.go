@@ -258,7 +258,7 @@ func TestCreateSupportPackage_CanceledContextProducesCancellationError(t *testin
 
 	msg := message.IsMessage(err)
 	require.NotNil(t, msg)
-	require.Equal(t, message.EngineCommonUserCancellationError, msg.Code())
+	require.Equal(t, message.EngineCommonUserCanceled, msg.Code())
 
 	entries, readErr := os.ReadDir(outputDir)
 	require.NoError(t, readErr)

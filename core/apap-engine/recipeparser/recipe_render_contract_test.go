@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
@@ -19,6 +20,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe/stages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
+	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 )
 
 func TestCPUMicroarchitectureOptionsAreEmptyWithoutTelemetry(t *testing.T) {
@@ -89,6 +91,162 @@ func TestCPUMicroarchitectureReadinessFailsWithoutTelemetry(t *testing.T) {
 		readiness.Advice[0].AdviceMessage.Code(),
 	)
 	assert.Equal(t, map[string]string{"cpuName": "Cortex-A76"}, readiness.Advice[0].AdviceMessage.Metadata())
+}
+
+func TestRenderingTelemetryReadinessWarnings(t *testing.T) {
+	tests := []struct {
+		name                string
+		recipeFile          string
+		parameters          map[string]any
+		osFamily            string
+		cpuName             string
+		expectedStatus      string
+		expectedMessageCode string
+	}{
+		{
+			name:                "code hotspots warns for unsupported Linux CPU",
+			recipeFile:          "core/apap-cli/recipes/code_hotspots.js",
+			osFamily:            "Linux",
+			cpuName:             "Cortex-A76",
+			expectedStatus:      recipe.ReadyStatusWarning,
+			expectedMessageCode: "recipes.code_hotspots.TELEMETRY_SPECIFICATION_UNAVAILABLE",
+		},
+		{
+			name:                "code hotspots warns for unsupported Windows CPU",
+			recipeFile:          "core/apap-cli/recipes/code_hotspots.js",
+			osFamily:            "Windows",
+			cpuName:             "Cortex-A76",
+			expectedStatus:      recipe.ReadyStatusWarning,
+			expectedMessageCode: "recipes.code_hotspots.TELEMETRY_SPECIFICATION_UNAVAILABLE",
+		},
+		{
+			name:           "code hotspots is ready for supported CPU",
+			recipeFile:     "core/apap-cli/recipes/code_hotspots.js",
+			osFamily:       "Linux",
+			cpuName:        "Neoverse-N1",
+			expectedStatus: recipe.ReadyStatusReady,
+		},
+		{
+			name:                "dynamic instruction mix warns for unsupported CPU",
+			recipeFile:          "core/apap-cli/recipes/instruction_mix.js",
+			parameters:          map[string]any{"mode": "dynamic"},
+			osFamily:            "Linux",
+			cpuName:             "Cortex-A76",
+			expectedStatus:      recipe.ReadyStatusWarning,
+			expectedMessageCode: "recipes.instruction_mix.TELEMETRY_SPECIFICATION_UNAVAILABLE",
+		},
+		{
+			name:                "combined instruction mix warns for unsupported CPU",
+			recipeFile:          "core/apap-cli/recipes/instruction_mix.js",
+			parameters:          map[string]any{"mode": "both"},
+			osFamily:            "Linux",
+			cpuName:             "Cortex-A76",
+			expectedStatus:      recipe.ReadyStatusWarning,
+			expectedMessageCode: "recipes.instruction_mix.TELEMETRY_SPECIFICATION_UNAVAILABLE",
+		},
+		{
+			name:           "static instruction mix does not warn for unsupported CPU",
+			recipeFile:     "core/apap-cli/recipes/instruction_mix.js",
+			parameters:     map[string]any{"mode": "static"},
+			osFamily:       "Linux",
+			cpuName:        "Cortex-A76",
+			expectedStatus: recipe.ReadyStatusReady,
+		},
+		{
+			name:           "dynamic instruction mix is ready for supported CPU",
+			recipeFile:     "core/apap-cli/recipes/instruction_mix.js",
+			parameters:     map[string]any{"mode": "dynamic"},
+			osFamily:       "Linux",
+			cpuName:        "Neoverse-N1",
+			expectedStatus: recipe.ReadyStatusReady,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			readiness := executeRecipeReadiness(t, tt.recipeFile, tt.parameters, &target.Description{
+				Os:             target.OsInfo{OSFamily: tt.osFamily},
+				PrimaryCPUName: tt.cpuName,
+			})
+
+			assert.Equal(t, tt.expectedStatus, readiness.Status)
+			if tt.expectedMessageCode == "" {
+				assert.Empty(t, readiness.Advice)
+				return
+			}
+
+			require.Len(t, readiness.Advice, 1)
+			assert.Empty(t, readiness.Advice[0].ToolName)
+			assert.Equal(t, recipe.AdviceSeverityWarning, readiness.Advice[0].AdviceSeverity)
+			assert.Equal(t, tt.expectedMessageCode, readiness.Advice[0].AdviceMessage.Code())
+			assert.Equal(t, map[string]string{"cpuName": tt.cpuName}, readiness.Advice[0].AdviceMessage.Metadata())
+		})
+	}
+}
+
+func executeRecipeReadiness(
+	t *testing.T,
+	recipeFile string,
+	parameterInputs map[string]any,
+	targetInfo *target.Description,
+) recipe.ReadyOutput {
+	t.Helper()
+
+	recipePath := filepath.Join("..", "..", "..", recipeFile)
+	recipeData, err := os.ReadFile(recipePath)
+	require.NoError(t, err)
+
+	parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
+	recipeDefinition, err := parser.ParseRecipe(recipePath, string(recipeData))
+	require.NoError(t, err)
+	require.Len(t, recipeDefinition.ReadyStages, 1)
+
+	boundParameters, err := parameters.BindRecipeParameters(
+		parameterInputs,
+		recipeDefinition.Parameters,
+		recipePath,
+	)
+	require.NoError(t, err)
+
+	recipeContext := &recipe.RecipeCtx{
+		OutputDir:        t.TempDir(),
+		ResolvedWorkload: &tool.WorkloadSystemWide{},
+		ParamValues:      boundParameters,
+		RecipeMetadata:   recipe.RecipeMetadata{Name: recipeDefinition.Name},
+		ToolVersions:     recipeDefinition.ToolVersions,
+	}
+	executionContext := newMockExecutionContext(t, recipeContext, targetInfo)
+	executionContext.On("ToolVersions").Return(recipeDefinition.ToolVersions)
+	executionContext.On("ToolsDir").Return(t.TempDir())
+	executionContext.On("IsFullCaptureSupportEnabled").Return(false)
+	executionContext.On("IsNeoprofTimelineEnabled").Return(false)
+
+	probeResultCount := 1
+	if mode, exists := boundParameters.FindValue("mode"); exists && mode == "both" {
+		probeResultCount = 2
+	}
+	probeResults := make([]tool.ProbeResult, probeResultCount)
+	for i := range probeResults {
+		probeResults[i] = tool.ProbeResult{Available: true, Capabilities: map[string]any{}}
+	}
+	executionContext.
+		On("ProbeToolsFromIntegrations", mock.Anything, mock.Anything, mock.Anything).
+		Return(probeResults, []error(nil))
+
+	readinessCollector := &runtime.ReadinessCollector{}
+	stageContext := &recipe.StageContext{
+		Context:           context.Background(),
+		ReadinessNotifier: readinessCollector,
+	}
+	recipeStage := &stages.CustomRecipeStage{
+		ScriptedStage: recipeDefinition.ReadyStages[0],
+		Ctx:           executionContext,
+	}
+
+	_, err = recipeStage.Execute(stageContext)
+	require.NoError(t, err)
+	require.Len(t, readinessCollector.ReadinessOutput, 1)
+	return readinessCollector.ReadinessOutput[0]
 }
 
 func TestRerenderCapableRecipesWireTimeFilterParameters(t *testing.T) {
@@ -192,6 +350,31 @@ func TestRerenderCapableRecipesWireTimeFilterParameters(t *testing.T) {
 				for _, widgetID := range tt.timeFilteredWidgetIDs {
 					assert.NotContains(t, nonRerenderWidgetsByID[widgetID].Config, "noDataMessage")
 				}
+			})
+
+			t.Run("rounds fractional time range parameters for sl-analyze", func(t *testing.T) {
+				recipePath := filepath.Join("..", "..", "..", tt.recipeFile)
+				recipeData, err := os.ReadFile(recipePath)
+				require.NoError(t, err)
+				parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
+				recipeProp, err := parser.ParseRecipe(recipePath, string(recipeData))
+				require.NoError(t, err)
+
+				rerenderOutput := executeTimeFilterRenderStage(t, recipeProp, true, map[string]any{
+					"filter_pid":           nil,
+					"filter_tid":           nil,
+					"filter_start_time_ns": float64(1000.4),
+					"filter_end_time_ns":   float64(2000.6),
+				})
+
+				renderersByID := make(map[string]recipe.RendererConfig, len(rerenderOutput.Renderers))
+				for _, renderer := range rerenderOutput.Renderers {
+					renderersByID[renderer.ID] = renderer
+				}
+
+				require.Equal(t, "SlAnalyzeRenderer", renderersByID["sl_analyze"].Type)
+				assert.Equal(t, int64(1000), renderersByID["sl_analyze"].Config["filter_start_time_ns"])
+				assert.Equal(t, int64(2001), renderersByID["sl_analyze"].Config["filter_end_time_ns"])
 			})
 
 		})

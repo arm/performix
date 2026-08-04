@@ -48,7 +48,7 @@ func DriveRecipeExecutionStages(ss []recipe.Stage, stageContext *recipe.StageCon
 			if cancelErr != nil {
 				return stage.ErrorType(), cancelErr
 			}
-			return stage.ErrorType(), message.New(message.EngineCommonUserCancellationError)
+			return stage.ErrorType(), message.New(message.EngineCommonUserCanceled)
 		}
 
 		stageContext.StageNotifier.OnStageEnd(stageInfo, err)

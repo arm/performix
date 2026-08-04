@@ -3,22 +3,14 @@
 
 version: '3'
 
-vars:
-  ROOT_SYSTEM_PYTHON: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
-  ROOT_VENV_PYTHON: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
-  ROOT_DETECT_SECRETS: '{{if eq OS "windows"}}.venv/Scripts/detect-secrets.exe{{else}}.venv/bin/detect-secrets{{end}}'
-  ROOT_DETECT_SECRETS_HOOK: '{{if eq OS "windows"}}.venv/Scripts/detect-secrets-hook.exe{{else}}.venv/bin/detect-secrets-hook{{end}}'
-
 includes:
-  gui:
-    taskfile: ./gui
-    dir: ./gui
   core:
     taskfile: ./core
     dir: ./core
-  ci:
-    taskfile: ./.github
-    dir: ./.github
+  internal:
+    taskfile: ./Taskfile.internal.yml
+    optional: true
+    flatten: true
 
 tasks:
   default:
@@ -37,66 +29,19 @@ tasks:
     desc: Build project components
     cmds:
       - task: core:build
-      - task: gui:build
-
-  test:
-    desc: Run project unit tests
-    cmds:
-      - task: core:test:unit
-      - task: gui:test:unit
-
-  test:bootstrap:
-    desc: Run bootstrap toolchain integration tests
-    cmds:
-      - task: deps:tools
-      - '{{.ROOT_VENV_PYTHON}} -m pytest scripts/tests -v'
+      - task: internal:build
+        if: test -f Taskfile.internal.yml
 
   deps:
     desc: Install repository dependencies
     cmds:
-      - task: deps:tools
-      - task: gui:deps
       - task: core:deps
-
-  deps:tools:
-    desc: Install repository-wide development tools
-    cmds:
-      - '{{.ROOT_SYSTEM_PYTHON}} -m venv .venv'
-      - '{{.ROOT_VENV_PYTHON}} -m pip install --disable-pip-version-check -r requirements-dev.txt detect-secrets==1.5.0'
-
-  lint:
-    desc: Run project linters
-    cmds:
-      - task: gui:lint
-      - task: core:lint
-
-  secrets:scan:
-    desc: Scan tracked files against the detect-secrets baseline
-    cmds:
-      - task: deps:tools
-      - git ls-files -z | xargs -0 {{.ROOT_DETECT_SECRETS_HOOK}} --baseline .secrets.baseline --no-verify
-
-  secrets:audit:
-    desc: Update and interactively audit the detect-secrets baseline
-    cmds:
-      - task: deps:tools
-      - '{{.ROOT_DETECT_SECRETS}} scan --baseline .secrets.baseline'
-      - '{{.ROOT_DETECT_SECRETS}} audit .secrets.baseline'
-
-  copyright:lint:
-    desc: Check copyright and license metadata for the files planned for open source
-    cmds:
-      - task: deps:tools
-      - '{{.ROOT_VENV_PYTHON}} scripts/release/copyright-lint.py lint'
-
-  copyright:annotate:
-    desc: Add SPDX metadata to first-party files that can be safely annotated automatically
-    cmds:
-      - task: deps:tools
-      - '{{.ROOT_VENV_PYTHON}} scripts/release/copyright-annotate.py'
+      - task: internal:deps
+        if: test -f Taskfile.internal.yml
 
   generate:
     desc: Generate project generated files (protobuf, codegen, etc.)
     cmds:
       - task: core:generate
-      - task: gui:generate
+      - task: internal:generate
+        if: test -f Taskfile.internal.yml

@@ -24,6 +24,10 @@ type AuthServer struct {
 	shutdownCtx    context.Context
 	targetSessions targetsession.TargetSessionProvider
 	targetAccess   *target.TargetAccess
+	// createSSHConnection creates a one-off SSH connection for transient login
+	// requests, bypassing the target-session cache so host-key verification
+	// prompts can be re-evaluated.
+	createSSHConnection func(context.Context, *target.SSHTarget, conductor.PromptProviders) (conductor.SecureClient, error)
 }
 
 // NewAuthServer creates a new AuthServer instance.
@@ -32,6 +36,10 @@ func NewAuthServer(shutdownCtx context.Context, targetSessions targetsession.Tar
 		shutdownCtx:    shutdownCtx,
 		targetSessions: targetSessions,
 		targetAccess:   targetAccess,
+		createSSHConnection: func(ctx context.Context, s *target.SSHTarget, pp conductor.PromptProviders) (conductor.SecureClient, error) {
+			secureConnector := conductor.NewDefaultSecureConnector()
+			return secureConnector.SecureConnectNoRetry(ctx, s, pp)
+		},
 	}
 }
 
@@ -82,22 +90,11 @@ func (s *AuthServer) TargetLogin(stream authproto.Auth_TargetLoginServer) error 
 
 	lock := s.targetAccess.LockWithCancellation(tgt, "target login", ctx.Done())
 	if lock == nil {
-		return sendTargetLoginError(stream, message.New(message.EngineCommonUserCancellationError))
+		return sendTargetLoginError(stream, message.New(message.EngineCommonUserCanceled))
 	}
 	defer lock.Unlock()
 
-	prompter := newTargetLoginPrompter(stream, s.shutdownCtx)
-	targetSession, err := s.targetSessions.TargetSession(tgt)
-	if err != nil {
-		return sendTargetLoginError(stream, err)
-	}
-
-	_, err = targetSession.Connect(ctx, targetsession.ConnectOptions{
-		PromptProviders: conductor.PromptProviders{
-			SecretPromptProvider:      prompter.PromptSecret,
-			FingerprintPromptProvider: prompter.PromptAcceptance,
-		},
-	})
+	err = s.connectToTarget(ctx, stream, tgt, request.GetCreateTransientSshConnection())
 	if err != nil {
 		return sendTargetLoginError(stream, err)
 	}
@@ -111,6 +108,37 @@ func (s *AuthServer) TargetLogin(stream authproto.Auth_TargetLoginServer) error 
 		return message.New(message.CliServiceTargetloginStreamFailure).WithCause(err)
 	}
 	return nil
+}
+
+func (s *AuthServer) connectToTarget(ctx context.Context, stream authproto.Auth_TargetLoginServer, tgt target.Target, createTransientSshConnection bool) error {
+	prompter := newTargetLoginPrompter(stream, s.shutdownCtx)
+	connectOpts := targetsession.ConnectOptions{
+		PromptProviders: conductor.PromptProviders{
+			SecretPromptProvider:      prompter.PromptSecret,
+			FingerprintPromptProvider: prompter.PromptAcceptance,
+		},
+	}
+
+	if createTransientSshConnection {
+		if sshTarget, ok := tgt.(*target.SSHTarget); ok {
+			conn, err := s.createSSHConnection(ctx, sshTarget, connectOpts.PromptProviders)
+			if err != nil {
+				return err
+			}
+			if closeErr := conn.Close(); closeErr != nil {
+				log.WithError(closeErr).Warn("Failed to close transient SSH connection")
+			}
+			return nil
+		} else {
+			log.Warn("create_transient_ssh_connection option is only supported for SSH targets. Falling back to standard login.")
+		}
+	}
+	targetSession, err := s.targetSessions.TargetSession(tgt)
+	if err != nil {
+		return err
+	}
+	_, err = targetSession.Connect(ctx, connectOpts)
+	return err
 }
 
 // targetLoginPrompter sends prompt requests to the client and waits for the response.
@@ -197,12 +225,12 @@ func (p *targetLoginPrompter) recvClientMessage() (*authproto.TargetLoginClientM
 	var err error
 	select {
 	case <-p.shutdownCtx.Done():
-		return nil, message.New(message.EngineCommonUserCancellationError)
+		return nil, message.New(message.EngineCommonUserCanceled)
 	case result := <-recvCh:
 		msg, err = result.msg, result.err
 	}
 	if p.shutdownCtx.Err() != nil {
-		return nil, message.New(message.EngineCommonUserCancellationError)
+		return nil, message.New(message.EngineCommonUserCanceled)
 	}
 	if err != nil {
 		return nil, message.New(message.CliServiceTargetloginStreamFailure).WithCause(err)

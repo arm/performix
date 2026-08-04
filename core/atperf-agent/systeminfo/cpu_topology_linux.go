@@ -252,21 +252,31 @@ func readTrimmedFile(fs afero.Fs, path string) (string, error) {
 	return strings.TrimSpace(string(bytes)), nil
 }
 
+func convertImplementer(implementer uint32, part uint32) uint32 {
+	// Bare metal Cobalt 100 platforms may show a MIDR with Microsoft's implemeter code (0x6d) for the N2 CPU part number (d49).
+	// This is a special case to map the implementor code back to Arm's, so the CPUs are correctly identified.
+	if (implementer<<12)|part == 0x6dd49 {
+		implementer = 0x41
+	}
+	return implementer
+}
+
 func resolveCPUName(info cpuInfo, midr string) string {
 	rawMIDR, ok := parseUintField(midr)
 	if ok {
 		implementer := (rawMIDR >> 24) & 0xff
 		part := (rawMIDR >> 4) & 0xfff
-		if name := armcpus.CpuidToName[(implementer<<12)|part]; name != "" {
+		converted := convertImplementer(implementer, part)
+		if name := armcpus.CpuidToName[(converted<<12)|part]; name != "" {
 			return name
 		}
 	}
-
 	implementer, ok := parseUintField(info.cpuImplementer)
 	if ok {
 		part, ok := parseUintField(info.cpuPart)
 		if ok {
-			if name := armcpus.CpuidToName[(implementer<<12)|part]; name != "" {
+			converted := convertImplementer(implementer, part)
+			if name := armcpus.CpuidToName[(converted<<12)|part]; name != "" {
 				return name
 			}
 		}

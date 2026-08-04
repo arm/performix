@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import signal
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -32,7 +34,12 @@ from sources import (
 from writer import CsvWriter
 
 
-_STOP_REQUESTED = False
+MIN_INTERVAL_SECONDS = 0.01
+MAX_INTERVAL_SECONDS = 60.0
+MIN_COMPLETE_SAMPLES = 2
+INSUFFICIENT_SAMPLES_EXIT_CODE = 3
+
+_STOP_EVENT = threading.Event()
 
 NUMA_COLUMNS = [
     "numa_hit_per_s",
@@ -45,10 +52,35 @@ NUMA_COLUMNS = [
 ]
 
 
+class InsufficientSamplesError(RuntimeError):
+    """Raised when collection stops before enough complete samples exist."""
+
+    def __init__(self, samples_collected: int) -> None:
+        self.samples_collected = samples_collected
+        super().__init__(
+            f"collected {samples_collected} complete samples; "
+            f"at least {MIN_COMPLETE_SAMPLES} are required"
+        )
+
+
+def _minimum_collection_duration(interval: float) -> float:
+    return interval * MIN_COMPLETE_SAMPLES
+
+
+def _has_sufficient_collection_duration(
+    interval: float,
+    duration: float,
+) -> bool:
+    if duration == 0:
+        return True
+    minimum_duration = _minimum_collection_duration(interval)
+    tolerance = max(1e-9, minimum_duration * 1e-9)
+    return duration + tolerance >= minimum_duration
+
+
 def _handle_signal(_signum: int, _frame) -> None:
     """Signal handler to request a clean stop in the main loop."""
-    global _STOP_REQUESTED
-    _STOP_REQUESTED = True
+    _STOP_EVENT.set()
 
 
 def _utc_iso_now() -> str:
@@ -217,7 +249,7 @@ class CollectorState:
 
 @dataclass
 class TickScheduler:
-    """Schedule ticks for the collection loop with injectable time/sleep."""
+    """Schedule ticks for the collection loop with injectable time/wait."""
     interval: float
     prev_tick: float
     next_tick: float
@@ -226,12 +258,34 @@ class TickScheduler:
     def start(cls, interval: float, now: float) -> "TickScheduler":
         return cls(interval=interval, prev_tick=now, next_tick=now + interval)
 
-    def wait_for_tick(self, now_fn, sleep_fn) -> tuple[float, float]:
+    def wait_for_tick(
+        self,
+        now_fn,
+        wait_fn,
+        deadline: Optional[float] = None,
+    ) -> Optional[tuple[float, float]]:
+        """Wait until the next tick, a deadline, or a stop request.
+
+        wait_fn follows threading.Event.wait semantics: it returns True when a
+        stop was requested and False when its timeout elapsed.
+        """
         now = now_fn()
-        if now < self.next_tick:
-            sleep_fn(self.next_tick - now)
+        deadline_tolerance = max(1e-9, self.interval * 1e-9)
+        if (
+            deadline is not None
+            and self.next_tick - deadline > deadline_tolerance
+        ):
+            if now < deadline:
+                wait_fn(deadline - now)
+            return None
+
+        if now < self.next_tick and wait_fn(self.next_tick - now):
+            return None
 
         tick_time = now_fn()
+        if tick_time < self.next_tick:
+            return None
+
         elapsed = tick_time - self.prev_tick
         if elapsed <= 0:
             elapsed = self.interval
@@ -485,17 +539,17 @@ def run_collect(
     numa_command_runner=None,
 ) -> None:
     """Collect stats on a timer and append rows to the CSV."""
+    _STOP_EVENT.clear()
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
     ensure_parent_dir(output)
 
-    start = time.monotonic()
-    end_time: Optional[float] = None if duration == 0 else start + duration
+    baseline_time = time.monotonic()
     state = init_collector_state(
         proc_root=proc_root,
         sys_root=sys_root,
-        now=start,
+        now=baseline_time,
         numa_command_runner=numa_command_runner,
     )
 
@@ -506,17 +560,27 @@ def run_collect(
         numa_node_ids=state.numa_node_ids,
     )
     writer = CsvWriter(output, header=header, flush=flush)
-    scheduler = TickScheduler.start(interval=interval, now=time.monotonic())
+    collection_start = time.monotonic()
+    state.last_thread_scan = collection_start
+    end_time: Optional[float] = (
+        None if duration == 0 else collection_start + duration
+    )
+    scheduler = TickScheduler.start(interval=interval, now=collection_start)
+    samples_collected = 0
     try:
         while True:
-            if _STOP_REQUESTED:
+            if _STOP_EVENT.is_set():
                 break
 
-            now = time.monotonic()
-            if end_time is not None and now >= end_time:
+            tick = scheduler.wait_for_tick(
+                time.monotonic,
+                _STOP_EVENT.wait,
+                deadline=end_time,
+            )
+            if tick is None or _STOP_EVENT.is_set():
                 break
-            tick_time, elapsed = scheduler.wait_for_tick(time.monotonic, time.sleep)
-            uptime = tick_time - start
+            tick_time, elapsed = tick
+            uptime = tick_time - collection_start
 
             row = collect_sample(
                 state,
@@ -529,19 +593,40 @@ def run_collect(
                 numa_command_runner=numa_command_runner,
             )
             writer.write_row(row)
+            samples_collected += 1
     finally:
         writer.close()
+
+    if samples_collected < MIN_COMPLETE_SAMPLES:
+        raise InsufficientSamplesError(samples_collected)
 
 
 def main(argv: list[str]) -> int:
     """CLI entrypoint returning an exit code without raising SystemExit."""
     args = parse_args(argv)
-    if args.interval <= 0:
-        print("ERROR: --interval must be > 0", file=sys.stderr)
+    if (
+        not math.isfinite(args.interval)
+        or args.interval < MIN_INTERVAL_SECONDS
+        or args.interval > MAX_INTERVAL_SECONDS
+    ):
+        print(
+            f"ERROR: --interval must be between {MIN_INTERVAL_SECONDS:g} "
+            f"and {MAX_INTERVAL_SECONDS:g} seconds",
+            file=sys.stderr,
+        )
         return 2
-    if args.duration < 0:
+    if not math.isfinite(args.duration) or args.duration < 0:
         print("ERROR: --duration must be >= 0", file=sys.stderr)
         return 2
+    if not _has_sufficient_collection_duration(args.interval, args.duration):
+        minimum_duration = _minimum_collection_duration(args.interval)
+        print(
+            f"ERROR: at least {MIN_COMPLETE_SAMPLES} complete samples are "
+            f"required; --duration must be at least {minimum_duration:g} "
+            f"seconds for --interval {args.interval:g}",
+            file=sys.stderr,
+        )
+        return INSUFFICIENT_SAMPLES_EXIT_CODE
 
     thread_scan_interval = args.thread_scan_interval
     if thread_scan_interval is None:
@@ -560,6 +645,9 @@ def main(argv: list[str]) -> int:
             thread_scan_interval=thread_scan_interval,
             flush=args.flush,
         )
+    except InsufficientSamplesError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return INSUFFICIENT_SAMPLES_EXIT_CODE
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

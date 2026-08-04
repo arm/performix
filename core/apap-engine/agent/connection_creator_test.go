@@ -60,9 +60,9 @@ func TestGetAgentPath_WindowsDefault(t *testing.T) {
 
 	cmdRunner := &conductormocks.MockCommandRunner{}
 	localAppData := "C:/Users/runner/AppData/Local"
-	cmdRunner.On("RunCommand", `powershell -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return("C:\\Users\\runner\\AppData\\Local\r\n", "", nil).Once()
-	cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, localAppData)).Return("", "", nil).Once()
-	cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, localAppData, terminology.GetProductBinaryName())).
+	cmdRunner.On("RunCommand", `powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return("C:\\Users\\runner\\AppData\\Local\r\n", "", nil).Once()
+	cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, localAppData)).Return("", "", nil).Once()
+	cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, localAppData, terminology.GetProductBinaryName())).
 		Return("", "", nil).Once()
 
 	tp := conductor.TargetPlatform{
@@ -82,8 +82,8 @@ func TestGetAgentPath_WindowsConfiguredPathNoActions(t *testing.T) {
 	base := "C:/tools"
 
 	cmdRunner := &conductormocks.MockCommandRunner{}
-	cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).Return("", "", nil).Once()
-	cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, base, terminology.GetProductBinaryName())).
+	cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).Return("", "", nil).Once()
+	cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, base, terminology.GetProductBinaryName())).
 		Return("", "", nil).Once()
 
 	tp := conductor.TargetPlatform{

@@ -559,7 +559,8 @@ def _format_token_usage(attempts: list[dict[str, str]]) -> str:
 
 
 def _format_mcp_calls(attempts: list[dict[str, str]]) -> str:
-    calls = _sum_int_property(attempts, "ai_mcp_completed_calls")
+    calls = _sum_int_property(attempts, "ai_mcp_tool_calls_succeeded")
+    calls += _sum_int_property(attempts, "ai_mcp_tool_calls_failed")
     if calls == 0:
         return ""
     return f"calls={calls}"

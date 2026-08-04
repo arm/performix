@@ -42,7 +42,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import truststore
 
+# The internal API proxy can use enterprise certificate authorities which are
+# available through the operating-system trust store but not Python's CA bundle.
+truststore.inject_into_ssl()
+
+from codex_session_metrics import (
+    codex_session_log,
+    collect_mcp_tool_metrics,
+    iter_jsonl,
+)
 from performance_quality import PERFORMIX_MCP_MODE
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -499,10 +509,18 @@ disable_response_storage = true
 # Keep Codex confined to the prompt workspace and the configured MCP server.
 default_permissions = "ai-insights-mcp"
 
+# Treat the generated workspace as the project root instead of loading project
+# instructions from parent directories in the Performix checkout.
+project_root_markers = []
+
 [features]
 # The model under test should obtain Performix evidence through MCP, not by
 # running local shell commands during evaluation.
 shell_tool = false
+
+# Marketplace plugins are not part of the evaluation and would otherwise be
+# downloaded into every attempt's isolated CODEX_HOME.
+plugins = false
 
 [model_providers.proxy]
 name = "OpenAI"
@@ -534,21 +552,6 @@ default_tools_approval_mode = "approve"
 """
     (codex_home / "config.toml").write_text(config, encoding="utf-8")
     return codex_home
-
-
-def iter_jsonl(path: Path):
-    """Yield JSON objects from a completed Codex JSONL transcript."""
-    if not path.is_file():
-        return
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{path} line {line_number} is not valid JSON") from exc
-        if isinstance(value, dict):
-            yield value
 
 
 def collect_json_value(value: Any, keys: set[str]) -> list[Any]:
@@ -624,17 +627,6 @@ def command_output_is_denied_only(output: str) -> bool:
     if "permission denied" not in lowered and "operation not permitted" not in lowered:
         return False
     return "Process exited with code 0" not in output
-
-
-def codex_session_log(codex_home: Path) -> Path:
-    """Return the single Codex session transcript for an attempt."""
-    sessions = codex_home / "sessions"
-    session_logs = sorted(sessions.rglob("*.jsonl")) if sessions.is_dir() else []
-    if len(session_logs) != 1:
-        raise RuntimeError(
-            f"expected exactly one Codex session log under {sessions}, found {len(session_logs)}"
-        )
-    return session_logs[0]
 
 
 def codex_truncation_marker_token_counts(codex_home: Path) -> list[int]:
@@ -753,6 +745,7 @@ def invoke_mcp_mode(
     LOGGER.info("Captured Codex response: %s (%d bytes)", response_md, response_md.stat().st_size)
 
     mcp = validate_mcp_call(raw_jsonl, mode)
+    mcp.update(collect_mcp_tool_metrics(codex_home, mode.server))
     truncation_token_counts = codex_truncation_marker_token_counts(codex_home)
     truncation_markers = len(truncation_token_counts)
     successful_commands = successful_external_commands(codex_home)
@@ -1025,10 +1018,31 @@ def record_evaluation_properties(
         for result in attempt_results
         if isinstance(result["invoke"].get("duration_seconds"), (int, float))
     )
-    mcp_calls = sum(
-        result["invoke"].get("mcp", {}).get("completed_calls", 0)
+    mcp_tool_calls_succeeded = sum(
+        result["invoke"].get("mcp", {}).get("tool_calls_succeeded", 0)
         for result in attempt_results
         if isinstance(result["invoke"].get("mcp"), dict)
+    )
+    mcp_tool_calls_failed = sum(
+        result["invoke"].get("mcp", {}).get("tool_calls_failed", 0)
+        for result in attempt_results
+        if isinstance(result["invoke"].get("mcp"), dict)
+    )
+    mcp_tool_duration_seconds_succeeded = sum(
+        result["invoke"].get("mcp", {}).get("tool_duration_seconds_succeeded", 0)
+        for result in attempt_results
+        if isinstance(
+            result["invoke"].get("mcp", {}).get("tool_duration_seconds_succeeded"),
+            (int, float),
+        )
+    )
+    mcp_tool_duration_seconds_failed = sum(
+        result["invoke"].get("mcp", {}).get("tool_duration_seconds_failed", 0)
+        for result in attempt_results
+        if isinstance(
+            result["invoke"].get("mcp", {}).get("tool_duration_seconds_failed"),
+            (int, float),
+        )
     )
     truncation_markers = sum(
         result["invoke"].get("truncation_markers", 0)
@@ -1048,7 +1062,16 @@ def record_evaluation_properties(
         ]
     )
     record_property("ai_agent_duration_seconds", round(agent_duration, 3))
-    record_property("ai_mcp_completed_calls", mcp_calls)
+    record_property("ai_mcp_tool_calls_succeeded", mcp_tool_calls_succeeded)
+    record_property("ai_mcp_tool_calls_failed", mcp_tool_calls_failed)
+    record_property(
+        "ai_mcp_tool_duration_seconds_succeeded",
+        round(mcp_tool_duration_seconds_succeeded, 3),
+    )
+    record_property(
+        "ai_mcp_tool_duration_seconds_failed",
+        round(mcp_tool_duration_seconds_failed, 3),
+    )
     record_property("ai_tool_output_truncated", truncation_markers > 0)
     record_property("ai_tool_output_truncation_markers", truncation_markers)
     record_property("ai_tool_output_truncated_tokens", sum_tool_output_truncated_tokens(attempt_results))

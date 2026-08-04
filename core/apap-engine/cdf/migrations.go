@@ -126,11 +126,14 @@ func parseMissingInvocationPathParts(p string) (*PathParts, bool) {
 }
 
 func buildPath(pp *PathParts) string {
-	base := "tool/" + pp.Tool + "/"
+	base := "tool/" + pp.Tool
 	if pp.Invocation != "" {
-		base += pp.Invocation + "/"
+		base += "/" + pp.Invocation
 	}
-	return base + pp.Suffix
+	if pp.Suffix != "" {
+		base += "/" + pp.Suffix
+	}
+	return base
 }
 
 func rewriteViaMigration(path string, mig PathMigration) (string, bool) {
@@ -181,17 +184,25 @@ func rewriteViaMigration(path string, mig PathMigration) (string, bool) {
 	}
 }
 
-// migratePath walks the given “today” path backwards through all registered
-// PathMigrations (newest-first), chaining each successful rewrite. If it ever
-// produces the same intermediate path twice, it stops to avoid an infinite
-// loop. It does not consult the manifest itself.
+// migratePath attempts to migrate the given “today” path backwards through all
+// registered PathMigrations for this model. It does not consult the manifest itself.
 //
 // Returns (rewritten, true) if any migration was applied; otherwise ("", false).
 func (m *OnDiskModel) migratePath(original string) (string, bool, error) {
+	return MigratePath(original, m.migrations)
+}
+
+// MigratePath walks the given “today” path backwards through all provided
+// PathMigrations (newest-first), chaining each successful rewrite. If it ever
+// produces the same intermediate path twice, it stops to avoid an infinite
+// loop.
+//
+// Returns (rewritten, true) if any migration was applied; otherwise ("", false).
+func MigratePath(original string, ms []PathMigration) (string, bool, error) {
 	norm := NormalizePath(original)
 
 	// Sort migrations newest-first
-	migs := append([]PathMigration(nil), m.migrations...)
+	migs := append([]PathMigration(nil), ms...)
 	sort.Sort(byVersionDesc(migs))
 
 	current := norm
@@ -206,13 +217,47 @@ func (m *OnDiskModel) migratePath(original string) (string, bool, error) {
 		}
 		// Cycle detection: if we’ve already seen this candidate, break out
 		if _, exists := seen[cand]; exists {
-			return "", false, fmt.Errorf("migratePath: detected cycle rewriting %q to %q; stopping", current, cand)
+			return "", false, fmt.Errorf("MigratePath: detected cycle rewriting %q to %q; stopping", current, cand)
 		}
 		seen[cand] = struct{}{}
 		current = cand
 	}
 
 	if current != norm {
+		return current, true, nil
+	}
+	return "", false, nil
+}
+
+func MigrateToolName(toolName string, ms []PathMigration) (string, bool, error) {
+	// Sort migrations newest-first
+	migs := append([]PathMigration(nil), ms...)
+	sort.Sort(byVersionDesc(migs))
+
+	current := toolName
+	seen := map[string]struct{}{
+		toolName: {},
+	}
+
+	for _, pm := range migs {
+		switch m := pm.(type) {
+		case *ToolNameMigration:
+			if current != m.To || current == m.From {
+				continue
+			}
+			// Cycle detection: if we’ve already seen this candidate, break out
+			if _, exists := seen[m.From]; exists {
+				return "", false, fmt.Errorf("MigrateToolName: detected cycle rewriting %q to %q; stopping", current, m.From)
+			}
+			seen[m.From] = struct{}{}
+			current = m.From
+		case *ToolInvocationMigration, *ToolPathSuffixMigration:
+		default:
+			continue
+		}
+	}
+
+	if current != toolName {
 		return current, true, nil
 	}
 	return "", false, nil

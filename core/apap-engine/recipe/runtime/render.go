@@ -141,7 +141,7 @@ func checkRendererIDsAreValid(visRendererIDs []string, rendererIDs []string) err
 }
 
 // GetRendererSpec executes the configured render stages and outputs the renderer and visualization spec.
-func GetRendererSpec(context context.Context, config *StageConfiguration, runDescriptions []*run.RunDescription) (recipe.RenderOutput, error) {
+func GetRendererSpec(context context.Context, config *StageConfiguration, runDescriptions []*run.RunDescription, runCapabilities []run.RunCapabilities) (recipe.RenderOutput, error) {
 	rendererCollector := &RendererStageCollector{}
 	stageContext := &recipe.StageContext{
 		Context:           context,
@@ -150,7 +150,7 @@ func GetRendererSpec(context context.Context, config *StageConfiguration, runDes
 		RendererNotifier:  rendererCollector,
 		StageNotifier:     &recipe.NullStageNotifier{},
 	}
-	stages := ConfigureRendererStages(config, config.Recipe.RenderStages, runDescriptions)
+	stages := ConfigureRendererStages(config, config.Recipe.RenderStages, runDescriptions, runCapabilities)
 	_, err := DriveRecipeExecutionStages(stages, stageContext)
 	if err != nil {
 		return recipe.RenderOutput{}, err
@@ -159,12 +159,13 @@ func GetRendererSpec(context context.Context, config *StageConfiguration, runDes
 	return rendererCollector.Output, nil
 }
 
-func ConfigureRendererStages(config *StageConfiguration, scriptedRenderStages []recipe.ScriptedStage, runDescriptions []*run.RunDescription) []recipe.Stage {
+func ConfigureRendererStages(config *StageConfiguration, scriptedRenderStages []recipe.ScriptedStage, runDescriptions []*run.RunDescription, runCapabilities []run.RunCapabilities) []recipe.Stage {
 	s := []recipe.Stage{}
 
 	hostFs := afero.NewOsFs()
 	execCtx := config.NewRunExecutionContext(hostFs)
 	execCtx.RunDescriptions = runDescriptions
+	execCtx.RunCapabilities = runCapabilities
 
 	for _, scripted := range scriptedRenderStages {
 		recipeStage := &stages.CustomRecipeStage{StageName: scripted.Name(), ScriptedStage: scripted, Ctx: execCtx}

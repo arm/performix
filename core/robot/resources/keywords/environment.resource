@@ -70,16 +70,6 @@ Set Enable On Demand Privilege Env Var
   [Arguments]  ${value}
   Set Performix Env Var  ENABLE_ON_DEMAND_PRIVILEGE  ${value}
 
-Set Enable Full Capture Support Env Var
-  [Documentation]  Enable full capture support. The atperf engine daemon must be
-  ...  restarted for this to take effect.
-  Set Performix Env Var  ENABLE_FULL_CAPTURE_SUPPORT  1
-
-Set Enable Rerendering Env Var
-  [Documentation]  Enable rerendering feature. The atperf engine daemon must be
-  ...  restarted for this to take effect.
-  Set Performix Env Var  ENABLE_RERENDERING  1
-
 Set Enable Experimental Recipes Env Var
   [Documentation]  Enable experimental recipes. The atperf engine daemon must be
   ...  restarted for this to take effect.
@@ -119,16 +109,6 @@ Clear Enable Agent Env Var
   ...  daemon must be restarted for this to take effect. This can be removed once
   ...  we have fully transitioned to using the agent.
   Clear Performix Env Var  ENABLE_AGENT
-
-Clear Enable Full Capture Support Env Var
-  [Documentation]  Clear the full capture support environment variable. The atperf engine daemon must be
-  ...  restarted for this to take effect.
-  Clear Performix Env Var  ENABLE_FULL_CAPTURE_SUPPORT
-
-Clear Enable Rerendering Env Var
-  [Documentation]  Clear the rerendering env var. The atperf engine daemon must be
-  ...  restarted for this to take effect.
-  Clear Performix Env Var  ENABLE_RERENDERING
 
 Clear Enable Experimental Recipes Env Var
   [Documentation]  Clear the experimental recipes env var. The atperf engine daemon must be

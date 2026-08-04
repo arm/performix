@@ -24,22 +24,46 @@ SPDX-License-Identifier: Apache-2.0
 - Runtime is higher than expected for equivalent code under normal Release optimization.
 
 ## What The LLM Should Suggest
-- Identify `run_feature_transform` as the primary bottleneck and explain why it is slower than `run_feature_transform_2` despite similar structure.
+- Identify `run_feature_transform` as the primary bottleneck and explain that
+  it is slower than `run_feature_transform_2` despite the two functions having
+  similar source structure and processing comparable inputs.
 - Accept either of these root-cause formulations:
   - Build/configuration issue (file-level optimization suppression such as `-O0` on hot CU), or
   - Codegen outcome mismatch (hot transform remains scalar / not vectorized while the twin transform is vectorized).
-- Recommend concrete remediation:
-  - restore optimized codegen for the hot CU, and/or
-  - make the hot transform generate vectorized code (compiler settings and loop-shape changes).
-- Suggest validating impact by comparing profile/runtime before and after the change.
+- Recommend investigating or correcting how the hot translation unit is
+  compiled, for example by checking its compiler options or vectorization
+  report and restoring optimized/vectorized code generation.
+- Establishing this source/codegen mismatch and recommending investigation or
+  correction of compilation is sufficient for the expected result.
 
 ## Expected Profiling Characteristics
 - Samples should skew heavily toward `run_feature_transform` (first half path) rather than `run_feature_transform_2` (second half path), despite near-identical source structure.
 - Loop body should show dense scalar instruction activity with limited optimization effects.
 
 ## Scoring Guidance
-- Pass:
-  - Correctly identifies that the hot transform is materially under-optimized relative to its twin and gives a concrete fix path (restore optimization flags and/or achieve comparable vectorized codegen).
+- Pass with high confidence:
+  - Establishes that the two functions have the same or structurally
+    equivalent source-level operation over comparable inputs, rather than
+    merely assuming that they might be equivalent.
+  - Contrasts the scalar code generated for `run_feature_transform` with the
+    vectorized code generated for `run_feature_transform_2` and recommends
+    investigating or correcting how the hot function is compiled.
+  - Statements that the functions have a similar structure and perform the
+    same kind of per-element transform count as an explicit source-level
+    comparison.
+  - Meeting these criteria is sufficient for high confidence; additional
+    remediation or validation detail does not affect the grade.
+- Pass with medium confidence:
+  - Correctly identifies and prioritizes the scalar-versus-vectorized codegen
+    mismatch and gives a concrete fix, but leaves unestablished that the two
+    functions perform structurally equivalent work.
+  - Conditional wording such as "if they are mathematically equivalent"
+    belongs in this grade because the source relationship remains unconfirmed.
+  - A comparison of the generated instructions, or advice to apply the second
+    function's vectorized structure, belongs in this grade when the response
+    leaves the source relationship unconfirmed.
 - Fail:
-  - Finds the hotspot and suggests SIMD/perf improvements but does not clearly connect the mismatch between transform 1 vs transform 2, or gives vague or non-prioritized fixes.
+  - Finds the hotspot but gives generic SIMD or performance advice without
+    connecting the codegen mismatch between the two transforms, or gives only
+    vague or non-prioritized fixes.
   - Or misses the primary issue or suggests an unrelated main fix.

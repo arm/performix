@@ -151,12 +151,12 @@ func TestTargetLockStageExecute_UserSignalsBeforeGrant(t *testing.T) {
 		{
 			name:        "stop",
 			closeStop:   true,
-			expectedErr: message.New(message.EngineCommonUserCancellationError),
+			expectedErr: message.New(message.EngineCommonUserStopped),
 		},
 		{
 			name:        "cancel",
 			closeStop:   false,
-			expectedErr: message.New(message.EngineCommonUserStoppedError),
+			expectedErr: message.New(message.EngineCommonUserCanceled),
 		},
 	}
 
@@ -234,7 +234,7 @@ func TestTargetLockStageExecute_TimesOut(t *testing.T) {
 	stream.AssertExpectations(t)
 }
 
-func TestTargetLockStageExecute_ObservesCancel(t *testing.T) {
+func TestTargetLockStageExecute_ObservesContextCancellation(t *testing.T) {
 	stage, client := newTargetLockStage(0)
 	stageCtx := newStageContext()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -249,7 +249,7 @@ func TestTargetLockStageExecute_ObservesCancel(t *testing.T) {
 		Once()
 
 	cleanup, err := stage.Execute(stageCtx)
-	require.Equal(t, message.New(message.EngineCommonUserCancellationError), err)
+	require.Equal(t, message.New(message.EngineCommonUserStopped), err)
 	require.NotNil(t, cleanup)
 	cleanup()
 	stream.AssertExpectations(t)

@@ -44,6 +44,7 @@ type GrpcServerConfig struct {
 	LogPath                   string
 	SrcToolsDirectory         string
 	DeploymentToolsDir        string
+	ADBPath                   string
 	IsRootWorkerEnabled       bool
 	EnableFullCaptureSupport  bool
 	EnableRerendering         bool
@@ -172,6 +173,7 @@ func (s *GrpcServer) runServer() error {
 		LogFile:                   s.Config.LogPath,
 		SourceToolsDir:            s.Config.SrcToolsDirectory,
 		ConfigDirectory:           s.Config.ConfigDirectory,
+		ADBPath:                   s.Config.ADBPath,
 	}
 
 	deploymentPaths := deployer.BaseToolDeploymentPaths{

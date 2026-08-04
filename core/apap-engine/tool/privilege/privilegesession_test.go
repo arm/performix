@@ -12,10 +12,23 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
 	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
+
+func TestPrivilegeProofForOS(t *testing.T) {
+	t.Run("Linux uses passwordless sudo", func(t *testing.T) {
+		proof := privilegeProofForOS(conductor.Linux)
+		assert.True(t, proof.GetNoPasswdSudo())
+	})
+
+	t.Run("Android uses su", func(t *testing.T) {
+		proof := privilegeProofForOS(conductor.Android)
+		assert.True(t, proof.GetAndroidSu())
+	})
+}
 
 func TestPrivilegeSession_withElevatedPrivileges(t *testing.T) {
 	t.Run("successfully attempts to elevate privileges", func(t *testing.T) {
@@ -36,10 +49,10 @@ func TestPrivilegeSession_withElevatedPrivileges(t *testing.T) {
 				Value: "test-token",
 			},
 		}
-		mockClient.On("ElevatePrivileges", mock.Anything, req).
+		mockClient.On("ElevatePrivileges", ctx, req).
 			Return(resp, nil)
 
-		session := NewPrivilegeSession(mockClient)
+		session := NewPrivilegeSession(mockClient, conductor.Linux)
 		_, err := session.withElevatedPrivileges(ctx, "TestRequest")
 		require.NoError(t, err)
 
@@ -67,7 +80,7 @@ func TestPrivilegeSession_withElevatedPrivileges(t *testing.T) {
 		mockClient.On("ElevatePrivileges", mock.Anything, req).
 			Return(resp, nil)
 
-		session := NewPrivilegeSession(mockClient)
+		session := NewPrivilegeSession(mockClient, conductor.Linux)
 		elevatedCtx, err := session.withElevatedPrivileges(ctx, "TestRequest")
 		require.NoError(t, err)
 
@@ -96,7 +109,7 @@ func TestPrivilegeSession_withElevatedPrivileges(t *testing.T) {
 		mockClient.On("ElevatePrivileges", mock.Anything, req).
 			Return(nil, assert.AnError)
 
-		session := NewPrivilegeSession(mockClient)
+		session := NewPrivilegeSession(mockClient, conductor.Linux)
 		_, err := session.withElevatedPrivileges(ctx, "TestRequest")
 
 		assert.Error(t, err)
@@ -127,7 +140,7 @@ func TestPrivilegeSession_Invoke(t *testing.T) {
 		mockClient.On("ElevatePrivileges", mock.Anything, elevateReq).
 			Return(elevateResp, nil)
 
-		session := NewPrivilegeSession(mockClient)
+		session := NewPrivilegeSession(mockClient, conductor.Linux)
 
 		// privCtx should contain privilege metadata
 		err := session.Invoke(ctx, "TestRequest", func(privCtx context.Context) error {
@@ -158,7 +171,7 @@ func TestPrivilegeSession_Invoke(t *testing.T) {
 				Token: &targetagentproto.PrivilegeProofToken{Value: "invalid-token"},
 			}, nil).Times(maxInvokeRetryCount)
 
-		session := NewPrivilegeSession(mockClient)
+		session := NewPrivilegeSession(mockClient, conductor.Linux)
 		_ = session.Invoke(ctx, "TestRequest", func(privCtx context.Context) error {
 			return invalidTokenErr
 		})
@@ -175,7 +188,7 @@ func TestPrivilegeSession_Invoke(t *testing.T) {
 		mockClient.On("ElevatePrivileges", mock.Anything, mock.Anything).
 			Return(nil, assert.AnError)
 
-		session := NewPrivilegeSession(mockClient)
+		session := NewPrivilegeSession(mockClient, conductor.Linux)
 		err := session.Invoke(ctx, "TestRequest", func(privCtx context.Context) error {
 			return nil
 		})

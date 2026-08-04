@@ -39,12 +39,12 @@ func TestFetchSourceFilesFetchesHostFiles(t *testing.T) {
 	}, nil, 2)
 
 	require.Len(t, results, 1)
-	assert.Equal(t, []string{"host content"}, results[0].Lines)
+	assert.Equal(t, "host content", results[0].Content)
 	assert.Equal(t, hostSource(sourceFile), results[0].LoadedLocation)
 	assert.Empty(t, results[0].Failures)
 }
 
-func TestFetchSourceFilesParsesSourceLines(t *testing.T) {
+func TestFetchSourceFilesPreservesSourceContent(t *testing.T) {
 	sourceFile := filepath.Join(t.TempDir(), "host.c")
 	require.NoError(t, os.WriteFile(sourceFile, []byte("line one\r\n\r\nline three\n"), 0o600))
 
@@ -53,7 +53,27 @@ func TestFetchSourceFilesParsesSourceLines(t *testing.T) {
 	}, nil, 2)
 
 	require.Len(t, results, 1)
-	assert.Equal(t, []string{"line one", "", "line three"}, results[0].Lines)
+	assert.Equal(t, "line one\r\n\r\nline three\n", results[0].Content)
+}
+
+func TestSourceContentLineCount(t *testing.T) {
+	tests := map[string]struct {
+		content string
+		want    int
+	}{
+		"empty":                  {content: "", want: 1},
+		"single line":            {content: "one", want: 1},
+		"trailing newline":       {content: "one\n", want: 1},
+		"LF lines":               {content: "one\ntwo", want: 2},
+		"CRLF lines":             {content: "one\r\ntwo\r\n", want: 2},
+		"trailing blank LF line": {content: "one\n\n", want: 2},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, test.want, sourceContentLineCount(test.content))
+		})
+	}
 }
 
 func TestSourceFilesFetcherDoesNotResolveTargetSessionForHostFiles(t *testing.T) {
@@ -62,14 +82,14 @@ func TestSourceFilesFetcherDoesNotResolveTargetSessionForHostFiles(t *testing.T)
 
 	tgt := &target.LocalTarget{}
 	provider := &targetsessionmocks.MockTargetSessionProvider{}
-	fetcher := NewSourceFilesFetcher(context.Background(), tgt, provider, 2)
+	fetcher := NewSourceFilesFetcher(context.Background(), tgt, provider)
 
 	results := fetcher([]SourceFile{
 		{Locations: []SourceFileLocation{hostSource(sourceFile)}},
 	})
 
 	require.Len(t, results, 1)
-	assert.Equal(t, []string{"host content"}, results[0].Lines)
+	assert.Equal(t, "host content", results[0].Content)
 	assert.Equal(t, hostSource(sourceFile), results[0].LoadedLocation)
 	provider.AssertNotCalled(t, "TargetSession", mock.Anything)
 }
@@ -90,7 +110,7 @@ func TestFetchSourceFilesFallsBackToTarget(t *testing.T) {
 	}, targetFileFetcher, 2)
 
 	require.Len(t, results, 1)
-	assert.Equal(t, []string{"target content"}, results[0].Lines)
+	assert.Equal(t, "target content", results[0].Content)
 	assert.Equal(t, targetSource("/target/file.c"), results[0].LoadedLocation)
 	require.Len(t, results[0].Failures, 1)
 	assert.Equal(t, SourceLocationHost, results[0].Failures[0].Location)
@@ -107,7 +127,7 @@ func TestFetchSourceFilesRecordsEmptyHostFileAsMissing(t *testing.T) {
 	}, nil, 2)
 
 	require.Len(t, results, 1)
-	assert.Empty(t, results[0].Lines)
+	assert.Empty(t, results[0].Content)
 	assert.Empty(t, results[0].LoadedLocation)
 	require.Len(t, results[0].Failures, 1)
 	assert.EqualError(t, results[0].Failures[0].Err, "empty source content")
@@ -122,7 +142,7 @@ func TestFetchSourceFilesRecordsMissingHostMapping(t *testing.T) {
 	}, nil, 2)
 
 	require.Len(t, results, 1)
-	assert.Empty(t, results[0].Lines)
+	assert.Empty(t, results[0].Content)
 	assert.Empty(t, results[0].LoadedLocation)
 	require.Len(t, results[0].Failures, 1)
 	assert.EqualError(t, results[0].Failures[0].Err, "missing host source mapping")
@@ -153,7 +173,7 @@ func TestFetchSourceFilesFallsBackToTargetWhenHostSourceContentMismatched(t *tes
 	}, targetFileFetcher, 2)
 
 	require.Len(t, results, 1)
-	assert.Equal(t, []string{"target line one", "target line two", "target line three"}, results[0].Lines)
+	assert.Equal(t, "target line one\ntarget line two\ntarget line three", results[0].Content)
 	assert.Equal(t, targetSource("/target/file.c"), results[0].LoadedLocation)
 	require.Len(t, results[0].Failures, 1)
 	assert.Equal(t, SourceLocationHost, results[0].Failures[0].Location)
@@ -175,7 +195,7 @@ func TestFetchSourceFilesRecordsTargetMismatch(t *testing.T) {
 	}, targetFileFetcher, 2)
 
 	require.Len(t, results, 1)
-	assert.Empty(t, results[0].Lines)
+	assert.Empty(t, results[0].Content)
 	assert.Empty(t, results[0].LoadedLocation)
 	require.Len(t, results[0].Failures, 1)
 	assert.Error(t, results[0].Failures[0].Err)
@@ -196,7 +216,7 @@ func TestFetchSourceFilesRecordsSourceFailureReason(t *testing.T) {
 	}, targetFileFetcher, 2)
 
 	require.Len(t, results, 1)
-	assert.Empty(t, results[0].Lines)
+	assert.Empty(t, results[0].Content)
 	assert.Empty(t, results[0].LoadedLocation)
 	require.Len(t, results[0].Failures, 1)
 	assert.ErrorIs(t, results[0].Failures[0].Err, targetErr)
@@ -214,7 +234,7 @@ func TestFetchSourceFilesRecordsMissingTargetFetcher(t *testing.T) {
 	}, nil, 2)
 
 	require.Len(t, results, 1)
-	assert.Empty(t, results[0].Lines)
+	assert.Empty(t, results[0].Content)
 	assert.Empty(t, results[0].LoadedLocation)
 	require.Len(t, results[0].Failures, 1)
 	assert.Error(t, results[0].Failures[0].Err)

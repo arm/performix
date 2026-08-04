@@ -16,6 +16,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
+	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
@@ -36,8 +37,9 @@ func NewAgentEngine(
 	userMessageWriter run.UserMessageWriter,
 	preserveTempDirs bool,
 	rootWorkerEnabled bool,
+	targetPlatform conductor.PlatformConfiguration,
 ) (*AgentEngine, func()) {
-	ps := privilege.NewPrivilegeSession(client)
+	ps := privilege.NewPrivilegeSession(client, targetPlatform.OS)
 
 	ae := &AgentEngine{
 		client:                client,
@@ -48,6 +50,7 @@ func NewAgentEngine(
 		preserveTemporaryDirs: preserveTempDirs,
 		rootWorkerEnabled:     rootWorkerEnabled,
 		privilegeSession:      ps,
+		targetPlatform:        targetPlatform,
 	}
 	return ae, ae.Cleanup
 }
@@ -150,10 +153,15 @@ type AgentEngine struct {
 	userMessageWriter       run.UserMessageWriter
 	procsToRelease          []int32
 	privilegeProcsToRelease []int32
+	targetPlatform          conductor.PlatformConfiguration
 
 	// Privilege
 	rootWorkerEnabled bool
 	privilegeSession  privilege.PrivilegeSession
+}
+
+func (g *AgentEngine) GetPlatform() conductor.PlatformConfiguration {
+	return g.targetPlatform
 }
 
 type hostFileHandle struct {

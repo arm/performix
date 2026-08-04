@@ -16,9 +16,10 @@ import (
 )
 
 // NewTargetSessionProvider creates a new default TargetSessionProvider.
-func NewTargetSessionProvider(toolsDir string, rootWorkerEnabled bool) TargetSessionProvider {
+func NewTargetSessionProvider(toolsDir string, rootWorkerEnabled bool, adbPath string) TargetSessionProvider {
 	return &targetSessionProvider{
 		toolsDir:               toolsDir,
+		adbPath:                adbPath,
 		agentConnectionCreator: agent.NewConnectionCreator(toolsDir, rootWorkerEnabled),
 	}
 }
@@ -39,6 +40,7 @@ type targetSessionProvider struct {
 	closed                 bool
 	entries                []*targetSession
 	toolsDir               string
+	adbPath                string
 	agentConnectionCreator agent.ConnectionCreator
 }
 
@@ -71,7 +73,7 @@ func (tsp *targetSessionProvider) session(target target.Target) (*targetSession,
 			return entry, nil
 		}
 	}
-	newSession := newTargetSession(target, tsp.agentConnectionCreator, tsp.toolsDir)
+	newSession := newTargetSession(target, tsp.agentConnectionCreator, tsp.toolsDir, tsp.adbPath)
 	tsp.entries = append(tsp.entries, newSession)
 	return newSession, nil
 }

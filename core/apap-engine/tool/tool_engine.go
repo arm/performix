@@ -6,6 +6,7 @@ package tool
 import (
 	"io"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 )
 
@@ -47,4 +48,5 @@ type Engine interface {
 	StartProgressTracker(id string) error
 	UpdateProgress(id, message string, percent float64) error
 	EndProgress(id string) error
+	GetPlatform() conductor.PlatformConfiguration
 }

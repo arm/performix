@@ -108,7 +108,7 @@ func TestCollect_CanceledContextBeforeRPCReturnsUserCancellation(t *testing.T) {
 
 	msg := message.IsMessage(err)
 	require.NotNil(t, msg)
-	require.Equal(t, message.EngineCommonUserCancellationError, msg.Code())
+	require.Equal(t, message.EngineCommonUserCanceled, msg.Code())
 	client.AssertNotCalled(t, "CreateSupportPackage", mock.Anything, mock.Anything)
 	connectorMock.AssertExpectations(t)
 }
@@ -126,7 +126,7 @@ func TestCollect_CanceledContextAfterConnectReturnsUserCancellation(t *testing.T
 
 	msg := message.IsMessage(err)
 	require.NotNil(t, msg)
-	require.Equal(t, message.EngineCommonUserCancellationError, msg.Code())
+	require.Equal(t, message.EngineCommonUserCanceled, msg.Code())
 	client.AssertNotCalled(t, "CreateSupportPackage", mock.Anything, mock.Anything)
 	connectorMock.AssertExpectations(t)
 }
@@ -145,7 +145,7 @@ func TestCollect_CreateSupportPackageCanceledReturnsUserCancellation(t *testing.
 
 	msg := message.IsMessage(err)
 	require.NotNil(t, msg)
-	require.Equal(t, message.EngineCommonUserCancellationError, msg.Code())
+	require.Equal(t, message.EngineCommonUserCanceled, msg.Code())
 	client.AssertExpectations(t)
 }
 

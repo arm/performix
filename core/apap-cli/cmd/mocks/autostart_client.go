@@ -24,6 +24,15 @@ func (c *MockAutostartClientConnector) ApapClient(config grpcserver.GrpcServerCo
 	}
 }
 
+func (c *MockAutostartClientConnector) StartAndConnect(config grpcserver.GrpcServerConfig) (apapproto.ApapClient, error) {
+	mockArgs := c.Called(config)
+	arg0 := mockArgs.Get(0)
+	if arg0 != nil {
+		return arg0.(apapproto.ApapClient), mockArgs.Error(1)
+	}
+	return nil, mockArgs.Error(1)
+}
+
 func (c *MockAutostartClientConnector) SetApapClient(client interface{}, err error) {
 	c.On("ApapClient", mock.AnythingOfType("grpcserver.GrpcServerConfig")).Return(client, err)
 }

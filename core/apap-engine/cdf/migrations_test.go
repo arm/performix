@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf/semver"
 )
 
@@ -247,5 +249,97 @@ func TestMigratePath_CycleError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cycle rewriting") {
 		t.Errorf("error did not mention cycle; got %q", err)
+	}
+}
+
+func TestMigrateToolName(t *testing.T) {
+	tests := []struct {
+		name             string
+		toolName         string
+		migrations       []PathMigration
+		expectedToolName string
+		expectedMigrated bool
+		expectedError    string
+	}{
+		{
+			name:     "migrates a matching tool name",
+			toolName: "new",
+			migrations: []PathMigration{
+				&ToolNameMigration{From: "old", To: "new"},
+			},
+			expectedToolName: "old",
+			expectedMigrated: true,
+		},
+		{
+			name:     "chains migrations newest first",
+			toolName: "new",
+			migrations: []PathMigration{
+				&ToolNameMigration{
+					From: "old",
+					To:   "middle",
+					Ver:  semver.SemVer{Major: 1},
+				},
+				&ToolNameMigration{
+					From: "middle",
+					To:   "new",
+					Ver:  semver.SemVer{Major: 2},
+				},
+			},
+			expectedToolName: "old",
+			expectedMigrated: true,
+		},
+		{
+			name:     "leaves an unmatched tool name unchanged",
+			toolName: "other",
+			migrations: []PathMigration{
+				&ToolNameMigration{From: "old", To: "new"},
+			},
+		},
+		{
+			name:     "ignores non-name migrations",
+			toolName: "a",
+			migrations: []PathMigration{
+				&ToolInvocationMigration{From: "a"},
+				&ToolPathSuffixMigration{From: "a", OldSuffix: "old", NewSuffix: "new"},
+			},
+		},
+		{
+			name:     "skips identity migrations",
+			toolName: "same",
+			migrations: []PathMigration{
+				&ToolNameMigration{From: "same", To: "same"},
+			},
+		},
+		{
+			name:     "rejects migration cycles",
+			toolName: "A",
+			migrations: []PathMigration{
+				&ToolNameMigration{
+					From: "A",
+					To:   "B",
+					Ver:  semver.SemVer{Major: 1},
+				},
+				&ToolNameMigration{
+					From: "B",
+					To:   "A",
+					Ver:  semver.SemVer{Major: 2},
+				},
+			},
+			expectedError: `MigrateToolName: detected cycle rewriting "B" to "A"; stopping`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			toolName, migrated, err := MigrateToolName(tt.toolName, tt.migrations)
+
+			if tt.expectedError != "" {
+				require.EqualError(t, err, tt.expectedError)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.expectedToolName, toolName)
+			require.Equal(t, tt.expectedMigrated, migrated)
+		})
 	}
 }

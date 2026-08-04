@@ -173,7 +173,7 @@ func TestGetRendererSpec_PopulatesRenderParamsAndMetadata(t *testing.T) {
 		RerenderingEnabled:   true,
 	}
 
-	output, err := GetRendererSpec(context.Background(), stageConfig, nil)
+	output, err := GetRendererSpec(context.Background(), stageConfig, nil, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, renderParams, stage.capturedParams)
 	assert.Equal(t, recipe.RecipeMetadata{

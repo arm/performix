@@ -5,7 +5,7 @@
 
 // @ts-check
 
-const ASCT_VERSION = '0.6.0';
+const ASCT_VERSION = '0.6.1';
 const TOOL_ASCT_NAME = 'asct';
 const TOOL_ASCT_VERSION = ASCT_VERSION;
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
@@ -17,7 +17,7 @@ const ASCT_BENCHMARKS = [
     name: 'idle-latency',
     label: 'Idle latency',
     defaultSelected: true,
-    description: 'Report a matrix of idle memory latency across NUMA nodes.',
+    description: 'Report idle memory latency across NUMA nodes.',
   },
   {
     id: 'benchmark_peak_bandwidth',
@@ -31,7 +31,7 @@ const ASCT_BENCHMARKS = [
     name: 'cross-numa-bandwidth',
     label: 'Cross-NUMA bandwidth',
     defaultSelected: true,
-    description: 'Report cross-NUMA node memory bandwidth.',
+    description: 'Report memory bandwidth between NUMA nodes.',
   },
   {
     id: 'benchmark_latency_sweep',
@@ -39,14 +39,15 @@ const ASCT_BENCHMARKS = [
     label: 'Latency sweep',
     defaultSelected: true,
     description:
-      'Sweep latency by datasize to map cache hierarchy and find optimal datasize for other benchmarks.',
+      'Measure latency across data sizes to reveal the cache hierarchy and help size other benchmarks.',
   },
   {
     id: 'benchmark_bandwidth_sweep',
     name: 'bandwidth-sweep',
     label: 'Bandwidth sweep',
     defaultSelected: true,
-    description: 'Sweep bandwidth by datasize to map cache hierarchy.',
+    description:
+      'Measure bandwidth across data sizes to reveal the cache hierarchy.',
   },
   {
     id: 'benchmark_loaded_latency',
@@ -54,14 +55,14 @@ const ASCT_BENCHMARKS = [
     label: 'Loaded latency',
     defaultSelected: false,
     description:
-      'Report loaded memory latency with background memory activity. This benchmark can take several minutes to complete.',
+      'Measure memory latency while background activity generates memory traffic. This benchmark can take several minutes to complete.',
   },
   {
     id: 'benchmark_c2c_latency',
     name: 'c2c-latency',
     label: 'Core-to-core latency',
     defaultSelected: true,
-    description: 'Report core to core latency.',
+    description: 'Report latency between CPU cores.',
   },
 ];
 
@@ -76,12 +77,14 @@ var recipe = {
   status: 'experimental',
   description:
     'EXPERIMENTAL This *preview* recipe runs the Arm System Characterization Tool (ASCT) to collect system information and microbenchmark results. It measures memory latency/bandwidth behavior to help with platform bring-up, tuning, and architectural comparisons.',
+  mcp_guidance:
+    'ASCT runs can take several minutes, especially with Loaded latency. Select System information only for a quick hardware check, or select individual benchmarks for a shorter run.',
   parameters: [
     {
       id: 'system_info_only',
       required: false,
       label: 'System info only',
-      description: 'Run only system-info (no benchmarks).',
+      description: 'Collect system information without running benchmarks.',
       config: /** @type {any} */ ({
         type: 'checkbox',
         defaultValue: false,
@@ -92,7 +95,7 @@ var recipe = {
       required: false,
       label: 'Default benchmarks',
       description:
-        'Run the ASCT default benchmark set (same behavior as passing no benchmark arguments).',
+        'Run the default latency, bandwidth, NUMA, and core-to-core benchmarks. Loaded latency is not included and can extend the run.',
       config: /** @type {any} */ ({
         type: 'checkbox',
         defaultValue: false,
@@ -316,25 +319,25 @@ function validateRecipeParameters(context) {
     if (ignoredLabels.length > 0) {
       context.writeUserMessage(
         'warn',
-        `System info only is enabled, so benchmark selections are ignored: ${ignoredLabels.join(', ')}`,
+        `System information only is selected, so the following benchmark selections are ignored: ${ignoredLabels.join(', ')}`,
       );
     }
   } else if (defaultBenchmarks) {
     if (explicitlySelectedBenchmarks.length > 0) {
       context.writeUserMessage(
         'warn',
-        `Default benchmarks is enabled, so explicit benchmark selections are ignored: ${explicitlySelectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}`,
+        `Default benchmarks are selected, so the following individual selections are ignored: ${explicitlySelectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}`,
       );
     }
     context.writeUserMessage(
       'info',
-      `Using the ASCT default benchmark set: ${selectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}.`,
+      `Running the default ASCT benchmarks: ${selectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}.`,
     );
   } else {
     if (explicitlySelectedBenchmarks.length === 0) {
       context.writeUserMessage(
         'info',
-        `No benchmarks explicitly selected; defaulting to ${selectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}.`,
+        `No benchmarks selected. Running the default ASCT benchmarks: ${selectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}.`,
       );
     }
   }
@@ -398,6 +401,7 @@ function buildASCTJSONTableSQL(relativePath) {
 }
 
 const ASCT_C2C_LATENCY_RENDERER_ID = 'asct_csv_benchmark_c2c_latency';
+const ASCT_SYSTEM_INFO_RENDERER_ID = 'asct_key_value_system_info';
 
 /**
  * @param {string} rendererId
@@ -413,6 +417,16 @@ const ASCT_C2C_LATENCY_DATA_SOURCE = makeRendererDataSource(
 );
 
 const ASCT_CSV_ANALYSIS_VISUALIZATIONS = [
+  {
+    key: 'numaLatencyMatrix',
+    benchmarkName: 'idle-latency',
+    config: {},
+  },
+  {
+    key: 'numaBandwidthMatrix',
+    benchmarkName: 'cross-numa-bandwidth',
+    config: {},
+  },
   {
     key: 'peakBandwidthGrid',
     benchmarkName: 'peak-bandwidth',
@@ -458,6 +472,60 @@ const ASCT_CSV_ANALYSIS_VISUALIZATIONS = [
       },
     },
   },
+  {
+    key: 'loadedLatencyLineChart',
+    benchmarkName: 'loaded-latency',
+    config: {
+      xAxisTitle: 'Peak theoretical bandwidth',
+      xAxisType: 'value',
+      xAxisMin: 0,
+      xAxisValueFormat: 'percent',
+      yAxisTitle: 'Loaded latency',
+      yAxisType: 'value',
+      yAxisMin: 0,
+      yAxisValueFormat: 'seconds',
+      pointSize: 7,
+      enableZoom: false,
+      enableTooltip: true,
+      series: [
+        {
+          type: 'single',
+          name: 'Loaded latency',
+          xColumn: 'peak_bandwidth_percent',
+          yColumn: 'latency_seconds',
+        },
+      ],
+      customQuery: {
+        tableNamePlaceholder: '__table__',
+        query: `
+          -- Normalize ASCT's nanosecond output to seconds so the renderer can
+          -- choose an appropriate display unit.
+          SELECT
+            try_cast("% of Peak Theoretical BW" AS DOUBLE) AS peak_bandwidth_percent,
+            try_cast("Loaded latency [ns]" AS DOUBLE) / 1000000000 AS latency_seconds
+          FROM __table__
+          WHERE "% of Peak Theoretical BW" IS NOT NULL
+            AND "Loaded latency [ns]" IS NOT NULL
+          ORDER BY peak_bandwidth_percent
+        `,
+      },
+    },
+  },
+  {
+    key: 'loadedLatencyGrid',
+    benchmarkName: 'loaded-latency',
+    config: {
+      // The CSV renderer exposes its row ordinal as `column0`; it is not ASCT data.
+      customQuery: {
+        tableNamePlaceholder: '__table__',
+        query: "SELECT COLUMNS(c -> c != 'column0') FROM __table__",
+      },
+      noDataMessage: 'Loaded latency data is unavailable for this run.',
+      noDataStatus: 'info',
+      showColumnFilters: false,
+      showColumnMenu: false,
+    },
+  },
 ];
 
 const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
@@ -466,22 +534,25 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
     benchmarkName: 'latency-sweep',
     fileName: 'latency-sweep.ubench.json',
     config: {
-      xAxisTitle: 'Message size (bytes)',
+      xAxisTitle: 'Message size',
       xAxisType: 'log',
       xAxisLogBase: 2,
       xAxisMin: 'dataMin',
-      yAxisTitle: 'Latency (ns)',
+      xAxisValueFormat: 'iec-bytes',
+      yAxisTitle: 'Latency',
       yAxisType: 'log',
       yAxisLogBase: 2,
       yAxisMin: 'dataMin',
+      yAxisValueFormat: 'seconds',
       pointSize: 7,
       enableZoom: false,
+      enableTooltip: true,
       series: [
         {
           type: 'single',
           name: 'Average latency',
           xColumn: 'size_bytes',
-          yColumn: 'average_latency_ns',
+          yColumn: 'average_latency_seconds',
         },
       ],
       customQuery: {
@@ -503,7 +574,11 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
             WHERE metric IN ('sizes', 'average_latency_ns')
             GROUP BY row_key
           )
-          SELECT size_bytes, average_latency_ns
+          -- Normalize ASCT's nanosecond output to seconds so the renderer can
+          -- choose an appropriate display unit.
+          SELECT
+            size_bytes,
+            average_latency_ns / 1000000000 AS average_latency_seconds
           FROM chart_values
           WHERE size_bytes IS NOT NULL
             AND average_latency_ns IS NOT NULL
@@ -542,22 +617,25 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
     benchmarkName: 'bandwidth-sweep',
     fileName: 'bandwidth-sweep.ubench.json',
     config: {
-      xAxisTitle: 'Message size (bytes)',
+      xAxisTitle: 'Message size',
       xAxisType: 'log',
       xAxisLogBase: 2,
       xAxisMin: 'dataMin',
-      yAxisTitle: 'Bandwidth (Mbps)',
+      xAxisValueFormat: 'iec-bytes',
+      yAxisTitle: 'Bandwidth',
       yAxisType: 'log',
       yAxisLogBase: 2,
       yAxisMin: 'dataMin',
+      yAxisValueFormat: 'iec-bytes-per-second',
       pointSize: 7,
       enableZoom: false,
+      enableTooltip: true,
       series: [
         {
           type: 'single',
           name: 'Total bandwidth',
-          xColumn: 'sizes',
-          yColumn: 'total_bandwidth_mbps',
+          xColumn: 'size_bytes',
+          yColumn: 'total_bandwidth_bytes_per_second',
         },
       ],
       customQuery: {
@@ -568,7 +646,7 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
               row_key,
               max(
                 CASE WHEN metric = 'sizes' THEN try_cast(value AS DOUBLE) END
-              ) AS sizes,
+              ) AS size_bytes,
               max(
                 CASE
                   WHEN metric = 'total_bandwidth_mbps'
@@ -579,11 +657,15 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
             WHERE metric IN ('sizes', 'total_bandwidth_mbps')
             GROUP BY row_key
           )
-          SELECT sizes, total_bandwidth_mbps
+          -- ASCT reports decimal MB/s; normalize to bytes/s so the renderer
+          -- can choose an appropriate IEC display unit.
+          SELECT
+            size_bytes,
+            total_bandwidth_mbps * 1000000 AS total_bandwidth_bytes_per_second
           FROM chart_values
-          WHERE sizes IS NOT NULL
+          WHERE size_bytes IS NOT NULL
             AND total_bandwidth_mbps IS NOT NULL
-          ORDER BY sizes
+          ORDER BY size_bytes
         `,
       },
     },
@@ -617,20 +699,21 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
 
 /**
  * @param {Record<string, any>} analysisConfig
- * @param {string} key
- * @param {any} visualizationConfig
- * @param {{renderer_id: string, output: string}[]} dataSource
+ * @param {{
+ *   dataSourceKey: string,
+ *   configKey: string,
+ *   config: any,
+ *   dataSource: {renderer_id: string, output: string}[],
+ * }} entry
  */
-function addAsctAnalysisVisualization(
+function addAsctAnalysisConfigEntry(
   analysisConfig,
-  key,
-  visualizationConfig,
-  dataSource,
+  { dataSourceKey, configKey, config, dataSource },
 ) {
   analysisConfig.data_source = analysisConfig.data_source || { tables: {} };
-  analysisConfig.data_source.tables[key] = dataSource;
-  analysisConfig[key] = {
-    ...visualizationConfig,
+  analysisConfig.data_source.tables[dataSourceKey] = dataSource;
+  analysisConfig[configKey] = {
+    ...config,
     data_source: {
       tables: {
         table: dataSource,
@@ -639,14 +722,79 @@ function addAsctAnalysisVisualization(
   };
 }
 
+const ASCT_CACHE_SIZES_TABLE_KEY = 'cacheSizes';
+const ASCT_CACHE_SIZE_MARKERS_CONFIG_KEY = 'cacheSizeMarkers';
+const ASCT_CACHE_SIZES_DATA_SOURCE = makeRendererDataSource(
+  ASCT_SYSTEM_INFO_RENDERER_ID,
+  'table',
+);
+
+// system-info.csv names cache capacities using K/M/G/T. Convert them to
+// bytes so the marker values align with the sweep x-axis data.
+const ASCT_CACHE_SIZE_MARKERS_CONFIG = {
+  data_source: {
+    tables: {
+      table: ASCT_CACHE_SIZES_DATA_SOURCE,
+    },
+  },
+  customQuery: {
+    tableNamePlaceholder: '__table__',
+    query: `
+      WITH cache_sizes AS (
+        SELECT
+          regexp_extract(
+            "key",
+            '^sys_hw\\.caches\\.(L1D|L2U|L3U)\\s+([0-9]+(?:\\.[0-9]+)?[KkMmGgTt])(?:\\s+|$)',
+            1
+          ) AS level,
+          regexp_extract(
+            "key",
+            '^sys_hw\\.caches\\.(L1D|L2U|L3U)\\s+([0-9]+(?:\\.[0-9]+)?[KkMmGgTt])(?:\\s+|$)',
+            2
+          ) AS size
+        FROM __table__
+        WHERE regexp_matches(
+          "key",
+          '^sys_hw\\.caches\\.(L1D|L2U|L3U)\\s+[0-9]+(?:\\.[0-9]+)?[KkMmGgTt](?:\\s+|$)'
+        )
+      )
+      SELECT
+        level || ' cache' AS name,
+        try_cast(left(size, length(size) - 1) AS DOUBLE) *
+          CASE upper(right(size, 1))
+            WHEN 'K' THEN 1024
+            WHEN 'M' THEN 1024 * 1024
+            WHEN 'G' THEN 1024 * 1024 * 1024
+            WHEN 'T' THEN 1024 * 1024 * 1024 * 1024
+          END AS x
+      FROM cache_sizes
+      WHERE try_cast(left(size, length(size) - 1) AS DOUBLE) > 0
+      ORDER BY x
+    `,
+  },
+};
+
 /**
- * @param {{entity: string, selectedBenchmarks: { id: string, name: string, label: string, defaultSelected: boolean, description: string }[]}} args
+ * @param {{entity: string, selectedBenchmarks: { id: string, name: string, label: string, defaultSelected: boolean, description: string }[], includeCacheSizeMarkers: boolean}} args
  */
-function buildAsctAnalysisConfig({ entity, selectedBenchmarks }) {
+function buildAsctAnalysisConfig({
+  entity,
+  selectedBenchmarks,
+  includeCacheSizeMarkers,
+}) {
   const analysisConfig = /** @type {Record<string, any>} */ ({
     data_source: { tables: {} },
   });
+  if (includeCacheSizeMarkers) {
+    addAsctAnalysisConfigEntry(analysisConfig, {
+      dataSourceKey: ASCT_CACHE_SIZES_TABLE_KEY,
+      configKey: ASCT_CACHE_SIZE_MARKERS_CONFIG_KEY,
+      config: ASCT_CACHE_SIZE_MARKERS_CONFIG,
+      dataSource: ASCT_CACHE_SIZES_DATA_SOURCE,
+    });
+  }
   let renderersToAdd = /** @type {any[]} */ ([]);
+  const csvRendererIds = new Set();
 
   // Change this to a map with the selected benchmark as the value
   const selectedBenchmarkNames = new Map(
@@ -660,20 +808,23 @@ function buildAsctAnalysisConfig({ entity, selectedBenchmarks }) {
     }
 
     const rendererId = `asct_csv_${selectedBenchmark.id}`;
-    renderersToAdd.push({
-      type: 'CSV',
-      id: rendererId,
-      config: {
-        component: `${entity}/${`${selectedBenchmark.name}.csv`}`,
-      },
-    });
+    if (!csvRendererIds.has(rendererId)) {
+      renderersToAdd.push({
+        type: 'CSV',
+        id: rendererId,
+        config: {
+          component: `${entity}/${`${selectedBenchmark.name}.csv`}`,
+        },
+      });
+      csvRendererIds.add(rendererId);
+    }
 
-    addAsctAnalysisVisualization(
-      analysisConfig,
-      v.key,
-      v.config,
-      makeRendererDataSource(rendererId, 'csv'),
-    );
+    addAsctAnalysisConfigEntry(analysisConfig, {
+      dataSourceKey: v.key,
+      configKey: v.key,
+      config: v.config,
+      dataSource: makeRendererDataSource(rendererId, 'csv'),
+    });
   });
 
   ASCT_JSON_ANALYSIS_VISUALIZATIONS.forEach((v) => {
@@ -699,12 +850,12 @@ function buildAsctAnalysisConfig({ entity, selectedBenchmarks }) {
       },
     });
 
-    addAsctAnalysisVisualization(
-      analysisConfig,
-      v.key,
-      v.config,
-      makeRendererDataSource(rendererId, 'table'),
-    );
+    addAsctAnalysisConfigEntry(analysisConfig, {
+      dataSourceKey: v.key,
+      configKey: v.key,
+      config: v.config,
+      dataSource: makeRendererDataSource(rendererId, 'table'),
+    });
   });
 
   return { analysisConfig, renderersToAdd };
@@ -720,6 +871,7 @@ function renderAsct(context) {
 
   const entity = 'tool/asct/0/output';
   const createdCsvFiles = getCreatedCsvFiles(context, entity).files;
+  const hasSystemInformation = createdCsvFiles.has('system-info.csv');
 
   const params =
     runDescriptions.length > 0 ? runDescriptions[0].Parameters : {};
@@ -740,6 +892,7 @@ function renderAsct(context) {
   const asctAnalysisConfig = buildAsctAnalysisConfig({
     entity,
     selectedBenchmarks,
+    includeCacheSizeMarkers: hasSystemInformation,
   });
 
   renderers.push(...asctAnalysisConfig.renderersToAdd);
@@ -753,8 +906,8 @@ function renderAsct(context) {
     config: asctAnalysisConfig.analysisConfig,
   });
 
-  if (createdCsvFiles.has('system-info.csv')) {
-    const rendererId = 'asct_key_value_system_info';
+  if (hasSystemInformation) {
+    const rendererId = ASCT_SYSTEM_INFO_RENDERER_ID;
 
     renderers.push({
       type: 'SQL',

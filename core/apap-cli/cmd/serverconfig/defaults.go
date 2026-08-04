@@ -32,15 +32,16 @@ const DefaultHTTPChunkBytes = 1024 * 1024
 
 const DefaultLogLevel = "info"
 const DefaultLogFile = stdout
+const DefaultADBPath = "adb"
 
 const DefaultEnableOnDemandPrivilege = true
 const DefaultAgentUseGroupController = true
 
-const DefaultEnableFullCaptureSupport = false
-const DefaultEnableRerendering = false
+const DefaultEnableFullCaptureSupport = true
+const DefaultEnableRerendering = true
 const DefaultEnableExperimentalRecipes = false
 const DefaultEnableSecondaryRunPaths = true
-const DefaultEnableTransferManager = false
+const DefaultEnableTransferManager = true
 const DefaultEnableAndroidTargets = false
 const DefaultEnableRenderDBSandbox = true
 const DefaultEnableNeoprofTimeline = false

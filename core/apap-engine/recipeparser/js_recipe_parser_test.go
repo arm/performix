@@ -49,6 +49,11 @@ func (m *MockRecipeAPI) listRunComponents(call goja.FunctionCall) goja.Value {
 	return arg.Get(0).(goja.Value)
 }
 
+func (m *MockRecipeAPI) getToolCapabilities(call goja.FunctionCall) goja.Value {
+	arg := m.Called(call)
+	return arg.Get(0).(goja.Value)
+}
+
 func (m *MockRecipeAPI) getParameter(call goja.FunctionCall) goja.Value {
 	arg := m.Called(call)
 	return arg.Get(0).(goja.Value)

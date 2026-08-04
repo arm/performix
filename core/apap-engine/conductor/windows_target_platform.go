@@ -135,3 +135,7 @@ func NewWindowsTargetPlatform(cmdRunner CommandRunner, fs TargetFilesystem, arch
 		Actions:               &WindowsTargetActions{BaseTargetActions{CmdRunner: cmdRunner, FS: fs}},
 	}
 }
+
+func QuotePowershellString(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}

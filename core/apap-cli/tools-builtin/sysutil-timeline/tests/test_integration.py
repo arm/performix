@@ -3,12 +3,25 @@
 
 import csv
 import os
+import signal
 import shutil
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
-from collector import _build_header, collect_sample, init_collector_state, run_collect
+import pytest
+
+from collector import (
+    INSUFFICIENT_SAMPLES_EXIT_CODE,
+    InsufficientSamplesError,
+    _build_header,
+    collect_sample,
+    init_collector_state,
+    run_collect,
+)
 
 
 def _copy_fixture(src: str, dst: str) -> None:
@@ -24,6 +37,42 @@ def _copy_fixture(src: str, dst: str) -> None:
 
 def _failed_numastat(_args):
     return SimpleNamespace(returncode=1, stdout="")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signal behavior")
+def test_collector_stops_promptly_during_long_interval(
+    tmp_path,
+    fixtures_dir: str,
+) -> None:
+    output = tmp_path / "timeline.csv"
+    script = Path(__file__).parents[1] / "sysutil-timeline.py"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(script),
+            "--interval",
+            "60",
+            "--output",
+            str(output),
+            "--proc-root",
+            os.path.join(fixtures_dir, "proc1"),
+            "--sys-root",
+            os.path.join(fixtures_dir, "sys"),
+        ],
+    )
+
+    try:
+        deadline = time.monotonic() + 2
+        while not output.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert output.exists()
+
+        process.send_signal(signal.SIGINT)
+        assert process.wait(timeout=2) == INSUFFICIENT_SAMPLES_EXIT_CODE
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
 
 
 def test_collect_writes_csv(tmp_path, fixtures_dir: str) -> None:
@@ -85,6 +134,30 @@ def test_collect_writes_csv(tmp_path, fixtures_dir: str) -> None:
 
     numa_idx = header.index("numa_hit_per_s")
     assert rows[1][numa_idx] == ""
+
+
+def test_collect_rejects_fewer_than_two_complete_samples(
+    tmp_path,
+    fixtures_dir: str,
+) -> None:
+    output = tmp_path / "timeline.csv"
+
+    with pytest.raises(InsufficientSamplesError, match="collected 1"):
+        run_collect(
+            interval=0.02,
+            duration=0.02,
+            output=str(output),
+            proc_root=os.path.join(fixtures_dir, "proc1"),
+            sys_root=os.path.join(fixtures_dir, "sys"),
+            thread_scan_interval=0.02,
+            flush=True,
+            numa_command_runner=_failed_numastat,
+        )
+
+    with open(output, "r", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+
+    assert len(rows) == 2
 
 
 def test_collect_sample_writes_per_core_irq_rates(tmp_path, fixtures_dir: str) -> None:
@@ -177,7 +250,7 @@ def test_collect_uses_sys_root(tmp_path, fixtures_dir: str) -> None:
     with open(output, "r", encoding="utf-8") as f:
         rows = list(csv.reader(f))
 
-    assert len(rows) >= 2
+    assert len(rows) == 3
     header = rows[0]
     assert "read_iops_sda" in header
 
@@ -216,7 +289,7 @@ other_node            10              20
     output = tmp_path / "timeline.csv"
     run_collect(
         interval=0.05,
-        duration=0.08,
+        duration=0.1,
         output=str(output),
         proc_root=str(proc_root),
         sys_root="/sys",

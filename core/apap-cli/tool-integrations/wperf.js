@@ -13,10 +13,6 @@ const readinessMessageCode =
 const toolNameWperf = 'wperf';
 
 /**
- * @type {import("../recipes/docs/jsdocs").ToolIntegration}
- */
-
-/**
  * @typedef {object} WperfError
  * @property {string} code
  * @property {object} metadata
@@ -32,6 +28,9 @@ const toolNameWperf = 'wperf';
  * @property {string} wperfDriverLauncherPath
  */
 
+/**
+ * @type {import("../recipes/docs/jsdocs").ToolIntegration}
+ */
 let tool = {
   name: toolNameWperf,
   version: '1.0.1',

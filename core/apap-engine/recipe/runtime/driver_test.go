@@ -119,7 +119,7 @@ func TestDriver(t *testing.T) {
 		recipeStage := []recipe.Stage{&fakeStageMock}
 
 		_, err := DriveRecipeExecutionStages(recipeStage, &stageContext)
-		expectedErr := message.New(message.EngineCommonUserCancellationError)
+		expectedErr := message.New(message.EngineCommonUserCanceled)
 		assert.Equal(t, expectedErr, err)
 		assert.NoError(t, message.ValidateMetadataPlaceholders(err))
 	})

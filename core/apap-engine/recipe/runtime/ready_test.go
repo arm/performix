@@ -60,8 +60,8 @@ func TestConfigureRecipeReadyStages_WithParameterValidationStage(t *testing.T) {
 
 	stageList := ConfigureRecipeReadyStages(cfg, cfg.Recipe.ReadyStages)
 
-	// Base stages (8) + option (1) + validation (1) + ready (1) = 11
-	assert.Len(t, stageList, 11)
+	// Base stages (11) + option (1) + validation (1) + ready (1) = 14
+	assert.Len(t, stageList, 14)
 
 	// Verify base stages are present
 	require.GreaterOrEqual(t, len(stageList), 8)
@@ -69,18 +69,21 @@ func TestConfigureRecipeReadyStages_WithParameterValidationStage(t *testing.T) {
 	assert.IsType(t, &stages.TargetArchitectureStage{}, stageList[1])
 	assert.IsType(t, &stages.TargetPlatformSupportStage{}, stageList[2])
 	assert.IsType(t, &stages.WorkloadOptionsStage{}, stageList[3])
-	assert.IsType(t, &stages.ConnectingToTargetAgentStage{}, stageList[4])
-	assert.IsType(t, &stages.TargetLockStage{}, stageList[5])
-	assert.IsType(t, &stages.CollectTargetInfoStage{}, stageList[6])
+	assert.IsType(t, &stages.ToolBundleResolutionStage{}, stageList[4])
+	assert.IsType(t, &stages.HostArchitectureStage{}, stageList[5])
+	assert.IsType(t, &stages.ConnectingToTargetAgentStage{}, stageList[6])
+	assert.IsType(t, &stages.TargetLockStage{}, stageList[7])
+	assert.IsType(t, &stages.CollectTargetInfoStage{}, stageList[8])
+	assert.IsType(t, &stages.ConnectingToHostAgentStage{}, stageList[9])
 
 	// Verify parameter option and validation stages are included in order
-	require.IsType(t, &stages.CustomRecipeStage{}, stageList[7])
-	assert.Equal(t, "option-a", stageList[7].Name())
-	require.IsType(t, &stages.CustomRecipeStage{}, stageList[8])
-	assert.Equal(t, "Validating recipe parameters", stageList[8].Name())
-	require.IsType(t, &stages.CustomRecipeStage{}, stageList[9])
-	assert.Equal(t, "ready-stage", stageList[9].Name())
-	assert.IsType(t, &stages.ReleaseTargetLockStage{}, stageList[10])
+	require.IsType(t, &stages.CustomRecipeStage{}, stageList[10])
+	assert.Equal(t, "option-a", stageList[10].Name())
+	require.IsType(t, &stages.CustomRecipeStage{}, stageList[11])
+	assert.Equal(t, "Validating recipe parameters", stageList[11].Name())
+	require.IsType(t, &stages.CustomRecipeStage{}, stageList[12])
+	assert.Equal(t, "ready-stage", stageList[12].Name())
+	assert.IsType(t, &stages.ReleaseTargetLockStage{}, stageList[13])
 }
 
 func TestConfigureRecipeReadyStages_WithoutParameterValidationStage(t *testing.T) {
@@ -94,8 +97,8 @@ func TestConfigureRecipeReadyStages_WithoutParameterValidationStage(t *testing.T
 
 	stageList := ConfigureRecipeReadyStages(cfg, cfg.Recipe.ReadyStages)
 
-	// Base stages (8) + ready (1) = 9 (no option or validation stages)
-	assert.Len(t, stageList, 9)
+	// Base stages (11) + ready (1) = 12 (no option or validation stages)
+	assert.Len(t, stageList, 12)
 
 	// Verify base stages are present
 	require.GreaterOrEqual(t, len(stageList), 8)
@@ -103,14 +106,17 @@ func TestConfigureRecipeReadyStages_WithoutParameterValidationStage(t *testing.T
 	assert.IsType(t, &stages.TargetArchitectureStage{}, stageList[1])
 	assert.IsType(t, &stages.TargetPlatformSupportStage{}, stageList[2])
 	assert.IsType(t, &stages.WorkloadOptionsStage{}, stageList[3])
-	assert.IsType(t, &stages.ConnectingToTargetAgentStage{}, stageList[4])
-	assert.IsType(t, &stages.TargetLockStage{}, stageList[5])
-	assert.IsType(t, &stages.CollectTargetInfoStage{}, stageList[6])
+	assert.IsType(t, &stages.ToolBundleResolutionStage{}, stageList[4])
+	assert.IsType(t, &stages.HostArchitectureStage{}, stageList[5])
+	assert.IsType(t, &stages.ConnectingToTargetAgentStage{}, stageList[6])
+	assert.IsType(t, &stages.TargetLockStage{}, stageList[7])
+	assert.IsType(t, &stages.CollectTargetInfoStage{}, stageList[8])
+	assert.IsType(t, &stages.ConnectingToHostAgentStage{}, stageList[9])
 
 	// Verify parameter option and validation stages are NOT included
-	require.IsType(t, &stages.CustomRecipeStage{}, stageList[7])
-	assert.Equal(t, "ready-stage", stageList[7].Name())
-	assert.IsType(t, &stages.ReleaseTargetLockStage{}, stageList[8])
+	require.IsType(t, &stages.CustomRecipeStage{}, stageList[10])
+	assert.Equal(t, "ready-stage", stageList[10].Name())
+	assert.IsType(t, &stages.ReleaseTargetLockStage{}, stageList[11])
 
 	// Verify option and validation stages are not in the list
 	for _, stage := range stageList {

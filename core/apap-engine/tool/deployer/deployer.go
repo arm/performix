@@ -235,9 +235,21 @@ func deployTool(targetType conductor.PlatformConfiguration, toolInfo tool.ToolIn
 	log.Infof("Successfully moved file: %s to %s", normalisedSrcBundle, normalisedTargetBundle)
 
 	inflateCommand := fmt.Sprintf("tar zxf %s -C %s", normalisedTargetBundle, normalisedDstDir)
+	if targetType.OS == conductor.Win {
+		inflateCommand = fmt.Sprintf(
+			`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$bundle = %s; Set-Location -LiteralPath ([System.IO.Path]::GetDirectoryName($bundle)); tar -zxf ([System.IO.Path]::GetFileName($bundle)) -C %s"`,
+			conductor.QuotePowershellString(normalisedTargetBundle),
+			conductor.QuotePowershellString(normalisedDstDir),
+		)
+	}
 	log.Infof(`inflating tool bundle "%s"`, inflateCommand)
-	_, _, err = cmdRunner.RunCommand(inflateCommand)
+	stdout, stderr, err := cmdRunner.RunCommand(inflateCommand)
 	if err != nil {
+		log.WithError(err).WithFields(log.Fields{
+			"command": inflateCommand,
+			"stdout":  stdout,
+			"stderr":  stderr,
+		}).Error("failed to inflate tool bundle")
 		toolMetadata["toolPath"] = normalisedTargetBundle
 		toolMetadata["toolDir"] = normalisedDstDir
 		return tidyUp(message.New(message.EngineToolDeployerInflateToolBundle).WithCause(err).WithMetadata(toolMetadata))
