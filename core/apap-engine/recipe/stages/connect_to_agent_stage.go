@@ -50,27 +50,7 @@ func (s *ConnectingToTargetAgentStage) Execute(ctx *recipe.StageContext) (func()
 	targetSessionSupplier := s.TargetSessionSupplier()
 	a, err := targetSessionSupplier.TargetAgent(ctx.Context)
 	if err != nil {
-		// If RetrieveOrCreate fails, notify readiness with the returned error.
-		advice := recipe.ReadyAdvice{
-			ToolName:       "agent",
-			AdviceSeverity: recipe.AdviceSeverityError,
-		}
-
-		// Set the advice message based on the error message if possible.
-		var msg message.Message
-		if errors.As(err, &msg) {
-			advice.AdviceMessage = msg
-		} else {
-			fallbackString := "The target agent connection failed due to an internal error."
-			advice.AdviceMessage = message.New(message.EngineRecipeparserJsRecipeStageReadinessMessage).WithMetadata(map[string]string{"message": fallbackString})
-		}
-
-		ctx.ReadinessNotifier.OnReadinessProbed(
-			recipe.ReadyOutput{
-				Status: recipe.ReadyStatusError,
-				Advice: []recipe.ReadyAdvice{advice},
-			},
-		)
+		notifyAgentReadinessFailure(ctx, err, "agent")
 
 		logx.FromContext(ctx.Context).Warnf("failed to create connection to agent: %v", err)
 
@@ -86,4 +66,26 @@ func (s *ConnectingToTargetAgentStage) Execute(ctx *recipe.StageContext) (func()
 	})
 
 	return nil, nil
+}
+
+func notifyAgentReadinessFailure(ctx *recipe.StageContext, err error, toolName string) {
+	advice := recipe.ReadyAdvice{
+		ToolName:       toolName,
+		AdviceSeverity: recipe.AdviceSeverityError,
+	}
+
+	var msg message.Message
+	if errors.As(err, &msg) {
+		advice.AdviceMessage = msg
+	} else {
+		fallbackString := "The target agent connection failed due to an internal error."
+		advice.AdviceMessage = message.New(message.EngineRecipeparserJsRecipeStageReadinessMessage).WithMetadata(map[string]string{"message": fallbackString})
+	}
+
+	ctx.ReadinessNotifier.OnReadinessProbed(
+		recipe.ReadyOutput{
+			Status: recipe.ReadyStatusError,
+			Advice: []recipe.ReadyAdvice{advice},
+		},
+	)
 }

@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -32,7 +35,12 @@ func newMCPStartCmd(runner MCPRunner) *cobra.Command {
 			grouping.GroupAnnotation: grouping.GroupMCPSub,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			err := runner.Run(cmd.Context(), readCloser(cmd.InOrStdin()), cmd.OutOrStdout(), cmd.ErrOrStderr())
+			// Signals cancel the same context used by stdin and caller cancellation,
+			// so all termination paths run the engine shutdown sequence.
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
+			err := runner.Run(ctx, readCloser(cmd.InOrStdin()), cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				wrappedErr := fmt.Errorf("failed to start MCP server: %w", err)
 				clijson.HandleCLIError(cmd.ErrOrStderr(), wrappedErr)

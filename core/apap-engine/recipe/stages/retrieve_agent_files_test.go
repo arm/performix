@@ -164,7 +164,7 @@ func TestRetrieveAgentFilesStage_Execute(t *testing.T) {
 
 		cleanup, err := stage.Execute(stageCtx)
 		require.Nil(t, cleanup)
-		expectedErr := message.New(message.EngineCommonUserCancellationError)
+		expectedErr := message.New(message.EngineCommonUserCanceled)
 		require.Equal(t, expectedErr, err)
 		assert.NoError(t, message.ValidateMetadataPlaceholders(err))
 	})
@@ -616,7 +616,7 @@ func TestRetrieveAgentFilesStage_Execute(t *testing.T) {
 		close(s.stageCtx.CommandStateChannel.CancelChan)
 
 		_, err := s.stage.Execute(s.stageCtx)
-		expectedErr := message.New(message.EngineCommonUserCancellationError)
+		expectedErr := message.New(message.EngineCommonUserCanceled)
 		require.Equal(t, expectedErr, err)
 		assert.NoError(t, message.ValidateMetadataPlaceholders(err))
 

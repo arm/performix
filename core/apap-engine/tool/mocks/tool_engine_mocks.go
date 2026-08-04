@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
+	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 )
@@ -59,6 +60,11 @@ func (m *MockEngineContext) UpdateProgress(id, message string, percent float64) 
 	return m.Called(id, message, percent).Error(0)
 }
 func (m *MockEngineContext) EndProgress(id string) error { return m.Called(id).Error(0) }
+
+func (m *MockEngineContext) GetPlatform() conductor.PlatformConfiguration {
+	args := m.Called()
+	return args.Get(0).(conductor.PlatformConfiguration)
+}
 
 type MockProcessHandle struct {
 	mock.Mock

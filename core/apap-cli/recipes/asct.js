@@ -5,7 +5,7 @@
 
 // @ts-check
 
-const ASCT_VERSION = '0.6.0';
+const ASCT_VERSION = '0.6.1';
 const TOOL_ASCT_NAME = 'asct';
 const TOOL_ASCT_VERSION = ASCT_VERSION;
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
@@ -17,7 +17,7 @@ const ASCT_BENCHMARKS = [
     name: 'idle-latency',
     label: 'Idle latency',
     defaultSelected: true,
-    description: 'Report a matrix of idle memory latency across NUMA nodes.',
+    description: 'Report idle memory latency across NUMA nodes.',
   },
   {
     id: 'benchmark_peak_bandwidth',
@@ -31,7 +31,7 @@ const ASCT_BENCHMARKS = [
     name: 'cross-numa-bandwidth',
     label: 'Cross-NUMA bandwidth',
     defaultSelected: true,
-    description: 'Report cross-NUMA node memory bandwidth.',
+    description: 'Report memory bandwidth between NUMA nodes.',
   },
   {
     id: 'benchmark_latency_sweep',
@@ -39,14 +39,15 @@ const ASCT_BENCHMARKS = [
     label: 'Latency sweep',
     defaultSelected: true,
     description:
-      'Sweep latency by datasize to map cache hierarchy and find optimal datasize for other benchmarks.',
+      'Measure latency across data sizes to reveal the cache hierarchy and help size other benchmarks.',
   },
   {
     id: 'benchmark_bandwidth_sweep',
     name: 'bandwidth-sweep',
     label: 'Bandwidth sweep',
     defaultSelected: true,
-    description: 'Sweep bandwidth by datasize to map cache hierarchy.',
+    description:
+      'Measure bandwidth across data sizes to reveal the cache hierarchy.',
   },
   {
     id: 'benchmark_loaded_latency',
@@ -54,14 +55,14 @@ const ASCT_BENCHMARKS = [
     label: 'Loaded latency',
     defaultSelected: false,
     description:
-      'Report loaded memory latency with background memory activity. This benchmark can take several minutes to complete.',
+      'Measure memory latency while background activity generates memory traffic. This benchmark can take several minutes to complete.',
   },
   {
     id: 'benchmark_c2c_latency',
     name: 'c2c-latency',
     label: 'Core-to-core latency',
     defaultSelected: true,
-    description: 'Report core to core latency.',
+    description: 'Report latency between CPU cores.',
   },
 ];
 
@@ -77,13 +78,13 @@ var recipe = {
   description:
     'This *preview* recipe runs the Arm System Characterization Tool (ASCT) to collect system information and microbenchmark results. It measures memory latency/bandwidth behavior to help with platform bring-up, tuning, and architectural comparisons.',
   mcp_guidance:
-    'Default benchmark runs can take several minutes; use timeout 600 when running the default benchmarks. Use system_info_only for a short system information check.',
+    'ASCT runs can take several minutes, especially with Loaded latency. Select System information only for a quick hardware check, or select individual benchmarks for a shorter run.',
   parameters: [
     {
       id: 'system_info_only',
       required: false,
       label: 'System info only',
-      description: 'Run only system-info (no benchmarks).',
+      description: 'Collect system information without running benchmarks.',
       config: /** @type {any} */ ({
         type: 'checkbox',
         defaultValue: false,
@@ -94,7 +95,7 @@ var recipe = {
       required: false,
       label: 'Default benchmarks',
       description:
-        'Run the ASCT default benchmark set (same behavior as passing no benchmark arguments).',
+        'Run the default latency, bandwidth, NUMA, and core-to-core benchmarks. Loaded latency is not included and can extend the run.',
       config: /** @type {any} */ ({
         type: 'checkbox',
         defaultValue: false,
@@ -318,25 +319,25 @@ function validateRecipeParameters(context) {
     if (ignoredLabels.length > 0) {
       context.writeUserMessage(
         'warn',
-        `System info only is enabled, so benchmark selections are ignored: ${ignoredLabels.join(', ')}`,
+        `System information only is selected, so the following benchmark selections are ignored: ${ignoredLabels.join(', ')}`,
       );
     }
   } else if (defaultBenchmarks) {
     if (explicitlySelectedBenchmarks.length > 0) {
       context.writeUserMessage(
         'warn',
-        `Default benchmarks is enabled, so explicit benchmark selections are ignored: ${explicitlySelectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}`,
+        `Default benchmarks are selected, so the following individual selections are ignored: ${explicitlySelectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}`,
       );
     }
     context.writeUserMessage(
       'info',
-      `Using the ASCT default benchmark set: ${selectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}.`,
+      `Running the default ASCT benchmarks: ${selectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}.`,
     );
   } else {
     if (explicitlySelectedBenchmarks.length === 0) {
       context.writeUserMessage(
         'info',
-        `No benchmarks explicitly selected; defaulting to ${selectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}.`,
+        `No benchmarks selected. Running the default ASCT benchmarks: ${selectedBenchmarks.map((benchmark) => benchmark.label).join(', ')}.`,
       );
     }
   }

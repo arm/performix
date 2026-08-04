@@ -230,6 +230,8 @@
  * @property {function(): RunDescription[]} getRunDescriptions - Provides general metadata associated with the runs to render.
  * @property {function(number, string): RunComponentDescription[]} listRunComponents
  * Lists manifest components for an indexed run matching the given component glob.
+ * @property {function(runIndex:number, toolInvocation:ToolInvocation): ToolCapabilities} getToolCapabilities
+ * Lists the registered capabilities for the specified tool invocation of the indexed run.
  * @property {function(string): any} getRenderParameter - Retrieves a render parameter by ID.
  * @property {function(): Object.<string, any>} getRenderParameters - Retrieves all render parameters by ID.
  * @property {function(string): void} logWarn
@@ -246,6 +248,30 @@
  * @property {string} relativePath - Relative path to the component within the run directory.
  * @property {string} fileName - Base file name for the component.
  * @property {{name: string, version: string}} componentType - Component type metadata.
+ */
+
+/**
+ * @typedef {Object} ToolInvocation
+ * @property {string} toolName - The name of the tool.
+ * @property {number} invocationIndex - The index of the tool invocation.
+ * @description - Defines a particular invocation of a tool.
+ */
+
+/**
+ * @typedef {Object} ToolCapabilities
+ * @property {function(capabilityId:string, state?:string): boolean} has - Returns true if this tool invocation has the requested capability ID (and optional state)
+ * @property {function(capabilityId:string, componentType?:ComponentType): ToolCapability|null} get - Returns the capability with the requested ID, if this tool invocation registered this capability.
+ *           Errors if an expected component type was specified, and the capability found does not have this component type
+ * @property {function(): Object.<string, ToolCapability>} list - Returns a list of all capabilities of this tool invocation, keyed by capability ID.
+ * @description - Stores the capabilities of a particular tool invocation.
+ */
+
+/**
+ * @typedef {Object} ToolCapability
+ * @property {string} state - the state of this capability
+ * @property {Object.<string, any>} payload - arbitrary payload data associated with this capability
+ * @property {ComponentType} componentType - the component name and version of this capability
+ * @description - Describes a capability of a particular tool invocation.
  */
 
 /**
@@ -331,8 +357,8 @@
  * @property {string} ToolName
  * @property {string} AdviceSeverity
  * @property {string} MessageCode - the code of the catalog message to look up
- * @property {Object.<string, string>} Metadata - (optional) any metadata to attach to the Message
- * @property {string} Cause - (optional) a string to attach as a cause
+ * @property {Object.<string, string>} [Metadata] - optional metadata to attach to the Message
+ * @property {string} [Cause] - an optional string to attach as a cause
  */
 
 /**
@@ -550,7 +576,7 @@
 /**
  * Metadata when emitting an output artifact from a tool.
  * @typedef {Object} OutputMetadata
- * @property {string} componentType
+ * @property {string} name
  * @property {string} version
  */
 
@@ -576,6 +602,11 @@
  * @property {(cmd:(string|string[]), opts:ProcessOptions) => Promise<ProcessHandle>} startProcess
  * Launch a process and resolve to a `ProcessHandle` allowing interaction of the process
  * within the runtime before it ends, e.g. kill or process stdout/stderr
+ *
+ * @property {() => number} monotonicNow
+ * Return milliseconds from a runtime-local monotonic clock. Use this for
+ * elapsed-time measurements that must not be affected by wall-clock changes.
+ * All Engine objects belonging to one tool integration share this clock.
  *
  * @property {() => Promise<string>} createTempDir
  * Create a temporary directory, returning its absolute path.
@@ -604,6 +635,9 @@
  * Globs may not rename or reshape wildcarded path segments.
  * `transferOptions` defines configuration options for how the transfer should be executed.
  * Artifacts will only be transferred on successful tool integration, whereas log files will always be collected.
+ * @property {(capabilityId:string, meta:OutputMetadata, capabilityData:CapabilityData) => Promise<void>} addToolCapability
+ * Registers a capability of this tool invocation in the run. This capability can be accessed in the 'render' stage of recipes.
+ * capabilityId must start with a letter or number and contain only letters, numbers, and the following symbols: ._-
  * @property {() => boolean} isFullCaptureSupportEnabled
  * Returns true when the EnableFullCaptureSupport feature flag is enabled
  * @property {() => boolean} isNeoprofTimelineEnabled
@@ -632,6 +666,24 @@
  *
  * @property {(sourceLocality:("target"), sourcePath:string, destinationPath:string) => Promise<void>} copyFrom
  * Copy a file from another locality to the current engine locality and resolve when the copy has completed.
+ * @property {() => PlatformDescription} getPlatform
+ * Return the OS and architecture of the current engine locality's platform.
+ */
+
+/**
+ * Describes the OS and architecture of a machine.
+ * @typedef {Object} PlatformDescription
+ * @property {string} Architecture
+ * The architecture of the machine.
+ * @property {string} OS
+ * The OS of the machine.
+ */
+
+/**
+ * @typedef {Object} CapabilityData
+ * @property {string} state - the state of this capability
+ * @property {Object.<string, any>} payload - arbitrary payload data associated with this capability
+ * @description - The contents of a tool capability
  */
 
 /**
@@ -773,10 +825,9 @@
  * @typedef {Object} ProbeAdvice
  * A single element of the probe result advice, describing an issue or recommendation.
  * @property {string} level // ready, warning, error, unknown
- * @property {string} [message] // The advice message
- * @property {string} [messageCode] // The advice message code
- * @property {Object.<string, string>} [metadata] // (optional) any metadata to attach to the message
- * @property {string} [cause] // (optional) any cause to attach to the message
+ * @property {string} messageCode // The advice message code
+ * @property {Object.<string, string>} [metadata] // optional metadata to attach to the message
+ * @property {string} [cause] // an optional cause to attach to the message
  */
 
 /**

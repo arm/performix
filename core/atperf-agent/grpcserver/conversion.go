@@ -10,6 +10,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/fsutil"
+	"github.com/Arm-Debug/apap-cli/atperf-agent/privilege"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/systeminfo"
 	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
@@ -191,40 +192,46 @@ func FileInfosToProto(all [][]fsutil.FileInfo) []*targetagentproto.FileInfos {
 	})
 }
 
-// PrivilegeProofToMech converts a PrivilegeProof proto message to a PrivilegeProofMech enum.
-func PrivilegeProofProtoToMech(req *targetagentproto.PrivilegeProof) (PrivilegeProofMech, error) {
+// PrivilegeProofProtoToMech converts a PrivilegeProof proto message to a privilege.ProofMechanism.
+func PrivilegeProofProtoToMech(req *targetagentproto.PrivilegeProof) (privilege.ProofMechanism, error) {
 	switch req.Mech.(type) {
 	case *targetagentproto.PrivilegeProof_NoPasswdUserns:
-		return NoPasswdUserns, nil
+		return privilege.NoPasswdUserns, nil
 	case *targetagentproto.PrivilegeProof_NoPasswdSudo:
-		return NoPasswdSudo, nil
+		return privilege.NoPasswdSudo, nil
 	case *targetagentproto.PrivilegeProof_SudoPassword:
-		return SudoPassword, nil
+		return privilege.SudoPassword, nil
 	case *targetagentproto.PrivilegeProof_SetuidHelper:
-		return SetuidHelper, nil
+		return privilege.SetuidHelper, nil
+	case *targetagentproto.PrivilegeProof_AndroidSu:
+		return privilege.AndroidSu, nil
 	default:
 		return 0, message.New(message.AgentElevatePrivilegesProofMechanismUnknown)
 	}
 }
 
-// MechToPrivilegeProofProto converts a PrivilegeProofMech enum to a PrivilegeProof proto message.
-func MechToPrivilegeProofProto(mech PrivilegeProofMech) *targetagentproto.PrivilegeProof {
+// MechToPrivilegeProofProto converts a privilege.ProofMechanism to a PrivilegeProof proto message.
+func MechToPrivilegeProofProto(mech privilege.ProofMechanism) *targetagentproto.PrivilegeProof {
 	switch mech {
-	case NoPasswdUserns:
+	case privilege.NoPasswdUserns:
 		return &targetagentproto.PrivilegeProof{
 			Mech: &targetagentproto.PrivilegeProof_NoPasswdUserns{},
 		}
-	case NoPasswdSudo:
+	case privilege.NoPasswdSudo:
 		return &targetagentproto.PrivilegeProof{
 			Mech: &targetagentproto.PrivilegeProof_NoPasswdSudo{},
 		}
-	case SudoPassword:
+	case privilege.SudoPassword:
 		return &targetagentproto.PrivilegeProof{
 			Mech: &targetagentproto.PrivilegeProof_SudoPassword{},
 		}
-	case SetuidHelper:
+	case privilege.SetuidHelper:
 		return &targetagentproto.PrivilegeProof{
 			Mech: &targetagentproto.PrivilegeProof_SetuidHelper{},
+		}
+	case privilege.AndroidSu:
+		return &targetagentproto.PrivilegeProof{
+			Mech: &targetagentproto.PrivilegeProof_AndroidSu{AndroidSu: true},
 		}
 	default:
 		return nil

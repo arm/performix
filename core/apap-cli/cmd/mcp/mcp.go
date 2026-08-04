@@ -10,9 +10,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/grouping"
-	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/client"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/mcpserver"
+	"github.com/Arm-Debug/apap-cli/apap-cli/service/server"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
@@ -38,13 +38,20 @@ func newMCPCommand() *cobra.Command {
 	return mcpCmd
 }
 
+// defaultMCPRunner creates the production lifecycle owner. Each MCP server gets
+// its own engine daemon rather than attaching to the shared CLI daemon.
 func defaultMCPRunner() MCPRunner {
+	// Suppress the background runner's user-facing startup message because MCP
+	// stdout is reserved for protocol messages.
 	connector := client.NewAutostartClientWithOutput(io.Discard)
+	shutter := server.NewShutter()
 	targets := target.NewDefaultTargetManager()
-	return mcpserver.NewMCPServer(
-		func() (apapproto.ApapClient, error) {
-			return connector.ApapClient(serverconfig.FromViperForBackground())
+	return &engineDaemonRunner{
+		startAndConnect: connector.StartAndConnect,
+		shutdown:        shutter.Shutdown,
+		allocatePorts:   allocateEngineDaemonPorts,
+		newProtocol: func(engine apapproto.ApapClient) MCPRunner {
+			return mcpserver.NewMCPServer(engine, targets)
 		},
-		targets,
-	)
+	}
 }

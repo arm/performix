@@ -4,7 +4,9 @@
 package sourcecontent
 
 // fetcher.go contains SourceFilesFetcher, used to fetch source content
-// concurrently from host and target machines. Failures are returned as
+// concurrently from host and target machines. Source content is returned
+// verbatim as a single string. Consumers should perform any required
+// post-processing, such as splitting it into lines. Failures are returned as
 // SourceFailureReason values.
 
 import (
@@ -19,9 +21,15 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 )
 
+// A small fixed worker pool overlaps per-file latency without allowing large
+// batches to place unbounded load on the host or target.
+const defaultSourceFilesFetchConcurrency = 4
+
 // SourceFile identifies one source file and the ordered locations to try.
 type SourceFile struct {
-	Locations        []SourceFileLocation
+	Locations []SourceFileLocation
+	// MinimumLineCount rejects source mappings that cannot contain a required
+	// source line, allowing the next configured location to be tried.
 	MinimumLineCount uint32
 }
 
@@ -32,8 +40,12 @@ type SourceFileLocation struct {
 }
 
 // SourceFileContent contains fetched source content and failure metadata.
+// Line-oriented consumers should split Content themselves rather than making
+// the fetcher discard information needed by complete-file consumers.
 type SourceFileContent struct {
-	Lines          []string
+	// Content is the complete source file exactly as read from the selected
+	// location, including its original line endings and trailing newline.
+	Content        string
 	Failures       []SourceFileFailure
 	LoadedLocation SourceFileLocation
 }
@@ -74,10 +86,10 @@ const (
 type targetFileFetcher func(ctx context.Context, targetPath string) (content string, failure SourceFailureReason, err error)
 
 // NewSourceFilesFetcher returns a source file fetcher for the given target.
-func NewSourceFilesFetcher(ctx context.Context, tgt target.Target, targetSessions targetsession.TargetSessionProvider, concurrency int) SourceFilesFetcher {
+func NewSourceFilesFetcher(ctx context.Context, tgt target.Target, targetSessions targetsession.TargetSessionProvider) SourceFilesFetcher {
 	return func(files []SourceFile) []SourceFileContent {
 		tgtFileFetcher := newTargetFileFetcher(tgt, targetSessions, nil)
-		return fetchSourceFiles(ctx, files, tgtFileFetcher, concurrency)
+		return fetchSourceFiles(ctx, files, tgtFileFetcher, defaultSourceFilesFetchConcurrency)
 	}
 }
 
@@ -150,10 +162,8 @@ func fetchSourceFile(ctx context.Context, sourceFile SourceFile, tgtFileFetcher 
 			continue
 		}
 
-		normalized := strings.ReplaceAll(content, "\r\n", "\n")
-		lines := strings.Split(strings.TrimSuffix(normalized, "\n"), "\n")
-		if sourceFile.MinimumLineCount == 0 || len(lines) >= int(sourceFile.MinimumLineCount) {
-			result.Lines = lines
+		if sourceFile.MinimumLineCount == 0 || sourceContentLineCount(content) >= int(sourceFile.MinimumLineCount) {
+			result.Content = content
 			result.LoadedLocation = location
 			return result
 		}
@@ -173,6 +183,15 @@ func fetchSourceFile(ctx context.Context, sourceFile SourceFile, tgtFileFetcher 
 		result.Failures = append(result.Failures, SourceFileFailure{Err: fmt.Errorf("missing source location")})
 	}
 	return result
+}
+
+// sourceContentLineCount returns the number of lines separated by '\n'.
+func sourceContentLineCount(content string) int {
+	lineCount := strings.Count(content, "\n")
+	if !strings.HasSuffix(content, "\n") {
+		lineCount++
+	}
+	return lineCount
 }
 
 // fetchHostSourceLocation reads source content from the host.

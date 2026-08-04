@@ -22,6 +22,11 @@ type mockModelView struct {
 	mock.Mock
 }
 
+func (m *mockModelView) Migrations() []PathMigration {
+	args := m.Called()
+	return args.Get(0).([]PathMigration)
+}
+
 // ResolveComponent returns the mocked component and error for a path.
 func (m *mockModelView) ResolveComponent(componentPath string) (Component, error) {
 	args := m.Called(componentPath)

@@ -4,10 +4,13 @@
 package tool_goja
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/dop251/goja"
 
@@ -15,15 +18,44 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/gojautils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
+	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 )
 
 // BoundEngineContext exposes engine to JS with async helpers.
 type BoundEngineContext struct {
-	eng           tool.Engine
-	ic            *tool.IntegrationContext
-	asyncHelper   *gojautils.AsyncHelper
-	fileCollector tool.FileCollector
+	eng                     tool.Engine
+	ic                      *tool.IntegrationContext
+	asyncHelper             *gojautils.AsyncHelper
+	fileCollector           tool.FileCollector
+	registeredCapabilityIDs *capabilityIDRegistry
+}
+
+type capabilityIDRegistry struct {
+	mu  sync.Mutex
+	ids map[string]struct{}
+}
+
+func newCapabilityIDRegistry() *capabilityIDRegistry {
+	return &capabilityIDRegistry{ids: make(map[string]struct{})}
+}
+
+func (r *capabilityIDRegistry) reserve(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.ids[id]; exists {
+		return false
+	}
+	r.ids[id] = struct{}{}
+	return true
+}
+
+func (r *capabilityIDRegistry) release(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.ids, id)
 }
 
 // Execution/Process option bags (JSON from JS).
@@ -50,8 +82,14 @@ type ProcessOptions struct {
 }
 
 // NewBoundEngineContext wires an engine + helper.
-func NewBoundEngineContext(eng tool.Engine, asyncHelper *gojautils.AsyncHelper, ic *tool.IntegrationContext, fileCollector tool.FileCollector) *BoundEngineContext {
-	return &BoundEngineContext{eng: eng, asyncHelper: asyncHelper, ic: ic, fileCollector: fileCollector}
+func NewBoundEngineContext(eng tool.Engine, asyncHelper *gojautils.AsyncHelper, ic *tool.IntegrationContext, fileCollector tool.FileCollector, registeredCapabilityIDs *capabilityIDRegistry) *BoundEngineContext {
+	return &BoundEngineContext{
+		eng:                     eng,
+		asyncHelper:             asyncHelper,
+		ic:                      ic,
+		fileCollector:           fileCollector,
+		registeredCapabilityIDs: registeredCapabilityIDs,
+	}
 }
 
 // IsFullCaptureSupportEnabled returns whether the full capture support is enabled for this tool integration.
@@ -411,4 +449,82 @@ func (b *BoundEngineContext) CreateRunFile(relativePath string, meta goja.Value)
 // ReadHostFile reads a file from the host and returns its contents.
 func (b *BoundEngineContext) ReadHostFile(path string) (string, error) {
 	return b.eng.ReadHostFile(path)
+}
+
+type CapabilityData struct {
+	State   string         `json:"state"`
+	Payload map[string]any `json:"payload"`
+}
+
+func (b *BoundEngineContext) AddToolCapability(capabilityId string, gojaComponentType goja.Value, gojaCapabilityData goja.Value) error {
+	if err := b.addToolCapability(capabilityId, gojaComponentType, gojaCapabilityData); err != nil {
+		return fmt.Errorf("addToolCapability: %w", err)
+	}
+	return nil
+}
+
+func (b *BoundEngineContext) addToolCapability(capabilityId string, gojaComponentType goja.Value, gojaCapabilityData goja.Value) (returnErr error) {
+	// Validate and convert capability contents
+	capabilityData := &CapabilityData{}
+	err := gojautils.ParseObjectFromJS(gojaCapabilityData, capabilityData)
+	if err != nil {
+		return err
+	}
+	contentsBytes, err := util.EncodeJSON[CapabilityData](capabilityData)
+	if err != nil {
+		return err
+	}
+	contentsString := string(contentsBytes)
+
+	// Validate capability ID
+	if !isCapabilityIDValid(capabilityId) {
+		return fmt.Errorf("invalid capability ID %q; must start with a letter or number and contain only letters, numbers, and the following symbols: ._-", capabilityId)
+	}
+	if !b.registeredCapabilityIDs.reserve(capabilityId) {
+		return fmt.Errorf("capability ID %q has already been registered", capabilityId)
+	}
+
+	// Create manifest entry
+	om := &OutputMetadata{}
+	if err := gojautils.ParseObjectFromJS(gojaComponentType, &om); err != nil {
+		b.registeredCapabilityIDs.release(capabilityId)
+		return err
+	}
+	componentType := cdf.ComponentType{Name: om.ComponentType, SchemaVersion: om.Version}
+
+	relativePath := filepath.Join("capabilities", fmt.Sprintf("%v.json", capabilityId))
+	absolutePath, err := b.fileCollector.AddComponent(b.ic.OutputEntityDir, componentType, relativePath)
+	if err != nil {
+		b.registeredCapabilityIDs.release(capabilityId)
+		return err
+	}
+	// note: from now on, we no longer release the ID on failure as the manifest entry has already been recorded
+
+	// Create run file
+	hostHandle, err := b.eng.CreateRunFile(absolutePath)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		returnErr = errors.Join(returnErr, hostHandle.Close())
+	}()
+	if err = hostHandle.Append(contentsString + "\n"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func isCapabilityIDValid(id string) bool {
+	var validCapabilityID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	return validCapabilityID.MatchString(id)
+}
+
+func (b *BoundEngineContext) GetPlatform() map[string]any {
+	platform := b.eng.GetPlatform()
+
+	return map[string]any{
+		"Architecture": string(platform.Architecture),
+		"OS":           string(platform.OS),
+	}
 }

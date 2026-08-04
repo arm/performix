@@ -11,7 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/grpcconnection"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 )
 
@@ -99,4 +101,74 @@ func TestRunServerAndConnect(t *testing.T) {
 		require.NoError(t, err)
 		assertConnOperational(t, conn)
 	})
+}
+
+func TestStartAndConnectSkipsInitialConnection(t *testing.T) {
+	config := grpcserver.GrpcServerConfig{Host: localhost, Port: 1337}
+	expectedConn := &grpc.ClientConn{}
+
+	sr := &mockServerRunner{}
+	sr.On("Run", config).Return(nil).Once()
+	connector := &grpcconnection.GRPCConnectorMock{}
+	connector.On("Connect", config.Host, config.Port, retryConnectionTimeout).Return(expectedConn, nil).Once()
+
+	c := autostartClient{serverRunner: sr}
+	conn, err := c.startAndConnect(config, connector)
+
+	require.NoError(t, err)
+	assert.Same(t, expectedConn, conn)
+	sr.AssertExpectations(t)
+	connector.AssertExpectations(t)
+	connector.AssertNotCalled(t, "Connect", config.Host, config.Port, initialConnectionTimeout)
+}
+
+func TestStartAndConnectDoesNotCleanUpWhenServerFailsToStart(t *testing.T) {
+	config := grpcserver.GrpcServerConfig{Host: localhost, Port: 1337}
+	startErr := errors.New("server failed to start")
+
+	sr := &mockServerRunner{}
+	sr.On("Run", config).Return(startErr).Once()
+	connector := &grpcconnection.GRPCConnectorMock{}
+	c := autostartClient{
+		serverRunner: sr,
+		killServer: func(string, int) error {
+			t.Fatal("server cleanup was not expected")
+			return nil
+		},
+	}
+
+	_, err := c.startAndConnect(config, connector)
+
+	require.ErrorIs(t, err, startErr)
+	sr.AssertExpectations(t)
+	connector.AssertNotCalled(t, "Connect", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestStartAndConnectCleansUpStartedServerWhenConnectionFails(t *testing.T) {
+	config := grpcserver.GrpcServerConfig{Host: localhost, Port: 1337}
+	connectionErr := errors.New("connection failed")
+	cleanupErr := errors.New("cleanup failed")
+
+	sr := &mockServerRunner{}
+	sr.On("Run", config).Return(nil).Once()
+	connector := &grpcconnection.GRPCConnectorMock{}
+	connector.On("Connect", config.Host, config.Port, retryConnectionTimeout).Return((*grpc.ClientConn)(nil), connectionErr).Once()
+	cleanupCalled := false
+	c := autostartClient{
+		serverRunner: sr,
+		killServer: func(host string, port int) error {
+			assert.Equal(t, config.Host, host)
+			assert.Equal(t, config.Port, port)
+			cleanupCalled = true
+			return cleanupErr
+		},
+	}
+
+	_, err := c.startAndConnect(config, connector)
+
+	require.ErrorIs(t, err, connectionErr)
+	require.ErrorIs(t, err, cleanupErr)
+	assert.True(t, cleanupCalled)
+	sr.AssertExpectations(t)
+	connector.AssertExpectations(t)
 }

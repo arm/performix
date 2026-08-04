@@ -16,20 +16,11 @@ import (
 	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
-type PrivilegeProofMech int
-
-const (
-	NoPasswdUserns PrivilegeProofMech = iota
-	NoPasswdSudo
-	SudoPassword
-	SetuidHelper
-)
-
 type ElevatorConfig struct {
 	Pm                process.ProcessManager
 	AcceptorFactory   privilege.AcceptorFactory
 	RootWorkerFactory privilege.RootWorkerProcessFactory
-	Mech              PrivilegeProofMech
+	ProofMechanism    privilege.ProofMechanism
 	Logger            *log.Logger
 }
 
@@ -59,23 +50,28 @@ func (a *Elevator) RootWorkerClient() (targetagentproto.TargetAgentClient, bool)
 	return a.client, true
 }
 
-// ElevatePrivileges elevates the agent's privileges by spawning a root worker proccess
-// with the given proof mechanism. If a root worker exist, this is a no-op.
-// Currently only NoPasswdSudo (passwordless sudo) is supported.
+// ElevatePrivileges elevates the agent's privileges by spawning a root worker
+// with the given proof mechanism. If a root worker exists, this is a no-op.
 func (a *Elevator) ElevatePrivileges(ctx context.Context, ec ElevatorConfig) error {
-	// Check mechanism support
-	switch ec.Mech {
-	case NoPasswdSudo:
-		log.Info("Attempting to elevating privileges with mechanism: passwordless sudo")
-	case NoPasswdUserns:
+	var mechanismFailureCode message.MessageCode
+
+	switch ec.ProofMechanism {
+	case privilege.NoPasswdSudo:
+		log.Info("Attempting to elevate privileges with mechanism: passwordless sudo")
+		mechanismFailureCode = message.AgentElevatePrivilegesMechanismPasswordlessSudo
+	case privilege.AndroidSu:
+		log.Info("Attempting to elevate privileges with mechanism: Android su")
+		// TODO: implement Android su support
+		return message.New(message.AgentElevatePrivilegesMechanismAndroidSuNotImplemented)
+	case privilege.NoPasswdUserns:
 		log.Warn("Privilege elevation requested with unsupported proof mechanism: no-passwd user namespace")
 		return message.New(message.AgentElevatePrivilegesProofMechanismNotSupported).
 			WithMetadata(map[string]string{"mech": "NoPasswdUserns"})
-	case SudoPassword:
+	case privilege.SudoPassword:
 		log.Warn("Privilege elevation requested with unsupported proof mechanism: sudo password")
 		return message.New(message.AgentElevatePrivilegesProofMechanismNotSupported).
 			WithMetadata(map[string]string{"mech": "SudoPassword"})
-	case SetuidHelper:
+	case privilege.SetuidHelper:
 		log.Warn("Privilege elevation requested with unsupported proof mechanism: setuid helper")
 		return message.New(message.AgentElevatePrivilegesProofMechanismNotSupported).
 			WithMetadata(map[string]string{"mech": "SetuidHelper"})
@@ -84,12 +80,10 @@ func (a *Elevator) ElevatePrivileges(ctx context.Context, ec ElevatorConfig) err
 		return message.New(message.AgentElevatePrivilegesProofMechanismUnknown)
 	}
 
-	// NoPasswdSudo
 	rootWorker, err := a.createAndSetNewRootWorker(ctx, ec)
 	if err != nil {
 		log.WithError(err).Debug("Privilege elevation failed: could not create root worker")
-		return message.New(message.AgentElevatePrivilegesMechanismPasswordlessSudo).
-			WithCause(err)
+		return message.New(mechanismFailureCode).WithCause(err)
 	}
 
 	if rootWorker == nil {
@@ -129,7 +123,10 @@ func (a *Elevator) createAndSetNewRootWorker(ctx context.Context, ec ElevatorCon
 	rootWorker, err := factory(
 		ec.Pm,
 		ec.AcceptorFactory,
-		privilege.RootWorkerProcessConfig{TransportLoggingEnabled: false},
+		privilege.RootWorkerProcessConfig{
+			TransportLoggingEnabled: false,
+			ProofMechanism:          ec.ProofMechanism,
+		},
 	)
 	if err != nil {
 		log.WithError(err).Error("Failed to create root worker process")

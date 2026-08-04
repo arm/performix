@@ -539,6 +539,12 @@
         "Message": "{$PRODUCT_FULL_NAME} could not elevate privileges using passwordless sudo.",
         "Explanation": "Privilege elevation using passwordless sudo failed on the target.",
         "Advice": "Check that passwordless sudo is correctly configured on the target. If the issue continues, contact Arm support."
+      },
+      "MECHANISM_ANDROID_SU_NOT_IMPLEMENTED": {
+        "Severity": "Error",
+        "Message": "Android root access is not implemented.",
+        "Explanation": "{$PRODUCT_FULL_NAME} cannot yet use Android su to run commands with root privileges.",
+        "Advice": "Use a recipe and workload type that does not require root privileges."
       }
     },
     "api": {
@@ -950,17 +956,13 @@
         "Explanation": "The OS and architecture combination ({os} {arch}) does not provide the host-side functionality required for this operation.",
         "Advice": "If the issue continues, contact Arm support."
       },
-      "USER_CANCELLATION_ERROR": {
-        "Severity": "Error",
-        "Message": "You canceled the operation.",
-        "Explanation": "{$PRODUCT_FULL_NAME} stopped the operation after receiving a cancellation request.",
-        "Advice": "If this occurred unexpectedly, contact Arm support."
+      "USER_CANCELED": {
+        "Severity": "Info",
+        "Message": "The operation was canceled."
       },
-      "USER_STOPPED_ERROR": {
-        "Severity": "Error",
-        "Message": "The operation stopped.",
-        "Explanation": "You manually stopped the operation.",
-        "Advice": "If this occurred unexpectedly, contact Arm support."
+      "USER_STOPPED": {
+        "Severity": "Info",
+        "Message": "The operation was stopped."
       }
     },
     "conductor": {
@@ -1635,6 +1637,12 @@
         "Advice": "Specify a valid workload type and then try again."
       },
       "stages": {
+        "HOST_AGENT_CONNECTION_FAILED": {
+          "Severity": "Error",
+          "Message": "{$PRODUCT_FULL_NAME} cannot connect to the agent server on the host.",
+          "Explanation": "The recipe needs the agent server on the host to run host-side tools, but the connection could not be established.",
+          "Advice": "Try the operation again. Ensure the host has sufficient resources and that the {$PRODUCT_FULL_NAME} tools directory on the host has not been manually modified. If {$PRODUCT_FULL_NAME} still cannot connect to the agent server on the host, contact Arm support."
+        },
         "SCRIPTED_STAGE_ERROR": {
           "Severity": "Error",
           "Message": "The recipe failed during the `{stage}` stage.",
@@ -2362,7 +2370,7 @@
         "Severity": "Error",
         "Message": "The `locality` field can only be used on `tool_bundle` dependencies.",
         "Explanation": "A recipe or tool integration sets `locality` on a `tool` dependency. {$PRODUCT_FULL_NAME} only supports `locality` for `tool_bundle` dependencies.",
-        "Advice":  "Contact support or the tool integration author."
+        "Advice": "Contact support or the tool integration author."
       },
       "TOOL_BUNDLE_MISSING_FIELDS": {
         "Severity": "Error",
@@ -2487,7 +2495,7 @@
           "Severity": "Error",
           "Message": "{$PRODUCT_FULL_NAME} could not elevate privileges on the target.",
           "Explanation": "{$PRODUCT_FULL_NAME} attempted to run `{request}` with administrator or root privileges on the target, but the request was not permitted.",
-          "Advice": "See the 'Prepare your target for {$PRODUCT_FULL_NAME} connections' section of the {$PRODUCT_FULL_NAME} User Guide for more information. Check that privilege elevation (for example, sudo) is configured correctly on the target. If {$PRODUCT_FULL_NAME} still cannot elevate privileges, contact Arm support."
+          "Advice": "See the 'Prepare your target for {$PRODUCT_FULL_NAME} connections' section of the {$PRODUCT_FULL_NAME} User Guide for more information. Check that privilege elevation is configured correctly. If {$PRODUCT_FULL_NAME} still cannot elevate privileges, contact Arm support."
         }
       }
     }
@@ -2519,6 +2527,14 @@
     }
   },
   "recipes": {
+    "code_hotspots": {
+      "TELEMETRY_SPECIFICATION_UNAVAILABLE": {
+        "Severity": "Warning",
+        "Message": "Some Code Hotspots measurement details will be unavailable.",
+        "Explanation": "No compatible telemetry specification is available for the primary CPU, `{cpuName}`. The run can still be collected and rendered, but some measurement descriptions and grouping information will not be available.",
+        "Advice": "You can continue with the recipe. To include complete measurement details, use a target whose primary CPU has a compatible telemetry specification."
+      }
+    },
     "cpu_microarchitecture": {
       "TELEMETRY_SPECIFICATION_UNAVAILABLE": {
         "Severity": "Error",
@@ -2528,6 +2544,12 @@
       }
     },
     "instruction_mix": {
+      "TELEMETRY_SPECIFICATION_UNAVAILABLE": {
+        "Severity": "Warning",
+        "Message": "Some Instruction Mix measurement details will be unavailable.",
+        "Explanation": "No compatible telemetry specification is available for the primary CPU, `{cpuName}`. Dynamic Instruction Mix data can still be collected and rendered, but some measurement descriptions and grouping information will not be available.",
+        "Advice": "You can continue with the recipe. To include complete measurement details, use a target whose primary CPU has a compatible telemetry specification."
+      },
       "NO_WORKLOAD_STATIC": {
         "Severity": "Error",
         "Message": "{$PRODUCT_FULL_NAME} cannot run instruction mix in static analysis mode with the workload type `{workloadType}`.",
@@ -2630,6 +2652,12 @@
         "Explanation": "The specified third-party recipe invokes the `{tool}` tool. The recipe supplied invalid arguments to the tool, which caused the tool to fail.",
         "Advice": "If the issue continues, contact the recipe author. If you are the recipe author, run the `{cmd}` command to see usage information for the tool."
       },
+      "INSUFFICIENT_SAMPLES": {
+        "Severity": "Error",
+        "Message": "Not enough samples were collected for {tool}.",
+        "Explanation": "{tool} requires at least {minimumSamples} complete samples. A sampling interval of {interval} seconds requires at least {minimumDuration} seconds of collection time.",
+        "Advice": "Increase the Run duration to at least {minimumDuration} seconds or select a shorter sampling interval, then run the Recipe again."
+      },
       "CREATE_PYTHON_VENV": {
         "Severity": "Error",
         "Message": "{$PRODUCT_FULL_NAME} cannot create a Python virtual environment (venv) for the `{tool}` tool.",
@@ -2688,11 +2716,23 @@
       }
     },
     "sysutil_timeline": {
+      "INVALID_INTERVAL": {
+        "Severity": "Error",
+        "Message": "The System Utilization sampling interval is invalid.",
+        "Explanation": "The sampling interval `{value}` seconds is outside the supported range of `{min}` to `{max}` seconds.",
+        "Advice": "Set the sampling interval to a value between `{min}` and `{max}` seconds, then run the Recipe again."
+      },
       "NUMASTAT_NOT_FOUND": {
         "Severity": "Warning",
         "Message": "`numastat` is not installed on the target.",
         "Explanation": "The System Utilization recipe can collect NUMA statistics when the `numastat` program is installed on the target. The recipe can still run without this program, but NUMA statistics will be unavailable in the timeline output.",
         "Advice": "Install the package that provides `numastat` on the target if NUMA statistics are required in the timeline output."
+      },
+      "RUN_FAILED": {
+        "Severity": "Error",
+        "Message": "System Utilization collection failed.",
+        "Explanation": "The System Utilization collector stopped unexpectedly before it could produce a valid timeline.",
+        "Advice": "Check the Run log for collector errors and address the underlying issue, then run the Recipe again. If the issue continues, contact Arm support."
       }
     },
     "syscall_trace": {
@@ -2840,6 +2880,12 @@
       }
     },
     "neoprof": {
+      "ANDROID_PACKAGE_NOT_DEBUGGABLE": {
+        "Severity": "Error",
+        "Message": "The Android package `{package}` cannot be profiled.",
+        "Explanation": "The selected Android package is not debuggable, so Android denied the profiling tool access to the application.",
+        "Advice": "Install and select a debuggable build of the application, then run the recipe again."
+      },
       "INVALID_MODE_PARAM": {
         "Severity": "Error",
         "Message": "The recipe provided an invalid `mode` parameter to the `neoprof` tool.",
@@ -2863,6 +2909,18 @@
         "Message": "The `neoprof` tool failed during profiling.",
         "Explanation": "The specified recipe invokes the `neoprof` tool. This tool failed unexpectedly; {tool} returned exit code `{code}` during profiling.",
         "Advice": "If the issue continues, contact Arm support."
+      },
+      "PARQUET_TO_JSON_RUN_FAILED": {
+        "Severity": "Error",
+        "Message": "The `parquet-to-json` tool failed to convert the profiling metadata.",
+        "Explanation": "After profiling, {$PRODUCT_FULL_NAME} ran the `parquet-to-json` tool to convert the counter metadata. The tool returned exit code `{exitCode}`.",
+        "Advice": "Run the recipe again. If the issue continues, contact Arm support."
+      },
+      "PARQUET_TO_JSON_OUTPUT_PARSE_FAILED": {
+        "Severity": "Error",
+        "Message": "The `parquet-to-json` tool returned invalid profiling metadata.",
+        "Explanation": "After profiling, {$PRODUCT_FULL_NAME} ran the `parquet-to-json` tool to convert the counter metadata. The tool returned output that is not a valid JSON array.",
+        "Advice": "Run the recipe again. If the issue continues, contact Arm support."
       },
       "FILE_DESCRIPTORS": {
         "Severity": "Error",

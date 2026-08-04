@@ -70,3 +70,5 @@ Unless `recipe_info` returns different MCP guidance, omit the timeout for initia
 Dynamic Insights are available only for successful runs produced by a supported recipe, currently `code_hotspots`. This limitation applies to Dynamic Insights, not to `run_recipe`; continue to use other recipes when they better match the user's profiling goal.
 
 Use `list_runs` to find a suitable existing successful run when the user has not supplied a run ID. Call `generate_ai_insights` with that run ID. If any returned payload is incomplete, use its bundle ID, payload name and `next_offset` with `read_ai_insights_payload_details`, repeating as needed until the relevant evidence is complete.
+
+The `run_query` tool provides advanced SELECT access to rendered run data. Use it when recipe-specific guidance requests direct querying, or when the user explicitly asks to query a run.

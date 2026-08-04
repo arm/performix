@@ -239,7 +239,7 @@ func readPosixHome(cmdRunner CommandRunner) (home string, err error) {
 
 // readWindowsHome fetches %USERPROFILE% from the target.
 func readWindowsHome(cmdRunner CommandRunner) (home string, err error) {
-	userprofileOut, _, userprofileErr := cmdRunner.RunCommand("powershell -NoLogo -WindowStyle Hidden -Command \"echo $env:USERPROFILE\"")
+	userprofileOut, _, userprofileErr := cmdRunner.RunCommand(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "echo $env:USERPROFILE"`)
 	if userprofileErr != nil {
 		return "", userprofileErr
 	}
@@ -257,7 +257,7 @@ func checkPosixWritable(cmdRunner CommandRunner, path string) (bool, error) {
 
 // readWindowsLocalAppData fetches LOCALAPPDATA from the target.
 func readWindowsLocalAppData(cmdRunner CommandRunner) (localAppData string, err error) {
-	stdout, _, envErr := cmdRunner.RunCommand(`powershell -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`)
+	stdout, _, envErr := cmdRunner.RunCommand(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`)
 	localAppData = strings.TrimSpace(strings.ReplaceAll(stdout, `\`, `/`))
 	if localAppData == "" && envErr != nil {
 		return "", envErr
@@ -267,7 +267,7 @@ func readWindowsLocalAppData(cmdRunner CommandRunner) (localAppData string, err 
 
 // readWindowsUserProfile fetches USERPROFILE from the target.
 func readWindowsUserProfile(cmdRunner CommandRunner) (userProfile string, err error) {
-	stdout, _, envErr := cmdRunner.RunCommand(`powershell -NoLogo -WindowStyle Hidden -Command "echo $env:USERPROFILE"`)
+	stdout, _, envErr := cmdRunner.RunCommand(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "echo $env:USERPROFILE"`)
 	userProfile = util.ForceToSlash(strings.TrimSpace(stdout))
 	if userProfile == "" && envErr != nil {
 		return "", envErr
@@ -277,7 +277,7 @@ func readWindowsUserProfile(cmdRunner CommandRunner) (userProfile string, err er
 
 // checkWindowsWritable attempts a temporary write under the provided Windows path on the target.
 func checkWindowsWritable(cmdRunner CommandRunner, path string) (bool, error) {
-	script := fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, path, terminology.GetProductBinaryName())
+	script := fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, path, terminology.GetProductBinaryName())
 	_, _, err := cmdRunner.RunCommand(script)
 	if err != nil {
 		return false, nil
@@ -294,7 +294,7 @@ func posixPathExists(cmdRunner CommandRunner, path string) (bool, error) {
 }
 
 func windowsPathExists(cmdRunner CommandRunner, path string) (bool, error) {
-	script := fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, path)
+	script := fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, path)
 	_, _, err := cmdRunner.RunCommand(script)
 	if err != nil {
 		return false, nil

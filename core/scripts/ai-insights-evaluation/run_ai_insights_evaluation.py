@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from argparse import ArgumentParser
 from pathlib import Path
 
 
@@ -19,6 +20,20 @@ REPORT_GENERATOR = HARNESS_DIR / "ai_insights_performance_report.py"
 LOCAL_REPORTING_DIR = HARNESS_DIR / "results" / "reporting"
 JUNIT_XML_NAME = "ai-insights-evaluation.xml"
 DASHBOARD_REPORT_NAME = "ai-insights-performance-dashboard.json"
+
+
+def reporting_dir_from_pytest_args(pytest_args: list[str]) -> Path:
+    """Return the reporting directory associated with the pytest results directory."""
+    parser = ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("--ai-results-dir")
+    options, _ = parser.parse_known_args(pytest_args)
+    if options.ai_results_dir is None:
+        return LOCAL_REPORTING_DIR
+
+    results_dir = Path(options.ai_results_dir).expanduser()
+    if not results_dir.is_absolute():
+        results_dir = HARNESS_DIR / results_dir
+    return results_dir / "reporting"
 
 
 def clear_reporting_dir(reporting_dir: Path) -> None:
@@ -93,7 +108,11 @@ def run_evaluation(
 
 
 def main(argv: list[str] | None = None) -> int:
-    return run_evaluation(list(sys.argv[1:] if argv is None else argv))
+    pytest_args = list(sys.argv[1:] if argv is None else argv)
+    return run_evaluation(
+        pytest_args,
+        reporting_dir=reporting_dir_from_pytest_args(pytest_args),
+    )
 
 
 if __name__ == "__main__":

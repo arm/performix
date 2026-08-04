@@ -14,6 +14,8 @@ const VERSION = '1.0.0';
 const POST_PROCESS_TOOL_NAME = 'cache_sharing';
 const bundleVersion = '1.0.0';
 const toolFile = `cache_sharing-${bundleVersion}-py3-none-any.whl`;
+const readinessMessageCode =
+  'engine.recipeparser.js_recipe_stage.READINESS_MESSAGE';
 
 const PYTHON_VER_MAJOR = 3;
 const PYTHON_VER_MINOR = 5;
@@ -68,8 +70,11 @@ const tool = {
     const { rc } = await engine.execCommand(['perf', '--version'], {});
     if (rc !== 0) {
       advice.push({
-        message: '`perf` not found on PATH',
         level: 'error',
+        messageCode: readinessMessageCode,
+        metadata: {
+          message: '`perf` not found on PATH',
+        },
       });
     }
 

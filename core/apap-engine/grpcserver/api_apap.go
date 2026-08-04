@@ -75,6 +75,7 @@ type ApapServerConfig struct {
 	LogFile                   string `json:"log-file"`
 	SourceToolsDir            string `json:"source-tools-dir"`
 	ConfigDirectory           string `json:"config-dir"`
+	ADBPath                   string `json:"adb-path"`
 }
 
 type ApapServer struct {
@@ -149,8 +150,12 @@ func NewApapServer(ctx context.Context, config ApapServerConfig, deploymentPaths
 		sessions:         render.NewSessionStorage(),
 		deploymentPaths:  deploymentPaths,
 		recipeCommandMap: cmdsync.NewCommandStateMap(),
-		targetSessions:   targetsession.NewTargetSessionProvider(deploymentPaths.DeployedToolsDirectory, config.IsRootWorkerEnabled),
-		execPath:         execPath,
+		targetSessions: targetsession.NewTargetSessionProvider(
+			deploymentPaths.DeployedToolsDirectory,
+			config.IsRootWorkerEnabled,
+			config.ADBPath,
+		),
+		execPath: execPath,
 		recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 			return recipeparser.ParseRecipeHelper(recipeparser.FileRecipeReader{}, recipeName)
 		},
@@ -429,8 +434,15 @@ func (s *ApapServer) PrepareRender(ctx context.Context, in *apapproto.PrepareRen
 		return config
 	}
 
+	capabilities, err := run.LoadRunCapabilities(util.Map(content.Entries, func(entry render.ContentMapEntry) cdf.ModelView {
+		return entry.Model
+	}))
+	if err != nil {
+		return nil, err
+	}
+
 	renderConfig := buildRenderConfig(renderBound.CollapseToMap())
-	baselineSpec, err := runtime.GetRendererSpec(ctx, renderConfig, runDescriptions)
+	baselineSpec, err := runtime.GetRendererSpec(ctx, renderConfig, runDescriptions, capabilities)
 	if err != nil {
 		return nil, err
 	}
@@ -460,7 +472,7 @@ func (s *ApapServer) PrepareRender(ctx context.Context, in *apapproto.PrepareRen
 
 		// Re-run render stages with mapped params, then ensure topology/bindings are unchanged.
 		renderConfig = buildRenderConfig(renderBound.CollapseToMap())
-		rendererSpec, err = runtime.GetRendererSpec(ctx, renderConfig, runDescriptions)
+		rendererSpec, err = runtime.GetRendererSpec(ctx, renderConfig, runDescriptions, capabilities)
 		if err != nil {
 			return nil, err
 		}
@@ -617,7 +629,7 @@ func (s *ApapServer) TargetPrepare(ctx context.Context, in *apapproto.TargetPrep
 
 	lock := s.targetAccess.LockWithCancellation(tgt, "target prepare", ctx.Done())
 	if lock == nil {
-		return nil, message.New(message.EngineCommonUserCancellationError)
+		return nil, message.New(message.EngineCommonUserCanceled)
 	}
 	defer lock.Unlock()
 
@@ -640,7 +652,7 @@ func (s *ApapServer) TargetInfoCollector(ctx context.Context, in *apapproto.Targ
 
 	lock := s.targetAccess.LockWithCancellation(tgt, "target info", ctx.Done())
 	if lock == nil {
-		return nil, message.New(message.EngineCommonUserCancellationError)
+		return nil, message.New(message.EngineCommonUserCanceled)
 	}
 	defer lock.Unlock()
 	targetSession, err := s.targetSessions.TargetSession(tgt)
@@ -658,7 +670,10 @@ func (s *ApapServer) TargetInfoCollector(ctx context.Context, in *apapproto.Targ
 
 	stream, err := agentConn.Client.HoldLock(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, message.New(message.EngineCommonUserCancellationError)
+		if cancelErr := message.CancellationError(ctx, err); cancelErr != nil {
+			return nil, cancelErr
+		}
+		return nil, err
 	}
 	_, err = stream.Recv()
 	if err != nil {

@@ -15,6 +15,8 @@ let tool_imix_version = '1.1.0';
 // Temporary fix until we support recipes defining whether they are custom or not
 let customRecipe = false;
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
+const telemetrySpecificationUnavailableMessageCode =
+  'recipes.instruction_mix.TELEMETRY_SPECIFICATION_UNAVAILABLE';
 
 /**
  * @type {import("./docs/jsdocs").Recipe}
@@ -77,6 +79,16 @@ var recipe = {
       label: 'Collect .NET stacks',
       description:
         'Enable collection of .NET stack traces when profiling .NET workloads.',
+      config: {
+        type: 'checkbox',
+        defaultValue: false,
+      },
+    },
+    {
+      id: 'rich_data_capture',
+      required: false,
+      label: 'Collect rich data',
+      description: `Enables the collection of rich data from the target, which enables advanced filtering functionality after the run completes. This can significantly increase host storage usage and transfer time.`,
       config: {
         type: 'checkbox',
         defaultValue: false,
@@ -200,6 +212,23 @@ function generateIMixToolConfig(workload, params) {
 
 /**
  * @param {import("./docs/jsdocs").ReadyExecutionContext} context
+ * @param {import("./docs/jsdocs").RecipeReadyAdvice[]} advice
+ */
+function addTelemetrySpecificationWarning(context, advice) {
+  const cpuName = context.targetInfo().PrimaryCPUName;
+  if (!context.getTelemetrySpecification(cpuName)) {
+    advice.push({
+      ToolName: '',
+      AdviceSeverity: 'warning',
+      MessageCode: telemetrySpecificationUnavailableMessageCode,
+      Metadata: { cpuName },
+      Cause: '',
+    });
+  }
+}
+
+/**
+ * @param {import("./docs/jsdocs").ReadyExecutionContext} context
  */
 function readyInstructionMix(context) {
   let mode = context.getParameter('mode');
@@ -219,6 +248,7 @@ function readyInstructionMix(context) {
       get_ipc_metric_name: true,
       collect_java_stacks: context.getParameter('collect_java_stacks'),
       collect_dotnet_stacks: context.getParameter('collect_dotnet_stacks'),
+      rich_data_capture: context.getParameter('rich_data_capture'),
     };
 
     tools.toolConfigs.push(generateNeoprofToolConfig(workload, params));
@@ -236,6 +266,9 @@ function readyInstructionMix(context) {
   let toolResponses = context.probeTools(tools);
 
   let allAdvice = collectToolAdvice(tools, toolResponses);
+  if (runDynamic) {
+    addTelemetrySpecificationWarning(context, allAdvice);
+  }
 
   return {
     status: toolStatusToRecipeStatus(allAdvice),
@@ -295,6 +328,7 @@ function runInstructionMix(context) {
       get_ipc_metric_name: true,
       collect_java_stacks: context.getParameter('collect_java_stacks'),
       collect_dotnet_stacks: context.getParameter('collect_dotnet_stacks'),
+      rich_data_capture: context.getParameter('rich_data_capture'),
     };
     tools.toolConfigs.push(generateNeoprofToolConfig(workload, params));
   }
@@ -608,14 +642,14 @@ function renderInstructionMix(context) {
         Number.isFinite(filterStartTimeNs) &&
         filterStartTimeNs >= 0
       ) {
-        slAnalyzeConfig.filter_start_time_ns = filterStartTimeNs;
+        slAnalyzeConfig.filter_start_time_ns = Math.round(filterStartTimeNs);
       }
       if (
         filterEndTimeNs !== null &&
         Number.isFinite(filterEndTimeNs) &&
         filterEndTimeNs >= 0
       ) {
-        slAnalyzeConfig.filter_end_time_ns = filterEndTimeNs;
+        slAnalyzeConfig.filter_end_time_ns = Math.round(filterEndTimeNs);
       }
       renderers.push(
         {
@@ -634,14 +668,26 @@ function renderInstructionMix(context) {
           config: { entity: `tool/${tool_neoprof_name}/0/` },
         },
       );
-      if (!context.getRunDescriptions()[0].IsRunPhaseTwoComplete) {
-        timeRangeFilter.disabled = {
-          reason: context.getRunDescriptions()[0].IsRunInProgress
+      const runDescription = context.getRunDescriptions()[0];
+      const renderTimeRangeFilter = { ...timeRangeFilter };
+
+      // Treat a missing parameter as disabled; only an explicit true enables time-range filtering.
+      const richDataCaptureEnabled =
+        runDescription.Parameters.rich_data_capture === true;
+
+      if (!richDataCaptureEnabled) {
+        renderTimeRangeFilter.disabled = {
+          reason:
+            'Time-range filtering is unavailable for this run. re-run the Recipe with "Collect rich data" enabled.',
+        };
+      } else if (!runDescription.IsRunPhaseTwoComplete) {
+        renderTimeRangeFilter.disabled = {
+          reason: runDescription.IsRunInProgress
             ? 'Unavailable until all capture data has been retrieved from the target.'
             : 'Unavailable because the run ended before all capture data was retrieved from the target.',
         };
       }
-      topBarFilters.push(timeRangeFilter);
+      topBarFilters.push(renderTimeRangeFilter);
     }
 
     renderers.push(

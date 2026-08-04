@@ -22,6 +22,12 @@ Options:
 - `--sys-root` alternate `/sys` root (fixtures/tests)
 - `--thread-scan-interval` seconds between thread scans (default: same as `--interval`)
 
+A finite duration must be at least twice the sampling interval so the
+collector can write two complete samples. For example, a 30-second interval
+requires a duration of at least 60 seconds. Unlimited collection
+(`--duration 0`) is allowed, but collection still fails if it is stopped before
+two complete samples have been written.
+
 ## Metrics
 
 All metrics are sampled on an interval and written as a single CSV row.

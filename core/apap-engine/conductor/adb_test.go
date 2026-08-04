@@ -43,10 +43,16 @@ func adbRunKey(args ...string) string {
 	return strings.Join(args, "\x00")
 }
 
+func newTestADBClient(serialNumber string, deviceIPAddress *string, runner ADBRunner) *ADBClient {
+	client := NewADBClient(serialNumber, deviceIPAddress, "")
+	client.runner = runner
+	return client
+}
+
 func TestADBCommandRunner(t *testing.T) {
 	deviceIP := "android-target.invalid:5555"
 	runner := &recordingADBRunner{}
-	client := newADBClientWithRunner("device-123", &deviceIP, runner)
+	client := newTestADBClient("device-123", &deviceIP, runner)
 	cmdRunner := &ADBCommandRunner{client: client}
 
 	stdout, stderr, err := cmdRunner.RunCommand("uname -a")
@@ -66,7 +72,7 @@ func TestADBCommandRunnerSkipsConnectWhenDeviceIsAlreadyListed(t *testing.T) {
 			adbRunKey("devices"): {stdout: "List of devices attached\ndevice-123\tdevice\n"},
 		},
 	}
-	client := newADBClientWithRunner("device-123", &deviceIP, runner)
+	client := newTestADBClient("device-123", &deviceIP, runner)
 	cmdRunner := &ADBCommandRunner{client: client}
 
 	_, _, err := cmdRunner.RunCommand("uname -a")
@@ -82,7 +88,7 @@ func TestADBCommandRunnerUsesLocallyVisibleDeviceWithoutDeviceIP(t *testing.T) {
 			adbRunKey("devices"): {stdout: "List of devices attached\ndevice-123\tdevice\n"},
 		},
 	}
-	client := newADBClientWithRunner("device-123", nil, runner)
+	client := newTestADBClient("device-123", nil, runner)
 	cmdRunner := &ADBCommandRunner{client: client}
 
 	_, _, err := cmdRunner.RunCommand("uname -a")
@@ -98,7 +104,7 @@ func TestADBCommandRunnerCachesConnectedDevice(t *testing.T) {
 			adbRunKey("devices"): {stdout: "List of devices attached\ndevice-123\tdevice\n"},
 		},
 	}
-	client := newADBClientWithRunner("device-123", nil, runner)
+	client := newTestADBClient("device-123", nil, runner)
 	cmdRunner := &ADBCommandRunner{client: client}
 
 	_, _, err := cmdRunner.RunCommand("uname -a")
@@ -120,7 +126,7 @@ func TestADBCommandRunnerInvalidatesCacheOnCommandError(t *testing.T) {
 			adbRunKey("-s", "device-123", "shell", "false"): {err: commandErr},
 		},
 	}
-	client := newADBClientWithRunner("device-123", nil, runner)
+	client := newTestADBClient("device-123", nil, runner)
 	cmdRunner := &ADBCommandRunner{client: client}
 
 	_, _, err := cmdRunner.RunCommand("false")
@@ -137,7 +143,7 @@ func TestADBCommandRunnerInvalidatesCacheOnCommandError(t *testing.T) {
 
 func TestADBCommandRunnerReturnsErrorWhenDeviceIsNotVisibleWithoutDeviceIP(t *testing.T) {
 	runner := &recordingADBRunner{}
-	client := newADBClientWithRunner("device-123", nil, runner)
+	client := newTestADBClient("device-123", nil, runner)
 	cmdRunner := &ADBCommandRunner{client: client}
 
 	_, _, err := cmdRunner.RunCommand("uname -a")
@@ -154,7 +160,7 @@ func TestADBCommandRunnerReturnsConnectError(t *testing.T) {
 			adbRunKey("connect", deviceIP): {err: connectErr},
 		},
 	}
-	client := newADBClientWithRunner("device-123", &deviceIP, runner)
+	client := newTestADBClient("device-123", &deviceIP, runner)
 	cmdRunner := &ADBCommandRunner{client: client}
 
 	_, _, err := cmdRunner.RunCommand("uname -a")
@@ -171,7 +177,7 @@ func TestADBCheckHealth(t *testing.T) {
 				adbRunKey("devices"): {stdout: "List of devices attached\ndevice-123\tdevice\n"},
 			},
 		}
-		client := newADBClientWithRunner("device-123", nil, runner)
+		client := newTestADBClient("device-123", nil, runner)
 
 		err := client.CheckHealth()
 
@@ -189,7 +195,7 @@ func TestADBCheckHealth(t *testing.T) {
 				adbRunKey("-s", "device-123", "get-state"): {err: healthErr},
 			},
 		}
-		client := newADBClientWithRunner("device-123", nil, runner)
+		client := newTestADBClient("device-123", nil, runner)
 
 		err := client.CheckHealth()
 
@@ -202,10 +208,25 @@ func TestADBCheckHealth(t *testing.T) {
 }
 
 func TestADBClient(t *testing.T) {
-	conn := NewADBClient("device-123", nil)
+	deviceIPAddress := "192.0.2.1:5555"
+	client := NewADBClient("device-123", &deviceIPAddress, "/path/to/adb")
 
-	require.IsType(t, &ADBCommandRunner{}, conn.CommandRunner())
-	require.IsType(t, &ADBTargetFilesystem{}, conn.Filesystem())
+	require.Equal(t, "device-123", client.serialNumber)
+	require.Same(t, &deviceIPAddress, client.deviceIPAddress)
+
+	runner, ok := client.runner.(*ExecADBRunner)
+	require.True(t, ok)
+	require.Equal(t, "/path/to/adb", runner.executable)
+
+	commandRunner, ok := client.CommandRunner().(*ADBCommandRunner)
+	require.True(t, ok)
+	require.Same(t, client, commandRunner.client)
+
+	filesystem, ok := client.Filesystem().(*ADBTargetFilesystem)
+	require.True(t, ok)
+	require.Same(t, client, filesystem.client)
+
+	require.NoError(t, client.Close())
 }
 
 func TestADBTargetFilesystemFileStat(t *testing.T) {
@@ -218,7 +239,7 @@ func TestADBTargetFilesystemFileStat(t *testing.T) {
 				},
 			},
 		}
-		fs := newADBClientWithRunner("device-123", nil, runner).Filesystem()
+		fs := newTestADBClient("device-123", nil, runner).Filesystem()
 
 		info, err := fs.FileStat("/data/local/tmp/file")
 
@@ -240,7 +261,7 @@ func TestADBTargetFilesystemFileStat(t *testing.T) {
 				},
 			},
 		}
-		fs := newADBClientWithRunner("device-123", nil, runner).Filesystem()
+		fs := newTestADBClient("device-123", nil, runner).Filesystem()
 
 		info, err := fs.FileStat("/data/local/tmp/dir")
 
@@ -259,7 +280,7 @@ func TestADBTargetFilesystemFileStat(t *testing.T) {
 				},
 			},
 		}
-		fs := newADBClientWithRunner("device-123", nil, runner).Filesystem()
+		fs := newTestADBClient("device-123", nil, runner).Filesystem()
 
 		_, err := fs.FileStat("/data/local/tmp/file")
 
@@ -273,7 +294,7 @@ func TestADBTargetFilesystemCreateDirTree(t *testing.T) {
 			adbRunKey("devices"): {stdout: "List of devices attached\ndevice-123\tdevice\n"},
 		},
 	}
-	fs := newADBClientWithRunner("device-123", nil, runner).Filesystem()
+	fs := newTestADBClient("device-123", nil, runner).Filesystem()
 
 	err := fs.CreateDirTree("/data/local/tmp/apap tools", 0o700)
 
@@ -290,7 +311,7 @@ func TestADBTargetFilesystemRemoveDirTree(t *testing.T) {
 			adbRunKey("devices"): {stdout: "List of devices attached\ndevice-123\tdevice\n"},
 		},
 	}
-	fs := newADBClientWithRunner("device-123", nil, runner).Filesystem()
+	fs := newTestADBClient("device-123", nil, runner).Filesystem()
 
 	err := fs.RemoveDirTree("/data/local/tmp/apap tools")
 
@@ -306,7 +327,7 @@ func TestADBTargetFilesystemCreateEmptyFile(t *testing.T) {
 			adbRunKey("devices"): {stdout: "List of devices attached\ndevice-123\tdevice\n"},
 		},
 	}
-	fs := newADBClientWithRunner("device-123", nil, runner).Filesystem()
+	fs := newTestADBClient("device-123", nil, runner).Filesystem()
 
 	err := fs.CreateEmptyFile("/data/local/tmp/apap tools/.extracted", 0o644)
 
@@ -323,7 +344,7 @@ func TestADBTargetFilesystemCopyFromHostUsesPush(t *testing.T) {
 			adbRunKey("devices"): {stdout: "List of devices attached\ndevice-123\tdevice\n"},
 		},
 	}
-	client := newADBClientWithRunner("device-123", nil, runner)
+	client := newTestADBClient("device-123", nil, runner)
 	fs := client.Filesystem()
 	hostPath := filepath.Join(t.TempDir(), "tool")
 	require.NoError(t, os.WriteFile(hostPath, []byte("payload"), 0o644))
@@ -344,7 +365,7 @@ func TestADBTargetFilesystemCopyFromHostUsesPush(t *testing.T) {
 
 func TestADBTargetFilesystemCopyFromHostReturnsHostStatError(t *testing.T) {
 	runner := &recordingADBRunner{}
-	fs := newADBClientWithRunner("device-123", nil, runner).Filesystem()
+	fs := newTestADBClient("device-123", nil, runner).Filesystem()
 	hostPath := filepath.Join(t.TempDir(), "missing-tool")
 
 	var progress []int64
@@ -361,7 +382,7 @@ func TestADBTargetFilesystemCopyFromHostReturnsHostStatError(t *testing.T) {
 
 func TestADBDialRejectsInvalidAddress(t *testing.T) {
 	runner := &recordingADBRunner{}
-	client := newADBClientWithRunner("device-123", nil, runner)
+	client := newTestADBClient("device-123", nil, runner)
 
 	_, err := client.Dial("tcp", "not-a-host-port")
 	require.Error(t, err)
@@ -374,7 +395,7 @@ func TestADBDialRemovesForwardWhenLocalDialFails(t *testing.T) {
 			adbRunKey("devices"): {stdout: "List of devices attached\ndevice-123\tdevice\n"},
 		},
 	}
-	client := newADBClientWithRunner("device-123", nil, runner)
+	client := newTestADBClient("device-123", nil, runner)
 
 	_, err := client.Dial("tcp", "android-device.invalid:1234")
 

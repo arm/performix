@@ -15,7 +15,7 @@ sys.path.append(str(REPORTING_DIR))
 from ai_insights_performance_report import (  # noqa: E402
     REPORT_NAME,
     build_dashboard_benchmarks,
-    build_payloads,
+    build_payloads as build_payloads_from_junit,
     write_payloads,
 )
 from junit_attempts import attempts_from_junit  # noqa: E402
@@ -40,7 +40,33 @@ def with_performance_assessment(
     return {**attempt, **dict(recorded_performance_properties(metrics))}
 
 
+def build_payloads(attempts: list[dict[str, str]]):
+    """Add the MCP properties recorded for every real pytest attempt."""
+    return build_payloads_from_junit([
+        {
+            "ai_mcp_tool_calls_succeeded": "0",
+            "ai_mcp_tool_calls_failed": "0",
+            "ai_mcp_tool_duration_seconds_succeeded": "0",
+            "ai_mcp_tool_duration_seconds_failed": "0",
+            **attempt,
+        }
+        for attempt in attempts
+    ])
+
+
 class AiInsightsPerformanceReportTests(unittest.TestCase):
+    def test_missing_mcp_call_count_is_rejected(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "missing or invalid ai_mcp_tool_calls_succeeded",
+        ):
+            build_payloads_from_junit([
+                {
+                    "ai_test_id": "test_case_01",
+                    "ai_mode": "performix_mcp",
+                }
+            ])
+
     def test_only_performix_mcp_has_performance_evaluation(self):
         self.assertTrue(is_performance_evaluated_mode("performix_mcp"))
         self.assertFalse(is_performance_evaluated_mode("rest"))
@@ -107,7 +133,10 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
                 "ai_input_tokens": "1000",
                 "ai_output_tokens": "1000",
                 "ai_reasoning_output_tokens": "123",
-                "ai_mcp_completed_calls": "2",
+                "ai_mcp_tool_calls_succeeded": "1",
+                "ai_mcp_tool_calls_failed": "1",
+                "ai_mcp_tool_duration_seconds_succeeded": "1",
+                "ai_mcp_tool_duration_seconds_failed": "0.25",
             },
         ]
 
@@ -131,6 +160,14 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
         self.assertEqual([True, True, False], [row[ignored_col] for row in report["rows"]])
         self.assertIn("attempt", report["headers"])
         self.assertIn("attempts_total", report["headers"])
+        rest_row = dict(zip(report["headers"], report["rows"][0]))
+        self.assertEqual(0, rest_row["mcp_tool_calls_succeeded"])
+        self.assertEqual(0, rest_row["mcp_tool_calls_failed"])
+        performix_row = dict(zip(report["headers"], report["rows"][2]))
+        self.assertEqual(1, performix_row["mcp_tool_calls_succeeded"])
+        self.assertEqual(1, performix_row["mcp_tool_calls_failed"])
+        self.assertEqual(1, performix_row["mcp_tool_duration_seconds_succeeded"])
+        self.assertEqual(0.25, performix_row["mcp_tool_duration_seconds_failed"])
 
     def test_missing_and_over_threshold_performix_metrics_are_alertable(self):
         attempts = [

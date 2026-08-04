@@ -11,6 +11,33 @@ func CopyMap[K comparable, V any](m map[K]V) map[K]V {
 	return cpy
 }
 
+func DeepCopyJSONObject(object map[string]any) map[string]any {
+	if object == nil {
+		return nil
+	}
+
+	copy := make(map[string]any, len(object))
+	for key, value := range object {
+		copy[key] = deepCopyJSONValue(value)
+	}
+	return copy
+}
+
+func deepCopyJSONValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return DeepCopyJSONObject(value)
+	case []any:
+		copy := make([]any, len(value))
+		for index, item := range value {
+			copy[index] = deepCopyJSONValue(item)
+		}
+		return copy
+	default:
+		return value
+	}
+}
+
 func CopyKeysSlice[K comparable, V any](m map[K]V) []K {
 	cpy := make([]K, len(m))
 	i := 0

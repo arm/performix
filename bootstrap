@@ -258,12 +258,6 @@ add_to_path() {
   append_managed_block "$file" "mise path" "export PATH=\"${bin_expr}:\$PATH\""
 }
 
-path_command() {
-  local bin_expr
-  bin_expr="$(path_expr_for_profile "$(dirname "$MISE_INSTALL_PATH")")"
-  printf 'export PATH="%s:$PATH"' "$bin_expr"
-}
-
 activate_shell() {
   local file shell_name mise_expr
   if ! file="$(profile_path)"; then
@@ -275,13 +269,6 @@ activate_shell() {
   mise_expr="$(path_expr_for_profile "$MISE_INSTALL_PATH")"
   append_managed_block "$file" "mise activation" "eval \"\$(\"${mise_expr}\" activate ${shell_name})\""
   ACTIVATED_SHELL_THIS_RUN=true
-}
-
-activation_command() {
-  local shell_name mise_expr
-  shell_name="$(basename "${SHELL:-}")"
-  mise_expr="$(path_expr_for_profile "$MISE_INSTALL_PATH")"
-  printf 'eval "$("%s" activate %s)"' "$mise_expr" "$shell_name"
 }
 
 current_shell_activated() {
@@ -374,20 +361,22 @@ info "Installing pinned tool versions with mise..."
 # Trusting the checked-in mise.toml avoids an interactive trust prompt on a
 # fresh clone while keeping mise's normal trust model for other directories.
 "$MISE_BIN" trust --yes "$PROJECT_ROOT/mise.toml"
+"$MISE_BIN" trust --yes "$PROJECT_ROOT/.miserc.toml"
+if [[ -f "$PROJECT_ROOT/mise.internal.toml" ]]; then
+  "$MISE_BIN" trust --yes "$PROJECT_ROOT/mise.internal.toml"
+fi
 "$MISE_BIN" install -C "$PROJECT_ROOT"
 
 success "Performix bootstrap completed."
 echo
 if current_shell_activated; then
   info "Next: run 'task install' when you are ready to install dependencies, generate code, and build."
-elif [[ "$ACTIVATED_SHELL_THIS_RUN" == true ]]; then
-  info "Next: run this command to activate mise in this shell, then run 'task install':"
-  printf '  %b%s%b\n' "$BOLD" "$(activation_command)" "$RESET"
-elif [[ "$PATH_SETUP_ACCEPTED" == true ]]; then
-  info "Next: run this command to make mise available in this shell, then run 'mise exec -- task install':"
-  printf '  %b%s%b\n' "$BOLD" "$(path_command)" "$RESET"
-elif [[ "$MISE_NEEDS_PATH_SETUP" == true ]]; then
-  info "Next: run '$MISE_BIN exec -- task install' when you are ready to install dependencies, generate code, and build."
 else
-  info "Next: run 'mise exec -- task install' when you are ready to install dependencies, generate code, and build."
+  if [[ "$ACTIVATED_SHELL_THIS_RUN" == true ]]; then
+    info "mise activation is configured in $(profile_path) and will take effect in new shells."
+  elif [[ "$PATH_SETUP_ACCEPTED" == true ]]; then
+    info "mise is configured on PATH in $(profile_path) and will be available in new shells."
+  fi
+  info "Next: install Performix dependencies now:"
+  printf '  %b"%s" exec -- task install%b\n' "$BOLD" "$(path_expr_for_profile "$MISE_BIN")" "$RESET"
 fi

@@ -77,6 +77,24 @@ func (s *testRenderStage) Execute(ctx recipe.ExecutionContext, stageContext *rec
 
 func (s *testRenderStage) Name() string { return "testRenderStage" }
 
+type testCapabilityRenderStage struct {
+	called       bool
+	capabilities run.ToolCapabilities
+}
+
+func (s *testCapabilityRenderStage) Execute(ctx recipe.ExecutionContext, stageContext *recipe.StageContext) (func(), error) {
+	capabilities, err := ctx.GetToolCapabilities(0, "a", 0)
+	if err != nil {
+		return nil, err
+	}
+
+	s.called = true
+	s.capabilities = capabilities
+	return nil, stageContext.RendererNotifier.OnRender(recipe.RenderOutput{})
+}
+
+func (s *testCapabilityRenderStage) Name() string { return "testCapabilityRenderStage" }
+
 func setupPrepareRenderServer(t *testing.T, outputFn func(renderParams map[string]any) recipe.RenderOutput) (*ApapServer, run.RunID) {
 	t.Helper()
 
@@ -1122,6 +1140,73 @@ func TestPrepareRender_WithVisualizationParameters_RejectsVisualizationRendererI
 	var msg *message.MessageImpl
 	require.ErrorAs(t, err, &msg)
 	assert.Equal(t, message.EngineGrpcserverApiApapRenderTopologyChanged, msg.Code())
+}
+
+func TestPrepareRender_FetchesAndAttachesCapabilities(t *testing.T) {
+	t.Run("fetches capabilities and provides them to renderer stages", func(t *testing.T) {
+		rc, runID := createRunCollectionWithRun(t)
+		capabilityComponentType := cdf.ComponentType{
+			Name:          "one-capability",
+			SchemaVersion: "1.0",
+		}
+		expectedCapability := run.ToolCapability{
+			State:         "available",
+			Payload:       map[string]any{"enabled": true},
+			ComponentType: capabilityComponentType,
+		}
+		expected := run.ToolCapabilities{
+			"one": expectedCapability,
+		}
+		capabilityRelativePath := "tool/a/0/capabilities/one.json"
+		capabilitiesDir := filepath.Join(rc.GetRunPath(runID), filepath.FromSlash("tool/a/0/capabilities"))
+		require.NoError(t, os.MkdirAll(capabilitiesDir, perms.LocalDirPerm))
+		require.NoError(t, util.WriteJSONFile(
+			filepath.Join(capabilitiesDir, "one.json"),
+			&expectedCapability,
+			perms.LocalFilePerm,
+		))
+		manifestPath := filepath.Join(rc.GetRunPath(runID), "manifest.json")
+		manifest, err := util.ReadJSONFile[cdf.Manifest](manifestPath)
+		require.NoError(t, err)
+		manifest.Entries = append(manifest.Entries, cdf.ManifestEntry{
+			Path:          capabilityRelativePath,
+			ComponentType: capabilityComponentType,
+		})
+		require.NoError(t, util.WriteJSONFileAtomic(manifestPath, manifest, perms.LocalFilePerm))
+
+		stage := &testCapabilityRenderStage{}
+		reader := MockRecipeReader{}
+		recipes := map[string]recipe.Recipe{
+			"cpu_microarchitecture": {
+				Name:         "cpu_microarchitecture",
+				RenderStages: []recipe.ScriptedStage{stage},
+			},
+		}
+		reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
+		server := &ApapServer{
+			runs:         rc,
+			recipeReader: &reader,
+			recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
+				recipeInfo := recipes[recipeName]
+				return &recipeInfo, nil
+			},
+			packageManager:       newTestPackageManager(t),
+			compatibilityChecker: &compatibility.ConcreteCompatibilityChecker{},
+		}
+		request := &apapproto.PrepareRenderRequest{
+			Content: &apapproto.ContentSelection{
+				Runs: []*apapproto.RunId{{Value: runID.Value}},
+			},
+		}
+
+		response, err := server.PrepareRender(context.Background(), request)
+
+		require.NoError(t, err)
+		require.NotNil(t, response)
+		require.True(t, stage.called)
+		require.Equal(t, expected, stage.capabilities)
+		require.Equal(t, capabilityComponentType, stage.capabilities["one"].ComponentType)
+	})
 }
 
 func TestShutdown(t *testing.T) {
@@ -2837,6 +2922,7 @@ func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
 		"deployment-tools-dir":        "/opt/apap/tools/deployed",
 		"source-tools-dir":            "/opt/apap/tools/src",
 		"config-dir":                  "/etc/apap",
+		"adb-path":                    "",
 	}
 
 	require.Equal(t, expected, server.buildSupportPackageConfig())

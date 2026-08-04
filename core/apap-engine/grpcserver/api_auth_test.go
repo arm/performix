@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	conductormocks "github.com/Arm-Debug/apap-cli/apap-engine/conductor/conductormocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
@@ -237,7 +238,7 @@ func TestTargetLogin(t *testing.T) {
 		resp := got.GetResponse()
 		require.NotNil(t, resp)
 		require.Equal(t, apapproto.StatusCode_ERROR, resp.GetReturnCode())
-		require.True(t, proto.Equal(message.BuildErrorChain(message.New(message.EngineCommonUserCancellationError)), resp.GetError()))
+		require.True(t, proto.Equal(message.BuildErrorChain(message.New(message.EngineCommonUserCanceled)), resp.GetError()))
 		stream.AssertExpectations(t)
 	})
 	t.Run("errors on target session provider failure", func(t *testing.T) {
@@ -270,6 +271,132 @@ func TestTargetLogin(t *testing.T) {
 		require.True(t, proto.Equal(message.BuildErrorChain(targetSessionErr), resp.GetError()))
 		stream.AssertExpectations(t)
 		provider.AssertExpectations(t)
+	})
+	t.Run("transient SSH connection bypasses target session cache and closes the connection", func(t *testing.T) {
+		provider := &targetsessionmocks.MockTargetSessionProvider{}
+		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{})
+		secureClient := &conductormocks.SecureClientMock{}
+		secureClient.On("Close").Return(nil).Once()
+		server.createSSHConnection = func(ctx context.Context, tgt *target.SSHTarget, pp conductor.PromptProviders) (conductor.SecureClient, error) {
+			require.Equal(t, "user@target-host", tgt.DisplayHost())
+			require.NotNil(t, pp.SecretPromptProvider)
+			require.NotNil(t, pp.FingerprintPromptProvider)
+			return secureClient, nil
+		}
+
+		hostKeyPolicy := apapproto.SSHHostKeyPolicy_SSH_HOST_KEY_POLICY_ASK_IF_MISSING
+		authMethod := apapproto.SSHAuthMethod_SSH_AUTH_METHOD_KEY
+		tgt := &apapproto.Target{
+			Connection: &apapproto.Target_SshConfig{
+				SshConfig: &apapproto.SSHConnectionConfig{
+					HostKeyPolicy: &hostKeyPolicy,
+					Hosts: []*apapproto.SSHHostConfig{{
+						Host:       "target-host",
+						Port:       22,
+						Username:   "user",
+						AuthMethod: &authMethod,
+					}},
+				},
+			},
+		}
+		req := &authproto.TargetLoginClientMessage{
+			Message: &authproto.TargetLoginClientMessage_Request{
+				Request: &authproto.TargetLoginRequest{
+					Target:                       tgt,
+					CreateTransientSshConnection: true,
+				},
+			},
+		}
+
+		stream := mocks.NewAuthTargetLoginServer(t)
+		stream.On("Context").Return(context.Background())
+		stream.On("Recv").Return(req, nil).Once()
+		stream.On("Send", mock.Anything).Return(nil).Once()
+
+		require.NoError(t, server.TargetLogin(stream))
+		provider.AssertNotCalled(t, "TargetSession", mock.Anything)
+		secureClient.AssertExpectations(t)
+		provider.AssertExpectations(t)
+		stream.AssertExpectations(t)
+	})
+	t.Run("transient SSH connection returns connect errors", func(t *testing.T) {
+		connectErr := errors.New("connect failed")
+		provider := &targetsessionmocks.MockTargetSessionProvider{}
+		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{})
+		server.createSSHConnection = func(context.Context, *target.SSHTarget, conductor.PromptProviders) (conductor.SecureClient, error) {
+			return nil, connectErr
+		}
+
+		hostKeyPolicy := apapproto.SSHHostKeyPolicy_SSH_HOST_KEY_POLICY_ASK_IF_MISSING
+		authMethod := apapproto.SSHAuthMethod_SSH_AUTH_METHOD_KEY
+		tgt := &apapproto.Target{
+			Connection: &apapproto.Target_SshConfig{
+				SshConfig: &apapproto.SSHConnectionConfig{
+					HostKeyPolicy: &hostKeyPolicy,
+					Hosts: []*apapproto.SSHHostConfig{{
+						Host:       "target-host",
+						Port:       22,
+						Username:   "user",
+						AuthMethod: &authMethod,
+					}},
+				},
+			},
+		}
+		req := &authproto.TargetLoginClientMessage{
+			Message: &authproto.TargetLoginClientMessage_Request{
+				Request: &authproto.TargetLoginRequest{
+					Target:                       tgt,
+					CreateTransientSshConnection: true,
+				},
+			},
+		}
+
+		stream := mocks.NewAuthTargetLoginServer(t)
+		stream.On("Context").Return(context.Background())
+		stream.On("Recv").Return(req, nil).Once()
+		var got *authproto.TargetLoginServerMessage
+		stream.On("Send", mock.Anything).Run(func(args mock.Arguments) {
+			got = args.Get(0).(*authproto.TargetLoginServerMessage)
+		}).Return(nil).Once()
+
+		err := server.TargetLogin(stream)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		resp := got.GetResponse()
+		require.NotNil(t, resp)
+		require.Equal(t, apapproto.StatusCode_ERROR, resp.GetReturnCode())
+		require.True(t, proto.Equal(message.BuildErrorChain(connectErr), resp.GetError()))
+		provider.AssertNotCalled(t, "TargetSession", mock.Anything)
+		provider.AssertExpectations(t)
+		stream.AssertExpectations(t)
+	})
+	t.Run("transient SSH connection request for non-ssh target falls back to target session", func(t *testing.T) {
+		session := &targetsessionmocks.MockTargetSession{}
+		session.On("Connect", mock.Anything, connectOptsMatcher).Return(nil, nil).Once()
+
+		provider := &targetsessionmocks.MockTargetSessionProvider{}
+		provider.On("TargetSession", mock.Anything).Return(session, nil).Once()
+		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{})
+
+		tgt := &apapproto.Target{Connection: &apapproto.Target_LocalConfig{LocalConfig: &apapproto.LocalConnectionConfig{}}}
+		req := &authproto.TargetLoginClientMessage{
+			Message: &authproto.TargetLoginClientMessage_Request{
+				Request: &authproto.TargetLoginRequest{
+					Target:                       tgt,
+					CreateTransientSshConnection: true,
+				},
+			},
+		}
+
+		stream := mocks.NewAuthTargetLoginServer(t)
+		stream.On("Context").Return(context.Background())
+		stream.On("Recv").Return(req, nil).Once()
+		stream.On("Send", mock.Anything).Return(nil).Once()
+
+		require.NoError(t, server.TargetLogin(stream))
+		session.AssertExpectations(t)
+		provider.AssertExpectations(t)
+		stream.AssertExpectations(t)
 	})
 }
 
@@ -406,7 +533,7 @@ func TestTargetLoginPrompter(t *testing.T) {
 			SecretType: conductor.SecretTypePassword,
 			Host:       "10.0.0.1",
 		})
-		assert.Equal(t, message.New(message.EngineCommonUserCancellationError), err)
+		assert.Equal(t, message.New(message.EngineCommonUserCanceled), err)
 
 		stream.AssertExpectations(t)
 	})

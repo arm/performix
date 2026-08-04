@@ -163,7 +163,7 @@ func TestWaitForTransfersStageErrorType(t *testing.T) {
 		require.NotEqual(t, util.InvalidTime(), desc.EndTime)
 
 		close(cancelChan)
-		require.ErrorIs(t, <-errCh, message.New(message.EngineCommonUserCancellationError))
+		require.ErrorIs(t, <-errCh, message.New(message.EngineCommonUserCanceled))
 		client.AssertExpectations(t)
 	})
 
@@ -284,7 +284,7 @@ func TestWaitForTransfersStageErrorType(t *testing.T) {
 		close(cancelChan)
 
 		err := <-errCh
-		require.ErrorIs(t, err, message.New(message.EngineCommonUserCancellationError))
+		require.ErrorIs(t, err, message.New(message.EngineCommonUserCanceled))
 		require.Equal(t, run.RecipeFailureRetrievePhase1Complete, stage.ErrorType())
 		client.AssertExpectations(t)
 	})

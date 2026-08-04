@@ -366,6 +366,385 @@ func TestGetRunDescriptions(t *testing.T) {
 	})
 }
 
+func TestGetToolCapabilities(t *testing.T) {
+	t.Run("returns a capability query object", func(t *testing.T) {
+		vm := goja.New()
+		execCtx := &mockExecutionContext{}
+		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{}, nil).Once()
+		t.Cleanup(func() {
+			execCtx.AssertExpectations(t)
+		})
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: execCtx}
+		getToolCapabilities, ok := goja.AssertFunction(vm.ToValue(api.getToolCapabilities))
+		require.True(t, ok)
+
+		value, err := getToolCapabilities(
+			goja.Undefined(),
+			vm.ToValue(1),
+			vm.ToValue(map[string]any{"toolName": "a", "invocationIndex": 2}),
+		)
+
+		require.NoError(t, err)
+		object, ok := value.(*goja.Object)
+		require.True(t, ok)
+		_, ok = goja.AssertFunction(object.Get("has"))
+		require.True(t, ok)
+		_, ok = goja.AssertFunction(object.Get("get"))
+		require.True(t, ok)
+		_, ok = goja.AssertFunction(object.Get("list"))
+		require.True(t, ok)
+	})
+
+	t.Run("has() reports capability presence and state", func(t *testing.T) {
+		vm := goja.New()
+		execCtx := &mockExecutionContext{}
+		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{
+			"one": {State: "available"},
+		}, nil).Once()
+		t.Cleanup(func() {
+			execCtx.AssertExpectations(t)
+		})
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: execCtx}
+		getToolCapabilities, ok := goja.AssertFunction(vm.ToValue(api.getToolCapabilities))
+		require.True(t, ok)
+
+		value, err := getToolCapabilities(
+			goja.Undefined(),
+			vm.ToValue(1),
+			vm.ToValue(map[string]any{"toolName": "a", "invocationIndex": 2}),
+		)
+		require.NoError(t, err)
+		has, ok := goja.AssertFunction(value.ToObject(vm).Get("has"))
+		require.True(t, ok)
+
+		checks := []struct {
+			arguments []goja.Value
+			expected  bool
+		}{
+			{arguments: []goja.Value{vm.ToValue("one")}, expected: true},
+			{arguments: []goja.Value{vm.ToValue("missing")}, expected: false},
+			{arguments: []goja.Value{vm.ToValue("one"), vm.ToValue("available")}, expected: true},
+			{arguments: []goja.Value{vm.ToValue("one"), vm.ToValue("unavailable")}, expected: false},
+			{arguments: []goja.Value{vm.ToValue("missing"), vm.ToValue("available")}, expected: false},
+		}
+
+		for _, check := range checks {
+			value, err = has(goja.Undefined(), check.arguments...)
+			require.NoError(t, err)
+			require.Equal(t, check.expected, value.ToBoolean())
+		}
+	})
+
+	t.Run("get() returns capability details", func(t *testing.T) {
+		vm := goja.New()
+		capability := run.ToolCapability{
+			State:         "available",
+			Payload:       map[string]any{"enabled": true},
+			ComponentType: cdf.ComponentType{Name: "abc", SchemaVersion: "123"},
+		}
+		execCtx := &mockExecutionContext{}
+		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{"one": capability}, nil).Once()
+		t.Cleanup(func() {
+			execCtx.AssertExpectations(t)
+		})
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: execCtx}
+		getToolCapabilities, ok := goja.AssertFunction(vm.ToValue(api.getToolCapabilities))
+		require.True(t, ok)
+
+		query, err := getToolCapabilities(
+			goja.Undefined(),
+			vm.ToValue(1),
+			vm.ToValue(map[string]any{"toolName": "a", "invocationIndex": 2}),
+		)
+		require.NoError(t, err)
+		get, ok := goja.AssertFunction(query.ToObject(vm).Get("get"))
+		require.True(t, ok)
+
+		value, err := get(goja.Undefined(), vm.ToValue("one"))
+		require.NoError(t, err)
+		var fromJS map[string]any
+		require.NoError(t, vm.ExportTo(value, &fromJS))
+		require.Equal(t, map[string]any{
+			"state":   "available",
+			"payload": map[string]any{"enabled": true},
+			"componentType": map[string]string{
+				"name":    "abc",
+				"version": "123",
+			},
+		}, fromJS)
+
+		value, err = get(goja.Undefined(), vm.ToValue("missing"))
+		require.NoError(t, err)
+		require.True(t, goja.IsNull(value))
+	})
+
+	t.Run("get() returns capability details for a matching component type", func(t *testing.T) {
+		vm := goja.New()
+		expected := run.ToolCapability{
+			State:         "available",
+			Payload:       map[string]any{"enabled": true},
+			ComponentType: cdf.ComponentType{Name: "data", SchemaVersion: "1.0"},
+		}
+		execCtx := &mockExecutionContext{}
+		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{"one": expected}, nil).Once()
+		t.Cleanup(func() {
+			execCtx.AssertExpectations(t)
+		})
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: execCtx}
+		getToolCapabilities, ok := goja.AssertFunction(vm.ToValue(api.getToolCapabilities))
+		require.True(t, ok)
+
+		query, err := getToolCapabilities(
+			goja.Undefined(),
+			vm.ToValue(1),
+			vm.ToValue(map[string]any{"toolName": "a", "invocationIndex": 2}),
+		)
+		require.NoError(t, err)
+		get, ok := goja.AssertFunction(query.ToObject(vm).Get("get"))
+		require.True(t, ok)
+
+		value, err := get(
+			goja.Undefined(),
+			vm.ToValue("one"),
+			vm.ToValue(map[string]any{"name": "data", "version": "1.0"}),
+		)
+		require.NoError(t, err)
+		var fromJS map[string]any
+		require.NoError(t, vm.ExportTo(value, &fromJS))
+		require.Equal(t, map[string]any{
+			"state":   "available",
+			"payload": map[string]any{"enabled": true},
+			"componentType": map[string]string{
+				"name":    "data",
+				"version": "1.0",
+			},
+		}, fromJS)
+	})
+
+	t.Run("get() rejects a mismatched component type", func(t *testing.T) {
+		vm := goja.New()
+		capability := run.ToolCapability{
+			State:         "available",
+			ComponentType: cdf.ComponentType{Name: "data", SchemaVersion: "1.0"},
+		}
+		execCtx := &mockExecutionContext{}
+		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{"one": capability}, nil).Once()
+		t.Cleanup(func() {
+			execCtx.AssertExpectations(t)
+		})
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: execCtx}
+		getToolCapabilities, ok := goja.AssertFunction(vm.ToValue(api.getToolCapabilities))
+		require.True(t, ok)
+
+		query, err := getToolCapabilities(
+			goja.Undefined(),
+			vm.ToValue(1),
+			vm.ToValue(map[string]any{"toolName": "a", "invocationIndex": 2}),
+		)
+		require.NoError(t, err)
+		get, ok := goja.AssertFunction(query.ToObject(vm).Get("get"))
+		require.True(t, ok)
+
+		_, err = get(
+			goja.Undefined(),
+			vm.ToValue("one"),
+			vm.ToValue(map[string]any{"name": "other", "version": "2.0"}),
+		)
+		require.EqualError(
+			t,
+			err,
+			"capability one with component type {name: other, version: 2.0} was requested, but this capability actually has type {name: data, version: 1.0}",
+		)
+	})
+
+	t.Run("list() returns all capability details", func(t *testing.T) {
+		vm := goja.New()
+		capabilities := run.ToolCapabilities{
+			"one": {
+				State:         "available",
+				Payload:       map[string]any{"enabled": true},
+				ComponentType: cdf.ComponentType{Name: "abc", SchemaVersion: "123"},
+			},
+			"two": {
+				State:         "unavailable",
+				Payload:       map[string]any{"reason": "off"},
+				ComponentType: cdf.ComponentType{Name: "xyz", SchemaVersion: "456"},
+			},
+		}
+		execCtx := &mockExecutionContext{}
+		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(capabilities, nil).Once()
+		t.Cleanup(func() {
+			execCtx.AssertExpectations(t)
+		})
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: execCtx}
+		getToolCapabilities, ok := goja.AssertFunction(vm.ToValue(api.getToolCapabilities))
+		require.True(t, ok)
+
+		query, err := getToolCapabilities(
+			goja.Undefined(),
+			vm.ToValue(1),
+			vm.ToValue(map[string]any{"toolName": "a", "invocationIndex": 2}),
+		)
+		require.NoError(t, err)
+		list, ok := goja.AssertFunction(query.ToObject(vm).Get("list"))
+		require.True(t, ok)
+
+		value, err := list(goja.Undefined())
+		require.NoError(t, err)
+		var fromJS map[string]any
+		require.NoError(t, vm.ExportTo(value, &fromJS))
+		require.Equal(t, map[string]any{
+			"one": map[string]any{
+				"state":   "available",
+				"payload": map[string]any{"enabled": true},
+				"componentType": map[string]string{
+					"name":    "abc",
+					"version": "123",
+				},
+			},
+			"two": map[string]any{
+				"state":   "unavailable",
+				"payload": map[string]any{"reason": "off"},
+				"componentType": map[string]string{
+					"name":    "xyz",
+					"version": "456",
+				},
+			},
+		}, fromJS)
+	})
+
+	t.Run("returns lookup errors", func(t *testing.T) {
+		vm := goja.New()
+		execCtx := &mockExecutionContext{}
+		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{}, fmt.Errorf("lookup failed")).Once()
+		t.Cleanup(func() {
+			execCtx.AssertExpectations(t)
+		})
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: execCtx}
+		getToolCapabilities, ok := goja.AssertFunction(vm.ToValue(api.getToolCapabilities))
+		require.True(t, ok)
+
+		_, err := getToolCapabilities(
+			goja.Undefined(),
+			vm.ToValue(1),
+			vm.ToValue(map[string]any{"toolName": "a", "invocationIndex": 2}),
+		)
+
+		require.EqualError(t, err, "lookup failed")
+	})
+
+	t.Run("rejects the wrong number of arguments", func(t *testing.T) {
+		api := &ConcreteRecipeAPI{vm: goja.New(), execCtx: &mockExecutionContext{}}
+		fn, ok := goja.AssertFunction(api.vm.ToValue(api.getToolCapabilities))
+		require.True(t, ok)
+
+		_, err := fn(goja.Undefined())
+
+		require.EqualError(t, err, "getToolCapabilities called with wrong number of parameters")
+	})
+
+	t.Run("rejects invalid lookup arguments", func(t *testing.T) {
+		api := &ConcreteRecipeAPI{vm: goja.New(), execCtx: &mockExecutionContext{}}
+		fn, ok := goja.AssertFunction(api.vm.ToValue(api.getToolCapabilities))
+		require.True(t, ok)
+		checks := []struct {
+			name      string
+			arguments []goja.Value
+		}{
+			{
+				name:      "run index",
+				arguments: []goja.Value{goja.Null(), api.vm.ToValue(map[string]any{"toolName": "a", "invocationIndex": 2})},
+			},
+			{
+				name:      "tool invocation",
+				arguments: []goja.Value{api.vm.ToValue(1), goja.Null()},
+			},
+		}
+
+		for _, check := range checks {
+			_, err := fn(goja.Undefined(), check.arguments...)
+			require.EqualError(t, err, "type mismatch", check.name)
+		}
+	})
+
+	t.Run("rejects incorrect helper argument counts", func(t *testing.T) {
+		vm := goja.New()
+		execCtx := &mockExecutionContext{}
+		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{}, nil).Once()
+		t.Cleanup(func() {
+			execCtx.AssertExpectations(t)
+		})
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: execCtx}
+		getToolCapabilities, ok := goja.AssertFunction(vm.ToValue(api.getToolCapabilities))
+		require.True(t, ok)
+
+		value, err := getToolCapabilities(
+			goja.Undefined(),
+			vm.ToValue(1),
+			vm.ToValue(map[string]any{"toolName": "a", "invocationIndex": 2}),
+		)
+		require.NoError(t, err)
+		has, ok := goja.AssertFunction(value.ToObject(vm).Get("has"))
+		require.True(t, ok)
+		get, ok := goja.AssertFunction(value.ToObject(vm).Get("get"))
+		require.True(t, ok)
+		list, ok := goja.AssertFunction(value.ToObject(vm).Get("list"))
+		require.True(t, ok)
+
+		_, err = has(goja.Undefined())
+		require.EqualError(t, err, "toolCapabilities.has called with wrong number of parameters")
+
+		_, err = has(goja.Undefined(), vm.ToValue("one"), vm.ToValue("available"), vm.ToValue("extra"))
+		require.EqualError(t, err, "toolCapabilities.has called with wrong number of parameters")
+
+		_, err = get(goja.Undefined())
+		require.EqualError(t, err, "toolCapabilities.get called with wrong number of parameters")
+
+		_, err = get(goja.Undefined(), vm.ToValue("one"), vm.ToValue("data"), vm.ToValue("extra"))
+		require.EqualError(t, err, "toolCapabilities.get called with wrong number of parameters")
+
+		_, err = list(goja.Undefined(), vm.ToValue("extra"))
+		require.EqualError(t, err, "toolCapabilities.list called with wrong number of parameters")
+	})
+
+	t.Run("rejects invalid helper arguments", func(t *testing.T) {
+		vm := goja.New()
+		execCtx := &mockExecutionContext{}
+		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{
+			"one": {State: "available"},
+		}, nil).Once()
+		t.Cleanup(func() {
+			execCtx.AssertExpectations(t)
+		})
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: execCtx}
+		getToolCapabilities, ok := goja.AssertFunction(vm.ToValue(api.getToolCapabilities))
+		require.True(t, ok)
+
+		value, err := getToolCapabilities(
+			goja.Undefined(),
+			vm.ToValue(1),
+			vm.ToValue(map[string]any{"toolName": "a", "invocationIndex": 2}),
+		)
+		require.NoError(t, err)
+		has, ok := goja.AssertFunction(value.ToObject(vm).Get("has"))
+		require.True(t, ok)
+		get, ok := goja.AssertFunction(value.ToObject(vm).Get("get"))
+		require.True(t, ok)
+
+		_, err = has(goja.Undefined(), goja.Null())
+		require.EqualError(t, err, "type mismatch")
+
+		_, err = has(goja.Undefined(), vm.ToValue("one"), goja.Null())
+		require.EqualError(t, err, "type mismatch")
+
+		_, err = get(goja.Undefined(), goja.Null())
+		require.EqualError(t, err, "type mismatch")
+
+		_, err = get(goja.Undefined(), vm.ToValue("one"), goja.Null())
+		require.EqualError(t, err, "type mismatch")
+	})
+}
+
 func TestListRunComponents(t *testing.T) {
 	t.Run("returns sorted components for selected run", func(t *testing.T) {
 		runDir := t.TempDir()

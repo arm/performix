@@ -19,6 +19,12 @@ service Auth {
 // TargetLoginRequest describes the target that the client wants to log into.
 message TargetLoginRequest {
     apap.Target target = 1;
+    // Create a transient SSH connection for this login attempt instead of
+    // reusing a cached SSH connection.
+    // This re-evaluates host-key verification and authentication, prompts again
+    // if needed, and closes the resulting connection without caching it.
+    // For non-SSH targets, this option is ignored.
+    bool create_transient_ssh_connection = 2;
 }
 
 // TargetLoginResponse returns placeholder information for the target login request.

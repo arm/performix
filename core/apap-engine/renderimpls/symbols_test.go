@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -317,6 +318,70 @@ func TestMapFilePaths(t *testing.T) {
 		err := mapFilePaths(db.Conn, mapper, sourceFilesTableName)
 		assert.ErrorContains(t, err, "does not exist")
 	})
+}
+
+func TestLoadSourceCodeAttributionTablesMapsPeriodicSampleFiles(t *testing.T) {
+	db := newTestDatabase(t)
+	_, err := db.Conn.ExecContext(context.Background(), fmt.Sprintf(createSourceFilesTableSQL, "source_files"))
+	require.NoError(t, err)
+
+	modelDir := t.TempDir()
+	hostRoot := t.TempDir()
+	symbolTargetPath := "/work/source.cpp"
+	periodicTargetPath := "/usr/include/c++/13/bits/random.h"
+
+	for _, targetPath := range []string{symbolTargetPath, periodicTargetPath} {
+		hostPath := filepath.Join(hostRoot, filepath.FromSlash(strings.TrimPrefix(targetPath, "/")))
+		require.NoError(t, os.MkdirAll(filepath.Dir(hostPath), perms.LocalDirPerm))
+		require.NoError(t, os.WriteFile(hostPath, []byte("source"), perms.LocalFilePerm))
+	}
+
+	sourceCodePath := filepath.Join(modelDir, run.SourceCodeFilename)
+	require.NoError(t, run.WriteHostSourceCodePath(sourceCodePath, &run.HostSourceCodePath{
+		Paths: []string{hostRoot},
+	}))
+
+	const samplesBase = "tool/neoprof/0/output/sources-capture-periodic_sampling"
+	samplesPath := filepath.Join(modelDir, filepath.FromSlash(samplesBase+"-app.csv"))
+	require.NoError(t, os.MkdirAll(filepath.Dir(samplesPath), perms.LocalDirPerm))
+	require.NoError(t, os.WriteFile(samplesPath, []byte(fmt.Sprintf(
+		"File,Line No,Inlined,Periodic Samples,Functions\n%q,7,,11,%q\n",
+		periodicTargetPath,
+		"random_function() (app)",
+	)), perms.LocalFilePerm))
+
+	model := cdf.NewOnDiskModel(modelDir, &cdf.Manifest{Entries: []cdf.ManifestEntry{
+		{Path: run.SourceCodeFilename, ComponentType: run.SourceCodeCT()},
+		{
+			Path: samplesBase + "*",
+			ComponentType: cdf.ComponentType{
+				Name:          "sl-collect-source-line-attribution",
+				SchemaVersion: "1.0",
+			},
+		},
+	}}, cdf.Metadata{})
+
+	_, err = db.Conn.ExecContext(context.Background(),
+		`INSERT INTO source_files (target_location, host_location) VALUES (?, ?)`,
+		symbolTargetPath,
+		filepath.Join(hostRoot, "work/source.cpp"),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, LoadSourceCodeAttributionTables(
+		db.Conn,
+		model,
+		samplesBase,
+		"source_files",
+		func(string) string { return "periodic_samples" },
+	))
+
+	var hostLocation string
+	require.NoError(t, db.Conn.QueryRowContext(context.Background(),
+		`SELECT host_location FROM source_files WHERE target_location = ?`,
+		periodicTargetPath,
+	).Scan(&hostLocation))
+	assert.Equal(t, filepath.Join(hostRoot, "usr/include/c++/13/bits/random.h"), hostLocation)
 }
 
 func TestAssertSymbolsFieldsExist(t *testing.T) {

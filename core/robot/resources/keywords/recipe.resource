@@ -297,7 +297,7 @@ Cancel Run
   [Arguments]  ${process}
   Write To Process Stdin  ${process}  "q"
   Wait For Process And Log  ${process}
-  The Last Command Failed With Message Code  engine.common.USER_CANCELLATION_ERROR
+  The Last Command Failed With Message Code  engine.common.USER_CANCELED
 
 Last Run Command Via Recipe Stdout Contains
   [Documentation]  Checks that the stdout of the last run command contains the specified substring.

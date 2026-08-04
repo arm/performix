@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/grpc/metadata"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
@@ -34,15 +35,17 @@ type PrivilegeSession interface {
 }
 
 type PrivilegeSessionImpl struct {
-	client targetagentproto.TargetAgentClient
+	client   targetagentproto.TargetAgentClient
+	targetOS conductor.OS
 
 	token   string
 	tokenMu sync.RWMutex
 }
 
-func NewPrivilegeSession(client targetagentproto.TargetAgentClient) *PrivilegeSessionImpl {
+func NewPrivilegeSession(client targetagentproto.TargetAgentClient, targetOS conductor.OS) *PrivilegeSessionImpl {
 	return &PrivilegeSessionImpl{
-		client: client,
+		client:   client,
+		targetOS: targetOS,
 	}
 }
 
@@ -52,7 +55,7 @@ func (p *PrivilegeSessionImpl) withElevatedPrivileges(ctx context.Context, reque
 	currToken := p.getToken()
 
 	if currToken == "" {
-		newToken, err := p.elevatePrivileges(request)
+		newToken, err := p.elevatePrivileges(ctx, request)
 		if err != nil {
 			return nil, err
 		}
@@ -103,21 +106,16 @@ func (p *PrivilegeSessionImpl) Invoke(ctx context.Context, request string, call 
 	return err
 }
 
-// elevatePrivileges attempts to elevate privileges on the target agent.
-// Currently, it only supports passwordless sudo mechanism.
-func (p *PrivilegeSessionImpl) elevatePrivileges(request string) (string, error) {
+// elevatePrivileges requests the passwordless mechanism for the target OS.
+func (p *PrivilegeSessionImpl) elevatePrivileges(ctx context.Context, request string) (string, error) {
 	req := &targetagentproto.ElevatePrivilegesRequest{
-		Proof: &targetagentproto.PrivilegeProof{
-			Mech: &targetagentproto.PrivilegeProof_NoPasswdSudo{
-				NoPasswdSudo: true,
-			},
-		},
+		Proof: privilegeProofForOS(p.targetOS),
 	}
 
 	// We only try once to elevate privileges as the passwordless mechanism either works or not.
 	// We might want to try more than once depending on the mechanism in the future.
 	// For example; sudo password mechanism might fail due to user entering wrong password (try 3 times).
-	resp, err := p.client.ElevatePrivileges(context.Background(), req)
+	resp, err := p.client.ElevatePrivileges(ctx, req)
 	if err != nil {
 		return "", message.New(message.EngineToolServiceElevatePrivilegesFailed).
 			WithMetadata(map[string]string{"request": request}).
@@ -128,6 +126,17 @@ func (p *PrivilegeSessionImpl) elevatePrivileges(request string) (string, error)
 	p.setToken(token)
 
 	return token, nil
+}
+
+func privilegeProofForOS(targetOS conductor.OS) *targetagentproto.PrivilegeProof {
+	if targetOS == conductor.Android {
+		return &targetagentproto.PrivilegeProof{
+			Mech: &targetagentproto.PrivilegeProof_AndroidSu{AndroidSu: true},
+		}
+	}
+	return &targetagentproto.PrivilegeProof{
+		Mech: &targetagentproto.PrivilegeProof_NoPasswdSudo{NoPasswdSudo: true},
+	}
 }
 
 func (p *PrivilegeSessionImpl) getToken() string {

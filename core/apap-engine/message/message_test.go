@@ -66,7 +66,7 @@ func TestCancellationError(t *testing.T) {
 		err := CancellationError(ctx, nil)
 		msg := IsMessage(err)
 		require.NotNil(t, msg)
-		require.Equal(t, EngineCommonUserCancellationError, msg.Code())
+		require.Equal(t, EngineCommonUserCanceled, msg.Code())
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
@@ -75,7 +75,7 @@ func TestCancellationError(t *testing.T) {
 		err := CancellationError(ctx, context.Canceled)
 		msg := IsMessage(err)
 		require.NotNil(t, msg)
-		require.Equal(t, EngineCommonUserCancellationError, msg.Code())
+		require.Equal(t, EngineCommonUserCanceled, msg.Code())
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
@@ -84,7 +84,7 @@ func TestCancellationError(t *testing.T) {
 		err := CancellationError(ctx, status.Error(codes.Canceled, "client canceled"))
 		msg := IsMessage(err)
 		require.NotNil(t, msg)
-		require.Equal(t, EngineCommonUserCancellationError, msg.Code())
+		require.Equal(t, EngineCommonUserCanceled, msg.Code())
 	})
 
 	t.Run("non-cancellation error returns nil", func(t *testing.T) {

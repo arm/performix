@@ -5,6 +5,14 @@ const { getExecutableFromWorkload } = require('./workload');
 const readinessMessageCode =
   'engine.recipeparser.js_recipe_stage.READINESS_MESSAGE';
 
+/**
+ * @param {number} milliseconds
+ * @returns {Promise<void>}
+ */
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 // Stable Linux process capabilities
 // See: https://github.com/torvalds/linux/blob/master/include/uapi/linux/capability.h
 const LINUX_PROC_CAPABILITY_MAP = {
@@ -136,7 +144,20 @@ async function probePythonVenv(engine, versionMajor, versionMinor, toolName) {
  * @returns {Promise<boolean>} - True if the path exists, false otherwise
  */
 async function pathExists(engine, path) {
-  const checkResult = await engine.execCommand(['stat', path], {});
+  let checkResult;
+  if (engine.getPlatform().OS === 'Windows') {
+    checkResult = await engine.execCommand(
+      [
+        'powershell',
+        '-NoProfile',
+        '-Command',
+        `if (Test-Path -LiteralPath $env:APX_TEST_PATH) { exit 0 } else { exit 1 }`,
+      ],
+      { environment: { APX_TEST_PATH: path } },
+    );
+  } else {
+    checkResult = await engine.execCommand(['stat', path], {});
+  }
   return checkResult.rc === 0;
 }
 
@@ -535,4 +556,5 @@ module.exports = {
   normalizeRootOutputAccess,
   posixTestWorkload,
   buildToolBundlePath,
+  delay,
 };

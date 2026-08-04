@@ -56,6 +56,23 @@ func notElevatedChecker() privilege.Checker {
 	return m
 }
 
+func TestElevator_AndroidSuNotImplemented(t *testing.T) {
+	factoryCalled := false
+
+	elevator := &Elevator{}
+	err := elevator.ElevatePrivileges(context.Background(), ElevatorConfig{
+		ProofMechanism: privilege.AndroidSu,
+		RootWorkerFactory: func(_ process.ProcessManager, _ privilege.AcceptorFactory, _ privilege.RootWorkerProcessConfig) (privilege.RootWorkerProcess, error) {
+			factoryCalled = true
+			return nil, nil
+		},
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, message.New(message.AgentElevatePrivilegesMechanismAndroidSuNotImplemented))
+	assert.False(t, factoryCalled)
+}
+
 func TestElevatePrivileges_AlreadyRunning_NoOp(t *testing.T) {
 	ctx := context.Background()
 

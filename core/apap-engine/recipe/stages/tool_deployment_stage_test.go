@@ -367,57 +367,20 @@ func TestToolDeploymentStage_Execute(t *testing.T) {
 	})
 }
 
-func TestToolDeploymentStage_GetMandatoryToolList(t *testing.T) {
-	targetStage := &ToolDeploymentStage{locality: deploymentsupport.DeploymentLocalityTarget}
+func TestRequiredToolsForLocality(t *testing.T) {
+	agent := tool.ToolInfo{Name: terminology.GetAgentBinaryName(), Version: versions.GetVersion()}
+	targetTool := tool.ToolInfo{Name: "target-tool", Version: "1.0"}
+	bundles := []deploymentsupport.ToolBundleInfo{
+		{Name: targetTool.Name, Version: targetTool.Version, Locality: deploymentsupport.DeploymentLocalityTarget},
+		{Name: targetTool.Name, Version: targetTool.Version, Locality: deploymentsupport.DeploymentLocalityTarget},
+		{Name: agent.Name, Version: agent.Version, Locality: deploymentsupport.DeploymentLocalityTarget},
+		{Name: "host-tool", Version: "2.0", Locality: deploymentsupport.DeploymentLocalityHost},
+	}
 
-	t.Run("includes only agent for Linux", func(t *testing.T) {
-		linuxPlatform := conductor.PlatformConfiguration{
-			Architecture: conductor.X86_64,
-			OS:           conductor.Linux,
-		}
-		tools := targetStage.getMandatoryToolList(linuxPlatform)
-
-		assert.Equal(t, []tool.ToolInfo{
-			{Name: terminology.GetAgentBinaryName(), Version: versions.GetVersion()},
-		}, tools)
-	})
-
-	t.Run("includes only agent for Windows", func(t *testing.T) {
-		windowsPlatform := conductor.PlatformConfiguration{
-			Architecture: conductor.AArch64,
-			OS:           conductor.Win,
-		}
-		tools := targetStage.getMandatoryToolList(windowsPlatform)
-
-		assert.Equal(t, []tool.ToolInfo{
-			{Name: terminology.GetAgentBinaryName(), Version: versions.GetVersion()},
-		}, tools)
-	})
-
-	t.Run("includes only agent for Android", func(t *testing.T) {
-		androidPlatform := conductor.PlatformConfiguration{
-			Architecture: conductor.AArch64,
-			OS:           conductor.Android,
-		}
-		tools := targetStage.getMandatoryToolList(androidPlatform)
-
-		assert.Equal(t, []tool.ToolInfo{
-			{Name: terminology.GetAgentBinaryName(), Version: versions.GetVersion()},
-		}, tools)
-	})
-
-	t.Run("includes only agent for Darwin", func(t *testing.T) {
-		darwinPlatform := conductor.PlatformConfiguration{
-			Architecture: conductor.AArch64,
-			OS:           conductor.Darwin,
-		}
-
-		tools := targetStage.getMandatoryToolList(darwinPlatform)
-
-		assert.Equal(t, []tool.ToolInfo{
-			{Name: terminology.GetAgentBinaryName(), Version: versions.GetVersion()},
-		}, tools)
-	})
+	assert.Equal(t, []tool.ToolInfo{agent, targetTool}, requiredToolsForLocality(
+		bundles,
+		deploymentsupport.DeploymentLocalityTarget,
+	))
 }
 
 func TestToolDeploymentStage_ClosesAgentConnection(t *testing.T) {

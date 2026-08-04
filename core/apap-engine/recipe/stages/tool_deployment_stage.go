@@ -18,10 +18,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
-	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
-	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
 )
 
 func NewToolDeploymentStage(machineTypeSupplier recipe.PlatformConfigurationSupplier, commandRunnerSupplier recipe.CommandRunnerSupplier, targetFilesystemSupplier recipe.TargetFilesystemSupplier, targetSessionSupplier recipe.TargetSessionSupplier, toolBundlesSupplier recipe.ToolBundlesSupplier, locality deploymentsupport.DeploymentLocality, deployMode deployer.ToolDeploymentMode, packageManager *packages.PackageManager) *ToolDeploymentStage {
@@ -62,16 +60,11 @@ func (t *ToolDeploymentStage) ErrorType() run.RunResult {
 }
 
 func (t *ToolDeploymentStage) Execute(ctx *recipe.StageContext) (func(), error) {
-	bundles := []deploymentsupport.ToolBundleInfo{}
-	for _, bundle := range t.toolBundlesSupplier() {
-		if t.locality != bundle.Locality {
-			continue
-		}
-		bundles = append(bundles, bundle)
-	}
+	bundles := t.toolBundlesSupplier()
 
 	// Return early for host deployments if there are no specified host bundles
-	if t.locality == deploymentsupport.DeploymentLocalityHost && len(bundles) == 0 {
+	if t.locality == deploymentsupport.DeploymentLocalityHost &&
+		!deploymentsupport.ContainsHostToolBundles(bundles) {
 		t.Result = deployer.NoAction
 		return nil, nil
 	}
@@ -86,27 +79,10 @@ func (t *ToolDeploymentStage) Execute(ctx *recipe.StageContext) (func(), error) 
 
 	targetPlatform := t.machineTypeSupplier()
 
-	// There are two types of tools deployments:
-	// (1) mandatory tools that can be deployed regardless of whether they are specified by the recipe
-	// (2) recipe specified tools that are resolved by the tool bundle supplier
-
-	// Add mandatory tools
-	t.ToolsToDeploy = append(t.ToolsToDeploy, t.getMandatoryToolList(targetPlatform)...)
-
-	// Add resolved bundles to ToolsToDeploy while avoiding duplicates
-	// Below code is O(n) per bundle. It's okay for now since no. of tools is small
-	// But, we might want to optimize this later
-	for _, bundle := range bundles {
-		key := bundle.Name + "@" + bundle.Version
-
-		// Check if already exists in ToolsToDeploy
-		if !slices.ContainsFunc(t.ToolsToDeploy, func(info tool.ToolInfo) bool {
-			return key == info.Name+"@"+info.Version
-		}) {
-			t.ToolsToDeploy = append(t.ToolsToDeploy,
-				tool.ToolInfo{Name: bundle.Name, Version: bundle.Version})
-		}
-	}
+	t.ToolsToDeploy = appendUniqueTools(
+		t.ToolsToDeploy,
+		requiredToolsForLocality(bundles, t.locality)...,
+	)
 	reconcileResults := []deployer.ReconcileResult{}
 
 	var toolSizes []int64
@@ -191,11 +167,6 @@ func (t *ToolDeploymentStage) updateStageResult(results []deployer.ReconcileResu
 		// Set to 'no action' if there were no results (no tools to deploy), or if all results were NoAction
 		t.Result = deployer.NoAction
 	}
-}
-
-func (t *ToolDeploymentStage) getMandatoryToolList(config conductor.PlatformConfiguration) []tool.ToolInfo {
-	tools := []tool.ToolInfo{{Name: terminology.GetAgentBinaryName(), Version: versions.GetVersion()}}
-	return tools
 }
 
 // closeAgentConnectionIfOpen shuts down the target agent if it is running

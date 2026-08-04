@@ -6,7 +6,14 @@ version: '3'
 vars:
   APX_BINARY: '{{if eq OS "windows"}}apx.exe{{else}}apx{{end}}'
   PYTHON_SYSTEM: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
-  PYTHON_DEFAULT: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
+  TOOLS_PYTHON: '{{.PYTHON_SYSTEM}}'
+  DEFAULT_APX_BUILD_TAGS: duckdb_arrow
+
+includes:
+  internal:
+    taskfile: ./Taskfile.internal.yml
+    optional: true
+    flatten: true
 
 tasks:
   default:
@@ -17,42 +24,6 @@ tasks:
   # Task names should use colon-delimited namespaces for grouped workflows:
   # <area>:<action>[:<scope>]. Keep aggregate tasks at the namespace root
   # where practical, and use a plain verb only for simple utility tasks.
-
-  # Dependency Tasks
-  deps:npm:
-    cmds:
-      - npm install
-
-  deps:tools:python:
-    cmds:
-      - '{{.PYTHON_SYSTEM}} -m venv .venv'
-      - '{{.PYTHON_DEFAULT}} -m pip install --disable-pip-version-check -r robot/requirements.txt'
-      - '{{.PYTHON_DEFAULT}} -c "from pathlib import Path; Path(''.venv/.deps-installed'').touch()"'
-
-  deps:tools:
-    env:
-      ARTIFACTORY_API_TOKEN: ${ARTIFACTORY_API_TOKEN}
-      SKIP_APX_AGENT_BUILD: true
-    cmds:
-      - '{{.PYTHON_DEFAULT}} scripts/get-tools.py'
-      - '{{.PYTHON_DEFAULT}} -c "from pathlib import Path; Path(''apap-cli/tools/.fetched'').touch()"'
-
-  deps:ai-insights-eval:
-    vars:
-      VENV_PYTHON: '{{if eq OS "windows"}}scripts/ai-insights-evaluation/.venv/Scripts/python.exe{{else}}scripts/ai-insights-evaluation/.venv/bin/python{{end}}'
-    cmds:
-      - '{{.PYTHON_DEFAULT}} -m venv scripts/ai-insights-evaluation/.venv'
-      - '{{.VENV_PYTHON}} -m pip install --disable-pip-version-check -r scripts/ai-insights-evaluation/requirements.txt'
-      - '{{.VENV_PYTHON}} -c "from pathlib import Path; Path(''scripts/ai-insights-evaluation/.venv/.deps-installed'').touch()"'
-
-  deps:
-    desc: Install all dependencies required for Performix core
-    env:
-      ARTIFACTORY_API_TOKEN: ${ARTIFACTORY_API_TOKEN}
-    cmds:
-      - task: deps:tools:python
-      - task: deps:tools
-      - task: deps:npm
 
   install:
     desc: Install dependencies, generate sources, and build core binaries
@@ -67,121 +38,38 @@ tasks:
       - task: build:apx
       - task: build:agent
 
-  build:apx:
-    desc: Build the APX binary
-    dir: apap-cli
-    cmds:
-      - go build -tags={{default "duckdb_arrow,confidential_telemetry" .APX_BUILD_TAGS}} -v -o {{.APX_BINARY}}
-
-  build:agent:
-    desc: Build the Performix agent; requires deps:tools:python
-    cmds:
-      - '{{.PYTHON_DEFAULT}} scripts/get-tools.py target_agent'
-
-  # Test Tasks
-  test:unit:engine:
-    desc: Run Go and Python unit tests for modules within the apap-engine directory
-    dir: apap-engine
-    env:
-      GOFLAGS: -tags=duckdb_arrow
-    cmds:
-      - go test ./...
-      - ../scripts/python/test-all.sh
-
-  test:unit:apx:
-    desc: Run Go unit tests for modules within the apap-cli directory
-    dir: apap-cli
-    env:
-      GOFLAGS: -tags=duckdb_arrow
-    cmds:
-      - go test ./...
-
-  test:unit:scripts:
-    desc: Run unit tests for Core Python scripts
-    deps:
-      - task: deps:ai-insights-eval
-    vars:
-      VENV_PYTHON: '{{if eq OS "windows"}}scripts/ai-insights-evaluation/.venv/Scripts/python.exe{{else}}scripts/ai-insights-evaluation/.venv/bin/python{{end}}'
-    cmds:
-      # unittest discovery does not recurse into directories whose names contain
-      # hyphens, so the two hyphenated script modules need explicit discovery roots.
-      - '{{.VENV_PYTHON}} -m unittest discover -s scripts -v'
-      - '{{.VENV_PYTHON}} -m unittest discover -s scripts/atperf-compat -v'
-      - '{{.VENV_PYTHON}} -m unittest discover -s scripts/ai-insights-evaluation -v'
-
-  test:unit:sysutil-timeline:
-    desc: Run Python unit tests for the sysutil-timeline built-in tool
-    deps:
-      - task: deps:ai-insights-eval
-    vars:
-      VENV_PYTHON: '{{if eq OS "windows"}}scripts/ai-insights-evaluation/.venv/Scripts/python.exe{{else}}scripts/ai-insights-evaluation/.venv/bin/python{{end}}'
-    env:
-      PYTHONPATH: apap-cli/tools-builtin/sysutil-timeline
-    cmds:
-      - '{{.VENV_PYTHON}} -m pytest apap-cli/tools-builtin/sysutil-timeline/tests -v'
-
-  test:unit:
-    desc: Run core unit tests
-    cmds:
-      - task: test:unit:engine
-      - task: test:unit:apx
-      - task: test:unit:scripts
-      - task: test:unit:sysutil-timeline
-
-  test:robot:
-    desc: Run Robot Framework functional tests against a remote target. Requires TARGET=<name>. See robot/README.md for full usage.
-    summary: |
-      Basic usage (skips workload-dependent and remote_localhost tests): task core:test:robot TARGET=<name>
-      See robot/README.md for more options and further details
-    requires:
-      vars: [TARGET]
-    cmds:
-      - ./scripts/python/run-robot.sh --target {{.TARGET}}{{if .ROBOT_ARGS}} {{.ROBOT_ARGS}}{{end}}
-
-  test:eval:ai-insights:
-    desc: Run the AI Insights evaluation suite
-    dir: scripts/ai-insights-evaluation
-    summary: |
-      Runs the local AI Insights evaluation suite from scripts/ai-insights-evaluation.
-
-      Pass additional pytest arguments after --, for example:
-
-        task core:test:eval:ai-insights -- -k test_case_03 --log-cli-level=INFO
-
-      The task uses $HOME/.cache/performix/ai-insights-evaluation/pre-recorded-runs
-      as its local input cache and downloads missing pre-recorded runs from
-      the AI Insights Artifactory project using ARTIFACTORY_API_TOKEN.
-
-      Pytest and performance-report outputs are written under
-      scripts/ai-insights-evaluation/results/reporting.
-    vars:
-      CLI_ARGS: '{{.CLI_ARGS}}'
-      VENV_PYTHON: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
-    cmds:
-      - task: deps:ai-insights-eval
-      - >-
-        {{.VENV_PYTHON}} run_ai_insights_evaluation.py
-        {{.CLI_ARGS}}
-
-  # Utility Tasks
-  start:
-    desc: Start the APX engine daemon
-    dir: apap-cli
-    cmds:
-      - ./apx daemon start -b
-
-  # Utility Tasks
-  stop:
-    desc: Stop the APX engine daemon
-    dir: apap-cli
-    cmds:
-      - ./apx daemon stop
-
   generate:
     desc: Generate all sources (Go, Protobuf, Messages, etc.)
     cmds:
       - ./scripts/go/generate-all.sh
       - ./scripts/protobuf/generate.sh
+
+  deps:tools:
+    desc: Package the tools available in the current checkout
+    env:
+      SKIP_APX_AGENT_BUILD: true
+    cmds:
+      - '{{.TOOLS_PYTHON}} scripts/get-tools.py'
+
+  deps:
+    desc: Install dependencies required by the current checkout
+    cmds:
+      - task: internal:deps:prepare
+        if: test -f Taskfile.internal.yml
+      - task: deps:tools
+      - task: internal:deps:finish
+        if: test -f Taskfile.internal.yml
+
+  build:apx:
+    desc: Build the APX binary
+    dir: apap-cli
+    cmds:
+      - go build -tags={{default .DEFAULT_APX_BUILD_TAGS .APX_BUILD_TAGS}} -v -o {{.APX_BINARY}}
+
+  build:agent:
+    desc: Build the Performix agent; requires deps:tools:python
+    cmds:
+      - '{{.TOOLS_PYTHON}} scripts/get-tools.py target_agent'
 
   clean:
     desc: Remove core build outputs
@@ -189,14 +77,5 @@ tasks:
       - rm -f apap-cli/apx apap-cli/apx.exe
       - rm -rf apap-cli/tools
       - rm -rf apap-cli/tools-*-*
-      - rm -rf apap-cli/sl-analyze-host-tools
-
-  lint:
-    desc: Run core linters & fix issues
-    cmds:
-      - ./scripts/lint-all.sh --fix
-
-  lint:robot:
-    desc: Run the Robocop linter for Robot Framework files
-    cmds:
-      - ./scripts/python/lint-robot.sh
+      - task: internal:clean
+        if: test -f Taskfile.internal.yml

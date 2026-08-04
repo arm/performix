@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
+	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/mocks"
 	runmocks "github.com/Arm-Debug/apap-cli/apap-engine/run/mocks"
@@ -75,7 +76,7 @@ func (m *MockPrivilegeSession) Invoke(ctx context.Context, request string, fn fu
 func TestAgentEngine_ClientMethods(t *testing.T) {
 	ctx := context.Background()
 	mockClient := new(targetagentmocks.TargetAgentClient)
-	engine, _ := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false)
+	engine, _ := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 
 	t.Run("ExecCommand", func(t *testing.T) {
 		req := &targetagentproto.ExecCommandRequest{Command: []string{"hello"}}
@@ -132,7 +133,7 @@ func TestAgentEngine_ClientMethods(t *testing.T) {
 func TestAgentEngine_StartProcessAndStream(t *testing.T) {
 	ctx := context.Background()
 	mockClient := new(targetagentmocks.TargetAgentClient)
-	engine, _ := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false)
+	engine, _ := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 
 	stdoutData := [][]byte{[]byte("out1"), []byte("out2")}
 	stderrData := [][]byte{[]byte("err1"), []byte("err2")}
@@ -195,7 +196,7 @@ func TestAgentEngine_ProgressAndEmitOutput(t *testing.T) {
 	t.Run("ProgressTracker", func(t *testing.T) {
 		notifier := &mocks.MockStageNotifier{}
 		ctx := context.Background()
-		engine, cleanup := NewAgentEngine(ctx, ctx, nil, notifier, nil, false, false)
+		engine, cleanup := NewAgentEngine(ctx, ctx, nil, notifier, nil, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 
 		notifier.On("OnStageStart", mock.AnythingOfType("notifiers.StageInfo")).Return(nil)
 		notifier.On("OnStageProgress", mock.AnythingOfType("notifiers.StageInfo"), mock.AnythingOfType("notifiers.StageProgress")).Return(nil)
@@ -210,14 +211,14 @@ func TestAgentEngine_ProgressAndEmitOutput(t *testing.T) {
 	t.Run("empty ProgressTracker cleanup is stable", func(t *testing.T) {
 		notifier := &mocks.MockStageNotifier{}
 		ctx := context.Background()
-		_, cleanup := NewAgentEngine(ctx, ctx, nil, notifier, nil, false, false)
+		_, cleanup := NewAgentEngine(ctx, ctx, nil, notifier, nil, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 		cleanup()
 	})
 
 	t.Run("ProgressTracker are ended automatically if not explicitly (to cover errors from stage runs)", func(t *testing.T) {
 		notifier := &mocks.MockStageNotifier{}
 		ctx := context.Background()
-		engine, cleanup := NewAgentEngine(ctx, ctx, nil, notifier, nil, false, false)
+		engine, cleanup := NewAgentEngine(ctx, ctx, nil, notifier, nil, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 
 		notifier.On("OnStageStart", mock.AnythingOfType("notifiers.StageInfo")).Return(nil)
 		notifier.On("OnStageProgress", mock.AnythingOfType("notifiers.StageInfo"), mock.AnythingOfType("notifiers.StageProgress")).Return(nil)
@@ -238,7 +239,7 @@ func TestAgentEngine_WriteUserMessage(t *testing.T) {
 		writer.On("Write", "error", "my user error").Return().Once()
 
 		ctx := context.Background()
-		engine, _ := NewAgentEngine(ctx, ctx, nil, nil, writer, false, false)
+		engine, _ := NewAgentEngine(ctx, ctx, nil, nil, writer, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 		engine.WriteUserMessage("error", "my user error")
 
 		writer.AssertExpectations(t)
@@ -249,7 +250,7 @@ func TestAgentEngine_Cleanup(t *testing.T) {
 	t.Run("processes are killed on cleanup", func(t *testing.T) {
 		ctx := context.Background()
 		mockClient := new(targetagentmocks.TargetAgentClient)
-		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false)
+		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 
 		mockClient.On("StartProcess", ctx, mock.Anything).Return(&targetagentproto.StartProcessResponse{Pid: 123}, nil)
 		mockClient.On("ReleaseProcessHandles", ctx, &targetagentproto.ReleaseProcessHandlesRequest{Pids: []int32{123}}).Return(&emptypb.Empty{}, nil)
@@ -266,7 +267,7 @@ func TestAgentEngine_Cleanup(t *testing.T) {
 		cw := captureLog(t)
 		ctx := context.Background()
 		mockClient := new(targetagentmocks.TargetAgentClient)
-		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false)
+		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 
 		mockClient.On("StartProcess", ctx, mock.Anything).Return(&targetagentproto.StartProcessResponse{Pid: 123}, nil)
 		mockClient.On("ReleaseProcessHandles", ctx, &targetagentproto.ReleaseProcessHandlesRequest{Pids: []int32{123}}).Return(&emptypb.Empty{}, errors.New("rekt"))
@@ -284,7 +285,7 @@ func TestAgentEngine_Cleanup(t *testing.T) {
 	t.Run("temporary directories are removed on cleanup", func(t *testing.T) {
 		ctx := context.Background()
 		mockClient := new(targetagentmocks.TargetAgentClient)
-		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false)
+		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 
 		mockClient.On("CreateTempDir", ctx, mock.Anything, mock.Anything).Return(&targetagentproto.TempDir{Path: "tPath"}, nil)
 		mockClient.On("Rm", ctx, &targetagentproto.RmRequest{Path: "tPath", Recursive: true, Force: true}).Return(&emptypb.Empty{}, nil)
@@ -300,7 +301,7 @@ func TestAgentEngine_Cleanup(t *testing.T) {
 	t.Run("temporary directories are preserved if requested", func(t *testing.T) {
 		ctx := context.Background()
 		mockClient := new(targetagentmocks.TargetAgentClient)
-		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, true, false)
+		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, true, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 
 		mockClient.On("CreateTempDir", ctx, mock.Anything, mock.Anything).Return(&targetagentproto.TempDir{Path: "tPath"}, nil)
 
@@ -317,7 +318,7 @@ func TestAgentEngine_Cleanup(t *testing.T) {
 		mockClient := new(targetagentmocks.TargetAgentClient)
 		mockPrivilegeSession := MockPrivilegeSession{}
 
-		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, true)
+		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, true, conductor.PlatformConfiguration{OS: conductor.Linux})
 		engine.privilegeSession = &mockPrivilegeSession
 
 		// Mock CreateTempDir
@@ -358,7 +359,7 @@ func TestAgentEngine_Cleanup(t *testing.T) {
 	t.Run("host files are closed on cleanup", func(t *testing.T) {
 		ctx := context.Background()
 		mockClient := new(targetagentmocks.TargetAgentClient)
-		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false)
+		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 
 		hostPath := filepath.Join(t.TempDir(), "stderr.log")
 		handle, err := engine.CreateRunFile(hostPath)
@@ -382,7 +383,7 @@ func TestAgentEngine_Cleanup(t *testing.T) {
 		cancel(agent.ErrAgentDisconnected)
 
 		mockClient := new(targetagentmocks.TargetAgentClient)
-		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false)
+		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 		engine.procsToRelease = []int32{123}
 
 		cleanup()
@@ -396,7 +397,7 @@ func TestAgentEngine_Cleanup(t *testing.T) {
 		cleanupCtx := context.Background()
 
 		mockClient := new(targetagentmocks.TargetAgentClient)
-		engine, cleanup := NewAgentEngine(ctx, cleanupCtx, mockClient, nil, nil, false, false)
+		engine, cleanup := NewAgentEngine(ctx, cleanupCtx, mockClient, nil, nil, false, false, conductor.PlatformConfiguration{OS: conductor.Linux})
 		engine.procsToRelease = []int32{123}
 
 		mockClient.On(
@@ -419,7 +420,7 @@ func TestAgentEngine_PrivilegePath(t *testing.T) {
 		mockPrivilegeSession := MockPrivilegeSession{}
 
 		ctx := context.Background()
-		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, rootWorkerEnabled)
+		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, rootWorkerEnabled, conductor.PlatformConfiguration{OS: conductor.Linux})
 		engine.privilegeSession = &mockPrivilegeSession
 
 		resp := &targetagentproto.StartProcessResponse{Pid: 123}
@@ -460,7 +461,7 @@ func TestAgentEngine_PrivilegePath(t *testing.T) {
 		mockPrivilegeSession := MockPrivilegeSession{}
 
 		ctx := context.Background()
-		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, rootWorkerEnabled)
+		engine, cleanup := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, rootWorkerEnabled, conductor.PlatformConfiguration{OS: conductor.Linux})
 		engine.privilegeSession = &mockPrivilegeSession
 
 		// Mock Invoke StartProcess
@@ -509,7 +510,7 @@ func TestAgentEngine_PrivilegePath(t *testing.T) {
 		mockPrivilegeSession := MockPrivilegeSession{}
 
 		ctx := context.Background()
-		engine, _ := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, rootWorkerEnabled)
+		engine, _ := NewAgentEngine(ctx, ctx, mockClient, nil, nil, false, rootWorkerEnabled, conductor.PlatformConfiguration{OS: conductor.Linux})
 		engine.privilegeSession = &mockPrivilegeSession
 
 		resp := &targetagentproto.CommandResult{Rc: 0, Stdout: "root", Stderr: ""}
@@ -535,4 +536,12 @@ func TestAgentEngine_PrivilegePath(t *testing.T) {
 		mockPrivilegeSession.AssertExpectations(t)
 		mockClient.AssertExpectations(t)
 	})
+}
+
+func TestAgentEngine_GetPlatform(t *testing.T) {
+	ctx := context.Background()
+	targetPlatform := conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64}
+	engine, _ := NewAgentEngine(ctx, ctx, nil, nil, nil, false, false, targetPlatform)
+
+	assert.Equal(t, targetPlatform, engine.GetPlatform())
 }

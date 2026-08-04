@@ -21,7 +21,6 @@ import (
 
 const sourceWindowsCoverageThresholdPercent = 99.0
 const sourceWindowsContextLines uint32 = 10
-const sourceWindowsFetchConcurrency = 4
 const sourceWindowsHotWindowThresholdPercent = 5.0
 const sourceWindowsHotWindowContextLines uint32 = 100
 const sourceWindowsSummaryName = "source_windows"
@@ -183,7 +182,7 @@ func SummarizeSourceWindows(ctx context.Context, desc *run.RunDescription, sessi
 	if desc != nil {
 		tgt = desc.Target
 	}
-	fetchSourceFiles := sourcecontent.NewSourceFilesFetcher(ctx, tgt, session.TargetSessions(), sourceWindowsFetchConcurrency)
+	fetchSourceFiles := sourcecontent.NewSourceFilesFetcher(ctx, tgt, session.TargetSessions())
 	payload, err := buildSourceWindowsPayload(fetchSourceFiles, sampleLines, totalSourceLineSamples, byteLimit)
 	if err != nil {
 		return RunSummary{}, err
@@ -411,10 +410,17 @@ func loadSourceLinesByID(
 			}
 			continue
 		}
-		sourceLinesByID[sourceFileID] = result.Lines
+		sourceLinesByID[sourceFileID] = sourceContentLines(result.Content)
 	}
 
 	return sourceLinesByID, sourceUnavailabilityByID
+}
+
+// sourceContentLines splits source text into the lines used to build source
+// windows.
+func sourceContentLines(content string) []string {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	return strings.Split(strings.TrimSuffix(normalized, "\n"), "\n")
 }
 
 // sourceUnavailabilityForFetchFailure converts a failed source file fetch

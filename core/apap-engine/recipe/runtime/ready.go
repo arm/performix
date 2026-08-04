@@ -143,6 +143,18 @@ func ConfigureRecipeReadyStages(config *StageConfiguration, scriptedReadyStages 
 	workloadOptionsStage := stages.NewWorkloadOptionsStage(config.Ctx.OrigWorkload, &config.Ctx.ResolvedWorkload, connectStage.TargetSessionSupplier, connectStage.CommandRunnerSupplier)
 	s = append(s, workloadOptionsStage)
 
+	toolBundleResolutionStage := stages.NewToolBundleResolutionStage(
+		config.PackageManager,
+		targetArchitectureStage.PlatformConfigurationSupplier,
+		&config.Ctx.ParamValues,
+		config.Recipe,
+	)
+	hostArchitectureStage := stages.NewHostArchitectureStage(
+		config.TargetSessions,
+		toolBundleResolutionStage.ToolBundlesSupplier,
+	)
+	s = append(s, toolBundleResolutionStage, hostArchitectureStage)
+
 	connectingToAgentStage := stages.NewConnectingToTargetAgentStage(
 		config.Ctx.Target,
 		connectStage.TargetSessionSupplier,
@@ -153,7 +165,11 @@ func ConfigureRecipeReadyStages(config *StageConfiguration, scriptedReadyStages 
 
 	targetLockStage := stages.NewTargetLockStage(agentSupplier, time.Second*3)
 	releaseTargetLockStage := stages.NewReleaseTargetLockStage(targetLockStage.Release)
-	s = append(s, connectingToAgentStage, targetLockStage, getTargetInfoStage)
+	connectingToHostAgentStage := stages.NewConnectingToHostAgentStage(
+		toolBundleResolutionStage.ToolBundlesSupplier,
+		hostArchitectureStage.TargetSessionSupplier,
+	)
+	s = append(s, connectingToAgentStage, targetLockStage, getTargetInfoStage, connectingToHostAgentStage)
 
 	// Add the scripted recipe ready stages
 	execCtx := config.NewRunExecutionContext(hostFs)

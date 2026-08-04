@@ -44,6 +44,7 @@ type ExecutionContext interface {
 	TargetInfo() *target.Description
 	GetRunDescriptions() []*run.RunDescription
 	GetRunModels() []cdf.ModelView
+	GetToolCapabilities(runIndex int, toolName string, invocationIndex int) (run.ToolCapabilities, error)
 	GetTool(toolInfo tool.ToolInfo) string
 	ToolsDir() string
 	RunToolIntegrations(context context.Context, cmdStateCh *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext) (func(), []error)
@@ -64,6 +65,7 @@ type RunExecutionContext struct {
 	AgentSupplier                 AgentConnSupplier
 	RunDescriptions               []*run.RunDescription
 	RunModels                     []cdf.ModelView
+	RunCapabilities               []run.RunCapabilities
 	PlatformConfigurationSupplier PlatformConfigurationSupplier
 	ToolPathsSupplier             ToolDeploymentPathsSupplier
 	TargetFilesystemSupplier      TargetFilesystemSupplier
@@ -139,6 +141,59 @@ func (c *RunExecutionContext) GetRunDescriptions() []*run.RunDescription {
 
 func (c *RunExecutionContext) GetRunModels() []cdf.ModelView {
 	return c.RunModels
+}
+
+func (c *RunExecutionContext) GetToolCapabilities(runIndex int, toolName string, invocationIndex int) (run.ToolCapabilities, error) {
+	if runIndex < 0 || runIndex >= len(c.RunCapabilities) || runIndex >= len(c.RunDescriptions) {
+		return nil, fmt.Errorf("GetToolCapabilities: run index %v out of bounds for %v runs", runIndex, len(c.RunCapabilities))
+	}
+
+	if c.RunDescriptions[runIndex].ToolsUsed != nil {
+		// Verify that the specified tool name and invocation exists
+		// Some very old runs may not have `toolsUsed` registered; in this case, we skip this check. Skipping
+		// this does not affect correctness; the returned ToolCapabilities struct will still record only the
+		// capabilities that are present in the run, we just can't fail early
+
+		// Check if tool name has been migrated
+		migratedToolName, wasMigrated, err := cdf.MigrateToolName(toolName, c.RunCapabilities[runIndex].Migrations)
+		if err != nil {
+			return nil, err
+		}
+		var toolFound bool
+		toolsForRun := c.RunDescriptions[runIndex].ToolsUsed
+		for _, toolUsed := range toolsForRun {
+			// Check both requested path and migrated path (if exists)
+			if (toolUsed.Tool == toolName || (wasMigrated && toolUsed.Tool == migratedToolName)) &&
+				toolUsed.Invocation == invocationIndex {
+				toolFound = true
+				break
+			}
+		}
+		if !toolFound {
+			return nil, fmt.Errorf("GetToolCapabilities: tool %q invocation %v not found for run index %v", toolName, invocationIndex, runIndex)
+		}
+	}
+
+	// Try unmigrated path first
+	invocationPath := fmt.Sprintf("tool/%s/%d", toolName, invocationIndex)
+	if capabilities, ok := c.RunCapabilities[runIndex].CapabilitiesPerTool[invocationPath]; ok {
+		return capabilities, nil
+	}
+
+	// Attempt to migrate requested path
+	migratedPath, wasMigrated, err := cdf.MigratePath(invocationPath, c.RunCapabilities[runIndex].Migrations)
+	if err != nil {
+		return nil, err
+	}
+	if wasMigrated {
+		if capabilities, ok := c.RunCapabilities[runIndex].CapabilitiesPerTool[migratedPath]; ok {
+			return capabilities, nil
+		}
+	}
+
+	// We don't error here because a particular tool invocation may not have any capabilities recorded - this
+	// isn't an error case
+	return run.ToolCapabilities{}, nil
 }
 
 func (c *RunExecutionContext) GetTool(toolInfo tool.ToolInfo) string {
@@ -317,6 +372,7 @@ func (c *RunExecutionContext) newEngineLocality(
 		c.UsrMessageWriter,
 		preserveTemporaryDirs,
 		c.RootWorkerEnabled,
+		targetPlatform.PlatformConfiguration,
 	)
 
 	return tool.EngineLocality{

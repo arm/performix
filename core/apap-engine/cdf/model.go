@@ -35,6 +35,7 @@ type ModelView interface {
 	ListEntityComponentsByTypeName(entity Entity, componentTypeName string) ([]Component, error)
 	ListEntityComponentsMatching(entity Entity, pred func(*Component) bool) ([]Component, error)
 	Metadata() Metadata
+	Migrations() []PathMigration
 	BasePath() string
 }
 
