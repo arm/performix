@@ -94,6 +94,16 @@ var recipe = {
         defaultValue: false,
       },
     },
+    {
+      id: 'rich_data_capture',
+      required: false,
+      label: 'Collect rich data',
+      description: `Enables the collection of rich data from the target, which enables advanced filtering functionality after the run completes. This can significantly increase host storage usage and transfer time.`,
+      config: {
+        type: 'checkbox',
+        defaultValue: false,
+      },
+    },
   ],
   renderParameters: [
     {
@@ -246,6 +256,7 @@ function readyCPUMicroarchitecture(context) {
     sampling_frequency: samplingFreq,
     collect_java_stacks: context.getParameter('collect_java_stacks'),
     collect_dotnet_stacks: context.getParameter('collect_dotnet_stacks'),
+    rich_data_capture: context.getParameter('rich_data_capture'),
   };
 
   let tools = generateNeoprofConfig(workload, params);
@@ -269,6 +280,12 @@ function computeValidValues(context) {
   }
   const pmuSpec = JSON.parse(primaryCPUTelemetry.telemetrySpecification);
 
+  const valid_metrics_groups = new Set(
+    Object.values(pmuSpec.methodologies.topdown_methodology.metric_grouping)
+      .flat()
+      .map((metric_group) => metric_group.toLowerCase()),
+  );
+
   // Generate a list of unique metric groups from pmuSpec.methodologies.topdown_methodology.decision_tree.metrics
   // Include metrics.group and all items in metrics.next_items, as the main group is usually Topdown_L1,
   // which is also a valid choice.
@@ -279,7 +296,9 @@ function computeValidValues(context) {
     .metrics) {
     all_metrics_groups.add(item.group);
     for (let next_item of item.next_items) {
-      all_metrics_groups.add(next_item);
+      if (valid_metrics_groups.has(next_item.toLowerCase())) {
+        all_metrics_groups.add(next_item);
+      }
     }
   }
   all_metrics_groups = Array.from(all_metrics_groups);
@@ -305,6 +324,7 @@ function runCPUMicroarchitecture(context) {
     sampling_frequency: sampling_freq,
     collect_java_stacks: context.getParameter('collect_java_stacks'),
     collect_dotnet_stacks: context.getParameter('collect_dotnet_stacks'),
+    rich_data_capture: context.getParameter('rich_data_capture'),
   };
   context.runTools(generateNeoprofConfig(workload, params));
 }
@@ -584,14 +604,14 @@ function renderCPUMicroarchitecture(context) {
       Number.isFinite(filterStartTimeNs) &&
       filterStartTimeNs >= 0
     ) {
-      slAnalyzeConfig.filter_start_time_ns = filterStartTimeNs;
+      slAnalyzeConfig.filter_start_time_ns = Math.round(filterStartTimeNs);
     }
     if (
       filterEndTimeNs !== null &&
       Number.isFinite(filterEndTimeNs) &&
       filterEndTimeNs >= 0
     ) {
-      slAnalyzeConfig.filter_end_time_ns = filterEndTimeNs;
+      slAnalyzeConfig.filter_end_time_ns = Math.round(filterEndTimeNs);
     }
     renderers.push(
       {
@@ -610,14 +630,26 @@ function renderCPUMicroarchitecture(context) {
         config: { entity: `tool/${tool_name}/0/` },
       },
     );
-    if (!context.getRunDescriptions()[0].IsRunPhaseTwoComplete) {
-      timeRangeFilter.disabled = {
-        reason: context.getRunDescriptions()[0].IsRunInProgress
+    const runDescription = context.getRunDescriptions()[0];
+    const renderTimeRangeFilter = { ...timeRangeFilter };
+
+    // Treat a missing parameter as disabled; only an explicit true enables time-range filtering.
+    const richDataCaptureEnabled =
+      runDescription.Parameters.rich_data_capture === true;
+
+    if (!richDataCaptureEnabled) {
+      renderTimeRangeFilter.disabled = {
+        reason:
+          'Time-range filtering is unavailable for this run. Re-run the recipe with "Collect rich data" enabled.',
+      };
+    } else if (!runDescription.IsRunPhaseTwoComplete) {
+      renderTimeRangeFilter.disabled = {
+        reason: runDescription.IsRunInProgress
           ? 'Unavailable until all capture data has been retrieved from the target.'
           : 'Unavailable because the run ended before all capture data was retrieved from the target.',
       };
     }
-    topBarFilters.push(timeRangeFilter);
+    topBarFilters.push(renderTimeRangeFilter);
   }
 
   renderers.push(

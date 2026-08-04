@@ -85,7 +85,7 @@ type localityScopedTargetSession struct {
 	localityName string
 }
 
-func newTargetSession(tgt target.Target, agentConnCreator agent.ConnectionCreator, baseToolsDir string) *targetSession {
+func newTargetSession(tgt target.Target, agentConnCreator agent.ConnectionCreator, baseToolsDir string, adbPath string) *targetSession {
 	return &targetSession{
 		target:       tgt,
 		baseToolsDir: baseToolsDir,
@@ -97,7 +97,7 @@ func newTargetSession(tgt target.Target, agentConnCreator agent.ConnectionCreato
 			return secureConnector.SecureConnectNoRetry(ctx, &sshTgt, promptProviders)
 		},
 		androidConnect: func(androidTgt target.AndroidTarget) (*conductor.ADBClient, error) {
-			adbClient := conductor.NewADBClient(androidTgt.SerialNumber, androidTgt.DeviceIPAddress)
+			adbClient := conductor.NewADBClient(androidTgt.SerialNumber, androidTgt.DeviceIPAddress, adbPath)
 			if err := adbClient.CheckHealth(); err != nil {
 				return nil, err
 			}

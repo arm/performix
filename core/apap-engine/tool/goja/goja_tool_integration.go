@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/eventloop"
@@ -144,10 +145,12 @@ type WorkloadSystemWide struct {
 
 // GojaToolInstance represents one instance bound to one VM/loop.
 type GojaToolInstance struct {
-	asyncHelper     gojautils.AsyncHelper
-	toolBinding     GojaToolBinding
-	toolArguments   []goja.Value
-	boundParameters parameters.BoundParameters
+	asyncHelper             gojautils.AsyncHelper
+	toolBinding             GojaToolBinding
+	toolArguments           []goja.Value
+	boundParameters         parameters.BoundParameters
+	monotonicOrigin         time.Time
+	registeredCapabilityIDs *capabilityIDRegistry
 }
 
 // boundGojaEngine represents the JS `engine` object for a single locality.
@@ -169,6 +172,11 @@ func (g *boundGojaEngine) startProcess(cmd goja.Value, opts goja.Value) goja.Val
 		return g.bec.StartProcess(cmd, opts) // JS object handle
 	})
 }
+
+func (g *GojaToolInstance) monotonicNow() float64 {
+	return float64(time.Since(g.monotonicOrigin)) / float64(time.Millisecond)
+}
+
 func (g *boundGojaEngine) createTempDir() goja.Value {
 	return g.asyncHelper.AsyncVal(func() (any, error) {
 		return g.locality.Engine.CreateTempDir() // string
@@ -228,6 +236,12 @@ func (g *boundGojaEngine) toolsRoot() string {
 func (g *boundGojaEngine) copyFrom(sourceLocality string, sourcePath string, destinationPath string) goja.Value {
 	return g.asyncHelper.AsyncOK(func() error {
 		return g.locality.CopyFrom(sourceLocality, sourcePath, destinationPath)
+	})
+}
+
+func (g *boundGojaEngine) AddToolCapability(capabilityId string, gojaComponentType goja.Value, gojaCapabilityData goja.Value) goja.Value {
+	return g.asyncHelper.AsyncOK(func() error {
+		return g.bec.AddToolCapability(capabilityId, gojaComponentType, gojaCapabilityData)
 	})
 }
 
@@ -316,6 +330,8 @@ func (s *ScriptedToolSource) NewIntegration(
 	}
 
 	ti := &GojaToolInstance{
+		monotonicOrigin:         time.Now(),
+		registeredCapabilityIDs: newCapabilityIDRegistry(),
 		asyncHelper: gojautils.AsyncHelper{
 			Loop:           loop,
 			Vm:             vm,
@@ -417,8 +433,14 @@ func (g *GojaToolInstance) newEngineObject(
 	bound := &boundGojaEngine{
 		locality:        locality,
 		resolveLocality: toolCtx.ResolveLocality,
-		bec:             NewBoundEngineContext(locality.Engine, &g.asyncHelper, toolCtx, locality.FileCollector),
-		asyncHelper:     &g.asyncHelper,
+		bec: NewBoundEngineContext(
+			locality.Engine,
+			&g.asyncHelper,
+			toolCtx,
+			locality.FileCollector,
+			g.registeredCapabilityIDs,
+		),
+		asyncHelper: &g.asyncHelper,
 		bindLocality: func(nextLocality tool.EngineLocality) (*goja.Object, error) {
 			return g.newEngineObject(vm, nextLocality, toolCtx)
 		},
@@ -427,6 +449,7 @@ func (g *GojaToolInstance) newEngineObject(
 	for _, ef := range []exposedFunction{
 		{jsName: "execCommand", fn: vm.ToValue(bound.execCommand)},
 		{jsName: "startProcess", fn: vm.ToValue(bound.startProcess)},
+		{jsName: "monotonicNow", fn: vm.ToValue(g.monotonicNow)},
 		{jsName: "createTempDir", fn: vm.ToValue(bound.createTempDir)},
 		{jsName: "mkDir", fn: vm.ToValue(bound.mkDir)},
 		{jsName: "rm", fn: vm.ToValue(bound.rm)},
@@ -446,6 +469,8 @@ func (g *GojaToolInstance) newEngineObject(
 		{jsName: "getLocality", fn: vm.ToValue(bound.getLocality)},
 		{jsName: "toolsRoot", fn: vm.ToValue(bound.toolsRoot)},
 		{jsName: "copyFrom", fn: vm.ToValue(bound.copyFrom)},
+		{jsName: "addToolCapability", fn: vm.ToValue(bound.AddToolCapability)},
+		{jsName: "getPlatform", fn: vm.ToValue(bound.bec.GetPlatform)},
 	} {
 		if err := jsEngine.Set(ef.jsName, ef.fn); err != nil {
 			return nil, err

@@ -25,7 +25,7 @@ import (
 func parseRecipeFile(t *testing.T, recipeFile string) recipe.Recipe {
 	t.Helper()
 
-	recipePath := filepath.Join("..", "..", "apap-cli", "recipes", recipeFile)
+	recipePath := recipeTestPath(t, recipeFile)
 	recipeSource, err := os.ReadFile(recipePath)
 	require.NoError(t, err)
 
@@ -34,6 +34,14 @@ func parseRecipeFile(t *testing.T, recipeFile string) recipe.Recipe {
 	require.NoError(t, err)
 
 	return parsedRecipe
+}
+
+func recipeTestPath(t *testing.T, recipeFile string) string {
+	t.Helper()
+
+	recipePath, err := filepath.Abs(filepath.Join("..", "..", "apap-cli", "recipes", recipeFile))
+	require.NoError(t, err)
+	return recipePath
 }
 
 func executeRenderStage(

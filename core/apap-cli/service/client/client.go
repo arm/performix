@@ -14,11 +14,15 @@ import (
 
 type client struct{}
 
-func (c client) connect(host string, port int) (*grpc.ClientConn, error) {
-	connector := grpcconnection.NewLocalConnector(
+func newEngineConnector() grpcconnection.GRPCConnector {
+	return grpcconnection.NewLocalConnector(
 		grpc.WithChainUnaryInterceptor(message.ErrorHandlingClientInterceptor()),
 		grpc.WithChainStreamInterceptor(message.ErrorHandlingClientStreamInterceptor()),
 	)
+}
+
+func (c client) connect(host string, port int) (*grpc.ClientConn, error) {
+	connector := newEngineConnector()
 	return connector.Connect(host, port, initialConnectionTimeout)
 }
 

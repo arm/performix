@@ -25,6 +25,7 @@ func NewToolRegistry(tools ...Tool) ToolRegistry {
 func DefaultToolRegistry() ToolRegistry {
 	return NewToolRegistry(
 		toolimpl.GenerateAIInsightsTool{},
+		toolimpl.RunQueryTool{},
 		toolimpl.ListRecipesTool{},
 		toolimpl.RecipeInfoTool{},
 		toolimpl.ListRunsTool{},

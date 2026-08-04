@@ -643,7 +643,7 @@ func TestTransferManagerListen(t *testing.T) {
 		close(releasePhase1)
 
 		got := waitForFlushResult(t, resultCh)
-		expected := message.New(message.EngineCommonUserCancellationError)
+		expected := message.New(message.EngineCommonUserCanceled)
 		assert.Equal(t, expected, got)
 		client.AssertNotCalled(t, "ListFiles", mock.Anything, mock.MatchedBy(func(req *targetagentproto.ListFilesRequest) bool {
 			return len(req.Paths) == 1 && req.Paths[0] == backgroundTransfer.RemotePath
@@ -895,7 +895,7 @@ func TestTransferManagerListen(t *testing.T) {
 		close(cancelChan)
 		got := waitForFlushResult(t, resultCh)
 
-		expected := message.New(message.EngineCommonUserCancellationError)
+		expected := message.New(message.EngineCommonUserCanceled)
 		assert.Equal(t, expected, got)
 		assert.NoError(t, message.ValidateMetadataPlaceholders(got))
 		client.AssertExpectations(t)

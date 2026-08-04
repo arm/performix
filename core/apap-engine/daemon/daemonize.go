@@ -77,6 +77,7 @@ const WaitForExitStatusDuration = 100 * time.Millisecond
 
 func start(commandName string, args []string) (pid int, err error) {
 	cmd := exec.Command(commandName, args...)
+	isolateDaemonProcess(cmd)
 	err = cmd.Start()
 	if err != nil {
 		return

@@ -5,6 +5,7 @@ package deployer
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,7 +57,7 @@ func TestDeployTools(t *testing.T) {
 
 	t.Run("Reconcile fails, error produced when unzip fails, destination is cleaned up", func(t *testing.T) {
 		mcr := &conductormocks.MockCommandRunner{}
-		mcr.On("RunCommand", mock.Anything).Return("", "", errors.New("rekt"))
+		mcr.On("RunCommand", `tar zxf apapDeploy/testTool/1.0/testTool-Linux-x86_64.tar.gz -C apapDeploy/testTool/1.0`).Return("", "", errors.New("rekt"))
 
 		tp, cleanup := writeLocalToolFile(t, testTool, targetMachineType)
 		defer cleanup()
@@ -124,7 +125,7 @@ func TestDeployTools(t *testing.T) {
 		remoteFS := afero.NewMemMapFs()
 
 		mcr := &conductormocks.MockCommandRunner{}
-		mcr.On("RunCommand", mock.Anything).Return("", "", nil).Run(func(args mock.Arguments) {
+		mcr.On("RunCommand", `tar zxf apapDeploy/testTool/1.0/testTool-Linux-x86_64.tar.gz -C apapDeploy/testTool/1.0`).Return("", "", nil).Run(func(args mock.Arguments) {
 			_ = afero.WriteFile(remoteFS, "apapDeploy/testTool/1.0/extractedTool", []byte{}, perms.LocalFilePerm)
 		})
 
@@ -147,7 +148,7 @@ func TestDeployTools(t *testing.T) {
 		_ = remoteFS.Mkdir("apapDeploy/testTool/1.0/", perms.LocalDirPerm)
 
 		mcr := &conductormocks.MockCommandRunner{}
-		mcr.On("RunCommand", mock.Anything).Return("", "", nil).Run(func(args mock.Arguments) {
+		mcr.On("RunCommand", `tar zxf apapDeploy/testTool/1.0/testTool-Linux-x86_64.tar.gz -C apapDeploy/testTool/1.0`).Return("", "", nil).Run(func(args mock.Arguments) {
 			_ = afero.WriteFile(remoteFS, "apapDeploy/testTool/1.0/extractedTool", []byte{}, perms.LocalFilePerm)
 		})
 
@@ -172,7 +173,7 @@ func TestDeployTools(t *testing.T) {
 		writeMarkerFile(t, remoteFS, tp)
 
 		mcr := &conductormocks.MockCommandRunner{}
-		mcr.On("RunCommand", mock.Anything).Return("", "", nil).Run(func(args mock.Arguments) {
+		mcr.On("RunCommand", `tar zxf apapDeploy/testTool/1.0/testTool-Linux-x86_64.tar.gz -C apapDeploy/testTool/1.0`).Return("", "", nil).Run(func(args mock.Arguments) {
 			_ = afero.WriteFile(remoteFS, "apapDeploy/testTool/1.0/extractedTool", []byte{}, perms.LocalFilePerm)
 		})
 
@@ -315,6 +316,33 @@ func TestDeployTools(t *testing.T) {
 			"toolPath": "b",
 		}
 		assert.Equal(t, expectedMetadata, msg.Metadata())
+	})
+
+	t.Run("deployTools succeeds for Windows target", func(t *testing.T) {
+		windowsTarget := conductor.PlatformConfiguration{OS: conductor.Win, Architecture: conductor.X86_64}
+		tempDir := t.TempDir()
+		srcBundle := filepath.Join(tempDir, "c")
+		require.NoError(t, os.WriteFile(srcBundle, []byte("bundle"), perms.LocalFilePerm))
+
+		tp := ToolPaths{
+			DstDir:       `C:\tools\pkg`,
+			TargetBundle: `C:\tmp\bundle.tar.gz`,
+			SrcBundle:    srcBundle,
+		}
+
+		remoteFS := afero.NewMemMapFs()
+		mcr := &conductormocks.MockCommandRunner{}
+		expectedCmd := fmt.Sprintf(
+			`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$bundle = %s; Set-Location -LiteralPath ([System.IO.Path]::GetDirectoryName($bundle)); tar -zxf ([System.IO.Path]::GetFileName($bundle)) -C %s"`,
+			conductor.QuotePowershellString(filepath.ToSlash(tp.TargetBundle)),
+			conductor.QuotePowershellString(filepath.ToSlash(tp.DstDir)),
+		)
+		mcr.On("RunCommand", expectedCmd).Return("", "", nil).Once()
+
+		err := deployTool(windowsTarget, testTool, mcr, targetFilesystem(remoteFS), tp, []conductor.ReportProgressRequest{}, false)
+
+		assert.NoError(t, err)
+		mcr.AssertExpectations(t)
 	})
 
 	t.Run("Force deployment succeeds if tool is not already deployed", func(t *testing.T) {

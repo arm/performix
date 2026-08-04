@@ -7,8 +7,8 @@ const { probePython, probeWhl, normalizeRootOutputAccess } = require('./utils');
 
 const TOOL_NAME = 'asct';
 const TOOL_DISPLAY_NAME = 'ASCT';
-const BUNDLE_VERSION = '0.6.0';
-const BUNDLE_HASH = '6324f8f';
+const BUNDLE_VERSION = '0.6.1';
+const BUNDLE_HASH = 'd2f4360';
 const BUNDLE_DIR = `${TOOL_NAME}/${BUNDLE_VERSION}`;
 const BUNDLE_ARCHIVE_NAME = `${TOOL_NAME}-${BUNDLE_VERSION}+${BUNDLE_HASH}.tar.gz`;
 const INSTALL_DIR_NAME = `install-${BUNDLE_VERSION}+${BUNDLE_HASH}`;
@@ -524,10 +524,10 @@ function getInterruptionTriggerName(ctx) {
  */
 function getInterruptionMessageCode(ctx) {
   if (ctx.metadata.interruptType === 'stop') {
-    return 'engine.common.USER_STOPPED_ERROR';
+    return 'engine.common.USER_STOPPED';
   }
   if (ctx.metadata.interruptType === 'cancel') {
-    return 'engine.common.USER_CANCELLATION_ERROR';
+    return 'engine.common.USER_CANCELED';
   }
   return null;
 }
@@ -818,7 +818,7 @@ let tool = {
       id: 'defaultBenchmarks',
       label: 'Default benchmarks',
       description:
-        'Run the ASCT default benchmark set (same behavior as passing no benchmark arguments).',
+        'Run the default latency, bandwidth, NUMA, and core-to-core benchmarks. Loaded latency is not included and can extend the run.',
       config: {
         type: 'checkbox',
         defaultValue: false,

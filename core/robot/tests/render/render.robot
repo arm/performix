@@ -127,14 +127,12 @@ Run Render Successfully Filters a Code Hotspots Run by PID with SlAnalyze Render
   [Setup]  Run Keywords  Skip Unless Target OS Is  ${OS_LINUX}
   ...  AND  Run Busy Loop Process On Target And Capture PID
   ...  AND  Run Code Hotspots With System-Wide And Capture Run ID
-  ...  AND  Set Enable Rerendering Env Var
   Given The Run Exists  ${RUN_ID}
   When Run Render With Flags  ${RUN_ID}  flags="--param=filter_pid=${PYTHON_PID}"
   Then The Render Invocation Was Successful
   And All Image Names Match The Process Name
   [Teardown]  Run Keywords  Stop Process On Target  ${PYTHON_PID}
   ...  AND  Stop Process On Target  ${YES_PID}
-  ...  AND  Clear Enable Rerendering Env Var
 
 ### CompareDrilldownFlat tests ###
 
@@ -339,7 +337,6 @@ Generate System Utilization Run
 
 Render Suite Setup
   Common Setup
-  Set Enable Full Capture Support Env Var
   The Test Target Is Added Successfully
   The Target Is Set To Default Successfully  ${G_TARGET_NAME}
   Run Recipes For Suite
@@ -349,7 +346,6 @@ Render Suite Setup
 
 Render Suite Teardown
   The Test Target Is Removed Successfully
-  Clear Enable Full Capture Support Env Var
   Common Teardown
 
 Set Long Comparison Renderer Configs
@@ -397,7 +393,7 @@ Run Busy Loop Process On Target And Capture PID
 
 Run CPU Microarchitecture With System-Wide And Capture Run ID
   [Documentation]  Run cpu_microarchitecture system-wide and capture the run ID in a test variable
-  Run CPU Microarchitecture Recipe  --system-wide --timeout 3 --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  Run CPU Microarchitecture Recipe  --system-wide --timeout 3 --param rich_data_capture=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   The Last Command Succeeded
   ${run_id} =  Extract The Run ID
   The Run Exists  ${run_id}
@@ -405,7 +401,7 @@ Run CPU Microarchitecture With System-Wide And Capture Run ID
 
 Run Code Hotspots With System-Wide And Capture Run ID
   [Documentation]  Run code_hotspots system-wide and capture the run ID in a test variable
-  Run Code Hotspots Recipe  --system-wide --timeout 3 --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  Run Code Hotspots Recipe  --system-wide --timeout 3 --param rich_data_capture=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   The Last Command Succeeded
   ${run_id} =  Extract The Run ID
   The Run Exists  ${run_id}

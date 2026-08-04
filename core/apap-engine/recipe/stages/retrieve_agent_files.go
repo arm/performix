@@ -156,7 +156,7 @@ func (r *RetrieveAgentFilesStage) Execute(stageCtx *recipe.StageContext) (func()
 	if stageCtx.CommandStateChannel != nil && stageCtx.CommandStateChannel.CancelChan != nil {
 		select {
 		case <-stageCtx.CommandStateChannel.CancelChan:
-			return nil, message.New(message.EngineCommonUserCancellationError)
+			return nil, message.New(message.EngineCommonUserCanceled)
 		default:
 		}
 

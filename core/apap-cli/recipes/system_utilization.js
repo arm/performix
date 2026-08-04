@@ -1023,7 +1023,7 @@ const recipe = {
       id: 'interval',
       required: false,
       label: 'Interval',
-      description: 'Sampling interval in seconds.',
+      description: 'Sampling interval in seconds (0.01 to 60).',
       config: {
         type: 'input',
         defaultValue: '1.0',

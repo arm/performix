@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 
 	agentmocks "github.com/Arm-Debug/apap-cli/apap-engine/agent/mocks"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/grpcserver/transport"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/ioutil"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
@@ -80,6 +81,7 @@ func newRootWorkerForTests(
 ) *rootWorkerProcessImpl {
 	cfg := RootWorkerProcessConfig{
 		TransportLoggingEnabled: false,
+		ProofMechanism:          NoPasswdSudo,
 	}
 	r, _ := newRootWorkerProcessImpl(pm, af, cfg)
 	r.LaunchTiming = LaunchTiming{
@@ -94,6 +96,37 @@ func newRootWorkerForTests(
 	r.deps.newHealth = func(_ grpc.ClientConnInterface) healthproto.HealthClient { return hf }
 	r.deps.waitProcess = func(p *os.Process) (any, error) { return "exited", nil }
 	return r
+}
+
+func TestBuildAndroidSuCommandNotImplemented(t *testing.T) {
+	command, err := buildAndroidSuCommand([]string{"/data/local/tmp/apx-agent", "start-root-worker"})
+
+	assert.Nil(t, command)
+	assert.ErrorIs(t, err, message.New(message.AgentElevatePrivilegesMechanismAndroidSuNotImplemented))
+}
+
+func TestBuildLaunchCommand(t *testing.T) {
+	t.Run("passwordless sudo", func(t *testing.T) {
+		r := &rootWorkerProcessImpl{RootWorkerProcessConfig: RootWorkerProcessConfig{
+			ProofMechanism: NoPasswdSudo,
+		}}
+
+		command, err := r.buildLaunchCommand([]string{"apx-agent", "start-root-worker"})
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"sudo", "-E", "-n", "apx-agent", "start-root-worker"}, command)
+	})
+
+	t.Run("Android su is not implemented", func(t *testing.T) {
+		r := &rootWorkerProcessImpl{RootWorkerProcessConfig: RootWorkerProcessConfig{
+			ProofMechanism: AndroidSu,
+		}}
+
+		command, err := r.buildLaunchCommand([]string{"apx-agent", "start-root-worker"})
+
+		assert.Nil(t, command)
+		assert.ErrorIs(t, err, message.New(message.AgentElevatePrivilegesMechanismAndroidSuNotImplemented))
+	})
 }
 
 func TestLaunch_HappyPath(t *testing.T) {

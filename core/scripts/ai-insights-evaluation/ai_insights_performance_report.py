@@ -36,6 +36,26 @@ from performance_quality import (
 REPORT_NAME = "ai_insights_performance.json"
 
 
+def required_count(attempt: dict[str, str], key: str) -> int:
+    """Return a required non-negative integer JUnit property."""
+    value = number(attempt.get(key))
+    if not isinstance(value, int):
+        test_id = attempt.get("ai_test_id", "unknown testcase")
+        mode = attempt.get("ai_mode", "unknown mode")
+        raise ValueError(f"missing or invalid {key} for {test_id} in {mode}")
+    return value
+
+
+def required_number(attempt: dict[str, str], key: str) -> int | float:
+    """Return a required non-negative numeric JUnit property."""
+    value = number(attempt.get(key))
+    if not isinstance(value, (int, float)):
+        test_id = attempt.get("ai_test_id", "unknown testcase")
+        mode = attempt.get("ai_mode", "unknown mode")
+        raise ValueError(f"missing or invalid {key} for {test_id} in {mode}")
+    return value
+
+
 def build_payloads(
     attempts: list[dict[str, str]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -58,7 +78,10 @@ def build_payloads(
         "input_tokens",
         "output_tokens",
         "reasoning_output_tokens",
-        "mcp_completed_calls",
+        "mcp_tool_calls_succeeded",
+        "mcp_tool_calls_failed",
+        "mcp_tool_duration_seconds_succeeded",
+        "mcp_tool_duration_seconds_failed",
         "duration_threshold_seconds",
         "input_token_threshold",
         "output_token_threshold",
@@ -78,7 +101,16 @@ def build_payloads(
         input_tokens = number(attempt.get("ai_input_tokens"))
         output_tokens = number(attempt.get("ai_output_tokens"))
         reasoning_output_tokens = number(attempt.get("ai_reasoning_output_tokens"))
-        mcp_completed_calls = number(attempt.get("ai_mcp_completed_calls"))
+        mcp_tool_calls_succeeded = required_count(
+            attempt, "ai_mcp_tool_calls_succeeded"
+        )
+        mcp_tool_calls_failed = required_count(attempt, "ai_mcp_tool_calls_failed")
+        mcp_tool_duration_seconds_succeeded = required_number(
+            attempt, "ai_mcp_tool_duration_seconds_succeeded"
+        )
+        mcp_tool_duration_seconds_failed = required_number(
+            attempt, "ai_mcp_tool_duration_seconds_failed"
+        )
         evaluated = has_recorded_performance_evaluation(attempt)
 
         metrics = {}
@@ -112,7 +144,10 @@ def build_payloads(
             input_tokens,
             output_tokens,
             reasoning_output_tokens,
-            mcp_completed_calls,
+            mcp_tool_calls_succeeded,
+            mcp_tool_calls_failed,
+            mcp_tool_duration_seconds_succeeded,
+            mcp_tool_duration_seconds_failed,
             metrics["duration_seconds"].threshold if evaluated else None,
             metrics["input_tokens"].threshold if evaluated else None,
             metrics["output_tokens"].threshold if evaluated else None,

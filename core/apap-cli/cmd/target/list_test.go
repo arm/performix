@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os/exec"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -29,17 +30,6 @@ type fakeAndroidTargetDiscoverer struct {
 func (d *fakeAndroidTargetDiscoverer) DiscoverAndroidTargets() ([]*engine_target.AndroidTarget, error) {
 	d.calls++
 	return d.targets, d.err
-}
-
-type fakeADBRunner struct {
-	stdout string
-	err    error
-	calls  [][]string
-}
-
-func (r *fakeADBRunner) Run(args ...string) (string, string, error) {
-	r.calls = append(r.calls, args)
-	return r.stdout, "", r.err
 }
 
 func TestListTarget(t *testing.T) {
@@ -66,6 +56,26 @@ func TestListTarget(t *testing.T) {
 		_, err := cmd.ExecuteC()
 
 		assert.NoError(t, err)
+	})
+
+	t.Run("default discoverer uses configured adb path", func(t *testing.T) {
+		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
+		originalADBPath := viper.GetString("adb-path")
+		viper.Set(enableAndroidTargetsConfigKey, true)
+		viper.Set("adb-path", "configured-adb-that-does-not-exist")
+		t.Cleanup(func() {
+			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
+			viper.Set("adb-path", originalADBPath)
+		})
+
+		cmd := newListCommand(&mtm, adbAndroidTargetDiscoverer{})
+		cmd.SetArgs([]string{"--discover"})
+
+		_, err := cmd.ExecuteC()
+
+		var execErr *exec.Error
+		require.ErrorAs(t, err, &execErr)
+		assert.Equal(t, "configured-adb-that-does-not-exist", execErr.Name)
 	})
 
 	t.Run("discover flag is hidden when android targets are disabled", func(t *testing.T) {
@@ -333,39 +343,20 @@ ssh   yes      strict           user@host [key]
 	})
 
 	t.Run("adb discoverer parses connected devices", func(t *testing.T) {
-		runner := &fakeADBRunner{
-			stdout: `List of devices attached
+		stdout := `List of devices attached
 emulator-5556	device
 offline-device	offline
 unauthorized-device	unauthorized
 192.0.2.1:5555	device product:sdk model:Pixel device:generic
 
-`,
-		}
-		discoverer := adbAndroidTargetDiscoverer{runner: runner}
+`
 
-		targets, err := discoverer.DiscoverAndroidTargets()
+		targets := parseADBDevices(stdout)
 
-		require.NoError(t, err)
 		assert.Equal(t, []*engine_target.AndroidTarget{
 			{SerialNumber: "emulator-5556"},
 			{SerialNumber: "192.0.2.1:5555"},
 		}, targets)
-		require.Len(t, runner.calls, 1)
-		assert.Equal(t, []string{"devices"}, runner.calls[0])
-	})
-
-	t.Run("adb discoverer returns runner errors", func(t *testing.T) {
-		adbErr := errors.New("adb unavailable")
-		runner := &fakeADBRunner{err: adbErr}
-		discoverer := adbAndroidTargetDiscoverer{runner: runner}
-
-		targets, err := discoverer.DiscoverAndroidTargets()
-
-		require.ErrorIs(t, err, adbErr)
-		assert.Nil(t, targets)
-		require.Len(t, runner.calls, 1)
-		assert.Equal(t, []string{"devices"}, runner.calls[0])
 	})
 
 	t.Run("discovers android targets in a table", func(t *testing.T) {

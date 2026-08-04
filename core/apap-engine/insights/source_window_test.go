@@ -113,7 +113,7 @@ func sourceWindowsTestRunDescription() *run.RunDescription {
 }
 
 func sourceWindowsTestFetcher() sourcecontent.SourceFilesFetcher {
-	return sourcecontent.NewSourceFilesFetcher(context.Background(), nil, nil, sourceWindowsFetchConcurrency)
+	return sourcecontent.NewSourceFilesFetcher(context.Background(), nil, nil)
 }
 
 func sumSourceWindowSamples(payload sourceWindowsPayload) uint64 {
@@ -225,7 +225,7 @@ SET host_location = NULL,
 			}
 			results = append(results, sourcecontent.SourceFileContent{
 				LoadedLocation: targetLocation,
-				Lines:          lines,
+				Content:        strings.Join(lines, "\n"),
 			})
 		}
 		return results
@@ -247,6 +247,10 @@ SET host_location = NULL,
 	assert.Equal(t, "/remote/other.c", targetWindow.Path)
 	assert.Empty(t, targetWindow.SourceUnavailability)
 	assert.Contains(t, targetWindow.SourceLines, "      15       2:remote other line 2")
+}
+
+func TestSourceContentLinesNormalizesLineEndings(t *testing.T) {
+	assert.Equal(t, []string{"line one", "", "line three"}, sourceContentLines("line one\r\n\r\nline three\n"))
 }
 
 func TestSourceUnavailabilityForFetchFailureMapsConcreteReasons(t *testing.T) {

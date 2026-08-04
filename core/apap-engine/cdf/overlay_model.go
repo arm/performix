@@ -282,6 +282,14 @@ func (m *OverlayModel) Metadata() Metadata {
 	return m.overlay.Metadata()
 }
 
+// Migrations returns overlay migrations if available, otherwise base migrations.
+func (m *OverlayModel) Migrations() []PathMigration {
+	if overlayMigrations := m.overlay.Migrations(); overlayMigrations != nil {
+		return m.overlay.Migrations()
+	}
+	return m.base.Migrations()
+}
+
 // BasePath returns the base path of the overlay if available, otherwise the base path of the base model.
 func (m *OverlayModel) BasePath() string {
 	return m.overlay.BasePath()

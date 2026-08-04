@@ -16,6 +16,7 @@ path = [
     "core/clients/go/**/*_grpc.pb.go",
     "core/robot/stdout.txt",
     "core/scripts/tpip/tools-metadata.json",
+    "mise.internal.lock",
     "mise.lock",
 ]
 precedence = "closest"

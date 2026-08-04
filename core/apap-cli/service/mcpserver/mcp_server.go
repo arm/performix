@@ -17,39 +17,29 @@ import (
 	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
 )
 
-type EngineClientConnector func() (apapproto.ApapClient, error)
-
 type MCPServer struct {
-	connector EngineClientConnector
-	targets   target.TargetManagerService
-	registry  ToolRegistry
+	engine   apapproto.ApapClient
+	targets  target.TargetManagerService
+	registry ToolRegistry
 }
 
-// NewMCPServer creates an MCP server that connects to the engine before serving stdio requests.
-func NewMCPServer(connector EngineClientConnector, targets target.TargetManagerService) *MCPServer {
-	return newMCPServerWithDependencies(connector, targets, DefaultToolRegistry())
-}
-
-func newMCPServerWithDependencies(connector EngineClientConnector, targets target.TargetManagerService, registry ToolRegistry) *MCPServer {
+// NewMCPServer creates an MCP protocol server using an already-connected
+// engine. The caller remains responsible for the engine lifecycle.
+func NewMCPServer(engine apapproto.ApapClient, targets target.TargetManagerService) *MCPServer {
 	return &MCPServer{
-		connector: connector,
-		targets:   targets,
-		registry:  registry,
+		engine:   engine,
+		targets:  targets,
+		registry: DefaultToolRegistry(),
 	}
 }
 
 func (s *MCPServer) Run(ctx context.Context, in io.ReadCloser, out io.Writer, errOut io.Writer) error {
-	return runMCPServer(ctx, in, out, errOut, s.connector, s.targets, s.registry)
+	return runMCPServer(ctx, in, out, errOut, s.engine, s.targets, s.registry)
 }
 
-func runMCPServer(ctx context.Context, in io.ReadCloser, out io.Writer, errOut io.Writer, connector EngineClientConnector, targets target.TargetManagerService, registry ToolRegistry) error {
-	engineClient, err := connector()
-	if err != nil {
-		return err
-	}
-
+func runMCPServer(ctx context.Context, in io.ReadCloser, out io.Writer, errOut io.Writer, engine apapproto.ApapClient, targets target.TargetManagerService, registry ToolRegistry) error {
 	toolDeps := toolimpl.ToolDependencies{
-		Engine:  engineClient,
+		Engine:  engine,
 		Targets: targets,
 	}
 

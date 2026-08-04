@@ -95,6 +95,7 @@ func (r *RenderStageAPIExposer) ExposeAPI(api RecipeAPI, jsContext *goja.Object)
 	funcList := []exposedFunction{
 		{jsName: "getRunDescriptions", fn: api.getRunDescriptions},
 		{jsName: "listRunComponents", fn: api.listRunComponents},
+		{jsName: "getToolCapabilities", fn: api.getToolCapabilities},
 		{jsName: "getRenderParameter", fn: api.getRenderParameter},
 		{jsName: "getRenderParameters", fn: api.getRenderParameters},
 		{jsName: "logInfo", fn: api.logInfo},
@@ -247,7 +248,11 @@ func (s *GojaScriptedReadyStage) Execute(ctx recipe.ExecutionContext, stageConte
 	}
 
 	readyOutput := GojaReadyOutput{}
-	err = gojautils.ParseObjectFromJS(out, &readyOutput)
+	allowedUnset := []*regexp.Regexp{
+		regexp.MustCompile(`^advice\[\d+\]\.cause$`),
+		regexp.MustCompile(`^advice\[\d+\]\.metadata$`),
+	}
+	err = gojautils.ParseObjectFromJSWithRegex(out, &readyOutput, allowedUnset, []*regexp.Regexp{})
 	if err != nil {
 		return nil, err
 	}

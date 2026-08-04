@@ -39,7 +39,7 @@ func (m *mockAgentCreator) NewConnection(id string, localityName string, tp cond
 
 func TestTargetSessionConnect(t *testing.T) {
 	t.Run("Caches target", func(t *testing.T) {
-		ts := newTargetSession(&target.LocalTarget{}, nil, "")
+		ts := newTargetSession(&target.LocalTarget{}, nil, "", "adb")
 		cachedPlatform := &conductor.TargetPlatform{
 			PlatformConfiguration: conductor.PlatformConfiguration{
 				OS:           conductor.Linux,
@@ -71,7 +71,7 @@ func TestTargetSessionConnect(t *testing.T) {
 		secureClient.On("CommandRunner").Return(&conductormocks.MockCommandRunner{}).Maybe()
 		secureClient.On("SFTPClient").Return(&sftp.Client{}, nil).Once()
 
-		ts := newTargetSession(sshTarget, nil, "")
+		ts := newTargetSession(sshTarget, nil, "", "adb")
 		ts.platform = &conductor.TargetPlatform{PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux}}
 		ts.platformCreator = func(cr conductor.CommandRunner, fs conductor.TargetFilesystem, platformGate conductor.PlatformGate) (*conductor.TargetPlatform, error) {
 			require.Equal(t, conductor.TargetSupported, platformGate)
@@ -96,7 +96,7 @@ func TestTargetSessionConnect(t *testing.T) {
 	t.Run("Returns Android connection error before platform detection", func(t *testing.T) {
 		connectErr := errors.New("android connect failed")
 		androidTarget := &target.AndroidTarget{SerialNumber: "apap-missing-android-device"}
-		ts := newTargetSession(androidTarget, nil, "")
+		ts := newTargetSession(androidTarget, nil, "", "adb")
 		ts.androidConnect = func(androidTgt target.AndroidTarget) (*conductor.ADBClient, error) {
 			require.Equal(t, *androidTarget, androidTgt)
 			return nil, connectErr
@@ -115,7 +115,7 @@ func TestTargetSessionConnect(t *testing.T) {
 		sshTarget := &target.SSHTarget{}
 		called := false
 
-		ts := newTargetSession(sshTarget, nil, "")
+		ts := newTargetSession(sshTarget, nil, "", "adb")
 		ts.platform = &conductor.TargetPlatform{PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux}}
 		ts.sshConnect = func(ctx context.Context, sshTgt target.SSHTarget, promptProviders conductor.PromptProviders) (conductor.SecureClient, error) {
 			called = true
@@ -136,7 +136,7 @@ func TestTargetSessionConnect(t *testing.T) {
 		secureClient.On("SFTPClient").Return((*sftp.Client)(nil), sftpErr).Once()
 		secureClient.On("Close").Return(nil).Once()
 
-		ts := newTargetSession(sshTarget, nil, "")
+		ts := newTargetSession(sshTarget, nil, "", "adb")
 		ts.platform = &conductor.TargetPlatform{PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux}}
 		ts.sshConnect = func(ctx context.Context, sshTgt target.SSHTarget, promptProviders conductor.PromptProviders) (conductor.SecureClient, error) {
 			return secureClient, nil
@@ -153,7 +153,7 @@ func TestTargetSessionConnect(t *testing.T) {
 		connection.On("CheckHealth").Return(healthErr).Once()
 		connection.On("Close").Return(nil).Once()
 
-		ts := newTargetSession(&target.LocalTarget{}, nil, "")
+		ts := newTargetSession(&target.LocalTarget{}, nil, "", "adb")
 		osType := conductor.Linux
 		if runtime.GOOS == "windows" {
 			osType = conductor.Win
@@ -178,7 +178,7 @@ func TestTargetSessionConnect(t *testing.T) {
 	})
 	t.Run("Caches host-supported platform", func(t *testing.T) {
 		hostPlatform := &conductor.TargetPlatform{PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Darwin, Architecture: conductor.AArch64}}
-		ts := newTargetSession(&target.LocalTarget{}, nil, "")
+		ts := newTargetSession(&target.LocalTarget{}, nil, "", "adb")
 		ts.platformCreator = func(_ conductor.CommandRunner, _ conductor.TargetFilesystem, platformGate conductor.PlatformGate) (*conductor.TargetPlatform, error) {
 			require.Equal(t, conductor.HostSupported, platformGate)
 			return hostPlatform, nil
@@ -202,7 +202,7 @@ func TestTargetSessionConnect(t *testing.T) {
 
 func TestTargetSessionTargetPLatform(t *testing.T) {
 	t.Run("Requires Connection", func(t *testing.T) {
-		ts := newTargetSession(&target.LocalTarget{}, nil, t.TempDir())
+		ts := newTargetSession(&target.LocalTarget{}, nil, t.TempDir(), "adb")
 		_, err := ts.TargetPlatform()
 		require.ErrorIs(t, err, message.New(message.EngineTargetSessionConnectionNotEstablished))
 	})
@@ -221,7 +221,7 @@ func TestTargetSessionTargetPLatform(t *testing.T) {
 
 func TestTargetSessionTargetAgent(t *testing.T) {
 	t.Run("Requires Connection", func(t *testing.T) {
-		ts := newTargetSession(&target.LocalTarget{}, nil, t.TempDir())
+		ts := newTargetSession(&target.LocalTarget{}, nil, t.TempDir(), "adb")
 		_, err := ts.TargetAgent(context.Background())
 		require.ErrorIs(t, err, message.New(message.EngineTargetSessionConnectionNotEstablished))
 	})
@@ -230,7 +230,7 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		client.On("GetVersion", mock.Anything, mock.Anything).Return(nil, nil)
 		agentConn := &agent.AgentConn{Client: client}
 
-		ts := newTargetSession(&target.LocalTarget{}, nil, t.TempDir())
+		ts := newTargetSession(&target.LocalTarget{}, nil, t.TempDir(), "adb")
 		ts.connection = &mockTargetConnection{}
 		ts.platform = &conductor.TargetPlatform{
 			PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64},
@@ -244,7 +244,7 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		client.AssertExpectations(t)
 	})
 	t.Run("RequiresEstablishedPlatform", func(t *testing.T) {
-		ts := newTargetSession(&target.LocalTarget{}, nil, t.TempDir())
+		ts := newTargetSession(&target.LocalTarget{}, nil, t.TempDir(), "adb")
 		ts.connection = &mockTargetConnection{}
 
 		_, err := ts.TargetAgent(context.Background())
@@ -261,7 +261,7 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		agentCreator := &mockAgentCreator{}
 		agentCreator.On("NewConnection", mock.Anything, locality.Target, mock.Anything, dialer).Return(nil, agentErr).Once()
 
-		ts := newTargetSession(&target.LocalTarget{}, agentCreator, t.TempDir())
+		ts := newTargetSession(&target.LocalTarget{}, agentCreator, t.TempDir(), "adb")
 		ts.connection = connection
 		ts.platform = &conductor.TargetPlatform{
 			PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64},
@@ -288,7 +288,7 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		connection := &mockTargetConnection{}
 		connection.On("Dialer").Return(dialer).Once()
 
-		ts := newTargetSession(&target.LocalTarget{}, agentCreator, t.TempDir())
+		ts := newTargetSession(&target.LocalTarget{}, agentCreator, t.TempDir(), "adb")
 		ts.connection = connection
 		ts.platform = &conductor.TargetPlatform{
 			PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64},
@@ -320,7 +320,7 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		connection := &mockTargetConnection{}
 		connection.On("Dialer").Return(dialer).Once()
 
-		ts := newTargetSession(&target.LocalTarget{}, agentCreator, "/tools/base")
+		ts := newTargetSession(&target.LocalTarget{}, agentCreator, "/tools/base", "adb")
 		ts.connection = connection
 		ts.platform = &conductor.TargetPlatform{
 			PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64},
@@ -348,7 +348,7 @@ func TestLocalityScopedTargetSessionUsesHostLocality(t *testing.T) {
 		agentCreator := &mockAgentCreator{}
 		agentCreator.On("NewConnection", mock.Anything, locality.Host, mock.Anything, dialer).Return(newConn, nil).Once()
 
-		base := newTargetSession(&target.LocalTarget{}, agentCreator, t.TempDir())
+		base := newTargetSession(&target.LocalTarget{}, agentCreator, t.TempDir(), "adb")
 		base.connection = connection
 		base.platform = &conductor.TargetPlatform{
 			PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64},

@@ -6,7 +6,6 @@ package conductor
 import (
 	"bytes"
 	"os/exec"
-	"runtime"
 )
 
 // CommandRunner is the interface for running commands on the target machine.
@@ -19,18 +18,11 @@ type LocalCommandRunner struct {
 }
 
 func (c *LocalCommandRunner) RunCommand(cmd string) (string, string, error) {
+	return runLocalCommand(cmd)
+}
+
+func runCmd(command *exec.Cmd) (string, string, error) {
 	var stdout, stderr bytes.Buffer
-	var shell, flag string
-
-	if runtime.GOOS == "windows" {
-		shell = "cmd.exe"
-		flag = "/c"
-	} else {
-		shell = "/bin/sh"
-		flag = "-c"
-	}
-
-	command := exec.Command(shell, flag, cmd)
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	err := command.Run()

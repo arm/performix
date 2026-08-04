@@ -11,6 +11,7 @@ import (
 	"github.com/dop251/goja"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
@@ -18,6 +19,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
+	"github.com/Arm-Debug/apap-cli/apap-engine/recipe/runtime"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
@@ -96,6 +98,11 @@ func (m *mockExecutionContext) GetRunModels() []cdf.ModelView {
 	args := m.Called()
 	runModels, _ := args.Get(0).([]cdf.ModelView)
 	return runModels
+}
+
+func (m *mockExecutionContext) GetToolCapabilities(runIndex int, toolName string, invocationIndex int) (run.ToolCapabilities, error) {
+	args := m.Called(runIndex, toolName, invocationIndex)
+	return args.Get(0).(run.ToolCapabilities), args.Error(1)
 }
 
 func (m *mockExecutionContext) GetTool(toolInfo tool.ToolInfo) string {
@@ -366,6 +373,86 @@ func TestGojaScriptedEnabledParametersStage(t *testing.T) {
 		expectedErr := message.New(message.EngineRecipeparserJsRecipeStageInvalidRadioValue).WithMetadata(expectedMetadata)
 		assert.Equal(t, expectedErr, err)
 		assert.NoError(t, message.ValidateMetadataPlaceholders(err))
+	})
+}
+
+func TestGojaScriptedReadyStage(t *testing.T) {
+	t.Run("executes when cause and metadata are unspecified", func(t *testing.T) {
+		vm := goja.New()
+		stage := &GojaScriptedReadyStage{
+			GojaScriptedRecipeStage: GojaScriptedRecipeStage{
+				StageName:  "ready",
+				Exposer:    &ReadyStageAPIExposer{},
+				VM:         vm,
+				apiFactory: CreateConcreteAPI,
+				Exec: func(goja.FunctionCall) goja.Value {
+					return vm.ToValue(map[string]any{
+						"status": recipe.ReadyStatusWarning,
+						"advice": []map[string]any{{
+							"toolName":       "tool",
+							"adviceSeverity": recipe.ReadyStatusWarning,
+							"messageCode":    message.EngineCommonUserStopped,
+						}},
+					})
+				},
+			},
+		}
+		readinessCollector := &runtime.ReadinessCollector{}
+		stageCtx := &recipe.StageContext{
+			Context:           context.Background(),
+			ReadinessNotifier: readinessCollector,
+		}
+		execCtx := newMockExecutionContext(t, &recipe.RecipeCtx{
+			RecipeMetadata: recipe.RecipeMetadata{Name: "recipe"},
+		}, nil)
+
+		cleanup, err := stage.Execute(execCtx, stageCtx)
+
+		require.NoError(t, err)
+		require.Nil(t, cleanup)
+		require.Len(t, readinessCollector.ReadinessOutput, 1)
+		output := readinessCollector.ReadinessOutput[0]
+		require.Equal(t, recipe.ReadyStatusWarning, output.Status)
+		require.Len(t, output.Advice, 1)
+		advice := output.Advice[0]
+		require.Equal(t, "tool", advice.ToolName)
+		require.Equal(t, recipe.ReadyStatusWarning, advice.AdviceSeverity)
+		require.Equal(t, message.New(message.EngineCommonUserStopped), advice.AdviceMessage)
+		require.Empty(t, advice.AdviceMessage.Metadata())
+		require.NoError(t, errors.Unwrap(advice.AdviceMessage))
+	})
+
+	t.Run("returns error when messageCode is unspecified", func(t *testing.T) {
+		vm := goja.New()
+		stage := &GojaScriptedReadyStage{
+			GojaScriptedRecipeStage: GojaScriptedRecipeStage{
+				StageName:  "ready",
+				Exposer:    &ReadyStageAPIExposer{},
+				VM:         vm,
+				apiFactory: CreateConcreteAPI,
+				Exec: func(goja.FunctionCall) goja.Value {
+					return vm.ToValue(map[string]any{
+						"status": recipe.ReadyStatusWarning,
+						"advice": []map[string]any{{
+							"toolName":       "tool",
+							"adviceSeverity": recipe.ReadyStatusWarning,
+						}},
+					})
+				},
+			},
+		}
+		readinessCollector := &runtime.ReadinessCollector{}
+		stageCtx := &recipe.StageContext{
+			Context:           context.Background(),
+			ReadinessNotifier: readinessCollector,
+		}
+		execCtx := &mockExecutionContext{}
+
+		cleanup, err := stage.Execute(execCtx, stageCtx)
+
+		require.Nil(t, cleanup)
+		require.EqualError(t, err, "has unset fields: advice[0].messageCode")
+		require.Empty(t, readinessCollector.ReadinessOutput)
 	})
 }
 

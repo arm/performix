@@ -558,7 +558,7 @@ func (a *AgentServerAPI) ElevatePrivileges(ctx context.Context, req *targetagent
 		Pm:                a.Pm,
 		AcceptorFactory:   a.AcceptorFactory,
 		RootWorkerFactory: a.RootWorkerFactory,
-		Mech:              mech,
+		ProofMechanism:    mech,
 	})
 
 	if err != nil {

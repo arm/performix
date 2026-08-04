@@ -15,6 +15,8 @@ const NEOPROF_TIMELINE_COUNTER_PARQUET_PATTERN =
   'tool/neoprof/0/output/parquet/timeline/series_id=*/bin_duration=*/counter.parquet';
 const readinessMessageCode =
   'engine.recipeparser.js_recipe_stage.READINESS_MESSAGE';
+const telemetrySpecificationUnavailableMessageCode =
+  'recipes.code_hotspots.TELEMETRY_SPECIFICATION_UNAVAILABLE';
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
 
 /**
@@ -101,6 +103,16 @@ var recipe = {
       label: 'Reformat on host',
       description:
         'Run analysis on the host instead of the target. This is always enabled for Android targets but can be optionally enabled for Linux targets. collect_java_stacks and collect_dotnet_stacks are not currently supported when reformat_on_host is enabled.',
+      config: {
+        type: 'checkbox',
+        defaultValue: false,
+      },
+    },
+    {
+      id: 'rich_data_capture',
+      required: false,
+      label: 'Collect rich data',
+      description: `Enables the collection of rich data from the target, which enables advanced filtering functionality after the run completes. This can significantly increase host storage usage and transfer time.`,
       config: {
         type: 'checkbox',
         defaultValue: false,
@@ -221,14 +233,16 @@ function generateWperfConfig(workload, params) {
  * @returns {Object.<string, any>}
  */
 function buildNeoprofParams(context, samplingFreq) {
+  const androidTarget = isAndroidTarget(context.targetInfo());
   return {
     mode: 'samples',
     sampling_frequency: samplingFreq,
     collect_java_stacks: context.getParameter('collect_java_stacks'),
     collect_dotnet_stacks: context.getParameter('collect_dotnet_stacks'),
-    reformat_on_host:
-      isAndroidTarget(context.targetInfo()) ||
-      context.getParameter('reformat_on_host'),
+    rich_data_capture: androidTarget
+      ? false
+      : context.getParameter('rich_data_capture'),
+    reformat_on_host: androidTarget || context.getParameter('reformat_on_host'),
   };
 }
 
@@ -266,6 +280,23 @@ function isAndroidTarget(targetInfo) {
 
 /**
  * @param {import("./docs/jsdocs").ReadyExecutionContext} context
+ * @param {import("./docs/jsdocs").RecipeReadyAdvice[]} advice
+ */
+function addTelemetrySpecificationWarning(context, advice) {
+  const cpuName = context.targetInfo().PrimaryCPUName;
+  if (!context.getTelemetrySpecification(cpuName)) {
+    advice.push({
+      ToolName: '',
+      AdviceSeverity: 'warning',
+      MessageCode: telemetrySpecificationUnavailableMessageCode,
+      Metadata: { cpuName },
+      Cause: '',
+    });
+  }
+}
+
+/**
+ * @param {import("./docs/jsdocs").ReadyExecutionContext} context
  */
 function readyHotspots(context) {
   const workload = context.getWorkload();
@@ -275,6 +306,7 @@ function readyHotspots(context) {
   const collectJitDumpsEnabled =
     context.getParameter('collect_java_stacks') ||
     context.getParameter('collect_dotnet_stacks');
+  const richDataCaptureEnabled = context.getParameter('rich_data_capture');
 
   if (isWindowsTarget(targetInfo)) {
     const tools = generateWperfConfig(workload, buildWperfParams(samplingFreq));
@@ -304,6 +336,19 @@ function readyHotspots(context) {
         Cause: '',
       });
     }
+    if (richDataCaptureEnabled) {
+      allAdvice.push({
+        ToolName: TOOL_WPERF.name,
+        AdviceSeverity: 'warning',
+        MessageCode: readinessMessageCode,
+        Metadata: {
+          message:
+            'Rich data capture is not supported for Windows targets. Advanced filtering functionality will not be available.',
+        },
+        Cause: '',
+      });
+    }
+    addTelemetrySpecificationWarning(context, allAdvice);
     return {
       status: toolStatusToRecipeStatus(allAdvice),
       advice: allAdvice,
@@ -339,6 +384,7 @@ function readyHotspots(context) {
       });
     }
   }
+  addTelemetrySpecificationWarning(context, allAdvice);
   return {
     status: toolStatusToRecipeStatus(allAdvice),
     advice: allAdvice,
@@ -416,64 +462,44 @@ function getRenderParameterIfExists(context, parameterId) {
  * @param {number} binDuration
  * @returns {string}
  */
-function buildProvisionalTimelinePivotQuery(binDuration) {
+function buildProvisionalTimelineSystemWideQuery(binDuration) {
   return `
     -- Presentation-layer query for provisional timeline charts.
     --
     -- The upstream timeline SQL bundle keeps source loading and interval
     -- expansion faithful to the parquet inputs, so gaps remain absent there.
-    -- This final chart query intentionally builds a dense x/device-thread
-    -- domain and zero-fills uncovered bins to match current Streamline
-    -- rendering behaviour. Treat this as display-only policy for now.
-    PIVOT (
-      WITH series_points AS (
-        SELECT
-          x_start,
-          concat(
-            'dev',
-            CAST(device_no AS VARCHAR),
-            '_thread',
-            CAST(thread AS VARCHAR)
-          ) AS device_thread_key,
-          value
-        FROM {table}
-      ),
-      x_bounds AS (
-        SELECT
-          MIN(x_start) AS min_x_start,
-          MAX(x_start) AS max_x_start
-        FROM series_points
-      ),
-      x_domain AS (
-        SELECT generated.x_start
-        FROM x_bounds
-        CROSS JOIN generate_series(
-          CAST(x_bounds.min_x_start AS BIGINT),
-          CAST(x_bounds.max_x_start AS BIGINT),
-          ${binDuration}
-        ) AS generated(x_start)
-      ),
-      device_thread_domain AS (
-        SELECT DISTINCT device_thread_key
-        FROM series_points
-      )
+    -- This final chart query sums values across all discovered device/thread
+    -- pairs, then zero-fills uncovered bins. Treat this as display-only policy
+    -- for now.
+    WITH aggregated_series_points AS (
       SELECT
-        x_domain.x_start,
-        device_thread_domain.device_thread_key,
-        COALESCE(MAX(series_points.value), 0.0) AS value
-      FROM x_domain
-      CROSS JOIN device_thread_domain
-      LEFT JOIN series_points
-        ON series_points.x_start = x_domain.x_start
-       AND series_points.device_thread_key = device_thread_domain.device_thread_key
-      GROUP BY
-        x_domain.x_start,
-        device_thread_domain.device_thread_key
+        x_start,
+        SUM(value) AS value
+      FROM {table}
+      GROUP BY x_start
+    ),
+    x_bounds AS (
+      SELECT
+        MIN(x_start) AS min_x_start,
+        MAX(x_start) AS max_x_start
+      FROM aggregated_series_points
+    ),
+    x_domain AS (
+      SELECT generated.x_start
+      FROM x_bounds
+      CROSS JOIN generate_series(
+        CAST(x_bounds.min_x_start AS BIGINT),
+        CAST(x_bounds.max_x_start AS BIGINT),
+        ${binDuration}
+      ) AS generated(x_start)
     )
-    ON device_thread_key
-    USING MAX(value)
-    GROUP BY x_start
-    ORDER BY x_start
+    SELECT
+      x_domain.x_start,
+      COALESCE(aggregated_series_points.value, 0.0) AS value
+    FROM x_domain
+    LEFT JOIN aggregated_series_points
+      ON aggregated_series_points.x_start = x_domain.x_start
+    ORDER BY x_domain.x_start
   `.trim();
 }
 
@@ -516,14 +542,14 @@ function buildProvisionalTimelineVisualization(timelineSources) {
         yAxisTitle: 'Value',
         customQuery: {
           tableNamePlaceholder: '{table}',
-          query: buildProvisionalTimelinePivotQuery(binDuration),
+          query: buildProvisionalTimelineSystemWideQuery(binDuration),
         },
         series: [
           {
-            type: 'pattern',
-            name: { template: 'Device {y1} Thread {y2}' },
+            type: 'single',
+            name: 'Total',
             xColumn: 'x_start',
-            yColumn: { pattern: '^dev(\\d+)_thread(\\d+)$' },
+            yColumn: 'value',
           },
         ],
       },
@@ -597,6 +623,7 @@ function renderHotspots(context) {
   }
 
   const tool = runToolInfo.tool;
+  const runDescription = context.getRunDescriptions()[0];
   const filterPid = getRenderParameterIfExists(context, 'filter_pid');
   const filterTid = getRenderParameterIfExists(context, 'filter_tid');
   const filterStartTimeNs = getRenderParameterIfExists(
@@ -829,14 +856,14 @@ function renderHotspots(context) {
       Number.isFinite(filterStartTimeNs) &&
       filterStartTimeNs >= 0
     ) {
-      slAnalyzeConfig.filter_start_time_ns = filterStartTimeNs;
+      slAnalyzeConfig.filter_start_time_ns = Math.round(filterStartTimeNs);
     }
     if (
       filterEndTimeNs !== null &&
       Number.isFinite(filterEndTimeNs) &&
       filterEndTimeNs >= 0
     ) {
-      slAnalyzeConfig.filter_end_time_ns = filterEndTimeNs;
+      slAnalyzeConfig.filter_end_time_ns = Math.round(filterEndTimeNs);
     }
     renderers.push({
       type: 'SlAnalyzeRenderer',
@@ -853,14 +880,25 @@ function renderHotspots(context) {
       id: 'time_range',
       config: { entity: `tool/${tool.name}/0/` },
     });
-    if (!context.getRunDescriptions()[0].IsRunPhaseTwoComplete) {
-      timeRangeFilter.disabled = {
-        reason: context.getRunDescriptions()[0].IsRunInProgress
+    const renderTimeRangeFilter = { ...timeRangeFilter };
+
+    // Treat a missing parameter as disabled; only an explicit true enables time-range filtering.
+    const richDataCaptureEnabled =
+      runDescription.Parameters.rich_data_capture === true;
+
+    if (!richDataCaptureEnabled) {
+      renderTimeRangeFilter.disabled = {
+        reason:
+          'Time-range filtering is unavailable for this run. Re-run the recipe with "Collect rich data" enabled.',
+      };
+    } else if (!runDescription.IsRunPhaseTwoComplete) {
+      renderTimeRangeFilter.disabled = {
+        reason: runDescription.IsRunInProgress
           ? 'Unavailable until all capture data has been retrieved from the target.'
           : 'Unavailable because the run ended before all capture data was retrieved from the target.',
       };
     }
-    topBarFilters.push(timeRangeFilter);
+    topBarFilters.push(renderTimeRangeFilter);
   }
   renderers.push(
     {

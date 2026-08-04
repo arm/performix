@@ -3,6 +3,7 @@
 
 const NO_OP_WORKLOAD_STATE = {
   completed: () => false,
+  completedAtMonotonicMs: () => null,
   update: () => {},
   assertHealthy: () => {},
   handle: null,
@@ -16,7 +17,7 @@ const WORKLOAD_LOG_FILENAME = 'workload.log.json';
  * @param {import("../recipes/docs/jsdocs").Engine} engine
  * @param {Workload} workload
  * @param {string} outputDirectory
- * @returns {Promise<{completed: () => boolean, update: () => void, assertHealthy: () => void, handle: import("../recipes/docs/jsdocs").ProcessHandle | null}>}
+ * @returns {Promise<{completed: () => boolean, completedAtMonotonicMs: () => number | null, update: () => void, assertHealthy: () => void, handle: import("../recipes/docs/jsdocs").ProcessHandle | null}>}
  */
 async function launchWorkloadIfNeeded(engine, workload, outputDirectory) {
   const workloadInfo = normalizeWorkloadDescriptor(workload);
@@ -35,6 +36,7 @@ async function launchWorkloadIfNeeded(engine, workload, outputDirectory) {
   }
 
   let finished = false;
+  let completionMonotonicTimestampMs = null;
   let workloadFailure;
   const command = workloadInfo.command;
   const stringCommand = workloadInfo.rawCommand;
@@ -95,6 +97,7 @@ async function launchWorkloadIfNeeded(engine, workload, outputDirectory) {
   void handle
     .wait()
     .then((result) => {
+      completionMonotonicTimestampMs = engine.monotonicNow();
       finished = true;
       if (result.exitCode === 0) {
         engine.log(
@@ -117,6 +120,7 @@ async function launchWorkloadIfNeeded(engine, workload, outputDirectory) {
       }
     })
     .catch((err) => {
+      completionMonotonicTimestampMs = engine.monotonicNow();
       finished = true;
       engine.log(
         'error',
@@ -133,6 +137,7 @@ async function launchWorkloadIfNeeded(engine, workload, outputDirectory) {
 
   return {
     completed: () => finished,
+    completedAtMonotonicMs: () => completionMonotonicTimestampMs,
     update: () => {},
     assertHealthy: () => {
       if (workloadFailure) {

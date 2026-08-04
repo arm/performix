@@ -120,17 +120,7 @@ func LoadSymbolTables(
 			return fmt.Errorf("failed to create raw symbols view: %v", err)
 		}
 
-		// optional: load source-code.json for mapping
-		mapper := NewSourceMapper(run.HostSourceCodePath{})
-		if sourceComp, err := model.ResolveComponentExpectType(run.SourceCodeFilename, run.SourceCodeCT()); err == nil {
-			if hosts, err := run.ReadHostSourceCodePath(sourceComp.AbsolutePath); err == nil {
-				mapper = NewSourceMapper(*hosts)
-			} else {
-				log.Warnf("failed to read %q: %v", run.SourceCodeFilename, err)
-			}
-		} else {
-			log.Warnf("failed to resolve %q: %v", run.SourceCodeFilename, err)
-		}
+		mapper := newSourceMapperFromModel(model)
 
 		// create output tables
 		sourceFiles := addManifestEntry("source_files")
@@ -207,6 +197,9 @@ func LoadSourceCodeAttributionTables(
 	if err != nil {
 		return fmt.Errorf("failed to update source files table: %v", err)
 	}
+	if err := mapFilePaths(db, newSourceMapperFromModel(model), sourceFilesTableName); err != nil {
+		return fmt.Errorf("failed to map source file paths: %v", err)
+	}
 
 	// creating periodic samples table
 	periodicSamplesTableName := addManifestEntry("periodic_samples")
@@ -222,6 +215,23 @@ func LoadSourceCodeAttributionTables(
 	}
 
 	return nil
+}
+
+// newSourceMapperFromModel returns a mapper that resolves target paths against
+// the run's host source roots.
+func newSourceMapperFromModel(model cdf.ModelView) SymbolMapper {
+	sourceComp, err := model.ResolveComponentExpectType(run.SourceCodeFilename, run.SourceCodeCT())
+	if err != nil {
+		log.Warnf("failed to resolve %q: %v", run.SourceCodeFilename, err)
+		return NewSourceMapper(run.HostSourceCodePath{})
+	}
+
+	hosts, err := run.ReadHostSourceCodePath(sourceComp.AbsolutePath)
+	if err != nil {
+		log.Warnf("failed to read %q: %v", run.SourceCodeFilename, err)
+		return NewSourceMapper(run.HostSourceCodePath{})
+	}
+	return NewSourceMapper(*hosts)
 }
 
 func createRawSamplesView(db *sql.Conn, sourceCodeComponent cdf.Component, viewName string) error {

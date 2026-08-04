@@ -189,7 +189,7 @@ The System Utilization Recipe Reports As Ready When Tools Are Deployed
   And The Target Is Unprepared
   And Prepare The Test Target
   And The Target Is Prepared
-  And Deploy Tools For Recipe  system_utilization
+  And Deploy Tools For Recipe  system_utilization  --param interval=0.1
   When Check Recipe Is Ready  system_utilization  --target ${G_TARGET_NAME} --system-wide
   Then The Recipe Is Ready
   [Teardown]  Set Ready Suite Default State

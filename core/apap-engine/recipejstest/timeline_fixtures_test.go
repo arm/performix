@@ -278,8 +278,7 @@ func parseTimelineWrapperRecipe(
 ) recipe.Recipe {
 	t.Helper()
 
-	helperAbsPath, err := filepath.Abs(filepath.Join("..", "..", "apap-cli", "recipes", "lib", "timeline_sql_renderer.js"))
-	require.NoError(t, err)
+	helperAbsPath := recipeTestPath(t, "lib/timeline_sql_renderer.js")
 
 	recipePath := filepath.Join(t.TempDir(), "timeline_sql_wrapper_recipe.js")
 	recipeSource := fmt.Sprintf(`

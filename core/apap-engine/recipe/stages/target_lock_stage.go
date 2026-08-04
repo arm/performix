@@ -62,12 +62,12 @@ func (t *TargetLockStage) Execute(stageCtx *recipe.StageContext) (func(), error)
 		select {
 		case <-cmdStateChanel.StopChan:
 			if !lockGranted.Load() {
-				stopCancelErr <- message.New(message.EngineCommonUserCancellationError)
+				stopCancelErr <- message.New(message.EngineCommonUserStopped)
 				cancel()
 			}
 		case <-cmdStateChanel.CancelChan:
 			if !lockGranted.Load() {
-				stopCancelErr <- message.New(message.EngineCommonUserStoppedError)
+				stopCancelErr <- message.New(message.EngineCommonUserCanceled)
 				cancel()
 			}
 		case <-timeoutChan:

@@ -201,6 +201,25 @@ Raw result directories contain the generated `codex_home`, including
 the per-attempt auth file. Remove that directory before sharing raw
 artefacts outside the local test environment.
 
+## Judging Saved Responses
+
+Use `judge_ai_insights_response.py` to evaluate existing LLM responses
+without rerunning the analysis agent or the full pytest suite. Pass the
+rubric followed by one or more response files:
+
+```bash
+cd core/scripts/ai-insights-evaluation
+.venv/bin/python judge_ai_insights_response.py \
+  rubrics/test_case_28.md \
+  results/test_case_28/performix_mcp/attempts/001/llm_response.md
+```
+
+The helper uses `OPENAI_API_KEY` and the same judge operation as the test
+suite. It defaults the test ID to the rubric filename and honours
+`AI_INSIGHTS_JUDGE_MODEL`. Pass `--test-id` or `--judge-model` to override
+those values. The command returns a non-zero exit status if any response
+fails.
+
 ## Running With Live Progress Logs
 
 Pytest separates captured log level from live terminal logging.
@@ -269,10 +288,13 @@ JUnit data cannot be mistaken for the latest run.
 
 Recorded properties include the testcase id, mode, attempt number,
 attempt count, pass rate, imported run id, archive SHA256, agent
-duration, token counts, MCP call count, scores, judge labels, and paths
+duration, token counts, successful and failed MCP call counts and durations,
+scores, judge labels, and paths
 to the attempt artefacts such as `llm_response.md`, `score.md`,
-`score.json`, and `invoke_metadata.json`. For performance-evaluated attempts
-(i.e. in performix_mcp mode), they also include the performance thresholds
+`score.json`, and `invoke_metadata.json`. A call is counted as failed when
+Codex records either an MCP `Err` result or an MCP response with `isError` set.
+For performance-evaluated attempts (i.e. in performix_mcp mode), properties
+also include the performance thresholds
 and GOOD/POOR/INDETERMINABLE classification for runtime, input tokens, and
 output tokens. Suite-level properties record the model, reasoning effort,
 judge model, manifest path, and results directory once per pytest run.

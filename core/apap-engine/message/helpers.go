@@ -14,10 +14,10 @@ import (
 // CancellationError converts context cancellation and gRPC cancellation into the user-cancellation catalog message.
 func CancellationError(ctx context.Context, err error) error {
 	if ctx != nil && errors.Is(ctx.Err(), context.Canceled) {
-		return New(EngineCommonUserCancellationError).WithCause(ctx.Err())
+		return New(EngineCommonUserCanceled).WithCause(ctx.Err())
 	}
 	if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
-		return New(EngineCommonUserCancellationError).WithCause(err)
+		return New(EngineCommonUserCanceled).WithCause(err)
 	}
 	return nil
 }

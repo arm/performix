@@ -254,7 +254,7 @@ func (t *TransferManager) Listen(logger logrus.FieldLogger, cmdStateChannel *cmd
 			t.removeDeferredPendingManifestEntries()
 
 			t.observer.OnEndListen()
-			cancelMessage := message.New(message.EngineCommonUserCancellationError)
+			cancelMessage := message.New(message.EngineCommonUserCanceled)
 			t.endPhaseStage(phase1TransferPhase, cancelMessage)
 			t.endPhaseStage(backgroundTransferPhase, cancelMessage)
 
@@ -288,7 +288,7 @@ func (t *TransferManager) Listen(logger logrus.FieldLogger, cmdStateChannel *cmd
 			msg := t.flushTransfers(flush, baseCancel)
 			select {
 			case <-cancelChan:
-				msg = message.New(message.EngineCommonUserCancellationError)
+				msg = message.New(message.EngineCommonUserCanceled)
 			default:
 			}
 

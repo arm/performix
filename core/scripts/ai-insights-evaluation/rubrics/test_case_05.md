@@ -19,12 +19,17 @@ SPDX-License-Identifier: Apache-2.0
 - The hot loop is scalar despite regular branch-free arithmetic structure.
 - No explicit strategy is used to ensure high SIMD utilization.
 - Per-element math dominates runtime in one contiguous loop.
-- The kernel implementation translation unit is compiled with vectorization disabled (`-fno-tree-vectorize`) to keep this behavior stable across toolchains.
+- The test fixture keeps compiler vectorization disabled so this behaviour is
+  stable across toolchains. This build detail is not required in the response.
 
 ## What The LLM Should Suggest
 - Identify arithmetic hot loop as primary optimization target.
-- Suggest SIMD/vectorization-focused improvements appropriate for regular arithmetic loops.
-- Suggest candidate compiler/target tuning and verification steps (vectorization diagnostics/asm) with evidence labeling.
+- Suggest an actionable SIMD/vectorization improvement appropriate for a
+  regular arithmetic loop, such as enabling compiler vectorization,
+  restructuring a reduction or aliasing constraint, using a SIMD directive,
+  or implementing the loop with vector instructions.
+- Compiler vectorization diagnostics and assembly inspection are useful
+  verification steps, but exact flags or commands are not required.
 
 ## Expected Profiling Characteristics
 - Most samples should land in `kernel_5`.
@@ -32,7 +37,11 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Scoring Guidance
 - Pass:
-  - Identifies the arithmetic loop as dominant and suggests SIMD-friendly/per-core improvements.
+  - Identifies the dominant scalar arithmetic loop and recommends an
+    actionable SIMD/vectorization improvement.
+  - The response does not need to identify the test fixture's exact compiler
+    flag.
 - Fail:
-  - Identifies the hotspot but gives only generic advice.
+  - Identifies the hotspot but gives only generic advice without recommending
+    SIMD/vectorization.
   - Or misses the hotspot or suggests an unrelated main fix.

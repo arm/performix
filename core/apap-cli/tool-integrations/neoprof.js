@@ -31,10 +31,17 @@ const jitdumpJvmToolName = 'jitdump-jvm';
 const dotnetAgentVersion = '0.9.0';
 const dotnetAgentToolName = 'dotnet-agent';
 
+const performixGlobal =
+  /** @type {import("../recipes/docs/jsdocs").PerformixGlobal} */ (
+    globalThis['performix']
+  );
+const parquetToJsonName = 'parquet-to-json';
+const parquetToJsonVersion = performixGlobal.engineVersion;
+
 /**
  * Resolve deployment paths for the current engine locality.
  * @param {import("../recipes/docs/jsdocs").Engine} engine
- * @returns {{slAnalyzeDeployPath: string, slRecordDeployPath: string, jitdumpJvmDeployPath: string, dotnetAgentDeployPath: string}}
+ * @returns {{slAnalyzeDeployPath: string, slRecordDeployPath: string, jitdumpJvmDeployPath: string, dotnetAgentDeployPath: string, parquetToJsonDeployPath: string}}
  */
 function getNeoprofPaths(engine) {
   const toolsRoot = engine.toolsRoot();
@@ -43,9 +50,33 @@ function getNeoprofPaths(engine) {
     slRecordDeployPath: `${toolsRoot}/${slRecordToolName}/${bundleVersion}-${rc}/bin/`,
     jitdumpJvmDeployPath: `${toolsRoot}/${jitdumpJvmToolName}/${jitdumpJvmVersion}/`,
     dotnetAgentDeployPath: `${toolsRoot}/${dotnetAgentToolName}/${dotnetAgentVersion}/`,
+    parquetToJsonDeployPath: `${toolsRoot}/${parquetToJsonName}/${parquetToJsonVersion}/`,
   };
 
   return paths;
+}
+/**
+ * Resolve the file name of the parquet-to-json tool for the current engine locality.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @returns {string}
+ */
+function getParquetToJSONFilename(engine) {
+  if (engine.getPlatform().OS === 'Windows') {
+    return `${parquetToJsonName}.exe`;
+  }
+  return parquetToJsonName;
+}
+
+/**
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ * @returns {boolean}
+ */
+function isRichDataCaptureEnabled(engine, ctx) {
+  return (
+    engine.isFullCaptureSupportEnabled() &&
+    ctx.params.rich_data_capture === true
+  );
 }
 
 /**
@@ -103,6 +134,25 @@ let tool = {
         },
         {
           type: 'tool_bundle',
+          name: parquetToJsonName,
+          version: parquetToJsonVersion,
+          requiredWhen: {
+            type: 'param_is_not_set',
+            parameters: [{ reformat_on_host: true }],
+          },
+        },
+        {
+          type: 'tool_bundle',
+          name: parquetToJsonName,
+          version: parquetToJsonVersion,
+          requiredWhen: {
+            type: 'param_is_set',
+            parameters: [{ reformat_on_host: true }],
+          },
+          locality: 'host',
+        },
+        {
+          type: 'tool_bundle',
           name: jitdumpJvmToolName,
           version: jitdumpJvmVersion,
           requiredWhen: {
@@ -134,6 +184,13 @@ let tool = {
           type: 'tool_bundle',
           name: slAnalyzeToolName,
           version: `${bundleVersion}-${rc}`,
+          requiredWhen: { type: 'always' },
+          locality: 'host',
+        },
+        {
+          type: 'tool_bundle',
+          name: parquetToJsonName,
+          version: parquetToJsonVersion,
           requiredWhen: { type: 'always' },
           locality: 'host',
         },
@@ -250,6 +307,15 @@ let tool = {
         defaultValue: false,
       },
     },
+    {
+      id: 'rich_data_capture',
+      label: 'Collect rich data',
+      description: `Enables the collection of rich data from the target, which enables advanced filtering functionality after the run completes. This can significantly increase host storage usage and transfer time.`,
+      config: {
+        type: 'checkbox',
+        defaultValue: false,
+      },
+    },
   ],
 
   probe: async (engine, ctx) => {
@@ -263,10 +329,21 @@ let tool = {
       advice: [],
     };
 
+    if (isAndroidLaunch(ctx)) {
+      const androidPackageAccessProbe = await probeAndroidPackageAccess(
+        engine,
+        ctx,
+      );
+      if (androidPackageAccessProbe.level !== 'ready') {
+        result.advice.push(androidPackageAccessProbe);
+        return result;
+      }
+    }
+
     const paths = getNeoprofPaths(engine);
     const recordDeploymentProbe = await probeDeployment(
       engine,
-      paths.slRecordDeployPath,
+      paths.slRecordDeployPath + slRecordToolName,
       slRecordToolName,
     );
     const recordDeployed = recordDeploymentProbe.level === 'ready';
@@ -280,12 +357,24 @@ let tool = {
     const localisedPaths = getNeoprofPaths(localisedEngine);
     const analyzeDeploymentProbe = await probeDeployment(
       localisedEngine,
-      localisedPaths.slAnalyzeDeployPath,
+      localisedPaths.slAnalyzeDeployPath + slAnalyzeToolName,
       slAnalyzeToolName,
     );
     const analyzeDeployed = analyzeDeploymentProbe.level === 'ready';
     if (!analyzeDeployed) {
       result.advice.push(analyzeDeploymentProbe);
+    }
+
+    if (engine.isNeoprofTimelineEnabled()) {
+      let parquetToJsonProbe = await probeDeployment(
+        localisedEngine,
+        localisedPaths.parquetToJsonDeployPath +
+          getParquetToJSONFilename(localisedEngine),
+        parquetToJsonName,
+      );
+      if (parquetToJsonProbe.level !== 'ready') {
+        result.advice.push(parquetToJsonProbe);
+      }
     }
 
     result.available = recordDeployed && analyzeDeployed;
@@ -298,9 +387,10 @@ let tool = {
       // Probe the IPC metric name
       let ipcMetricProbe = await probeIpcMetric(engine, ctx);
       if (ipcMetricProbe.level !== 'ready') {
-        probeResponse.advice.push({
-          message: ipcMetricProbe.message,
-          severity: ipcMetricProbe.level,
+        result.advice.push({
+          level: ipcMetricProbe.level,
+          messageCode: ipcMetricProbe.messageCode,
+          metadata: ipcMetricProbe.metadata,
         });
       }
 
@@ -308,16 +398,18 @@ let tool = {
       if (analyzeDeployed) {
         let slAnalyzeProbe = await probeSlAnalyze(localisedEngine, ctx);
         if (slAnalyzeProbe.level !== 'ready') {
-          probeResponse.advice.push({
-            message: slAnalyzeProbe.message,
-            severity: slAnalyzeProbe.level,
+          result.advice.push({
+            level: slAnalyzeProbe.level,
+            messageCode: slAnalyzeProbe.messageCode,
+            metadata: slAnalyzeProbe.metadata,
           });
         }
-        result.capabilities = {
-          supports_strobing: probeResponse.supports_strobing,
-          supports_event_inherit: probeResponse.supports_event_inherit,
-        };
       }
+
+      result.capabilities = {
+        supports_strobing: probeResponse.supports_strobing,
+        supports_event_inherit: probeResponse.supports_event_inherit,
+      };
 
       result.advice.push(
         ...probeResponse.advice.map((a) => {
@@ -353,7 +445,11 @@ let tool = {
     const jitdumpJvmDeployPath = paths.jitdumpJvmDeployPath;
     const dotnetAgentDeployPath = paths.dotnetAgentDeployPath;
 
-    await ensureDeployed(engine, paths.slRecordDeployPath, slRecordToolName);
+    await ensureDeployed(
+      engine,
+      paths.slRecordDeployPath + slRecordToolName,
+      slRecordToolName,
+    );
 
     const neoprofAsPrivileged = await isPrivilegeRequired(engine, ctx);
     engine.log('info', `Neoprof privilege requirement: ${neoprofAsPrivileged}`);
@@ -417,7 +513,7 @@ let tool = {
     if (!ctx.params.reformat_on_host) {
       emitAnalysisFiles(engine, ctx, captureDirectory);
 
-      if (engine.isFullCaptureSupportEnabled()) {
+      if (isRichDataCaptureEnabled(engine, ctx)) {
         emitCaptureDir(engine, captureDirectory);
       }
     }
@@ -693,7 +789,7 @@ async function reformatOnHost(engine, ctx) {
 
   emitAnalysisFiles(engine, ctx, hostCaptureDirectory);
 
-  if (engine.isFullCaptureSupportEnabled()) {
+  if (isRichDataCaptureEnabled(engine, ctx)) {
     emitCaptureDir(engine, hostCaptureDirectory);
   }
 
@@ -753,6 +849,10 @@ async function reformatOnHost(engine, ctx) {
     asPrivileged: false,
   });
 
+  if (engine.isNeoprofTimelineEnabled()) {
+    await addToolCapabilities(engine, hostCaptureDirectory);
+  }
+
   engine.endProgress(progressTrackerId);
 }
 
@@ -761,7 +861,11 @@ async function reformatOnTarget(engine, ctx) {
   const progressTrackerId = 'Analyzing collection';
   engine.startProgressTracker(progressTrackerId);
 
-  await ensureDeployed(engine, paths.slAnalyzeDeployPath, slAnalyzeToolName);
+  await ensureDeployed(
+    engine,
+    paths.slAnalyzeDeployPath + slAnalyzeToolName,
+    slAnalyzeToolName,
+  );
 
   ctx.metadata.jitdumpsAvailable =
     ctx.metadata.jitdumpJvmAvailable || ctx.metadata.dotnetAgentAvailable;
@@ -770,7 +874,7 @@ async function reformatOnTarget(engine, ctx) {
   // Do this before starting sl-analyze so that jitdumps are correctly placed in the APC directory.
   await reformatJitdumps(engine, ctx);
 
-  if (ctx.metadata.jitdumpsAvailable && engine.isFullCaptureSupportEnabled()) {
+  if (ctx.metadata.jitdumpsAvailable && isRichDataCaptureEnabled(engine, ctx)) {
     immediateEmitEnrichedJitdumps(
       engine,
       ctx.metadata.outputDirectory + '/capture.apc',
@@ -791,6 +895,13 @@ async function reformatOnTarget(engine, ctx) {
     progressTrackerId,
     asPrivileged: ctx.metadata.neoprofAsPrivileged,
   });
+
+  if (engine.isNeoprofTimelineEnabled()) {
+    await addToolCapabilities(
+      engine,
+      ctx.metadata.outputDirectory + '/capture.apc',
+    );
+  }
 
   engine.endProgress(progressTrackerId);
 }
@@ -879,6 +990,30 @@ async function runSlAnalyze(engine, ctx, args, options) {
 }
 
 /**
+ * Checks that the adb shell user can run as the selected Android package.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ * @returns {Promise<import("../recipes/docs/jsdocs").ProbeAdvice>}
+ */
+async function probeAndroidPackageAccess(engine, ctx) {
+  const packageName = ctx.workload.packageName;
+  const result = await engine.execCommand(
+    ['run-as', packageName, '/system/bin/true'],
+    { asPrivileged: false },
+  );
+  if (result.rc === 0) {
+    return { level: 'ready', messageCode: '' };
+  }
+
+  return {
+    level: 'error',
+    messageCode: 'tool_integrations.neoprof.ANDROID_PACKAGE_NOT_DEBUGGABLE',
+    metadata: { package: packageName },
+    cause: `run-as returned exit code ${result.rc}: ${result.stderr.trim()}`,
+  };
+}
+
+/**
  * Checks that `sl-record` exists and runs on the target.
  * Invokes `sl-record --probe-report` to get probe advice.
  * @param {import("../recipes/docs/jsdocs").Engine} engine
@@ -956,14 +1091,17 @@ async function probeIpcMetric(engine, ctx) {
       );
       return {
         level: 'warning',
-        message: `The name of the IPC metric for the target could not be determined. This means that the IPC metric will not be included in the profiling data collected.`,
+        messageCode: readinessMessageCode,
+        metadata: {
+          message: `The name of the IPC metric for the target could not be determined. This means that the IPC metric will not be included in the profiling data collected.`,
+        },
       };
     }
   }
 
   return {
     level: 'ready',
-    message: '',
+    messageCode: '',
   };
 }
 
@@ -988,7 +1126,10 @@ async function probeSlAnalyze(engine, ctx) {
     );
     return {
       level: 'error',
-      message: `The ${locality} is using a version of the GNU C Library which is incompatible with the '${tool.name}' tool. Upgrade the GNU C Library on the ${locality} machine to at least version GLIBC_${glibcMatch[1]}, or use a different ${locality} machine with a newer operating system.`,
+      messageCode: readinessMessageCode,
+      metadata: {
+        message: `The ${locality} is using a version of the GNU C Library which is incompatible with the '${tool.name}' tool. Upgrade the GNU C Library on the ${locality} machine to at least version GLIBC_${glibcMatch[1]}, or use a different ${locality} machine with a newer operating system.`,
+      },
     };
   }
   await checkAndThrowNeoprofError(
@@ -1001,7 +1142,7 @@ async function probeSlAnalyze(engine, ctx) {
 
   return {
     level: 'ready',
-    message: '',
+    messageCode: '',
   };
 }
 
@@ -1167,6 +1308,15 @@ function workloadToSLArgs(workload) {
 }
 
 /**
+ * Returns whether a tool invocation launches an Android application.
+ * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ * @returns {boolean}
+ */
+function isAndroidLaunch(ctx) {
+  return ctx.workload?.type === 'androidLaunch';
+}
+
+/**
  * Converts workload configuration to jitdump-jvm / dotnet-agent CLI arguments.
  * @param {import("../recipes/docs/jsdocs").WorkloadLaunch |
  * import("../recipes/docs/jsdocs").WorkloadAndroidLaunch |
@@ -1294,6 +1444,15 @@ async function checkAndThrowNeoprofError(engine, ctx, exitCode, stdErr, tool) {
         msgCode: 'tool_integrations.neoprof.PID_NOT_EXIST',
         metadataProvider: (match) => ({
           pid: ctx.workload.pid.toString(),
+        }),
+      },
+    ],
+    [
+      /^run-as: package not debuggable: (.+)$/m,
+      {
+        msgCode: 'tool_integrations.neoprof.ANDROID_PACKAGE_NOT_DEBUGGABLE',
+        metadataProvider: (match) => ({
+          package: match[1],
         }),
       },
     ],
@@ -1733,7 +1892,7 @@ function immediateEmitSlRecordFiles(engine, ctx, outputDir) {
       immediateRetrieval: true,
     },
   );
-  if (engine.isFullCaptureSupportEnabled()) {
+  if (isRichDataCaptureEnabled(engine, ctx)) {
     // Emit capture.apc outputs that are available as soon as sl-record runs. Remaining capture.apc files
     // will be output once sl-analyze finishes
     engine.emitOutput(
@@ -2351,4 +2510,94 @@ async function parseExecutablePaths(engine, captureDirectory) {
     });
   }
   return Array.from(paths.values());
+}
+
+/**
+ * Reads the parquet timeline metadata files produced by `sl-analyze` and records capabilities
+ * for this tool invocation in the run.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param captureDirectory The path to the root of the `capture.apc` dir
+ * @returns {Promise<void>}
+ */
+async function addToolCapabilities(engine, captureDirectory) {
+  await ensureDeployed(
+    engine,
+    getNeoprofPaths(engine).parquetToJsonDeployPath +
+      getParquetToJSONFilename(engine),
+    parquetToJsonName,
+  );
+
+  const metadataFilePath =
+    captureDirectory +
+    '/report-new/apx/metadata/counter_series_metadata.parquet';
+  const parquetToJsonPath =
+    getNeoprofPaths(engine).parquetToJsonDeployPath +
+    getParquetToJSONFilename(engine);
+
+  const contents = await engine.execCommand(
+    [parquetToJsonPath, metadataFilePath, '--stdout'],
+    {},
+  );
+  if (contents.rc !== 0) {
+    throw {
+      code: 'tool_integrations.neoprof.PARQUET_TO_JSON_RUN_FAILED',
+      metadata: { exitCode: contents.rc },
+      cause: contents.stderr,
+    };
+  }
+
+  let metadata;
+  try {
+    metadata = JSON.parse(contents.stdout);
+  } catch (exception) {
+    throw {
+      code: 'tool_integrations.neoprof.PARQUET_TO_JSON_OUTPUT_PARSE_FAILED',
+      cause: exception,
+    };
+  }
+  if (!Array.isArray(metadata)) {
+    throw {
+      code: 'tool_integrations.neoprof.PARQUET_TO_JSON_OUTPUT_PARSE_FAILED',
+      cause: `tool output is valid JSON, but is not an array: ${contents.stdout}`,
+    };
+  }
+
+  for (const counter of metadata) {
+    await engine.addToolCapability(
+      metadataEntryToCapabilityID(counter),
+      { name: 'tool_capabilities/counter', version: '1.0' },
+      {
+        state: 'collected',
+        payload: {
+          title: `counter.${counter.title}.${counter.name}`,
+          description: counter.description,
+          units: counter.units,
+          series_id: counter.series_id,
+        },
+      },
+    );
+  }
+}
+
+/**
+ * Assembles a capability ID from a given `sl-analyze` counter series metadata entry.
+ * @param metadataEntry
+ * @returns {string}
+ */
+function metadataEntryToCapabilityID(metadataEntry) {
+  return `counter.${toCapabilityIDSegment(metadataEntry.title)}.${toCapabilityIDSegment(metadataEntry.name)}`;
+}
+
+/**
+ * Converts the phrase to lower case, and replaces whitespace and unsupported capability ID
+ * characters with underscores.
+ * @param phrase
+ * @returns {string}
+ */
+function toCapabilityIDSegment(phrase) {
+  return phrase
+    .toLowerCase()
+    .replaceAll(/\s/g, '_')
+    .replaceAll(/[()]/g, '')
+    .replaceAll(/[^a-z0-9._-]/g, '_');
 }

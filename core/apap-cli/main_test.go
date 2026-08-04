@@ -22,9 +22,10 @@ termination using ^C will stop the profiler and produce no results). Use the CLI
 */
 
 func BenchmarkServer(b *testing.B) {
-	// Use full timestamp in log messages
+	// Use full timestamps with millisecond precision in log messages.
 	log.SetFormatter(&log.TextFormatter{
-		FullTimestamp: true,
+		FullTimestamp:   true,
+		TimestampFormat: logTimestampFormat,
 	})
 	// Log infos and above.
 	log.SetLevel(log.InfoLevel)

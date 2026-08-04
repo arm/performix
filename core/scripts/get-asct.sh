@@ -20,8 +20,8 @@ fi
 source "$SCRIPT_DIR/constants.sh"
 
 ASCT_NAME="asct"
-ASCT_VERSION="0.6.0"
-ASCT_RELEASE_COMMIT_ID="6324f8f"
+ASCT_VERSION="0.6.1"
+ASCT_RELEASE_COMMIT_ID="d2f4360"
 
 ARTIFACTORY_ARCHIVE_NAME="${ASCT_NAME}-${ASCT_VERSION}+${ASCT_RELEASE_COMMIT_ID}-release.tar.gz"   # archive name pulled from artifactory
 ARTIFACTORY_INTERNAL_PACKAGE_NAME="${ASCT_NAME}-${ASCT_VERSION}+${ASCT_RELEASE_COMMIT_ID}.tar.gz"   # package name pulled from artifactory

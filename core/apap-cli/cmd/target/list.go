@@ -25,26 +25,23 @@ import (
 
 const ListUse = "list"
 
-var TargetListCmd = newListCommand(engine_target.NewDefaultTargetManager(), newADBAndroidTargetDiscoverer())
+var TargetListCmd = newListCommand(engine_target.NewDefaultTargetManager(), adbAndroidTargetDiscoverer{})
 
 type androidTargetDiscoverer interface {
 	DiscoverAndroidTargets() ([]*engine_target.AndroidTarget, error)
 }
+type adbAndroidTargetDiscoverer struct{}
 
-type adbAndroidTargetDiscoverer struct {
-	runner conductor.ADBRunner
-}
-
-func newADBAndroidTargetDiscoverer() adbAndroidTargetDiscoverer {
-	return adbAndroidTargetDiscoverer{runner: &conductor.ExecADBRunner{}}
-}
-
-func (d adbAndroidTargetDiscoverer) DiscoverAndroidTargets() ([]*engine_target.AndroidTarget, error) {
-	stdout, _, err := d.runner.Run("devices")
+func (adbAndroidTargetDiscoverer) DiscoverAndroidTargets() ([]*engine_target.AndroidTarget, error) {
+	stdout, _, err := conductor.NewExecADBRunner(viper.GetString("adb-path")).Run("devices")
 	if err != nil {
 		return nil, err
 	}
 
+	return parseADBDevices(stdout), nil
+}
+
+func parseADBDevices(stdout string) []*engine_target.AndroidTarget {
 	var targets []*engine_target.AndroidTarget
 	for _, line := range strings.Split(stdout, "\n") {
 		fields := strings.Fields(line)
@@ -52,7 +49,7 @@ func (d adbAndroidTargetDiscoverer) DiscoverAndroidTargets() ([]*engine_target.A
 			targets = append(targets, &engine_target.AndroidTarget{SerialNumber: fields[0]})
 		}
 	}
-	return targets, nil
+	return targets
 }
 
 func newListCommand(mtm target.TargetManagerService, discoverer androidTargetDiscoverer) *cobra.Command {

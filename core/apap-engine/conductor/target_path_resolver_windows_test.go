@@ -21,10 +21,10 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 	t.Run("uses default under LOCALAPPDATA when writable", func(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
 		localAppData := "C:/Users/runner/AppData/Local"
-		cmdRunner.On("RunCommand", `powershell -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return("C:\\Users\\runner\\AppData\\Local\r\n", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, localAppData)).
+		cmdRunner.On("RunCommand", `powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return("C:\\Users\\runner\\AppData\\Local\r\n", "", nil).Once()
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, localAppData)).
 			Return("", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, localAppData, terminology.GetProductBinaryName())).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, localAppData, terminology.GetProductBinaryName())).
 			Return("", "", nil).Once()
 
 		baseDir, err := ResolveToolsBaseDir("", Win, cmdRunner, locality.Target)
@@ -36,7 +36,7 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 
 	t.Run("propagates missing localappdata errors", func(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
-		cmdRunner.On("RunCommand", `powershell -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return("", "", assert.AnError).Once()
+		cmdRunner.On("RunCommand", `powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return("", "", assert.AnError).Once()
 
 		_, err := ResolveToolsBaseDir("", Win, cmdRunner, locality.Target)
 		assert.Error(t, err)
@@ -45,7 +45,7 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 
 	t.Run("errors when localappdata is empty", func(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
-		cmdRunner.On("RunCommand", `powershell -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return(" \n", "", nil).Once()
+		cmdRunner.On("RunCommand", `powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return(" \n", "", nil).Once()
 
 		_, err := ResolveToolsBaseDir("", Win, cmdRunner, locality.Target)
 		var msgErr message.Message
@@ -57,9 +57,9 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 	t.Run("uses configured absolute directory when writable", func(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
 		base := `C:\custom\tools`
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).
 			Return("", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, base, terminology.GetProductBinaryName())).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, base, terminology.GetProductBinaryName())).
 			Return("", "", nil).Once()
 
 		baseDir, err := ResolveToolsBaseDir(base, Win, cmdRunner, locality.Target)
@@ -71,9 +71,9 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 	t.Run("uses configured absolute directory with forward slashes", func(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
 		base := "C:/custom/tools"
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).
 			Return("", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, base, terminology.GetProductBinaryName())).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, base, terminology.GetProductBinaryName())).
 			Return("", "", nil).Once()
 
 		baseDir, err := ResolveToolsBaseDir(base, Win, cmdRunner, locality.Target)
@@ -85,9 +85,9 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 	t.Run("uses forward-slash absolute directory when writable", func(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
 		base := "C:/custom/tools"
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).
 			Return("", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, base, terminology.GetProductBinaryName())).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, base, terminology.GetProductBinaryName())).
 			Return("", "", nil).Once()
 
 		baseDir, err := ResolveToolsBaseDir(base, Win, cmdRunner, locality.Target)
@@ -99,7 +99,7 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 	t.Run("errors when configured path is missing", func(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
 		base := `C:\missing\tools`
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).
 			Return("", "", assert.AnError).Once()
 
 		_, err := ResolveToolsBaseDir(base, Win, cmdRunner, locality.Target)
@@ -112,9 +112,9 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 	t.Run("errors when configured path is not writable", func(t *testing.T) {
 		cmdRunner := &MockCommandRunner{}
 		base := `C:\locked`
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, base)).
 			Return("", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, base, terminology.GetProductBinaryName())).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, base, terminology.GetProductBinaryName())).
 			Return("", "", assert.AnError).Once()
 
 		_, err := ResolveToolsBaseDir(base, Win, cmdRunner, locality.Target)
@@ -129,10 +129,10 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 		localAppData := "C:/Users/runner/AppData/Local"
 		base := "rel/path"
 		expanded := filepath.ToSlash(filepath.Join(localAppData, base))
-		cmdRunner.On("RunCommand", `powershell -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return("C:\\Users\\runner\\AppData\\Local\r\n", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, expanded)).
+		cmdRunner.On("RunCommand", `powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return("C:\\Users\\runner\\AppData\\Local\r\n", "", nil).Once()
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, expanded)).
 			Return("", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, expanded, terminology.GetProductBinaryName())).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, expanded, terminology.GetProductBinaryName())).
 			Return("", "", nil).Once()
 
 		baseDir, err := ResolveToolsBaseDir(base, Win, cmdRunner, locality.Target)
@@ -147,10 +147,10 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 		userProfile := "C:/Users/runner"
 		base := `~\toolsbase`
 		expanded := filepath.ToSlash(filepath.Join(userProfile, "toolsbase"))
-		cmdRunner.On("RunCommand", `powershell -NoLogo -WindowStyle Hidden -Command "echo $env:USERPROFILE"`).Return("C:\\Users\\runner\r\n", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, expanded)).
+		cmdRunner.On("RunCommand", `powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "echo $env:USERPROFILE"`).Return("C:\\Users\\runner\r\n", "", nil).Once()
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, expanded)).
 			Return("", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, expanded, terminology.GetProductBinaryName())).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, expanded, terminology.GetProductBinaryName())).
 			Return("", "", nil).Once()
 
 		baseDir, err := ResolveToolsBaseDir(base, Win, cmdRunner, locality.Target)
@@ -165,10 +165,10 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 		userProfile := "C:/Users/runner"
 		base := `~/tools\mixed`
 		expanded := filepath.ToSlash(filepath.Join(userProfile, "tools", "mixed"))
-		cmdRunner.On("RunCommand", `powershell -NoLogo -WindowStyle Hidden -Command "echo $env:USERPROFILE"`).Return("C:\\Users\\runner\r\n", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, expanded)).
+		cmdRunner.On("RunCommand", `powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "echo $env:USERPROFILE"`).Return("C:\\Users\\runner\r\n", "", nil).Once()
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, expanded)).
 			Return("", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, expanded, terminology.GetProductBinaryName())).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, expanded, terminology.GetProductBinaryName())).
 			Return("", "", nil).Once()
 
 		baseDir, err := ResolveToolsBaseDir(base, Win, cmdRunner, locality.Target)
@@ -183,10 +183,10 @@ func TestResolveToolsBaseDir_Windows(t *testing.T) {
 		localAppData := "C:/Users/runner/AppData/Local"
 		base := `rel\back`
 		expanded := filepath.ToSlash(filepath.Join(localAppData, "rel", "back"))
-		cmdRunner.On("RunCommand", `powershell -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return("C:\\Users\\runner\\AppData\\Local\r\n", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, expanded)).
+		cmdRunner.On("RunCommand", `powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "echo $env:LOCALAPPDATA"`).Return("C:\\Users\\runner\\AppData\\Local\r\n", "", nil).Once()
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "if (Test-Path '%s') { exit 0 } else { exit 1 }"`, expanded)).
 			Return("", "", nil).Once()
-		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, expanded, terminology.GetProductBinaryName())).
+		cmdRunner.On("RunCommand", fmt.Sprintf(`powershell -NoProfile -NoLogo -WindowStyle Hidden -Command "$p = '%s'; $tmp = Join-Path $p '%v-writecheck.tmp'; try { Set-Content -Path $tmp -Value '' -ErrorAction Stop; Remove-Item $tmp -Force; exit 0 } catch { exit 1 }"`, expanded, terminology.GetProductBinaryName())).
 			Return("", "", nil).Once()
 
 		baseDir, err := ResolveToolsBaseDir(base, Win, cmdRunner, locality.Target)

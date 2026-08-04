@@ -48,6 +48,7 @@ func serverConfigToArgs(config grpcserver.GrpcServerConfig) []string {
 		"--log-level", fmt.Sprint(config.LogLevel),
 		"--log-file", fmt.Sprint(config.LogPath),
 		"--deployment-tools-dir", fmt.Sprint(config.DeploymentToolsDir),
+		"--adb-path", fmt.Sprint(config.ADBPath),
 		fmt.Sprintf("--enable-render-db-sandbox=%t", config.EnableRenderDBSandbox),
 	}
 	return args

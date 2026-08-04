@@ -7,11 +7,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net"
 	"testing"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -45,47 +43,22 @@ func connectTestServer(t *testing.T, ctx context.Context, engine apapproto.ApapC
 }
 
 func TestMCPServerRun(t *testing.T) {
-	t.Run("connects engine client before serving", func(t *testing.T) {
-		connected := make(chan struct{}, 1)
+	t.Run("serves until context is cancelled", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		reader, writer := io.Pipe()
 		defer writer.Close()
 
 		errCh := make(chan error, 1)
-		server := newMCPServerWithDependencies(
-			func() (apapproto.ApapClient, error) {
-				connected <- struct{}{}
-				return apapprotomocks.NewApapClient(t), nil
-			},
+		server := NewMCPServer(
+			apapprotomocks.NewApapClient(t),
 			nil,
-			DefaultToolRegistry(),
 		)
 		go func() {
 			errCh <- server.Run(ctx, reader, &bytes.Buffer{}, &bytes.Buffer{})
 		}()
 
-		select {
-		case <-connected:
-		case <-time.After(time.Second):
-			t.Fatal("server did not connect engine client")
-		}
 		cancel()
 		require.ErrorIs(t, <-errCh, context.Canceled)
-	})
-
-	t.Run("returns engine client connection error", func(t *testing.T) {
-		expectedErr := errors.New("connect failed")
-		server := newMCPServerWithDependencies(
-			func() (apapproto.ApapClient, error) {
-				return nil, expectedErr
-			},
-			nil,
-			DefaultToolRegistry(),
-		)
-
-		err := server.Run(context.Background(), io.NopCloser(bytes.NewReader(nil)), &bytes.Buffer{}, &bytes.Buffer{})
-
-		require.ErrorIs(t, err, expectedErr)
 	})
 }
 
@@ -109,6 +82,7 @@ func TestMCPServerProtocol(t *testing.T) {
 		assert.Contains(t, names, "list_recipes")
 		assert.Contains(t, names, "recipe_info")
 		assert.Contains(t, names, "list_runs")
+		assert.Contains(t, names, "run_query")
 	})
 
 	t.Run("advertises server instructions on initialize", func(t *testing.T) {

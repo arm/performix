@@ -189,11 +189,6 @@ function Add-MiseToPath {
     Write-Success "Added $binDir to the user PATH. Restart your shell to use it."
 }
 
-function Get-PathCommand {
-    $binDir = Split-Path -Parent $MiseInstallPath
-    return "`$env:PATH = `"$binDir;`$env:PATH`""
-}
-
 function Add-ManagedBlock($Path, $Name, $Content) {
     # Managed markers make bootstrap idempotent without trying to parse or merge
     # a developer's existing PowerShell profile.
@@ -226,10 +221,6 @@ function Add-MiseActivation {
     $content = "(& `"$MiseInstallPath`" activate pwsh) | Out-String | Invoke-Expression"
     Add-ManagedBlock $profilePath "mise activation" $content
     $script:ActivatedShellThisRun = $true
-}
-
-function Get-MiseActivationCommand {
-    return "(& `"$MiseInstallPath`" activate pwsh) | Out-String | Invoke-Expression"
 }
 
 function Test-MiseActivated {
@@ -278,27 +269,26 @@ Write-Info "Installing pinned tool versions with mise..."
 # Trusting the checked-in mise.toml avoids an interactive trust prompt on a
 # fresh clone while keeping mise's normal trust model for other directories.
 & $MiseBin trust --yes (Join-Path $ProjectRoot "mise.toml")
+& $MiseBin trust --yes (Join-Path $ProjectRoot ".miserc.toml")
+$MiseInternalConfig = Join-Path $ProjectRoot "mise.internal.toml"
+if (Test-Path $MiseInternalConfig) {
+    & $MiseBin trust --yes $MiseInternalConfig
+}
 & $MiseBin install -C $ProjectRoot
 
 Write-Success "Performix bootstrap completed."
 if (Test-MiseActivated) {
     Write-Info "Next: run 'task install' when you are ready to install dependencies, generate code, and build."
-} elseif ($ActivatedShellThisRun) {
-    Write-Info "Next: run this command to activate mise in this shell, then run 'task install':"
-    if ($UseColour) {
-        Write-Host "  $(Get-MiseActivationCommand)" -ForegroundColor White
-    } else {
-        Write-Host "  $(Get-MiseActivationCommand)"
-    }
-} elseif ($PathSetupAccepted) {
-    Write-Info "Next: run this command to make mise available in this PowerShell session, then run 'mise exec -- task install':"
-    if ($UseColour) {
-        Write-Host "  $(Get-PathCommand)" -ForegroundColor White
-    } else {
-        Write-Host "  $(Get-PathCommand)"
-    }
-} elseif ($MiseNeedsPathSetup) {
-    Write-Info "Next: run '& `"$MiseBin`" exec -- task install' when you are ready to install dependencies, generate code, and build."
 } else {
-    Write-Info "Next: run 'mise exec -- task install' when you are ready to install dependencies, generate code, and build."
+    if ($ActivatedShellThisRun) {
+        Write-Info "mise activation is configured in $($PROFILE.CurrentUserCurrentHost) and will take effect in new PowerShell sessions."
+    } elseif ($PathSetupAccepted) {
+        Write-Info "mise is configured on the user PATH and will be available in new PowerShell sessions."
+    }
+    Write-Info "Next: install Performix dependencies now:"
+    if ($UseColour) {
+        Write-Host "  & `"$MiseBin`" exec -- task install" -ForegroundColor White
+    } else {
+        Write-Host "  & `"$MiseBin`" exec -- task install"
+    }
 }

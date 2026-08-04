@@ -19,6 +19,29 @@ RUNNER_SPEC.loader.exec_module(runner)
 
 
 class AiInsightsEvaluationRunnerTests(unittest.TestCase):
+    def test_reporting_dir_follows_ai_results_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            results_dir = Path(tmp) / "evaluation-results"
+
+            reporting_dir = runner.reporting_dir_from_pytest_args(
+                ["--ai-results-dir", str(results_dir), "-k", "test_case_03"]
+            )
+
+        self.assertEqual(results_dir / "reporting", reporting_dir)
+
+    def test_relative_results_dir_is_relative_to_harness(self):
+        reporting_dir = runner.reporting_dir_from_pytest_args(
+            ["--ai-results-dir=custom-results"]
+        )
+
+        self.assertEqual(runner.HARNESS_DIR / "custom-results" / "reporting", reporting_dir)
+
+    def test_default_reporting_dir_is_unchanged(self):
+        self.assertEqual(
+            runner.LOCAL_REPORTING_DIR,
+            runner.reporting_dir_from_pytest_args(["-k", "test_case_03"]),
+        )
+
     def test_clear_reporting_dir_reuses_existing_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             reporting_dir = Path(tmp) / "reporting"
@@ -138,6 +161,20 @@ class AiInsightsEvaluationRunnerTests(unittest.TestCase):
                 )
 
         self.assertEqual(3, result)
+
+    def test_main_uses_reporting_dir_for_ai_results_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            results_dir = Path(tmp) / "results"
+            args = ["--ai-results-dir", str(results_dir), "-k", "test_case_03"]
+
+            with patch.object(runner, "run_evaluation", return_value=0) as run_evaluation:
+                result = runner.main(args)
+
+        self.assertEqual(0, result)
+        run_evaluation.assert_called_once_with(
+            args,
+            reporting_dir=results_dir / "reporting",
+        )
 
 
 if __name__ == "__main__":
