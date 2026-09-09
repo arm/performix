@@ -423,22 +423,22 @@ func (c *RunExecutionContext) newEngineLocality(
 	)
 
 	return tool.EngineLocality{
-			Name:   localityName,
-			Engine: engine,
-			FileCollector: NewRecipeFileCollector(
-				c.Collector,
-				*targetPlatform,
-				func() *agent.AgentConn { return agentConn },
-			),
-			ToolsRoot: toolsRoot,
-			CopyFrom: func(sourceLocality string, sourcePath string, destinationPath string) error {
-				return c.copyFile(sourceLocality, localityName, sourcePath, destinationPath)
-			},
-		}, func() {
-			engineCleanup()
-			cancelAgentCleanup(nil)
-			stop()
-		}
+		Name:   localityName,
+		Engine: engine,
+		FileCollector: NewRecipeFileCollector(
+			c.Collector,
+			*targetPlatform,
+			func() *agent.AgentConn { return agentConn },
+		),
+		ToolsRoot: toolsRoot,
+		CopyFrom: func(sourceLocality string, sourcePath string, destinationPath string) error {
+			return c.copyFile(sourceLocality, localityName, sourcePath, destinationPath)
+		},
+	}, func() {
+		engineCleanup()
+		cancelAgentCleanup(nil)
+		stop()
+	}
 }
 
 func (c *RunExecutionContext) copyFile(sourceLocality string, destinationLocality string, sourcePath string, destinationPath string) error {

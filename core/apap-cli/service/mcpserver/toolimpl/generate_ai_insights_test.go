@@ -23,50 +23,67 @@ import (
 )
 
 func TestGenerateAIInsightsTool(t *testing.T) {
-	t.Run("selects System Utilisation query guidance from the run recipe", func(t *testing.T) {
-		ctx := context.Background()
-		engine := apapprotomocks.NewApapClient(t)
-		expectRunDescription(engine, "run-123", insights.SystemUtilizationRecipeName)
-		engine.On("GetRunSummaryBundle", mock.Anything, mock.MatchedBy(func(req *apapproto.RunSummaryBundleRequest) bool {
-			return req.GetRunId().GetValue() == "run-123"
-		})).Return(runSummaryBundle(insights.SystemUtilizationRecipeName,
-			&apapproto.RunSummaryPayload{
-				Name:    "additional_context",
-				Payload: `{"unused":true}`,
-			},
-		), nil).Once()
-		clientSession, serverSession := connectTestServer(
-			t,
-			ctx,
-			ToolDependencies{Engine: engine},
-			GenerateAIInsightsTool{}.Register,
-		)
-		defer clientSession.Close()
-		defer serverSession.Close()
+	for _, tc := range []struct {
+		name            string
+		recipeName      string
+		guidanceHeading string
+	}{
+		{
+			name:            "System Utilisation",
+			recipeName:      insights.SystemUtilizationRecipeName,
+			guidanceHeading: "System Utilisation Query Guide",
+		},
+		{
+			name:            "Syscall Trace",
+			recipeName:      insights.SyscallTraceSummaryRecipeName,
+			guidanceHeading: "Syscall Trace Query Guide",
+		},
+	} {
+		t.Run("selects "+tc.name+" query guidance from the run recipe", func(t *testing.T) {
+			ctx := context.Background()
+			engine := apapprotomocks.NewApapClient(t)
+			expectRunDescription(engine, "run-123", tc.recipeName)
+			engine.On("GetRunSummaryBundle", mock.Anything, mock.MatchedBy(func(req *apapproto.RunSummaryBundleRequest) bool {
+				return req.GetRunId().GetValue() == "run-123"
+			})).Return(runSummaryBundle(tc.recipeName,
+				&apapproto.RunSummaryPayload{
+					Name:    "additional_context",
+					Payload: `{"unused":true}`,
+				},
+			), nil).Once()
+			clientSession, serverSession := connectTestServer(
+				t,
+				ctx,
+				ToolDependencies{Engine: engine},
+				GenerateAIInsightsTool{}.Register,
+			)
+			defer clientSession.Close()
+			defer serverSession.Close()
 
-		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
-			Name:      "generate_ai_insights",
-			Arguments: map[string]any{"run_id": "run-123"},
+			result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+				Name:      "generate_ai_insights",
+				Arguments: map[string]any{"run_id": "run-123"},
+			})
+
+			require.NoError(t, err)
+			require.False(t, result.IsError)
+			require.NotNil(t, result.StructuredContent)
+
+			var content generateAIInsightsResult
+			require.NoError(t, json.Unmarshal([]byte(requireToolText(t, result)), &content))
+			assert.Empty(t, content.BundleID)
+			assert.Equal(t, "run-123", content.RunID)
+			assert.Contains(t, content.Guidance, "AI Insights Analysis Guide")
+			assert.Contains(t, content.Guidance, tc.guidanceHeading)
+			assert.Contains(t, content.Guidance, "run_query")
+			require.Len(t, content.Payloads, 1)
+			assert.Equal(t, "run_details", content.Payloads[0].Name)
+			assert.True(t, content.Payloads[0].Complete)
+			assert.Nil(t, content.Payloads[0].NextOffset)
+			assert.JSONEq(t, fmt.Sprintf(`{"RunId":"run-123","RecipeName":%q}`, tc.recipeName), content.Payloads[0].Content)
+			assert.NotContains(t, content.Guidance, "SPDX-")
 		})
-
-		require.NoError(t, err)
-		require.False(t, result.IsError)
-		require.NotNil(t, result.StructuredContent)
-
-		var content generateAIInsightsResult
-		require.NoError(t, json.Unmarshal([]byte(requireToolText(t, result)), &content))
-		assert.Empty(t, content.BundleID)
-		assert.Equal(t, "run-123", content.RunID)
-		assert.Contains(t, content.Guidance, "AI Insights Analysis Guide")
-		assert.Contains(t, content.Guidance, "System Utilisation Query Guide")
-		assert.Contains(t, content.Guidance, "run_query")
-		require.Len(t, content.Payloads, 1)
-		assert.Equal(t, "run_details", content.Payloads[0].Name)
-		assert.True(t, content.Payloads[0].Complete)
-		assert.Nil(t, content.Payloads[0].NextOffset)
-		assert.JSONEq(t, `{"RunId":"run-123","RecipeName":"system_utilization"}`, content.Payloads[0].Content)
-		assert.NotContains(t, content.Guidance, "SPDX-")
-	})
+	}
 
 	t.Run("selects Instruction Mix query guidance from the run recipe", func(t *testing.T) {
 		ctx := context.Background()
@@ -577,7 +594,7 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 	t.Run("reports unsupported recipe and supported recipes", func(t *testing.T) {
 		ctx := context.Background()
 		engine := apapprotomocks.NewApapClient(t)
-		expectRunDescription(engine, "run-123", "memory_access")
+		expectRunDescription(engine, "run-123", "unsupported_recipe")
 		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine}, GenerateAIInsightsTool{}.Register)
 		defer clientSession.Close()
 		defer serverSession.Close()
@@ -594,13 +611,17 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(text), &content))
 		require.NotNil(t, content.Error)
 		assert.Equal(t, message.EngineInsightsUnsupportedRecipe, content.Error.Code)
-		assert.Equal(t, "memory_access", content.Error.Metadata["unsupportedRecipe"])
-		assert.Equal(t, "code_hotspots, cpu_microarchitecture, instruction_mix, system_utilization", content.Error.Metadata["supportedRecipesList"])
-		assert.Contains(t, text, "memory_access")
+		assert.Equal(t, "unsupported_recipe", content.Error.Metadata["unsupportedRecipe"])
+		assert.Equal(t, "asct, cache_sharing, code_hotspots, cpu_microarchitecture, instruction_mix, memory_access, syscall_trace_summary, system_utilization", content.Error.Metadata["supportedRecipesList"])
+		assert.Contains(t, text, "unsupported_recipe")
+		assert.Contains(t, text, "asct")
+		assert.Contains(t, text, "cache_sharing")
 		assert.Contains(t, text, "code_hotspots")
 		assert.Contains(t, text, "cpu_microarchitecture")
+		assert.Contains(t, text, "syscall_trace_summary")
 		assert.Contains(t, text, "system_utilization")
 		assert.Contains(t, text, "instruction_mix")
+		assert.Contains(t, text, "memory_access")
 	})
 
 	t.Run("surfaces caller-controlled run id catalog detail", func(t *testing.T) {

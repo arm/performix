@@ -9,5 +9,5 @@
 # still receives everything it needs.
 
 certifi          # download_github_release_asset.py
-jsonschema       # validate_matrix.py
+jsonschema==4.25.1  # validate_matrix.py, validate_telemetry.py
 pytest>=8.4.2    # sysutil-timeline pytest tests (pending shared-venv unification)

@@ -55,6 +55,10 @@ const (
 	Apap_ListDirectories_FullMethodName           = "/apap.Apap/ListDirectories"
 	Apap_CreateSupportPackage_FullMethodName      = "/apap.Apap/CreateSupportPackage"
 	Apap_GetRunSummaryBundle_FullMethodName       = "/apap.Apap/GetRunSummaryBundle"
+	Apap_ListMCPClients_FullMethodName            = "/apap.Apap/ListMCPClients"
+	Apap_GetMCPClientStatus_FullMethodName        = "/apap.Apap/GetMCPClientStatus"
+	Apap_InstallMCPClient_FullMethodName          = "/apap.Apap/InstallMCPClient"
+	Apap_UninstallMCPClient_FullMethodName        = "/apap.Apap/UninstallMCPClient"
 )
 
 // ApapClient is the client API for Apap service.
@@ -128,6 +132,18 @@ type ApapClient interface {
 	CreateSupportPackage(ctx context.Context, in *CreateSupportPackageRequest, opts ...grpc.CallOption) (*CreateSupportPackageResponse, error)
 	// Fetch data required by the MCP server to generate insights
 	GetRunSummaryBundle(ctx context.Context, in *RunSummaryBundleRequest, opts ...grpc.CallOption) (*RunSummaryBundleResponse, error)
+	// Lists supported MCP clients and their current MCP configuration status.
+	// The response also includes the MCP server definition used by install and
+	// uninstall operations.
+	ListMCPClients(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*MCPClientListing, error)
+	// Gets the current MCP configuration status for one supported client.
+	GetMCPClientStatus(ctx context.Context, in *GetMCPClientStatusRequest, opts ...grpc.CallOption) (*MCPClientListing, error)
+	// Adds the Performix MCP server to one supported client. A conflicting
+	// existing server entry is left unchanged.
+	InstallMCPClient(ctx context.Context, in *InstallMCPClientRequest, opts ...grpc.CallOption) (*MCPClientInstallResult, error)
+	// Removes the Performix MCP server from one supported client. Other MCP
+	// servers and conflicting entries are left unchanged.
+	UninstallMCPClient(ctx context.Context, in *UninstallMCPClientRequest, opts ...grpc.CallOption) (*MCPClientUninstallResult, error)
 }
 
 type apapClient struct {
@@ -504,6 +520,46 @@ func (c *apapClient) GetRunSummaryBundle(ctx context.Context, in *RunSummaryBund
 	return out, nil
 }
 
+func (c *apapClient) ListMCPClients(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*MCPClientListing, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MCPClientListing)
+	err := c.cc.Invoke(ctx, Apap_ListMCPClients_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *apapClient) GetMCPClientStatus(ctx context.Context, in *GetMCPClientStatusRequest, opts ...grpc.CallOption) (*MCPClientListing, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MCPClientListing)
+	err := c.cc.Invoke(ctx, Apap_GetMCPClientStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *apapClient) InstallMCPClient(ctx context.Context, in *InstallMCPClientRequest, opts ...grpc.CallOption) (*MCPClientInstallResult, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MCPClientInstallResult)
+	err := c.cc.Invoke(ctx, Apap_InstallMCPClient_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *apapClient) UninstallMCPClient(ctx context.Context, in *UninstallMCPClientRequest, opts ...grpc.CallOption) (*MCPClientUninstallResult, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MCPClientUninstallResult)
+	err := c.cc.Invoke(ctx, Apap_UninstallMCPClient_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ApapServer is the server API for Apap service.
 // All implementations must embed UnimplementedApapServer
 // for forward compatibility
@@ -575,6 +631,18 @@ type ApapServer interface {
 	CreateSupportPackage(context.Context, *CreateSupportPackageRequest) (*CreateSupportPackageResponse, error)
 	// Fetch data required by the MCP server to generate insights
 	GetRunSummaryBundle(context.Context, *RunSummaryBundleRequest) (*RunSummaryBundleResponse, error)
+	// Lists supported MCP clients and their current MCP configuration status.
+	// The response also includes the MCP server definition used by install and
+	// uninstall operations.
+	ListMCPClients(context.Context, *emptypb.Empty) (*MCPClientListing, error)
+	// Gets the current MCP configuration status for one supported client.
+	GetMCPClientStatus(context.Context, *GetMCPClientStatusRequest) (*MCPClientListing, error)
+	// Adds the Performix MCP server to one supported client. A conflicting
+	// existing server entry is left unchanged.
+	InstallMCPClient(context.Context, *InstallMCPClientRequest) (*MCPClientInstallResult, error)
+	// Removes the Performix MCP server from one supported client. Other MCP
+	// servers and conflicting entries are left unchanged.
+	UninstallMCPClient(context.Context, *UninstallMCPClientRequest) (*MCPClientUninstallResult, error)
 	mustEmbedUnimplementedApapServer()
 }
 
@@ -677,6 +745,18 @@ func (UnimplementedApapServer) CreateSupportPackage(context.Context, *CreateSupp
 }
 func (UnimplementedApapServer) GetRunSummaryBundle(context.Context, *RunSummaryBundleRequest) (*RunSummaryBundleResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRunSummaryBundle not implemented")
+}
+func (UnimplementedApapServer) ListMCPClients(context.Context, *emptypb.Empty) (*MCPClientListing, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListMCPClients not implemented")
+}
+func (UnimplementedApapServer) GetMCPClientStatus(context.Context, *GetMCPClientStatusRequest) (*MCPClientListing, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetMCPClientStatus not implemented")
+}
+func (UnimplementedApapServer) InstallMCPClient(context.Context, *InstallMCPClientRequest) (*MCPClientInstallResult, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InstallMCPClient not implemented")
+}
+func (UnimplementedApapServer) UninstallMCPClient(context.Context, *UninstallMCPClientRequest) (*MCPClientUninstallResult, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UninstallMCPClient not implemented")
 }
 func (UnimplementedApapServer) mustEmbedUnimplementedApapServer() {}
 
@@ -1273,6 +1353,78 @@ func _Apap_GetRunSummaryBundle_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Apap_ListMCPClients_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ApapServer).ListMCPClients(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Apap_ListMCPClients_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ApapServer).ListMCPClients(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Apap_GetMCPClientStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMCPClientStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ApapServer).GetMCPClientStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Apap_GetMCPClientStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ApapServer).GetMCPClientStatus(ctx, req.(*GetMCPClientStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Apap_InstallMCPClient_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstallMCPClientRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ApapServer).InstallMCPClient(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Apap_InstallMCPClient_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ApapServer).InstallMCPClient(ctx, req.(*InstallMCPClientRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Apap_UninstallMCPClient_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UninstallMCPClientRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ApapServer).UninstallMCPClient(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Apap_UninstallMCPClient_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ApapServer).UninstallMCPClient(ctx, req.(*UninstallMCPClientRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Apap_ServiceDesc is the grpc.ServiceDesc for Apap service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1399,6 +1551,22 @@ var Apap_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRunSummaryBundle",
 			Handler:    _Apap_GetRunSummaryBundle_Handler,
+		},
+		{
+			MethodName: "ListMCPClients",
+			Handler:    _Apap_ListMCPClients_Handler,
+		},
+		{
+			MethodName: "GetMCPClientStatus",
+			Handler:    _Apap_GetMCPClientStatus_Handler,
+		},
+		{
+			MethodName: "InstallMCPClient",
+			Handler:    _Apap_InstallMCPClient_Handler,
+		},
+		{
+			MethodName: "UninstallMCPClient",
+			Handler:    _Apap_UninstallMCPClient_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

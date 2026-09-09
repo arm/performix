@@ -13,6 +13,7 @@ import pytest
 from test_ai_insights_evaluation import (
     McpServer,
     codex_truncation_markers,
+    mcp_mode_env,
     should_fail_on_tool_output_truncation,
     validate_mcp_call,
 )
@@ -38,7 +39,15 @@ def _write_events(path: Path, *items: dict) -> None:
     )
 
 
-def test_auxiliary_tool_failure_does_not_invalidate_attempt(tmp_path: Path) -> None:
+def test_performix_mcp_enables_experimental_recipes() -> None:
+    assert mcp_mode_env(MODE, {}) == {
+        "APXD_ENABLE_EXPERIMENTAL_RECIPES": "true"
+    }
+
+
+def test_auxiliary_tool_failure_does_not_invalidate_attempt(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     raw_jsonl = tmp_path / "codex_exec.jsonl"
     _write_events(
         raw_jsonl,
@@ -67,7 +76,42 @@ def test_auxiliary_tool_failure_does_not_invalidate_attempt(tmp_path: Path) -> N
 
     assert result["required_completed_calls"] == 1
     assert result["failed_calls"] == 1
+    assert result["failed_by_tool"] == {"run_query": 1}
+    assert result["failure_rate_percent_by_tool"] == {
+        "generate_ai_insights": 0.0,
+        "run_query": 50.0,
+    }
     assert result["failed_messages"] == ["run_query: invalid SQL"]
+    assert "run_query: 1/2 failed (50.0%)" in caplog.text
+
+
+def test_structured_mcp_tool_error_is_reported(tmp_path: Path) -> None:
+    raw_jsonl = tmp_path / "codex_exec.jsonl"
+    _write_events(
+        raw_jsonl,
+        {
+            "type": "mcp_tool_call",
+            "server": "arm-performix",
+            "tool": "generate_ai_insights",
+            "status": "completed",
+        },
+        {
+            "type": "mcp_tool_call",
+            "server": "arm-performix",
+            "tool": "run_query",
+            "status": "failed",
+            "error": None,
+            "result": {
+                "structured_content": {
+                    "error": {"message": "table does not exist"},
+                },
+            },
+        },
+    )
+
+    result = validate_mcp_call(raw_jsonl, MODE)
+
+    assert result["failed_messages"] == ["run_query: table does not exist"]
 
 
 def test_required_ai_insights_call_must_still_succeed(tmp_path: Path) -> None:

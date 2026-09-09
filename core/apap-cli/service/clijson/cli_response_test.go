@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/test"
 	"github.com/Arm-Debug/apap-cli/apap-cli/utils"
@@ -19,6 +20,17 @@ import (
 
 type MarshalFail struct {
 	Channel chan int
+}
+
+func TestMarkErrorHandled(t *testing.T) {
+	msg := message.New(message.EngineRunDoesNotExist)
+
+	err := MarkErrorHandled(msg)
+
+	require.ErrorIs(t, err, ErrorAlreadyHandled)
+	require.ErrorIs(t, err, msg)
+	var structuredErr message.Message
+	require.ErrorAs(t, err, &structuredErr)
 }
 
 func TestMarshalJSONCLIResponse(t *testing.T) {

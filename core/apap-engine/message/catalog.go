@@ -53,7 +53,10 @@ const (
 
 // catalogConstants defines a list of constants that can be referenced in the message
 // catalog. Constants are referenced by using the following syntax: {$CONSTANT_KEY}.
-var catalogConstants = map[string]string{"PRODUCT_FULL_NAME": terminology.GetProductFullName()}
+var catalogConstants = map[string]string{
+	"PRODUCT_FULL_NAME": terminology.GetProductFullName(),
+	"MCP_SERVER_NAME":   terminology.GetMCPServerName(),
+}
 
 // CatalogMessage is a structured message obtained from the message catalog.
 type CatalogMessage struct {

@@ -74,7 +74,6 @@ func (r *RunStageAPIExposer) ExposeAPI(api RecipeAPI, jsContext *goja.Object) er
 		{jsName: "targetInfo", fn: api.targetInfo},
 		{jsName: "readHostFile", fn: api.readHostFile},
 		{jsName: "getTelemetrySpecification", fn: api.getTelemetrySpecification},
-		{jsName: "probeTools", fn: api.probeTools},
 		{jsName: "retrieveFile", fn: api.retrieveFile},
 		{jsName: "runCommand", fn: api.runCommand},
 		{jsName: "isFullCaptureSupportEnabled", fn: api.isFullCaptureSupportEnabled},
@@ -98,6 +97,7 @@ func (r *RenderStageAPIExposer) ExposeAPI(api RecipeAPI, jsContext *goja.Object)
 		{jsName: "getFirstSupportedCpuName", fn: api.getFirstSupportedCPUName},
 		{jsName: "listRunComponents", fn: api.listRunComponents},
 		{jsName: "getToolCapabilities", fn: api.getToolCapabilities},
+		{jsName: "readRunComponent", fn: api.readRunComponent},
 		{jsName: "getRenderParameter", fn: api.getRenderParameter},
 		{jsName: "getRenderParameters", fn: api.getRenderParameters},
 		{jsName: "setDefaultRenderParameter", fn: api.setDefaultRenderParameter},
@@ -215,7 +215,7 @@ type GojaScriptedReadyStage struct {
 	GojaScriptedRecipeStage
 }
 
-type GojaReadyAdvice struct {
+type gojaReadyAdvice struct {
 	ToolName       string            `json:"toolName"`
 	AdviceSeverity string            `json:"adviceSeverity"`
 	MessageCode    string            `json:"messageCode"`
@@ -223,9 +223,9 @@ type GojaReadyAdvice struct {
 	Cause          string            `json:"cause"`
 }
 
-type GojaReadyOutput struct {
+type gojaReadyOutput struct {
 	Status string            `json:"status"`
-	Advice []GojaReadyAdvice `json:"advice"`
+	Advice []gojaReadyAdvice `json:"advice"`
 }
 
 func (s *GojaScriptedReadyStage) Execute(ctx recipe.ExecutionContext, stageContext *recipe.StageContext) (func(), error) {
@@ -243,21 +243,28 @@ func (s *GojaScriptedReadyStage) Execute(ctx recipe.ExecutionContext, stageConte
 		return nil, err
 	}
 
-	readyOutput := GojaReadyOutput{}
-	allowedUnset := []*regexp.Regexp{
-		regexp.MustCompile(`^advice\[\d+\]\.cause$`),
-		regexp.MustCompile(`^advice\[\d+\]\.metadata$`),
-	}
-	err = gojautils.ParseObjectFromJSWithRegex(out, &readyOutput, allowedUnset, []*regexp.Regexp{})
+	readyOutput, err := ParseGojaReadyOutput(out, ctx.GetRecipeCtx().RecipeMetadata.Name)
 	if err != nil {
 		return nil, err
 	}
 
-	stageContext.ReadinessNotifier.OnReadinessProbed(convertGojaReadyOutputToReadyOutput(readyOutput, ctx.GetRecipeCtx().RecipeMetadata.Name))
+	stageContext.ReadinessNotifier.OnReadinessProbed(readyOutput)
 	return nil, nil
 }
 
-func convertGojaReadyOutputToReadyOutput(gojaOutput GojaReadyOutput, recipeName string) recipe.ReadyOutput {
+// ParseGojaReadyOutput parses a JavaScript readiness result and converts it
+// into the engine readiness result used by notifiers. The optional cause and
+// metadata advice fields may be omitted.
+func ParseGojaReadyOutput(out goja.Value, recipeName string) (recipe.ReadyOutput, error) {
+	gojaOutput := gojaReadyOutput{}
+	allowedUnset := []*regexp.Regexp{
+		regexp.MustCompile(`^advice\[\d+\]\.cause$`),
+		regexp.MustCompile(`^advice\[\d+\]\.metadata$`),
+	}
+	if err := gojautils.ParseObjectFromJSWithRegex(out, &gojaOutput, allowedUnset, []*regexp.Regexp{}); err != nil {
+		return recipe.ReadyOutput{}, err
+	}
+
 	readyOutput := recipe.ReadyOutput{Status: gojaOutput.Status}
 	advice := []recipe.ReadyAdvice{}
 	for _, gojaAdvice := range gojaOutput.Advice {
@@ -290,7 +297,7 @@ func convertGojaReadyOutputToReadyOutput(gojaOutput GojaReadyOutput, recipeName 
 		advice = append(advice, readyAdvice)
 	}
 	readyOutput.Advice = advice
-	return readyOutput
+	return readyOutput, nil
 }
 
 type GojaSingleSelectedParameterOptionStage struct {
@@ -321,6 +328,16 @@ func ExecuteOptionsFunction(
 		return nil, nil, err
 	}
 
+	recipeName := ctx.GetRecipeCtx().RecipeMetadata.Name
+	targetName := ctx.GetRecipeCtx().TargetName
+	values, items, err := ParseParameterOptionsOutput(out, converter, allowEmpty, paramName, recipeName, targetName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return values, items, nil
+}
+
+func ParseParameterOptionsOutput(out goja.Value, converter func(data []interface{}) ([]string, []parameters.ParameterOption, error), allowEmpty bool, paramName string, recipeName string, targetName string) ([]string, []parameters.ParameterOption, error) {
 	if exported, ok := out.Export().([]interface{}); ok {
 		if converter == nil {
 			converter = func(data []interface{}) ([]string, []parameters.ParameterOption, error) {
@@ -336,8 +353,8 @@ func ExecuteOptionsFunction(
 			if len(values) == 0 && !allowEmpty {
 				metadata := map[string]string{
 					"paramName":  paramName,
-					"recipeName": ctx.GetRecipeCtx().RecipeMetadata.Name,
-					"targetName": ctx.GetRecipeCtx().TargetName,
+					"recipeName": recipeName,
+					"targetName": targetName,
 				}
 				return nil, nil, message.New(message.EngineRecipeparserJsRecipeStageParamOptionsEmptyDynamic).WithMetadata(metadata)
 			}
@@ -397,7 +414,7 @@ type GojaScriptedRenderStage struct {
 	GojaScriptedRecipeStage
 }
 
-type scriptedRenderOutput struct {
+type gojaRenderOutput struct {
 	Renderers      []recipe.RendererConfig
 	Visualizations []recipe.WidgetConfig
 	UI             map[string][]recipe.WidgetConfig
@@ -421,7 +438,7 @@ func (s *GojaScriptedRenderStage) Execute(ctx recipe.ExecutionContext, stageCont
 		return s.DeferredActions.InvokeAll, err
 	}
 
-	renderOutput, err := parseScriptedRenderOutput(out)
+	renderOutput, err := ParseGojaRenderOutput(out)
 	if err != nil {
 		return s.DeferredActions.InvokeAll, err
 	}
@@ -432,9 +449,10 @@ func (s *GojaScriptedRenderStage) Execute(ctx recipe.ExecutionContext, stageCont
 	return s.DeferredActions.InvokeAll, nil
 }
 
-func parseScriptedRenderOutput(out goja.Value) (recipe.RenderOutput, error) {
+// ParseGojaRenderOutput parses and validates a JavaScript render-stage result.
+func ParseGojaRenderOutput(out goja.Value) (recipe.RenderOutput, error) {
 	renderOutput := recipe.RenderOutput{}
-	parsedOutput := scriptedRenderOutput{}
+	parsedOutput := gojaRenderOutput{}
 
 	allowedUnset := []*regexp.Regexp{
 		regexp.MustCompile(`(^|\.)(Config|Placement|ParameterBindings|Disabled)$`),
@@ -503,7 +521,7 @@ type validationError struct {
 	Cause       string            `json:"cause"`
 }
 
-type paramValidation struct {
+type gojaParamValidationOutput struct {
 	Errors []validationError `json:"errors"`
 }
 
@@ -604,13 +622,10 @@ func (s *GojaScriptedEnabledParametersStage) Execute(ctx recipe.ExecutionContext
 			return s.DeferredActions.InvokeAll, err
 		}
 
-		var validationResult paramValidation
-		// Metadata and cause can be unset
-		if err := gojautils.ParseObjectFromJSWithRegex(out, &validationResult, []*regexp.Regexp{regexp.MustCompile(`metadata|cause`)}, nil); err != nil {
+		convertedErrs, err := ParseGojaParamValidationOutput(out, s.recipe.Name)
+		if err != nil {
 			return s.DeferredActions.InvokeAll, err
 		}
-
-		convertedErrs := s.convertGojaValidationResult(validationResult)
 		pvr.Errors = append(pvr.Errors, convertedErrs...)
 	}
 
@@ -636,7 +651,20 @@ func (s *GojaScriptedEnabledParametersStage) Execute(ctx recipe.ExecutionContext
 	return s.DeferredActions.InvokeAll, nil
 }
 
-func (s *GojaScriptedEnabledParametersStage) convertGojaValidationResult(validationResult paramValidation) []recipe.ParameterValidationError {
+// ParseGojaParamValidationOutput parses a JavaScript parameter-validation
+// result and converts its errors into engine parameter-validation errors.
+func ParseGojaParamValidationOutput(out goja.Value, recipeName string) ([]recipe.ParameterValidationError, error) {
+	validationResult := gojaParamValidationOutput{}
+	// Metadata and cause can be unset.
+	if err := gojautils.ParseObjectFromJSWithRegex(
+		out,
+		&validationResult,
+		[]*regexp.Regexp{regexp.MustCompile(`metadata|cause`)},
+		nil,
+	); err != nil {
+		return nil, err
+	}
+
 	errs := []recipe.ParameterValidationError{}
 	for _, paramErr := range validationResult.Errors {
 		var msg *message.MessageImpl
@@ -651,7 +679,7 @@ func (s *GojaScriptedEnabledParametersStage) convertGojaValidationResult(validat
 				"value":      paramErr.Value,
 				"paramName":  paramErr.ParameterId,
 				"code":       requestedCode,
-				"recipeName": s.recipe.Name,
+				"recipeName": recipeName,
 			}
 
 			// Avoiding collisions between newly-created metadata and metadata provided from js
@@ -669,5 +697,5 @@ func (s *GojaScriptedEnabledParametersStage) convertGojaValidationResult(validat
 			Message:     msg,
 		})
 	}
-	return errs
+	return errs, nil
 }

@@ -46,6 +46,37 @@ the repository root, or alternatively `make robot-test` from the `apap-cli`
 directory. Both methods handle virtual environment setup and dependency
 installation automatically.
 
+### MCP client installation
+
+The MCP client-installation suite is host-only and does not require a profiling
+target. Its default `mock` mode runs the same human-readable and JSON status and
+doctor checks before and after the install, idempotent install and uninstall
+lifecycle for every supported client. It also covers `install --all`,
+`uninstall --all`, conflicts, unreadable configuration and undetected clients.
+The suite creates temporary application evidence and configuration files, and
+uses minimal Claude Code, Codex and VS Code command stubs built by the Task
+workflow for black-box testing.
+
+From the repository root, run:
+
+```shell
+task core:build:apx
+task core:test:robot TARGET=robot_localhost \
+  ROBOT_ARGS="--test-suite robot/tests/mcp/client_installation.robot"
+```
+
+The opt-in `real` mode runs the same cases against installed clients while
+retaining temporary configuration directories:
+
+```shell
+MCP_CLIENT_TEST_MODE=real task core:test:robot TARGET=robot_localhost \
+  ROBOT_ARGS="--test-suite robot/tests/mcp/client_installation.robot"
+```
+
+Real-mode cases are skipped when the client is absent or its configuration
+cannot be isolated safely on the host. Mock mode is the deterministic mode for
+normal CI.
+
 ### Using `task core:test:robot` (recommended)
 
 The `TARGET` argument is mandatory and must match the name of a config file in `robot/resources/files/targets/`:
@@ -122,6 +153,34 @@ Note that `remote-localhost`-tagged tests will be skipped automatically if the r
 | Skip `remote-localhost` tests (note: `remote-localhost` tests require special setup on the target before they are run, this can be handled `./scripts/run-robot.py` with the `--run-remote-localhost` flag) | `robot -T --outputdir robot/results --exclude disabledORremote-localhost --variable TARGET:<name> robot/tests` |
 | Dry run a single suite (no execution) | `robot --dryrun --output NONE --log NONE --report NONE robot/tests/recipe/recipe.robot` |
 | Run without producing output files | `robot --output NONE --log NONE --report NONE --variable TARGET:<name> robot/tests` |
+
+## Continuous integration sharding
+
+The extended validation workflow runs independent parts of the Robot suite in parallel. Sharding is CI orchestration only; local `task core:test:robot` and `make robot-test` invocations remain single Robot runs unless you select suites or tags explicitly.
+
+The main [Robot Framework workflow](../../.github/workflows/robot-framework.yaml) uses two partition shapes to balance run times. Both shapes cover all eligible ordinary tests:
+
+| Host runner and target | Ordinary test partition | Additional coverage |
+| ---------------------- | ----------------------- | ------------------- |
+| Linux Arm64 host and provisioned Linux Arm64 target | `recipe` + `tool` + `non-recipe-non-tool` | Dedicated `remote-localhost` shard |
+| Linux x86-64 host and provisioned Linux Arm64 target | `recipe` + `non-recipe` | None |
+| Windows x86-64 host and provisioned Linux Arm64 target | `recipe` + `non-recipe` | None |
+| Linux Arm64 host and static Raspberry Pi target | Selected static subset | Manual workflow dispatches only |
+
+The ordinary suite assignments in each partition are exhaustive:
+
+- The `arm64` partition runs `robot/tests/recipe`, `robot/tests/tool`, and every other top-level suite in separate shards. It also runs the dedicated `remote-localhost` shard.
+- The `amd64` partition runs `robot/tests/recipe` separately; `non-recipe` includes every other top-level suite.
+
+[`.github/robot-sharding.json`](../../.github/robot-sharding.json) is the source of truth for shard partitions, host assignments, workload preparation, and static targets. Each provisioned-target shard lists its top-level test suites and whether it prepares workloads. Static targets list their selected suite files separately.
+
+Add every new top-level `robot/tests` directory to exactly one shard in each partition. Matrix generation fails before target provisioning if a suite is missing or duplicated.
+
+The separate [x86 target workflow](../../.github/workflows/robot-framework-x86.yaml) and [Windows on Arm workflow](../../.github/workflows/robot-framework-woa.yaml) remain single Robot jobs with platform-specific suite and tag exclusions.
+
+### Isolation requirements
+
+Each concurrent provisioned shard has its own runner and target. The workflow derives a unique artifact suffix from each matrix row. Robot results, engine logs, and exported runs use this suffix so results from parallel jobs do not collide.
 
 ## Workload-dependent tests (skipped by default if not set up)
 

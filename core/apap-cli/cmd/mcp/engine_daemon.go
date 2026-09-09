@@ -62,19 +62,32 @@ func allocateEngineDaemonPorts() (serverPort int, authPort int, err error) {
 	return ports[0], ports[1], nil
 }
 
-// Run starts and connects to the engine, serves MCP until the session ends,
-// then requests graceful engine shutdown. Cancellation of the command context
-// is a normal exit unless shutdown itself fails.
-func (r *engineDaemonRunner) Run(ctx context.Context, in io.ReadCloser, out io.Writer, errOut io.Writer) (runErr error) {
-	serverPort, authPort, err := r.allocatePorts()
+// isolatedEngineDaemonConfig creates a background-engine configuration on
+// fresh loopback ports. MCP commands use this instead of attaching to the
+// shared CLI daemon configured by the global port flags.
+func isolatedEngineDaemonConfig(
+	allocatePorts func() (int, int, error),
+) (grpcserver.GrpcServerConfig, error) {
+	serverPort, authPort, err := allocatePorts()
 	if err != nil {
-		return err
+		return grpcserver.GrpcServerConfig{}, err
 	}
 	config := serverconfig.FromViperForBackground()
 	config.Host = serverconfig.DefaultServerHostname
 	config.Port = serverPort
 	config.AuthPort = authPort
 	config.HttpPort = 0
+	return config, nil
+}
+
+// Run starts and connects to the engine, serves MCP until the session ends,
+// then requests graceful engine shutdown. Cancellation of the command context
+// is a normal exit unless shutdown itself fails.
+func (r *engineDaemonRunner) Run(ctx context.Context, in io.ReadCloser, out io.Writer, errOut io.Writer) (runErr error) {
+	config, err := isolatedEngineDaemonConfig(r.allocatePorts)
+	if err != nil {
+		return err
+	}
 
 	// MCP stdout is reserved for protocol messages. Redirect the process-wide
 	// logger to stderr for this invocation, then restore it for other commands

@@ -6,8 +6,10 @@ package query
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -174,6 +176,42 @@ func TestQueryViaArrowWithDuckDB(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, "hello", rows[0]["col1"])
 	require.Equal(t, float64(42), rows[0]["col2"]) // numbers decode as float64 via JSON
+}
+
+func TestQueryViaArrowCancellationStopsDuckDB(t *testing.T) {
+	db, err := (&render.DuckDBFactory{}).Connect(t.Name())
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		reader, queryErr := QueryViaArrow(
+			ctx,
+			db,
+			"SELECT range::VARCHAR, random() AS k FROM range(1_000_000_000) ORDER BY k",
+		)
+		if reader != nil {
+			reader.Release()
+		}
+		done <- queryErr
+	}()
+
+	// Let the query enter DuckDB before interrupting it.
+	time.Sleep(time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		require.ErrorContains(t, err, "Interrupted")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the Arrow query to stop after cancellation")
+	}
 }
 
 func TestNewTableArrowIPCWithDuckDB(t *testing.T) {

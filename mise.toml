@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [tools]
-go = "1.26.6"
+go = "1.27.0"
 python = "3.10"
 "github:go-task/task" = "v3.50.0"
 "github:protocolbuffers/protobuf" = "v23.4"

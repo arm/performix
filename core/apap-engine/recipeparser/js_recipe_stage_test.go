@@ -16,6 +16,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/gojautils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
@@ -446,7 +447,7 @@ func TestGojaScriptedReadyStage(t *testing.T) {
 			Context:           context.Background(),
 			ReadinessNotifier: readinessCollector,
 		}
-		execCtx := &mockExecutionContext{}
+		execCtx := newMockExecutionContext(t, &recipe.RecipeCtx{}, nil)
 
 		cleanup, err := stage.Execute(execCtx, stageCtx)
 
@@ -456,11 +457,11 @@ func TestGojaScriptedReadyStage(t *testing.T) {
 	})
 }
 
-func TestConvertGojaReadyOutputToReadyOutput(t *testing.T) {
+func TestParseGojaReadyOutput(t *testing.T) {
 	t.Run("successful conversion", func(t *testing.T) {
-		gojaOutput := GojaReadyOutput{
+		gojaOutput := gojaReadyOutput{
 			Status: "status",
-			Advice: []GojaReadyAdvice{
+			Advice: []gojaReadyAdvice{
 				{
 					ToolName:       "toolA",
 					AdviceSeverity: "severityA",
@@ -477,7 +478,10 @@ func TestConvertGojaReadyOutputToReadyOutput(t *testing.T) {
 				},
 			},
 		}
-		result := convertGojaReadyOutputToReadyOutput(gojaOutput, "")
+		out, err := gojautils.GoObjectToJS(goja.New(), gojaOutput)
+		require.NoError(t, err)
+		result, err := ParseGojaReadyOutput(out, "")
+		require.NoError(t, err)
 		assert.Equal(t, gojaOutput.Status, result.Status)
 		assert.Equal(t, 2, len(result.Advice))
 
@@ -496,9 +500,9 @@ func TestConvertGojaReadyOutputToReadyOutput(t *testing.T) {
 		assert.Equal(t, expectedMessage, resultB.AdviceMessage)
 	})
 	t.Run("sets message as UnknownReadinessMessage if message code is empty or invalid", func(t *testing.T) {
-		gojaOutput := GojaReadyOutput{
+		gojaOutput := gojaReadyOutput{
 			Status: "status",
-			Advice: []GojaReadyAdvice{
+			Advice: []gojaReadyAdvice{
 				{
 					ToolName:       "toolA",
 					AdviceSeverity: "severityA",
@@ -508,7 +512,10 @@ func TestConvertGojaReadyOutputToReadyOutput(t *testing.T) {
 				},
 			},
 		}
-		result := convertGojaReadyOutputToReadyOutput(gojaOutput, "myRecipe")
+		out, err := gojautils.GoObjectToJS(goja.New(), gojaOutput)
+		require.NoError(t, err)
+		result, err := ParseGojaReadyOutput(out, "myRecipe")
+		require.NoError(t, err)
 		assert.Equal(t, gojaOutput.Status, result.Status)
 		assert.Equal(t, 1, len(result.Advice))
 

@@ -127,7 +127,7 @@ function renderJavaAnalysis(context) {
       CAST(recording_id AS HUGEINT) AS "Recording",
       source_jfr_relative_path AS "Source JFR",
       CAST(jvm_pid AS BIGINT) AS "PID",
-      CAST(jvm_start_epoch_ms AS BIGINT) AS "JVM Start (epoch ms)",
+      CAST(jvm_start_epoch_ns AS BIGINT) AS "JVM Start (epoch ns)",
       CAST(recording_start_epoch_ns AS BIGINT) AS "Recording Start (epoch ns)",
       CAST(recording_end_epoch_ns AS BIGINT) AS "Recording End (epoch ns)",
       CAST(parse_complete AS VARCHAR) AS "Parse Complete",
@@ -146,7 +146,7 @@ function renderJavaAnalysis(context) {
       java_arguments AS "Java Arguments",
       jvm_arguments AS "JVM Arguments",
       jvm_flags AS "JVM Flags",
-      CAST(jvm_start_epoch_ms AS BIGINT) AS "JVM Start (epoch ms)"
+      CAST(jvm_start_epoch_ns AS BIGINT) AS "JVM Start (epoch ns)"
     FROM read_parquet({{path:${JFR_COMPONENTS.jvmInfo}}})
     ORDER BY recording_id, jvm_pid`,
   );
@@ -163,19 +163,66 @@ function renderJavaAnalysis(context) {
 
   const heapSummaryRenderer = makeSQLRenderer(
     'jvm_heap_summary',
-    `SELECT
+    `WITH heap_phases AS (
+      SELECT
+        heap.recording_id,
+        heap.gc_id,
+        phase.event_start_epoch_ns,
+        phase.gc_phase,
+        phase.used_bytes,
+        phase.start_address,
+        phase.committed_end_address,
+        phase.committed_size_bytes,
+        phase.reserved_end_address,
+        phase.reserved_size_bytes
+      FROM read_parquet({{path:${JFR_COMPONENTS.heapSummary}}}) AS heap
+      CROSS JOIN LATERAL (
+        VALUES
+          (
+            heap.before_event_start_epoch_ns,
+            'Before GC',
+            heap.before_used_bytes,
+            heap.before_heap_space_start_address,
+            heap.before_heap_space_committed_end_address,
+            heap.before_heap_space_committed_size_bytes,
+            heap.before_heap_space_reserved_end_address,
+            heap.before_heap_space_reserved_size_bytes
+          ),
+          (
+            heap.after_event_start_epoch_ns,
+            'After GC',
+            heap.after_used_bytes,
+            heap.after_heap_space_start_address,
+            heap.after_heap_space_committed_end_address,
+            heap.after_heap_space_committed_size_bytes,
+            heap.after_heap_space_reserved_end_address,
+            heap.after_heap_space_reserved_size_bytes
+          )
+      ) AS phase(
+        event_start_epoch_ns,
+        gc_phase,
+        used_bytes,
+        start_address,
+        committed_end_address,
+        committed_size_bytes,
+        reserved_end_address,
+        reserved_size_bytes
+      )
+    )
+    SELECT
       CAST(recording_id AS HUGEINT) AS "Recording",
       CAST(event_start_epoch_ns AS BIGINT) AS "Event Start (epoch ns)",
       CAST(gc_id AS BIGINT) AS "GC ID",
       gc_phase AS "GC Phase",
       CAST(used_bytes AS HUGEINT) AS "Used (bytes)",
-      start_address_hex AS "Start Address",
-      committed_end_address_hex AS "Committed End Address",
+      start_address AS "Start Address",
+      committed_end_address AS "Committed End Address",
       CAST(committed_size_bytes AS HUGEINT) AS "Committed Size (bytes)",
-      reserved_end_address_hex AS "Reserved End Address",
+      reserved_end_address AS "Reserved End Address",
       CAST(reserved_size_bytes AS HUGEINT) AS "Reserved Size (bytes)"
-    FROM read_parquet({{path:${JFR_COMPONENTS.heapSummary}}})
-    ORDER BY recording_id, event_start_epoch_ns, gc_id`,
+    FROM heap_phases
+    WHERE event_start_epoch_ns IS NOT NULL
+    ORDER BY recording_id, event_start_epoch_ns, gc_id, gc_phase`,
   );
 
   const garbageCollectionRenderer = makeSQLRenderer(
@@ -189,13 +236,13 @@ function renderJavaAnalysis(context) {
       gc_cause AS "GC Cause",
       CAST(sum_of_pauses_ns AS BIGINT) AS "Total Pause (ns)",
       CAST(longest_pause_ns AS BIGINT) AS "Longest Pause (ns)",
-      os_name AS "OS Thread",
-      CAST(os_thread_id AS BIGINT) AS "OS Thread ID",
-      java_name AS "Java Thread",
-      CAST(java_thread_id AS BIGINT) AS "Java Thread ID",
-      group_name AS "Thread Group",
-      group_parent_name AS "Parent Thread Group",
-      CAST(virtual AS VARCHAR) AS "Virtual Thread"
+      event_thread_os_name AS "OS Thread",
+      CAST(event_thread_os_thread_id AS BIGINT) AS "OS Thread ID",
+      event_thread_java_name AS "Java Thread",
+      CAST(event_thread_java_thread_id AS BIGINT) AS "Java Thread ID",
+      event_thread_group_name AS "Thread Group",
+      event_thread_group_parent_name AS "Parent Thread Group",
+      CAST(event_thread_virtual AS VARCHAR) AS "Virtual Thread"
     FROM read_parquet({{path:${JFR_COMPONENTS.garbageCollection}}})
     ORDER BY recording_id, event_start_epoch_ns, gc_id`,
   );
@@ -233,7 +280,7 @@ function renderJavaAnalysis(context) {
       FROM selected_recording
       UNION ALL
       SELECT 30, 'Recording', 'JVM age',
-        CAST(ROUND((CAST(recording_start_epoch_ns AS DOUBLE) / 1000000.0 - CAST(jvm_start_epoch_ms AS DOUBLE)) / 1000.0, 3) AS VARCHAR) || ' s'
+        CAST(ROUND(CAST(recording_start_epoch_ns - jvm_start_epoch_ns AS DOUBLE) / 1000000000.0, 3) AS VARCHAR) || ' s'
       FROM selected_recording
       UNION ALL
       SELECT 40, 'Recording', 'Recording duration',
@@ -276,16 +323,17 @@ function renderJavaAnalysis(context) {
       WHERE ${makeRecordingPredicate(selectedRecordingId)}
     )
     SELECT
-      CAST(heap.event_start_epoch_ns - recording.recording_start_epoch_ns AS DOUBLE) /
+      CAST(heap.after_event_start_epoch_ns - recording.recording_start_epoch_ns AS DOUBLE) /
         1000000000.0 AS time_s,
-      CAST(heap.used_bytes AS DOUBLE) / 1048576.0 AS used_after_gc_mib,
-      CAST(heap.committed_size_bytes AS DOUBLE) / 1048576.0 AS committed_mib,
-      CAST(heap.reserved_size_bytes AS DOUBLE) / 1048576.0 AS reserved_mib
+      CAST(heap.after_used_bytes AS DOUBLE) / 1048576.0 AS used_after_gc_mib,
+      CAST(heap.after_heap_space_committed_size_bytes AS DOUBLE) /
+        1048576.0 AS committed_mib,
+      CAST(heap.after_heap_space_reserved_size_bytes AS DOUBLE) /
+        1048576.0 AS reserved_mib
     FROM read_parquet({{path:${JFR_COMPONENTS.heapSummary}}}) AS heap
     JOIN selected_recording AS recording USING (recording_id)
-    WHERE heap.event_start_epoch_ns IS NOT NULL
-      AND heap.gc_phase = 'After GC'
-    ORDER BY heap.event_start_epoch_ns, heap.gc_id, heap.gc_phase`,
+    WHERE heap.after_event_start_epoch_ns IS NOT NULL
+    ORDER BY heap.after_event_start_epoch_ns, heap.gc_id`,
   );
 
   const recordingFilter = {

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/gojautils"
+	"github.com/Arm-Debug/apap-cli/apap-engine/jstest/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	tool_goja "github.com/Arm-Debug/apap-cli/apap-engine/tool/goja"
 )
@@ -35,7 +36,7 @@ type ToolIntegrationJSHarness struct {
 // Harness calling methods
 // ------------------------
 
-// ToolProperties returns the defined properties of the tool
+// ToolProperties returns the declarative properties of the tool.
 func (th *ToolIntegrationJSHarness) ToolProperties() tool.IntegrationProperties {
 	return tool.IntegrationProperties{
 		Name:                   th.binding.Name,
@@ -51,14 +52,14 @@ func (th *ToolIntegrationJSHarness) ToolProperties() tool.IntegrationProperties 
 // ToolProbe calls the tool's probe method, supplying the provided tool engine
 // and tool context as arguments. It returns the tool's ProbeResult response,
 // as well as any exception that may have been thrown.
-func (th *ToolIntegrationJSHarness) ToolProbe(t *testing.T, engine ToolEngine, toolContext tool_goja.ToolContext) (tool.ProbeResult, error) {
+func (th *ToolIntegrationJSHarness) ToolProbe(t *testing.T, engine mocks.ToolEngine, toolContext tool_goja.ToolContext) (tool.ProbeResult, error) {
 	t.Helper()
 
 	th.callMu.Lock()
 	defer th.callMu.Unlock()
 
 	var probeResult tool.ProbeResult
-	result, err := th.callFunction(t, th.binding.Probe, engine, toolContext)
+	result, err := th.callAwaitFunction(t, th.binding.Probe, engine, toolContext)
 	if err != nil {
 		return probeResult, err
 	}
@@ -75,52 +76,52 @@ func (th *ToolIntegrationJSHarness) ToolProbe(t *testing.T, engine ToolEngine, t
 // ToolRun calls the tool's run method, supplying the provided tool engine
 // and tool context as arguments. It returns any exception that may have
 // been thrown.
-func (th *ToolIntegrationJSHarness) ToolRun(t *testing.T, engine ToolEngine, toolContext tool_goja.ToolContext) error {
+func (th *ToolIntegrationJSHarness) ToolRun(t *testing.T, engine mocks.ToolEngine, toolContext tool_goja.ToolContext) error {
 	t.Helper()
 
 	th.callMu.Lock()
 	defer th.callMu.Unlock()
 
-	_, err := th.callFunction(t, th.binding.Run, engine, toolContext)
+	_, err := th.callAwaitFunction(t, th.binding.Run, engine, toolContext)
 	return err
 }
 
 // ToolReformat calls the tool's reformat method, supplying the provided tool
 // engine and tool context as arguments. It returns any exception that may have
 // been thrown.
-func (th *ToolIntegrationJSHarness) ToolReformat(t *testing.T, engine ToolEngine, toolContext tool_goja.ToolContext) error {
+func (th *ToolIntegrationJSHarness) ToolReformat(t *testing.T, engine mocks.ToolEngine, toolContext tool_goja.ToolContext) error {
 	t.Helper()
 
 	th.callMu.Lock()
 	defer th.callMu.Unlock()
 
-	_, err := th.callFunction(t, th.binding.Reformat, engine, toolContext)
+	_, err := th.callAwaitFunction(t, th.binding.Reformat, engine, toolContext)
 	return err
 }
 
 // ToolStop calls the tool's stop method, supplying the provided tool engine
 // and tool context as arguments. It returns any exception that may have
 // been thrown.
-func (th *ToolIntegrationJSHarness) ToolStop(t *testing.T, engine ToolEngine, toolContext tool_goja.ToolContext) error {
+func (th *ToolIntegrationJSHarness) ToolStop(t *testing.T, engine mocks.ToolEngine, toolContext tool_goja.ToolContext) error {
 	t.Helper()
 
 	th.callMu.Lock()
 	defer th.callMu.Unlock()
 
-	_, err := th.callFunction(t, th.binding.OnStop, engine, toolContext)
+	_, err := th.callAwaitFunction(t, th.binding.OnStop, engine, toolContext)
 	return err
 }
 
 // ToolCancel calls the tool's cancel method, supplying the provided tool
 // engine and tool context as arguments. It returns any exception that may
 // have been thrown.
-func (th *ToolIntegrationJSHarness) ToolCancel(t *testing.T, engine ToolEngine, toolContext tool_goja.ToolContext) error {
+func (th *ToolIntegrationJSHarness) ToolCancel(t *testing.T, engine mocks.ToolEngine, toolContext tool_goja.ToolContext) error {
 	t.Helper()
 
 	th.callMu.Lock()
 	defer th.callMu.Unlock()
 
-	_, err := th.callFunction(t, th.binding.OnCancel, engine, toolContext)
+	_, err := th.callAwaitFunction(t, th.binding.OnCancel, engine, toolContext)
 	return err
 }
 

@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 dir: "mocks"
-filename: "{{.InterfaceNameCamel}}.go"
-mockname: "{{.InterfaceNameCamel}}"
-outpkg: "mocks"
+filename: "{{.StructName}}.go"
+structname: "{{ .InterfaceName | camelcase | firstUpper }}"
+pkgname: "mocks"
+template: "testify"
+template-data:
+  unroll-variadic: true
+include-auto-generated: true
 packages:
   github.com/Arm-Debug/apap-cli/clients/go/apapproto:
     interfaces:

@@ -5,8 +5,6 @@
 
 """Pre-record a Performix run artifact for one testcase."""
 
-from __future__ import annotations
-
 import argparse
 import json
 import posixpath
@@ -17,13 +15,16 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 sys.path.append(str(Path(__file__).resolve().parent))
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from recipe_support import sampled_source_weight, source_files_query
+from modifications.modify_asct_core_to_core_latency import create_core_to_core_latency_asymmetry_run
+from modifications.modify_asct_low_peak_bandwidth import create_low_peak_bandwidth_run
+from recipe_support import PRERECORD_MODES, sampled_source_weight, source_files_query
 from run_export_helper import (
     CommandFailure,
     export_run,
@@ -32,6 +33,71 @@ from run_export_helper import (
     run_cli,
     sha256_file,
 )
+
+
+@dataclass(frozen=True)
+class Launch:
+    command: str
+
+
+@dataclass(frozen=True)
+class AttachToPID:
+    pid: int
+
+
+@dataclass(frozen=True)
+class SystemWide:
+    pass
+
+
+ProfilingTarget = Launch | AttachToPID | SystemWide
+
+
+RUN_MODIFICATIONS = {
+    "core_to_core_latency_asymmetry": {
+        "recipe": "asct",
+        "handler": create_core_to_core_latency_asymmetry_run,
+    },
+    "low_peak_bandwidth": {
+        "recipe": "asct",
+        "handler": create_low_peak_bandwidth_run,
+    }
+}
+
+
+def run_modification_from_config(config: dict[str, Any], recipe: str) -> str | None:
+    """Validate and return the resolved prerecord run modification."""
+
+    name = config.get("run_modification")
+    if name is None:
+        return None
+    if not isinstance(name, str):
+        raise ValueError("prerecord run_modification must be a string")
+
+    specification = RUN_MODIFICATIONS.get(name)
+    if specification is None:
+        raise ValueError(f"unsupported run modification: {name!r}")
+    if recipe != specification["recipe"]:
+        raise ValueError(
+            f"run modification {name!r} requires recipe "
+            f"{specification['recipe']!r}, not {recipe!r}"
+        )
+    return name
+
+
+def materialize_run_artifact(
+    source: Path,
+    destination: Path,
+    modification: str | None,
+) -> None:
+    """Create the final run archive."""
+
+    if modification is None:
+        destination.with_name("run-modification-report.json").unlink(missing_ok=True)
+        shutil.copy2(source, destination)
+        return
+
+    RUN_MODIFICATIONS[modification]["handler"](source, destination)
 
 
 def render_run(cli_bin: Path, run_id: str) -> str:
@@ -223,13 +289,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cli-bin", required=True, type=Path)
     parser.add_argument("--target", required=True)
     parser.add_argument("--recipe", required=True)
-    profile_target = parser.add_mutually_exclusive_group(required=True)
+    profile_target = parser.add_mutually_exclusive_group()
     profile_target.add_argument("--workload-cmd")
     profile_target.add_argument("--pid", type=int)
     parser.add_argument("--timeout")
     parser.add_argument(
         "--prerecord",
-        default="",
+        required=True,
         help="Resolved prerecord configuration as a JSON object.",
     )
     parser.add_argument("--params-json", default="[]")
@@ -262,11 +328,9 @@ def parse_recipe_params(raw_params: str) -> list[str]:
     return params
 
 
-def parse_prerecord_config(raw_config: str, pid: int | None) -> dict[str, Any]:
+def parse_prerecord_config(raw_config: str) -> dict[str, Any]:
     """Parse and validate one testcase's prerecord configuration."""
 
-    if not raw_config:
-        return {"mode": "attach" if pid is not None else "launch"}
     try:
         config = json.loads(raw_config)
     except json.JSONDecodeError as exc:
@@ -274,8 +338,8 @@ def parse_prerecord_config(raw_config: str, pid: int | None) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError("prerecord configuration must be an object")
 
-    mode = config.get("mode", "launch")
-    if mode not in ("launch", "attach"):
+    mode = config.get("mode")
+    if not isinstance(mode, str) or mode not in PRERECORD_MODES:
         raise ValueError(f"unsupported prerecord mode: {mode}")
     config["mode"] = mode
 
@@ -296,8 +360,8 @@ def parse_prerecord_config(raw_config: str, pid: int | None) -> dict[str, Any]:
             or not all(isinstance(part, str) and part for part in command)
         ):
             raise ValueError(f"prerecord {name} must be a command array")
-    if mode == "attach" and pid is None and setup is None:
-        raise ValueError("attach prerecord requires setup and cleanup commands")
+    if mode == "system-wide" and setup is not None:
+        raise ValueError("system-wide prerecord cannot use setup or cleanup lifecycle commands")
     return config
 
 
@@ -341,23 +405,29 @@ def attach_pid_from_setup(output: str) -> int:
     return int(matches[-1])
 
 
+def profiling_target_args(profiling_target: ProfilingTarget) -> list[str]:
+    """Return CLI arguments for one profiling target."""
+
+    if isinstance(profiling_target, Launch):
+        return ["--workload", profiling_target.command]
+    if isinstance(profiling_target, AttachToPID):
+        return ["--pid", str(profiling_target.pid)]
+    if isinstance(profiling_target, SystemWide):
+        return ["--system-wide"]
+    raise TypeError(f"unsupported profiling target: {profiling_target!r}")
+
+
 def build_recipe_ready_command(
     cli_bin: Path,
     recipe: str,
     target: str,
-    workload_cmd: str | None,
-    pid: int | None,
+    profiling_target: ProfilingTarget,
     recipe_params: list[str],
 ) -> list[str]:
-    """Build the readiness command for a launch or attach workload."""
+    """Build the readiness command for one profiling target."""
 
-    if (workload_cmd is None) == (pid is None):
-        raise ValueError("exactly one of workload_cmd or pid is required")
     cmd = [str(cli_bin), "recipe", "ready", recipe]
-    if workload_cmd is not None:
-        cmd.extend(["--workload", workload_cmd])
-    else:
-        cmd.extend(["--pid", str(pid)])
+    cmd.extend(profiling_target_args(profiling_target))
     cmd.extend(["--target", target])
     for param in recipe_params:
         cmd.extend(["--param", param])
@@ -368,21 +438,14 @@ def build_recipe_run_command(
     cli_bin: Path,
     recipe: str,
     target: str,
-    workload_cmd: str | None,
-    pid: int | None,
+    profiling_target: ProfilingTarget,
     timeout: str | None,
     recipe_params: list[str],
 ) -> list[str]:
-    """Build a launch- or attach-mode recipe command."""
-
-    if (workload_cmd is None) == (pid is None):
-        raise ValueError("exactly one of workload_cmd or pid is required")
+    """Build a recipe command for one profiling target."""
 
     cmd = [str(cli_bin), "recipe", "run", recipe]
-    if workload_cmd is not None:
-        cmd.extend(["--workload", workload_cmd])
-    else:
-        cmd.extend(["--pid", str(pid)])
+    cmd.extend(profiling_target_args(profiling_target))
     cmd.extend(["--target", target, "--deploy-tools"])
     if timeout:
         cmd.extend(["--timeout", timeout])
@@ -399,7 +462,8 @@ def main() -> int:
     output_dir = args.output_dir.expanduser().resolve()
     try:
         recipe_params = parse_recipe_params(args.params_json) + list(args.param)
-        prerecord = parse_prerecord_config(args.prerecord, args.pid)
+        prerecord = parse_prerecord_config(args.prerecord)
+        run_modification = run_modification_from_config(prerecord, args.recipe)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -414,6 +478,19 @@ def main() -> int:
         return 1
     setup = prerecord.get("setup")
     cleanup = prerecord.get("cleanup")
+    profile_mode = prerecord["mode"]
+    if profile_mode == "launch" and args.workload_cmd is None:
+        print("error: launch prerecord requires --workload-cmd", file=sys.stderr)
+        return 1
+    if profile_mode == "attach" and args.workload_cmd is not None:
+        print("error: attach prerecord cannot use --workload-cmd", file=sys.stderr)
+        return 1
+    if profile_mode == "attach" and args.pid is None and setup is None:
+        print("error: attach prerecord requires --pid or setup and cleanup commands", file=sys.stderr)
+        return 1
+    if profile_mode == "system-wide" and (args.workload_cmd is not None or args.pid is not None):
+        print("error: system-wide prerecord does not accept --workload-cmd or --pid", file=sys.stderr)
+        return 1
     if setup is not None:
         if not args.ssh_target or args.ssh_key is None or args.target_workload_root is None:
             print(
@@ -429,13 +506,6 @@ def main() -> int:
     else:
         ssh_key = None
 
-    profile_mode = prerecord["mode"]
-    workload_cmd = args.workload_cmd
-    pid = args.pid
-    if profile_mode == "launch" and pid is not None:
-        print("error: launch prerecord cannot use --pid", file=sys.stderr)
-        return 1
-
     setup_started = False
     try:
         if setup is not None:
@@ -447,16 +517,19 @@ def main() -> int:
                 args.target_workload_root,
                 check=True,
             )
-            if profile_mode == "attach":
-                pid = attach_pid_from_setup(setup_process.stdout)
-                workload_cmd = None
+        if profile_mode == "launch":
+            profiling_target: ProfilingTarget = Launch(args.workload_cmd)
+        elif profile_mode == "attach":
+            pid = attach_pid_from_setup(setup_process.stdout) if setup is not None else args.pid
+            profiling_target = AttachToPID(pid)
+        else:
+            profiling_target = SystemWide()
 
         ready_cmd = build_recipe_ready_command(
             cli_bin,
             args.recipe,
             args.target,
-            workload_cmd,
-            pid,
+            profiling_target,
             recipe_params,
         )
         run_cli(ready_cmd, cli_bin.parent)
@@ -465,8 +538,7 @@ def main() -> int:
             cli_bin,
             args.recipe,
             args.target,
-            workload_cmd,
-            pid,
+            profiling_target,
             str(timeout) if timeout is not None else None,
             recipe_params,
         )
@@ -501,16 +573,19 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="ai-insights-export-") as tmp:
         exported = export_run(cli_bin, run_id, Path(tmp))
         latest = case_dir / "latest.zip"
-        shutil.copy2(exported, latest)
+        materialize_run_artifact(exported, latest, run_modification)
 
     metadata = {
         "testcase_id": args.case,
         "recipe": args.recipe,
         "target": args.target,
         "profile_mode": profile_mode,
-        "workload_command": workload_cmd,
-        "pid": pid,
+        "workload_command": (
+            profiling_target.command if isinstance(profiling_target, Launch) else None
+        ),
+        "pid": profiling_target.pid if isinstance(profiling_target, AttachToPID) else None,
         "recipe_params": recipe_params,
+        "run_modification": run_modification,
         "run_id": run_id,
         "cli_version": get_cli_version(cli_bin),
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),

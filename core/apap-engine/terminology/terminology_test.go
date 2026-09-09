@@ -25,7 +25,8 @@ func TestSetNames(t *testing.T) {
 			"PRODUCT_BINARY_NAME": "bin-name",
 			"AGENT_BINARY_NAME": "agent-bin-name",
 			"DAEMON_DIR_NAME": "daemon-dir",
-			"ENV_VAR_PREFIX": "ENV_VAR"
+			"ENV_VAR_PREFIX": "ENV_VAR",
+			"MCP_SERVER_NAME": "mcp-name"
 		}`)
 		setTerms()
 
@@ -34,6 +35,7 @@ func TestSetNames(t *testing.T) {
 		assert.Equal(t, "agent-bin-name", GetAgentBinaryName())
 		assert.Equal(t, "daemon-dir", GetDaemonDirName())
 		assert.Equal(t, "ENV_VAR", GetEnvVarPrefix())
+		assert.Equal(t, "mcp-name", GetMCPServerName())
 	})
 }
 
@@ -45,5 +47,6 @@ func TestTerminologyJSON(t *testing.T) {
 		assert.NotEmpty(t, GetAgentBinaryName(), "AGENT_BINARY_NAME is not defined in terminology.json")
 		assert.NotEmpty(t, GetDaemonDirName(), "DAEMON_DIR_NAME is not defined in terminology.json")
 		assert.NotEmpty(t, GetEnvVarPrefix(), "ENV_VAR_PREFIX is not defined in terminology.json")
+		assert.NotEmpty(t, GetMCPServerName(), "MCP_SERVER_NAME is not defined in terminology.json")
 	})
 }

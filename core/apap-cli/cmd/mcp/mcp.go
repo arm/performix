@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: Apache-2.0
 
+// This file defines the MCP command group and its long-lived server command.
+// Client-management commands live in neighbouring files named after each
+// command.
 package mcp
 
 import (
@@ -21,6 +24,10 @@ import (
 var RootCmd = newMCPCommand()
 
 func newMCPCommand() *cobra.Command {
+	return newMCPCommandWithClients(defaultMCPClientDependencies())
+}
+
+func newMCPCommandWithClients(registration mcpClientDependencies) *cobra.Command {
 	mcpCmd := &cobra.Command{
 		Use:   "mcp",
 		Short: fmt.Sprintf("Set up the %v MCP server.", terminology.GetProductFullName()),
@@ -34,7 +41,13 @@ func newMCPCommand() *cobra.Command {
 		},
 	}
 
-	mcpCmd.AddCommand(newMCPStartCmd(defaultMCPRunner()))
+	mcpCmd.AddCommand(
+		newMCPStartCmd(defaultMCPRunner()),
+		newMCPDoctorCmd(registration),
+		newMCPInstallCmd(registration),
+		newMCPStatusCmd(registration),
+		newMCPUninstallCmd(registration),
+	)
 	return mcpCmd
 }
 

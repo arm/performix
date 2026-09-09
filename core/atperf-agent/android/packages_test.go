@@ -43,6 +43,20 @@ com.example.other/.LauncherActivity
 	}, parseMainActivityComponentsByPackage(output))
 }
 
+func TestParseDebuggablePackages(t *testing.T) {
+	output := `
+Package [com.example.debuggable] (abc):
+  flags=[ DEBUGGABLE HAS_CODE ALLOW_BACKUP ]
+Package [com.example.release] (def):
+  flags=[ HAS_CODE ALLOW_BACKUP ]
+`
+
+	assert.Equal(t, map[string]bool{
+		"com.example.debuggable": true,
+		"com.example.release":    false,
+	}, parseDebuggablePackages(output))
+}
+
 func TestParseComponentName(t *testing.T) {
 	tests := map[string]struct {
 		component   string
@@ -98,6 +112,13 @@ com.example.beta/.LauncherActivity
 com.example.beta/.SettingsActivity
 com.android.settings/.Settings
 `}, nil).Once()
+	pm.On("ExecCommand", &process.LaunchCommand{Command: []string{"sh", "-c", packageDetailsCommand}}).
+		Return(&process.CommandResult{Rc: 0, Stdout: `
+Package [com.example.alpha] (abc):
+  flags=[ DEBUGGABLE HAS_CODE ]
+Package [com.example.beta] (def):
+  flags=[ HAS_CODE ]
+`}, nil).Once()
 
 	resp, err := ListPackages(pm)
 
@@ -107,6 +128,7 @@ com.android.settings/.Settings
 			{
 				Name:       "com.example.alpha",
 				Activities: []*targetagentproto.AndroidActivity{{Name: "com.example.alpha.MainActivity"}},
+				Debuggable: boolPointer(true),
 			},
 			{
 				Name: "com.example.beta",
@@ -114,6 +136,7 @@ com.android.settings/.Settings
 					{Name: "com.example.beta.LauncherActivity"},
 					{Name: "com.example.beta.SettingsActivity"},
 				},
+				Debuggable: boolPointer(false),
 			},
 		},
 	}, resp)
@@ -146,4 +169,8 @@ func TestListPackagesReturnsResolverCommandError(t *testing.T) {
 	require.Nil(t, resp)
 	require.ErrorIs(t, err, expectedErr)
 	pm.AssertExpectations(t)
+}
+
+func boolPointer(value bool) *bool {
+	return &value
 }

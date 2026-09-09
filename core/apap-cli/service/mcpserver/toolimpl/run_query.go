@@ -37,8 +37,9 @@ var errRunQueryRowsTooLarge = errors.New("serialized response exceeds the size l
 type RunQueryTool struct{}
 
 type runQueryInput struct {
-	RunID string `json:"run_id"`
-	SQL   string `json:"sql"`
+	RunID                 string `json:"run_id"`
+	SQL                   string `json:"sql"`
+	IncludeResolvedTables bool   `json:"include_resolved_tables,omitempty"`
 }
 
 var runQueryInputSchema = &jsonschema.Schema{
@@ -53,6 +54,11 @@ var runQueryInputSchema = &jsonschema.Schema{
 			Type:        "string",
 			Description: "One DuckDB SELECT statement to execute against the run's rendered data.",
 		},
+		"include_resolved_tables": {
+			Type:        "boolean",
+			Default:     json.RawMessage("false"),
+			Description: "Whether to include resolved_tables, which maps visualization IDs and named data sources to rendered table names. Leave it disabled when that mapping is not needed to reduce response size.",
+		},
 	},
 }
 
@@ -60,11 +66,14 @@ type runQueryColumn struct {
 	Name string `json:"name"`
 }
 
+type runQueryResolvedTables map[string]map[string][]string
+
 type runQueryResult struct {
-	Columns          []runQueryColumn `json:"columns"`
-	Rows             [][]any          `json:"rows"`
-	ReturnedRowCount int              `json:"returned_row_count"`
-	Error            *toolError       `json:"error,omitempty"`
+	Columns          []runQueryColumn        `json:"columns"`
+	Rows             [][]any                 `json:"rows"`
+	ReturnedRowCount int                     `json:"returned_row_count"`
+	ResolvedTables   *runQueryResolvedTables `json:"resolved_tables,omitempty"`
+	Error            *toolError              `json:"error,omitempty"`
 }
 
 var runQueryOutputSchema = &jsonschema.Schema{
@@ -94,6 +103,17 @@ var runQueryOutputSchema = &jsonschema.Schema{
 			Type:        "integer",
 			Description: "Number of rows returned by the query.",
 		},
+		"resolved_tables": {
+			Type:        "object",
+			Description: "Mapping from visualization IDs and named data sources to rendered table names. Present only when include_resolved_tables is true.",
+			AdditionalProperties: &jsonschema.Schema{
+				Type: "object",
+				AdditionalProperties: &jsonschema.Schema{
+					Type:  "array",
+					Items: &jsonschema.Schema{Type: "string"},
+				},
+			},
+		},
 		"error": toolErrorSchema(),
 	},
 }
@@ -104,6 +124,8 @@ func (RunQueryTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 		Description: "Runs one DuckDB SELECT statement against an existing Performix run. " +
 			"Use this advanced tool when recipe guidance calls for raw run analysis. Each call creates and closes a render, " +
 			"so prefer a small number of selective aggregate queries and use predicates or LIMIT to control result size. " +
+			"Set include_resolved_tables to true to return resolved_tables, which maps visualization IDs and named data sources to rendered table names; " +
+			"leave it disabled when that mapping is not needed to reduce response size. " +
 			fmt.Sprintf("Query results larger than %d MiB are rejected.", runQueryMaxResultMiB),
 		Annotations:  &mcp.ToolAnnotations{ReadOnlyHint: true},
 		InputSchema:  runQueryInputSchema,
@@ -184,6 +206,10 @@ func executeRunQuery(ctx context.Context, engine apapproto.ApapClient, input run
 	if run.AnyRendererPending(invoked) {
 		return result, fmt.Errorf("render remained pending: %s", strings.Join(run.ListPendingRenderersForDisplay(params, invoked), "; "))
 	}
+	if input.IncludeResolvedTables {
+		resolvedTables := runQueryResolvedTablesFromProto(invoked.GetVisualizationResolvedTables())
+		result.ResolvedTables = &resolvedTables
+	}
 
 	queryCtx, cancelQuery := context.WithCancel(ctx)
 	defer cancelQuery()
@@ -238,6 +264,18 @@ func executeRunQuery(ctx context.Context, engine apapproto.ApapClient, input run
 		return result, runQueryResultTooLargeError(err)
 	}
 	return result, nil
+}
+
+func runQueryResolvedTablesFromProto(list *apapproto.VisualizationResolvedTablesList) runQueryResolvedTables {
+	resolved := runQueryResolvedTables{}
+	for _, entry := range list.GetEntries() {
+		dataSources := map[string][]string{}
+		for name, tables := range entry.GetTables() {
+			dataSources[name] = append([]string{}, tables.GetValues()...)
+		}
+		resolved[entry.GetId().GetValue()] = dataSources
+	}
+	return resolved
 }
 
 func runQueryResultTooLargeError(cause error) error {

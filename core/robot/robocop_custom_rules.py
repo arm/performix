@@ -9,7 +9,7 @@ import re
 
 from robot.api import Token
 from robot.parsing.model.blocks import Keyword, SettingSection, TestCase, VariableSection
-from robot.parsing.model.statements import KeywordCall
+from robot.parsing.model.statements import KeywordCall, TemplateArguments
 
 from robocop.linter.rules import Rule, RuleSeverity, VisitorChecker
 
@@ -135,6 +135,12 @@ class PerformixBddChecker(VisitorChecker):
         super().__init__()
 
     def visit_TestCase(self, node: TestCase) -> None:  # noqa: N802
+        # Template-driven tests contain data rows rather than keyword calls.
+        # The shared template keyword contains the test behaviour.
+        if any(isinstance(statement, TemplateArguments) for statement in node.body):
+            self.generic_visit(node)
+            return
+
         bdd_steps: list[str] = []
         previous_bdd_step: str | None = None
 

@@ -39,6 +39,7 @@ import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 import requests
@@ -50,7 +51,7 @@ from performance_quality import (
     performance_thresholds_from_manifest,
     recorded_performance_properties,
 )
-from recipe_support import requires_source_archive, resolve_recipe
+from recipe_support import PRERECORD_MODES, requires_source_archive, resolve_prerecord_config, resolve_recipe
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -284,6 +285,7 @@ def _selected_testcases_from_nodeids(config, nodeids) -> list[dict[str, str]]:
             manifest_by_id[test_id] = {
                 **test_case,
                 "recipe": resolve_recipe(test_case, defaults),
+                "prerecord": resolve_prerecord_config(test_case, defaults),
             }
 
     # xdist gives the controller node IDs, not pytest Items. Match the
@@ -408,6 +410,7 @@ def _download_missing_run_artifacts(
     for test_case in testcases:
         test_id = test_case["id"]
         archive = prerecorded_run_cache / test_case["run_artifact"]
+        artifact_dir = Path(test_case["run_artifact"]).parent.as_posix()
         source_archive = archive.parent / "test_src.zip"
         needs_source = _requires_source_archive(test_case)
         missing_files = []
@@ -428,7 +431,7 @@ def _download_missing_run_artifacts(
         if not archive.is_file():
             _download_artifactory_input(
                 artifactory_run_base,
-                test_id,
+                artifact_dir,
                 "latest.zip",
                 archive.parent,
                 "latest.zip",
@@ -436,7 +439,7 @@ def _download_missing_run_artifacts(
         if needs_source and not source_archive.is_file():
             _download_artifactory_input(
                 artifactory_run_base,
-                test_id,
+                artifact_dir,
                 "test_src.zip",
                 archive.parent,
                 "test_src.zip",
@@ -444,7 +447,7 @@ def _download_missing_run_artifacts(
         if not metadata.is_file():
             if not _download_artifactory_input(
                 artifactory_run_base,
-                test_id,
+                artifact_dir,
                 "latest.metadata.json",
                 archive.parent,
                 "metadata.json",
@@ -452,7 +455,7 @@ def _download_missing_run_artifacts(
             ):
                 _download_artifactory_input(
                     artifactory_run_base,
-                    test_id,
+                    artifact_dir,
                     "metadata.json",
                     archive.parent,
                     "metadata.json",
@@ -529,16 +532,39 @@ def _validate_prerecorded_metadata(
                 f"manifest={test_case.get('recipe_params', [])!r}, "
                 f"metadata={metadata.get('recipe_params', [])!r}"
             )
+        expected_run_modification = test_case.get("run_modification")
+        recorded_run_modification = metadata.get("run_modification")
+        if recorded_run_modification != expected_run_modification:
+            raise pytest.UsageError(
+                f"Pre-recorded run modification mismatch for {test_case['id']}: "
+                f"manifest={expected_run_modification or '<missing>'!r}, "
+                f"metadata={recorded_run_modification or '<missing>'!r}"
+            )
+        try:
+            expected_mode = resolve_prerecord_config(test_case)["mode"]
+        except ValueError as exc:
+            raise pytest.UsageError(f"Invalid testcase profile mode: {exc}") from exc
+        recorded_mode = metadata.get("profile_mode", "launch")
+        if not isinstance(recorded_mode, str) or recorded_mode not in PRERECORD_MODES:
+            raise pytest.UsageError(
+                f"Invalid pre-recorded profile mode for {test_case['id']}: "
+                f"metadata profile_mode={recorded_mode!r}"
+            )
+        if recorded_mode != expected_mode:
+            raise pytest.UsageError(
+                f"Pre-recorded profile mode mismatch for {test_case['id']}: "
+                f"manifest={expected_mode!r}, metadata={recorded_mode!r}"
+            )
 
 
-def _requires_source_archive(test_case: dict[str, str]) -> bool:
+def _requires_source_archive(test_case: dict[str, Any]) -> bool:
     """Return source-archive requirement or raise a usage error with testcase context."""
 
     try:
         return requires_source_archive(test_case["recipe"], test_case.get("recipe_params"))
     except ValueError as exc:
         raise pytest.UsageError(
-            f"Invalid recipe_params for {test_case['id']}: {exc}"
+            f"Invalid testcase configuration for {test_case['id']}: {exc}"
         ) from exc
 
 

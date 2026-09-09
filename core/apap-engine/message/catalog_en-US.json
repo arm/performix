@@ -7,11 +7,215 @@
   "cli": {
     "cmd": {
       "common": {
+        "DETAILS_HEADING": {
+          "Severity": "Info",
+          "Message": "Details:"
+        },
         "JSON_MARSHAL_FAILED": {
           "Severity": "Error",
           "Message": "Failed to marshal response to JSON.",
           "Explanation": "{$PRODUCT_FULL_NAME} cannot serialize the command output into JSON format.",
           "Advice": "Run the command without the `--json` flag to view the plain text output. If the issue continues when using the `--json` flag, contact Arm support."
+        }
+      },
+      "mcp": {
+        "common": {
+          "CLIENT_AND_ALL": {
+            "Severity": "Error",
+            "Message": "An MCP client and `--all` cannot be specified together.",
+            "Explanation": "The command can operate on one named MCP client or all available clients, but not both.",
+            "Advice": "Remove the client identifier or the `--all` flag, then try again."
+          },
+          "ERROR_CODE_DETAIL": {
+            "Severity": "Info",
+            "Message": "Error code: {code}"
+          },
+          "TECHNICAL_DETAIL": {
+            "Severity": "Info",
+            "Message": "Detail: {detail}"
+          }
+        },
+        "install": {
+          "NONE_AVAILABLE": {
+            "Severity": "Info",
+            "Message": "No MCP clients are available for installation."
+          },
+          "DETECTION_PROGRESS": {
+            "Severity": "Info",
+            "Message": "Detecting available MCP clients..."
+          },
+          "PROGRESS": {
+            "Severity": "Info",
+            "Message": "Adding {$PRODUCT_FULL_NAME} MCP to {client}"
+          }
+        },
+        "uninstall": {
+          "NONE_AVAILABLE": {
+            "Severity": "Info",
+            "Message": "No MCP clients are available for removal."
+          },
+          "DETECTION_PROGRESS": {
+            "Severity": "Info",
+            "Message": "Detecting configured MCP clients..."
+          },
+          "PROGRESS": {
+            "Severity": "Info",
+            "Message": "Removing {$PRODUCT_FULL_NAME} MCP from {client}"
+          }
+        },
+        "status": {
+          "DETECTED_HEADING": {
+            "Severity": "Info",
+            "Message": "Detected MCP clients:"
+          },
+          "PROGRESS": {
+            "Severity": "Info",
+            "Message": "Detecting MCP clients..."
+          },
+          "CLIENT_COLUMN": {
+            "Severity": "Info",
+            "Message": "CLIENT"
+          },
+          "CLIENT_FIELD": {
+            "Severity": "Info",
+            "Message": "Client:\t{value}"
+          },
+          "CLIENT_ID_FIELD": {
+            "Severity": "Info",
+            "Message": "Client ID:\t{value}"
+          },
+          "DETECTED_FIELD": {
+            "Severity": "Info",
+            "Message": "Detected:\t{value}"
+          },
+          "EXECUTABLE_FIELD": {
+            "Severity": "Info",
+            "Message": "Executable:\t{path}"
+          },
+          "CONFIGURATION_FIELD": {
+            "Severity": "Info",
+            "Message": "Configuration file:\t{path} (auto-detected)"
+          },
+          "REGISTRATION_FIELD": {
+            "Severity": "Info",
+            "Message": "{$PRODUCT_FULL_NAME} MCP status:\t{marker} {state}"
+          },
+          "STATE_CONFIGURED": {
+            "Severity": "Info",
+            "Message": "configured"
+          },
+          "STATE_NOT_CONFIGURED": {
+            "Severity": "Info",
+            "Message": "not configured"
+          },
+          "STATE_CONFLICT": {
+            "Severity": "Info",
+            "Message": "conflict"
+          },
+          "STATE_UNREADABLE": {
+            "Severity": "Info",
+            "Message": "unreadable"
+          },
+          "STATE_UNKNOWN": {
+            "Severity": "Info",
+            "Message": "unknown"
+          },
+          "JSON_PARSE_DETAIL": {
+            "Severity": "Info",
+            "Message": "Could not parse JSON: {detail}"
+          },
+          "UNDETECTED_HEADING": {
+            "Severity": "Info",
+            "Message": "Supported MCP clients not detected:"
+          },
+          "SETUP_HINT": {
+            "Severity": "Info",
+            "Message": "Run \"apx mcp doctor <client>\" for setup instructions."
+          },
+          "DIAGNOSE": {
+            "Severity": "Info",
+            "Message": "{state} - run \"apx mcp doctor {client}\" to diagnose"
+          }
+        },
+        "doctor": {
+          "HEADING": {
+            "Severity": "Info",
+            "Message": "Checking {client} MCP setup..."
+          },
+          "CLIENT_DETECTED": {
+            "Severity": "Info",
+            "Message": "MCP client: {client} was detected."
+          },
+          "CLIENT_NOT_DETECTED": {
+            "Severity": "Info",
+            "Message": "MCP client: {client} was not detected."
+          },
+          "CHECKED": {
+            "Severity": "Info",
+            "Message": "Checked:"
+          },
+          "EXECUTABLE_DETAIL": {
+            "Severity": "Info",
+            "Message": "Executable: {path}"
+          },
+          "CONFIGURATION_DETAIL": {
+            "Severity": "Info",
+            "Message": "Configuration file: {path} (auto-detected)"
+          },
+          "ERROR_CONTEXT": {
+            "Severity": "Info",
+            "Message": "Error: {message}"
+          },
+          "EXPLANATION_CONTEXT": {
+            "Severity": "Info",
+            "Message": "Explanation: {explanation}"
+          },
+          "PATH_COMMAND": {
+            "Severity": "Info",
+            "Message": "{command} on PATH"
+          },
+          "INSTALL_CLIENT": {
+            "Severity": "Info",
+            "Message": "Install {client} in one of the locations above."
+          },
+          "MCP_CONFIGURED": {
+            "Severity": "Info",
+            "Message": "{$PRODUCT_FULL_NAME} MCP: configured."
+          },
+          "MCP_NOT_CONFIGURED": {
+            "Severity": "Info",
+            "Message": "{$PRODUCT_FULL_NAME} MCP: not configured."
+          },
+          "MCP_CONFLICT": {
+            "Severity": "Info",
+            "Message": "{$PRODUCT_FULL_NAME} MCP: the existing configuration conflicts with this installation."
+          },
+          "MCP_UNREADABLE": {
+            "Severity": "Info",
+            "Message": "{$PRODUCT_FULL_NAME} MCP: the client configuration could not be read."
+          },
+          "MCP_UNKNOWN": {
+            "Severity": "Info",
+            "Message": "{$PRODUCT_FULL_NAME} MCP: status could not be determined."
+          },
+          "NEXT_STEP": {
+            "Severity": "Info",
+            "Message": "Next step:"
+          },
+          "READY": {
+            "Severity": "Info",
+            "Message": "{client} is ready to use {$PRODUCT_FULL_NAME} MCP."
+          },
+          "NOT_READY": {
+            "Severity": "Info",
+            "Message": "{client} is not ready to use {$PRODUCT_FULL_NAME} MCP."
+          },
+          "FAILED": {
+            "Severity": "Error",
+            "Message": "{client} is not ready to use {$PRODUCT_FULL_NAME} MCP.",
+            "Explanation": "One or more required MCP setup checks failed.",
+            "Advice": "Follow the next step shown for each failed check, then run `apx mcp doctor {clientId}` again."
+          }
         }
       },
       "recipe": {
@@ -655,6 +859,76 @@
     }
   },
   "engine": {
+    "mcp_registration": {
+      "CLIENT_UNKNOWN": {
+        "Severity": "Error",
+        "Message": "The MCP client `{client}` is not supported.",
+        "Explanation": "The requested client identifier is not in the list of MCP clients supported by this version of {$PRODUCT_FULL_NAME}.",
+        "Advice": "Run `apx mcp status` to list the supported MCP clients."
+      },
+      "CLIENT_UNAVAILABLE": {
+        "Severity": "Error",
+        "Message": "The MCP client `{client}` was not detected.",
+        "Explanation": "{$PRODUCT_FULL_NAME} cannot find the client application or management command required by this client.",
+        "Advice": "Install the MCP client in a standard location, then run `apx mcp doctor {client}` to see the locations checked."
+      },
+      "CONFIG_CONFLICT": {
+        "Severity": "Error",
+        "Message": "The MCP client `{client}` already has a different `{$MCP_SERVER_NAME}` server configuration.",
+        "Explanation": "{$PRODUCT_FULL_NAME} does not overwrite or remove an existing server configuration that it cannot identify as the current {$PRODUCT_FULL_NAME} MCP server.",
+        "Advice": "Review the client's MCP configuration and remove or rename the existing `{$MCP_SERVER_NAME}` entry before trying again."
+      },
+      "CONFIG_COMMAND_MISMATCH": {
+        "Severity": "Error",
+        "Message": "The configured MCP command is `{actual}`; expected `{expected}`.",
+        "Explanation": "The existing `{$MCP_SERVER_NAME}` entry starts a different command.",
+        "Advice": "Update the MCP command or remove the entry before installing {$PRODUCT_FULL_NAME} MCP."
+      },
+      "CONFIG_ARGUMENTS_MISMATCH": {
+        "Severity": "Error",
+        "Message": "The configured MCP arguments are `{actual}`; expected `{expected}`.",
+        "Explanation": "The existing `{$MCP_SERVER_NAME}` entry passes different arguments.",
+        "Advice": "Update the MCP arguments or remove the entry before installing {$PRODUCT_FULL_NAME} MCP."
+      },
+      "CONFIG_TRANSPORT_MISMATCH": {
+        "Severity": "Error",
+        "Message": "The configured MCP transport is `{actual}`; expected `{expected}`.",
+        "Explanation": "The existing `{$MCP_SERVER_NAME}` entry uses a different transport.",
+        "Advice": "Update the MCP transport or remove the entry before installing {$PRODUCT_FULL_NAME} MCP."
+      },
+      "CONFIG_ENVIRONMENT_MISMATCH": {
+        "Severity": "Error",
+        "Message": "The configured MCP environment variable names are `{actual}`; expected `{expected}`.",
+        "Explanation": "The existing `{$MCP_SERVER_NAME}` entry has different environment variables. Variable values are not displayed.",
+        "Advice": "Update the MCP environment or remove the entry before installing {$PRODUCT_FULL_NAME} MCP."
+      },
+      "CONFIG_READ_FAILED": {
+        "Severity": "Error",
+        "Message": "{$PRODUCT_FULL_NAME} cannot read the MCP configuration for `{client}`.",
+        "Explanation": "The client configuration is inaccessible or is not valid for the expected configuration format.",
+        "Advice": "Check the client configuration file and its permissions, then try again."
+      },
+      "CONFIG_WRITE_FAILED": {
+        "Severity": "Error",
+        "Message": "{$PRODUCT_FULL_NAME} cannot update the MCP configuration for `{client}`.",
+        "Explanation": "The client configuration could not be updated without changing unrelated server entries.",
+        "Advice": "Check the client configuration file and its permissions, then try again."
+      },
+      "CLIENT_COMMAND_FAILED": {
+        "Severity": "Error",
+        "Message": "The MCP client `{client}` could not update its server configuration.",
+        "Explanation": "The client's MCP management command failed while updating the `{$MCP_SERVER_NAME}` server.",
+        "Advice": "Review any command error or output shown below, correct the client configuration or installation, then try again."
+      },
+      "CLIENT_COMMAND_ERROR_LABEL": {
+        "Severity": "Info",
+        "Message": "Command error:"
+      },
+      "CLIENT_COMMAND_OUTPUT_LABEL": {
+        "Severity": "Info",
+        "Message": "Command output:"
+      }
+    },
     "agent": {
       "connection": {
         "TRANSPORT_ERROR": {
@@ -668,6 +942,14 @@
           "Message": "{$PRODUCT_FULL_NAME} can no longer confirm that the agent on the target is responsive.",
           "Explanation": "The agent did not acknowledge its presence in the allotted time. This may be due to network issues, the target being overloaded, or the agent process crashing.",
           "Advice": "Check the target's network connection is stable and compute resources are sufficient before running the recipe again. If the issue continues, contact Arm support."
+        }
+      },
+      "process_stream": {
+        "RECEIVE_FAILED": {
+          "Severity": "Error",
+          "Message": "{$PRODUCT_FULL_NAME} could not finish collecting output from a process when running a recipe.",
+          "Explanation": "An error occurred while receiving process output through an {$PRODUCT_FULL_NAME} agent.",
+          "Advice": "Run the recipe again. If the issue continues, contact Arm support."
         }
       },
       "connection_provider": {
@@ -2563,6 +2845,12 @@
         "Message": "Some Code Hotspots measurement details will be unavailable.",
         "Explanation": "No compatible telemetry specification is available for the primary CPU, `{cpuName}`. The run can still be collected and rendered, but some measurement descriptions and grouping information will not be available.",
         "Advice": "You can continue with the recipe. To include complete measurement details, use a target whose primary CPU has a compatible telemetry specification."
+      },
+      "TIMELINE_DATA_INCOMPLETE": {
+        "Severity": "Error",
+        "Message": "The Code Hotspots timeline data is incomplete.",
+        "Explanation": "The timeline data does not match the expected levels of detail. The available bin durations are `{availableBinDurations}`; the expected bin durations are `{expectedBinDurations}`.",
+        "Advice": "Run the Code Hotspots recipe again to regenerate the timeline data. If the problem continues, contact Arm support."
       }
     },
     "cpu_microarchitecture": {
@@ -2624,9 +2912,9 @@
     "common": {
       "SPE_NOT_CONFIGURED": {
         "Severity": "Error",
-        "Message": "SPE is not configured on the target.",
+        "Message": "Arm Statistical Profiling Extension (SPE) is not configured on the target.",
         "Explanation": "The specified recipe requires SPE to be enabled on the target, to collect the necessary profiling metrics. The Arm SPE driver was not detected on the target. This means that the target is incompatible with the specified recipe.",
-        "Advice": "Ensure that SPE is enabled in the kernel and the necessary drivers are loaded. Alternatively, use a different target which has SPE configured."
+        "Advice": "Ensure that SPE is enabled in the kernel and the necessary drivers are loaded by following the instructions at `https://learn.arm.com/learning-paths/servers-and-cloud-computing/spe-on-performix/`. Alternatively, use a different target which has SPE configured."
       },
       "TOOL_NOT_DEPLOYED": {
         "Severity": "Error",
@@ -3025,6 +3313,12 @@
         "Message": "The `neoprof` tool failed during profiling.",
         "Explanation": "The specified recipe invokes the `neoprof` tool. This tool failed unexpectedly; {tool} returned exit code `{code}` during profiling.",
         "Advice": "If the issue continues, contact Arm support."
+      },
+      "PERF_AGENT_FAILED": {
+        "Severity": "Error",
+        "Message": "The `neoprof` tool failed to start performance profiling.",
+        "Explanation": "The `neoprof` tool could not open one or more performance events required by the recipe on the target, or it could not make any CPU ready for profiling. Common causes include events that are not supported by the target processor or kernel, restricted access to performance monitoring, hardware counters being used by another profiling tool, CPUs being offline or changing online state, or a temporary timing or resource issue while profiling starts. No profiling data was collected.",
+        "Advice": "Run the recipe again in case the target state changed while profiling was starting. If the problem continues, ensure that the target CPUs remain online and stop any other profiling tools that might be using the hardware counters. Confirm that Linux performance monitoring is permitted on the target. If none of these actions resolve the issue, contact Arm support."
       },
       "PARQUET_TO_JSON_RUN_FAILED": {
         "Severity": "Error",

@@ -76,6 +76,29 @@ class ResolveCaseConfigTests(unittest.TestCase):
         self.assertEqual(case["prerecord"]["mode"], "attach")
         self.assertEqual(case["prerecord"]["timeout_seconds"], 25)
 
+    def test_resolves_system_wide_case_without_workload(self):
+        case = resolver.resolve_case_config(
+            {"id": "test_case_48", "prerecord": {"mode": "system-wide"}},
+            {"recipe": "system_utilization"},
+        )
+
+        self.assertEqual(case["prerecord"]["mode"], "system-wide")
+        self.assertEqual(case["workload"], "")
+
+    def test_rejects_system_wide_lifecycle_commands(self):
+        with self.assertRaisesRegex(ValueError, "system-wide prerecord cannot use"):
+            resolver.resolve_case_config(
+                {
+                    "id": "test_case_48",
+                    "prerecord": {
+                        "mode": "system-wide",
+                        "setup": ["bash", "sidecar.sh", "setup"],
+                        "cleanup": ["bash", "sidecar.sh", "cleanup"],
+                    },
+                },
+                {"recipe": "system_utilization"},
+            )
+
     def test_builds_manifest_free_generic_case(self):
         args = resolver.parser.parse_args(
             [

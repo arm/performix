@@ -15,29 +15,48 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/render"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 )
 
+var neoprofTimelineBinDurationsNS = []int64{
+	10_000_000,
+	50_000_000,
+	100_000_000,
+	500_000_000,
+	1_000_000_000,
+	5_000_000_000,
+	10_000_000_000,
+}
+
 func TestCodeHotspotsTimelineVisibilityRules(t *testing.T) {
-	t.Run("includes timeline for single run with provisional parquet components", func(t *testing.T) {
+	t.Run("uses the complete LoD catalogue for a single run", func(t *testing.T) {
 		runRoot := t.TempDir()
-		model := newRunComponentPresenceModel(t, runRoot, []timelineComponentFixture{
-			counterCapabilityFixture(t, "counter.key_type_0.series_4", map[string]any{
+		components := []timelineComponentFixture{
+			counterCapabilityFixture(t, "counter.key_type_8.series_4", map[string]any{
 				"title":       "Cycles: CPU Cycles",
 				"description": "CPU cycle count.",
 				"units":       "cycles",
-				"key_type":    0,
+				"key_type":    8,
 				"series_id":   4,
 			}),
-			counterCapabilityFixture(t, "counter.key_type_0.series_6", map[string]any{
+			counterCapabilityFixture(t, "counter.key_type_8.series_6", map[string]any{
 				"title":       "Instructions: Executed",
 				"description": "Executed instruction count.",
 				"units":       "instructions",
-				"key_type":    0,
+				"key_type":    8,
 				"series_id":   6,
 			}),
+			{
+				RelativePath: "tool/neoprof/0/output/parquet/metadata/capture_metadata.json",
+				ComponentType: cdf.ComponentType{
+					Name:          "timeline-capture-metadata-json",
+					SchemaVersion: "1.0",
+				},
+				Content: []byte(`[{"duration":60000000000,"time_unit":"nanoseconds"}]`),
+			},
 			{
 				RelativePath: "tool/neoprof/0/output/parquet/timeline/counter_series_files.parquet",
 				ComponentType: cdf.ComponentType{
@@ -45,21 +64,12 @@ func TestCodeHotspotsTimelineVisibilityRules(t *testing.T) {
 					SchemaVersion: "1.0",
 				},
 			},
-			{
-				RelativePath: "tool/neoprof/0/output/parquet/timeline/key_type=0/series_id=4/bin_duration=10000/counter.parquet",
-				ComponentType: cdf.ComponentType{
-					Name:          "hotspots-provisional-parquet",
-					SchemaVersion: "1.0",
-				},
-			},
-			{
-				RelativePath: "tool/neoprof/0/output/parquet/timeline/key_type=0/series_id=6/bin_duration=10000/counter.parquet",
-				ComponentType: cdf.ComponentType{
-					Name:          "hotspots-provisional-parquet",
-					SchemaVersion: "1.0",
-				},
-			},
-		})
+		}
+		components = append(
+			components,
+			counterParquetCatalogueFixtures(8, 4, 6)...,
+		)
+		model := newRunComponentPresenceModel(t, runRoot, components)
 
 		output, err := executeCodeHotspotsRenderStage(
 			t,
@@ -76,13 +86,62 @@ func TestCodeHotspotsTimelineVisibilityRules(t *testing.T) {
 
 		groups, ok := timelineWidget.Config["groups"].(map[string]any)
 		require.True(t, ok)
-		require.Contains(t, groups, "key_0_series_4_10000")
-		require.Contains(t, groups, "key_0_series_6_10000")
+		require.Contains(t, groups, "key_8_series_4")
+		require.Contains(t, groups, "key_8_series_6")
+		series4 := groups["key_8_series_4"].(map[string]any)
+		require.Len(t, series4["lods"], len(neoprofTimelineBinDurationsNS))
+		require.Equal(t, "Cycles: CPU Cycles", series4["title"])
+		require.Equal(t, "CPU cycle count.", series4["description"])
+		series4Config := series4["config"].(map[string]any)
+		require.Equal(t, "Rate", series4Config["yAxisTitle"])
+		require.Equal(t, "cycles/s", series4Config["yAxisUnit"])
+		series6 := groups["key_8_series_6"].(map[string]any)
+		require.Len(t, series6["lods"], len(neoprofTimelineBinDurationsNS))
+		series6Config := series6["config"].(map[string]any)
+		require.Equal(t, "instructions/s", series6Config["yAxisUnit"])
+		require.Equal(t, map[string]any{
+			"start": int64(0),
+			"end":   int64(60_000_000_000),
+			"unit":  "ns",
+		}, timelineWidget.Config["timeDomain"])
 	})
 
-	t.Run("distinguishes counters with the same series ID", func(t *testing.T) {
+	t.Run("rejects a missing LoD parquet file from a single series", func(t *testing.T) {
 		runRoot := t.TempDir()
-		model := newRunComponentPresenceModel(t, runRoot, []timelineComponentFixture{
+		components := []timelineComponentFixture{
+			captureMetadataComponentFixture(),
+		}
+		components = append(
+			components,
+			counterParquetCatalogueFixturesExcept(0, 4, 10_000_000_000)...,
+		)
+		model := newRunComponentPresenceModel(t, runRoot, components)
+
+		_, err := executeCodeHotspotsRenderStage(
+			t,
+			[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
+			[]cdf.ModelView{model},
+		)
+		require.ErrorContains(
+			t,
+			err,
+			"Timeline LoD catalogue is inconsistent: group key_0_series_4",
+		)
+		messageError := message.IsMessage(err)
+		require.NotNil(t, messageError)
+		require.Equal(
+			t,
+			message.MessageCode("recipes.code_hotspots.TIMELINE_DATA_INCOMPLETE"),
+			messageError.Code(),
+		)
+		require.Equal(t, "key_0_series_4", messageError.Metadata()["groupKey"])
+		require.NotEmpty(t, messageError.Metadata()["availableBinDurations"])
+		require.NotEmpty(t, messageError.Metadata()["expectedBinDurations"])
+	})
+
+	t.Run("distinguishes keyed counters with the same series ID", func(t *testing.T) {
+		runRoot := t.TempDir()
+		components := []timelineComponentFixture{
 			counterCapabilityFixture(t, "counter.key_type_8.series_4", map[string]any{
 				"title":       "CPU Cycles",
 				"description": "CPU cycle count.",
@@ -98,20 +157,17 @@ func TestCodeHotspotsTimelineVisibilityRules(t *testing.T) {
 				"series_id":   4,
 			}),
 			{
-				RelativePath: "tool/neoprof/0/output/parquet/timeline/key_type=8/series_id=4/bin_duration=10000/counter.parquet",
+				RelativePath: "tool/neoprof/0/output/parquet/metadata/capture_metadata.json",
 				ComponentType: cdf.ComponentType{
-					Name:          "hotspots-provisional-parquet",
+					Name:          "timeline-capture-metadata-json",
 					SchemaVersion: "1.0",
 				},
+				Content: []byte(`[{"duration":60000000000,"time_unit":"nanoseconds"}]`),
 			},
-			{
-				RelativePath: "tool/neoprof/0/output/parquet/timeline/key_type=9/series_id=4/bin_duration=10000/counter.parquet",
-				ComponentType: cdf.ComponentType{
-					Name:          "hotspots-provisional-parquet",
-					SchemaVersion: "1.0",
-				},
-			},
-		})
+		}
+		components = append(components, counterParquetCatalogueFixtures(8, 4)...)
+		components = append(components, counterParquetCatalogueFixtures(9, 4)...)
+		model := newRunComponentPresenceModel(t, runRoot, components)
 
 		output, err := executeCodeHotspotsRenderStage(
 			t,
@@ -120,20 +176,29 @@ func TestCodeHotspotsTimelineVisibilityRules(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		groups := requireTimelineGroups(t, requireTimelineWidget(t, output))
-		require.Equal(t, "CPU Cycles", groups["key_8_series_4_10000"].(map[string]any)["title"])
-		require.Equal(t, "GPU Cycles", groups["key_9_series_4_10000"].(map[string]any)["title"])
+		groups := requireTimelineWidget(t, output).Config["groups"].(map[string]any)
+		require.Equal(t, "CPU Cycles", groups["key_8_series_4"].(map[string]any)["title"])
+		require.Equal(t, "GPU Cycles", groups["key_9_series_4"].(map[string]any)["title"])
 	})
 
-	t.Run("does not include timeline without required parquet inputs", func(t *testing.T) {
+	t.Run("does not include timeline without capture metadata", func(t *testing.T) {
 		runRoot := t.TempDir()
-		model := newRunComponentPresenceModel(t, runRoot, []timelineComponentFixture{{
-			RelativePath: "tool/neoprof/0/output/parquet/timeline/hotspots_timeline.csv",
-			ComponentType: cdf.ComponentType{
-				Name:          "hotspots-provisional-csv",
-				SchemaVersion: "1.0",
+		model := newRunComponentPresenceModel(t, runRoot, []timelineComponentFixture{
+			{
+				RelativePath: "tool/neoprof/0/output/parquet/timeline/counter_series_files.parquet",
+				ComponentType: cdf.ComponentType{
+					Name:          "timeline-counter-series-files-metadata",
+					SchemaVersion: "1.0",
+				},
 			},
-		}})
+			{
+				RelativePath: "tool/neoprof/0/output/parquet/timeline/key_type=8/series_id=4/bin_duration=10000/counter.parquet",
+				ComponentType: cdf.ComponentType{
+					Name:          "hotspots-provisional-parquet",
+					SchemaVersion: "1.0",
+				},
+			},
+		})
 
 		output, err := executeCodeHotspotsRenderStage(
 			t,
@@ -156,7 +221,7 @@ func TestCodeHotspotsTimelineVisibilityRules(t *testing.T) {
 				},
 			},
 			{
-				RelativePath: "tool/neoprof/0/output/parquet/timeline/key_type=0/series_id=1/bin_duration=1000000/counter.parquet",
+				RelativePath: "tool/neoprof/0/output/parquet/timeline/key_type=8/series_id=1/bin_duration=1000000/counter.parquet",
 				ComponentType: cdf.ComponentType{
 					Name:          "hotspots-provisional-parquet",
 					SchemaVersion: "1.0",
@@ -180,7 +245,8 @@ func TestCodeHotspotsTimelineVisibilityRules(t *testing.T) {
 
 func TestCodeHotspotsTimelineUsesCounterCapabilityMetadata(t *testing.T) {
 	runRoot := t.TempDir()
-	model := newRunComponentPresenceModel(t, runRoot, []timelineComponentFixture{
+	components := []timelineComponentFixture{
+		captureMetadataComponentFixture(),
 		counterCapabilityFixture(t, "counter.instructions.executed", map[string]any{
 			"title":       "Instructions (Executed): All",
 			"description": "The counter increments for every executed instruction.",
@@ -201,12 +267,11 @@ func TestCodeHotspotsTimelineUsesCounterCapabilityMetadata(t *testing.T) {
 				Name:          "tool_capabilities/unrelated",
 				SchemaVersion: "1.0",
 			},
-			Contents: []byte(`{"state":"collected","payload":null}`),
+			Content: []byte(`{"state":"collected","payload":null}`),
 		},
-		counterParquetComponentFixture(16, 20_000),
-		counterParquetComponentFixture(18, 10_000),
-		counterParquetComponentFixture(16, 10_000),
-	})
+	}
+	components = append(components, counterParquetCatalogueFixtures(0, 16, 18)...)
+	model := newRunComponentPresenceModel(t, runRoot, components)
 
 	output, err := executeCodeHotspotsRenderStage(
 		t,
@@ -218,25 +283,27 @@ func TestCodeHotspotsTimelineUsesCounterCapabilityMetadata(t *testing.T) {
 	timelineWidget := requireTimelineWidget(t, output)
 	require.Equal(t, "s", timelineWidget.Config["xAxisUnit"])
 	groups := requireTimelineGroups(t, timelineWidget)
-	series16At10k := requireTimelineGroup(t, groups, "key_0_series_16_10000")
-	series16At20k := requireTimelineGroup(t, groups, "key_0_series_16_20000")
-	require.Equal(t, "Instructions (Executed): All", series16At10k["title"])
-	require.Equal(t, "Instructions (Executed): All", series16At20k["title"])
-	require.Equal(t, "The counter increments for every executed instruction.", series16At10k["description"])
-	series16Config := requireTimelineGroupConfig(t, series16At10k)
+	series16 := requireTimelineGroup(t, groups, "key_0_series_16")
+	require.Equal(t, "Instructions (Executed): All", series16["title"])
+	require.Equal(t, "The counter increments for every executed instruction.", series16["description"])
+	require.Len(t, series16["lods"], len(neoprofTimelineBinDurationsNS))
+	series16Config := requireTimelineGroupConfig(t, series16)
 	require.Equal(t, "Time (s)", series16Config["xAxisTitle"])
-	require.Equal(t, "instructions", series16Config["yAxisUnit"])
+	require.Equal(t, "instructions/s", series16Config["yAxisUnit"])
 
-	series18 := requireTimelineGroup(t, groups, "key_0_series_18_10000")
+	series18 := requireTimelineGroup(t, groups, "key_0_series_18")
 	require.Equal(t, "Branch Predictor: Mispredictions", series18["title"])
-	require.NotContains(t, requireTimelineGroupConfig(t, series18), "yAxisUnit")
+	require.Len(t, series18["lods"], len(neoprofTimelineBinDurationsNS))
+	require.Equal(t, "events/s", requireTimelineGroupConfig(t, series18)["yAxisUnit"])
 }
 
 func TestCodeHotspotsTimelineUsesGenericPresentationForRunWithoutCapabilities(t *testing.T) {
 	runRoot := t.TempDir()
-	model := newRunComponentPresenceModel(t, runRoot, []timelineComponentFixture{
-		counterParquetComponentFixture(10, 100_000_000),
-	})
+	components := []timelineComponentFixture{
+		captureMetadataComponentFixture(),
+	}
+	components = append(components, counterParquetCatalogueFixtures(0, 10)...)
+	model := newRunComponentPresenceModel(t, runRoot, components)
 
 	output, err := executeCodeHotspotsRenderStage(
 		t,
@@ -246,19 +313,20 @@ func TestCodeHotspotsTimelineUsesGenericPresentationForRunWithoutCapabilities(t 
 	require.NoError(t, err)
 
 	groups := requireTimelineGroups(t, requireTimelineWidget(t, output))
-	series10 := requireTimelineGroup(t, groups, "key_0_series_10_100000000")
+	series10 := requireTimelineGroup(t, groups, "key_0_series_10")
 	require.Equal(t, "Key 0, Series 10", series10["title"])
 	require.Equal(
 		t,
-		"Provisional timeline series Key 0, Series 10 at 100000000 ns resolution.",
+		"Timeline data for Key 0, Series 10.",
 		series10["description"],
 	)
-	require.NotContains(t, requireTimelineGroupConfig(t, series10), "yAxisUnit")
+	require.Equal(t, "events/s", requireTimelineGroupConfig(t, series10)["yAxisUnit"])
 }
 
 func TestCodeHotspotsTimelineUsesGenericPresentationForSeriesWithoutMetadata(t *testing.T) {
 	runRoot := t.TempDir()
-	model := newRunComponentPresenceModel(t, runRoot, []timelineComponentFixture{
+	components := []timelineComponentFixture{
+		captureMetadataComponentFixture(),
 		counterCapabilityFixture(t, "counter.instructions", map[string]any{
 			"title":       "Instructions: Executed",
 			"description": "Executed instruction count.",
@@ -266,9 +334,9 @@ func TestCodeHotspotsTimelineUsesGenericPresentationForSeriesWithoutMetadata(t *
 			"key_type":    0,
 			"series_id":   6,
 		}),
-		counterParquetComponentFixture(4, 10_000),
-		counterParquetComponentFixture(6, 10_000),
-	})
+	}
+	components = append(components, counterParquetCatalogueFixtures(0, 4, 6)...)
+	model := newRunComponentPresenceModel(t, runRoot, components)
 
 	output, err := executeCodeHotspotsRenderStage(
 		t,
@@ -278,21 +346,21 @@ func TestCodeHotspotsTimelineUsesGenericPresentationForSeriesWithoutMetadata(t *
 	require.NoError(t, err)
 
 	groups := requireTimelineGroups(t, requireTimelineWidget(t, output))
-	series4 := requireTimelineGroup(t, groups, "key_0_series_4_10000")
+	series4 := requireTimelineGroup(t, groups, "key_0_series_4")
 	require.Equal(t, "Key 0, Series 4", series4["title"])
 	require.Equal(
 		t,
-		"Provisional timeline series Key 0, Series 4 at 10000 ns resolution.",
+		"Timeline data for Key 0, Series 4.",
 		series4["description"],
 	)
-	require.NotContains(t, requireTimelineGroupConfig(t, series4), "yAxisUnit")
+	require.Equal(t, "events/s", requireTimelineGroupConfig(t, series4)["yAxisUnit"])
 
-	series6 := requireTimelineGroup(t, groups, "key_0_series_6_10000")
+	series6 := requireTimelineGroup(t, groups, "key_0_series_6")
 	require.Equal(t, "Instructions: Executed", series6["title"])
 	require.Equal(t, "Executed instruction count.", series6["description"])
 	require.Equal(
 		t,
-		"instructions",
+		"instructions/s",
 		requireTimelineGroupConfig(t, series6)["yAxisUnit"],
 	)
 }
@@ -340,7 +408,10 @@ func TestCodeHotspotsTimelineRejectsInvalidCounterCapabilityMetadata(t *testing.
 		t.Run(test.name, func(t *testing.T) {
 			runRoot := t.TempDir()
 			components := append(
-				[]timelineComponentFixture{counterParquetComponentFixture(4, 10_000)},
+				[]timelineComponentFixture{
+					captureMetadataComponentFixture(),
+					counterParquetComponentFixture(4, 10_000),
+				},
 				test.capabilities...,
 			)
 			model := newRunComponentPresenceModel(t, runRoot, components)
@@ -355,37 +426,30 @@ func TestCodeHotspotsTimelineRejectsInvalidCounterCapabilityMetadata(t *testing.
 	}
 }
 
-func TestCodeHotspotsTimelinePresentationQuerySumsDevicesAndThreadsAndZeroFillsGaps(t *testing.T) {
+func TestCodeHotspotsTimelinePresentationQueryUsesSelectedLodAndRange(t *testing.T) {
 	runRoot := t.TempDir()
-	fixture := writeTimelineBinnedDeltaParquetFixture(t, runRoot, []timelineCounterSeriesFixture{
+	seriesFixtures := []timelineCounterSeriesFixture{
 		{
 			SeriesID:    4,
-			BinDuration: 10_000,
+			BinDuration: 10_000_000,
 			CounterRows: []timelineCounterRowFixture{
 				{
 					StartTimestamp: 1_000_000_000,
-					EndTimestamp:   1_000_020_000,
+					EndTimestamp:   1_020_000_000,
 					DeviceNo:       7,
 					Thread:         23,
-					Value:          3,
+					Value:          2,
 				},
 				{
 					StartTimestamp: 1_000_000_000,
-					EndTimestamp:   1_000_010_000,
+					EndTimestamp:   1_010_000_000,
 					DeviceNo:       7,
 					Thread:         31,
-					Value:          6,
+					Value:          4,
 				},
 				{
-					StartTimestamp: 1_000_000_000,
-					EndTimestamp:   1_000_010_000,
-					DeviceNo:       8,
-					Thread:         41,
-					Value:          9,
-				},
-				{
-					StartTimestamp: 1_000_030_000,
-					EndTimestamp:   1_000_040_000,
+					StartTimestamp: 1_030_000_000,
+					EndTimestamp:   1_040_000_000,
 					DeviceNo:       7,
 					Thread:         31,
 					Value:          6,
@@ -394,16 +458,21 @@ func TestCodeHotspotsTimelinePresentationQuerySumsDevicesAndThreadsAndZeroFillsG
 		},
 		{
 			SeriesID:    6,
-			BinDuration: 10_000,
+			BinDuration: 10_000_000,
 			CounterRows: []timelineCounterRowFixture{{
 				StartTimestamp: 1_000_000_000,
-				EndTimestamp:   1_000_010_000,
+				EndTimestamp:   1_010_000_000,
 				DeviceNo:       9,
 				Thread:         41,
 				Value:          99,
 			}},
 		},
-	})
+	}
+	fixture := writeTimelineBinnedDeltaParquetFixture(
+		t,
+		runRoot,
+		completeNeoprofTimelineSeriesFixtures(seriesFixtures),
+	)
 	model := newCodeHotspotsTimelineFixtureModel(t, runRoot, fixture)
 
 	output, err := executeCodeHotspotsRenderStage(
@@ -419,7 +488,16 @@ func TestCodeHotspotsTimelinePresentationQuerySumsDevicesAndThreadsAndZeroFillsG
 		return rendererConfig.Type == "SQL" && strings.HasPrefix(rendererConfig.ID, "timeline_")
 	})
 
-	query := resolveTimelineGroupQuery(t, session, renderers, timelineWidget, "key_0_series_4_10000")
+	query := resolveTimelineGroupQuery(
+		t,
+		session,
+		renderers,
+		timelineWidget,
+		"key_0_series_4",
+		10_000_000,
+		1_010_000_000,
+		1_040_000_000,
+	)
 	rows, err := session.Database().Conn.QueryContext(context.Background(), query)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -429,47 +507,207 @@ func TestCodeHotspotsTimelinePresentationQuerySumsDevicesAndThreadsAndZeroFillsG
 	require.Equal(t, []string{"x_start", "value"}, columns)
 
 	require.True(t, rows.Next())
-	var row1XStart float64
-	var row1Value float64
-	require.NoError(t, rows.Scan(&row1XStart, &row1Value))
-	require.InDelta(t, 1.0, row1XStart, 1e-12)
-	require.Equal(t, 18.0, row1Value)
+	var activeXStart int64
+	var activeValue float64
+	require.NoError(t, rows.Scan(&activeXStart, &activeValue))
+	require.Equal(t, int64(1_010_000_000), activeXStart)
+	require.Equal(t, 100.0, activeValue)
 
 	require.True(t, rows.Next())
-	var row2XStart float64
-	var row2Value float64
-	require.NoError(t, rows.Scan(&row2XStart, &row2Value))
-	require.InDelta(t, 1.00001, row2XStart, 1e-12)
-	require.Equal(t, 3.0, row2Value)
+	var gapXStart int64
+	var gapValue float64
+	require.NoError(t, rows.Scan(&gapXStart, &gapValue))
+	require.Equal(t, int64(1_020_000_000), gapXStart)
+	require.Equal(t, 0.0, gapValue)
 
 	require.True(t, rows.Next())
-	var row3XStart float64
-	var row3Value float64
-	require.NoError(t, rows.Scan(&row3XStart, &row3Value))
-	require.InDelta(t, 1.00002, row3XStart, 1e-12)
-	require.Equal(t, 0.0, row3Value)
-
-	require.True(t, rows.Next())
-	var row4XStart float64
-	var row4Value float64
-	require.NoError(t, rows.Scan(&row4XStart, &row4Value))
-	require.InDelta(t, 1.00003, row4XStart, 1e-12)
-	require.Equal(t, 6.0, row4Value)
+	var resumedXStart int64
+	var resumedValue float64
+	require.NoError(t, rows.Scan(&resumedXStart, &resumedValue))
+	require.Equal(t, int64(1_030_000_000), resumedXStart)
+	require.Equal(t, 600.0, resumedValue)
 
 	require.False(t, rows.Next())
 	require.NoError(t, rows.Err())
 }
 
+func TestCodeHotspotsTimelinePresentationQueryPreservesSparseBinsAcrossLods(t *testing.T) {
+	const (
+		fineBinDuration   = int64(50_000_000)
+		coarseBinDuration = int64(100_000_000)
+		rangeStart        = int64(0)
+		rangeEnd          = int64(300_000_000)
+	)
+	type expectedPoint struct {
+		xStart int64
+		value  float64
+	}
+	// Keep the compressed intervals identical so changing LoD only changes the
+	// number of displayed bins, not the gap or per-second rate semantics.
+	counterRows := []timelineCounterRowFixture{
+		{
+			StartTimestamp: 0,
+			EndTimestamp:   100_000_000,
+			DeviceNo:       7,
+			Thread:         23,
+			Value:          2,
+		},
+		{
+			StartTimestamp: 200_000_000,
+			EndTimestamp:   300_000_000,
+			DeviceNo:       7,
+			Thread:         23,
+			Value:          12,
+		},
+	}
+
+	runRoot := t.TempDir()
+	seriesFixtures := []timelineCounterSeriesFixture{
+		{
+			SeriesID:    4,
+			BinDuration: fineBinDuration,
+			CounterRows: counterRows,
+		},
+		{
+			SeriesID:    4,
+			BinDuration: coarseBinDuration,
+			CounterRows: counterRows,
+		},
+	}
+	fixture := writeTimelineBinnedDeltaParquetFixture(
+		t,
+		runRoot,
+		completeNeoprofTimelineSeriesFixtures(seriesFixtures),
+	)
+	model := newCodeHotspotsTimelineFixtureModel(t, runRoot, fixture)
+	output, err := executeCodeHotspotsRenderStage(
+		t,
+		[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
+		[]cdf.ModelView{model},
+	)
+	require.NoError(t, err)
+
+	timelineWidget := requireTimelineWidget(t, output)
+	group := requireTimelineGroup(
+		t,
+		requireTimelineGroups(t, timelineWidget),
+		"key_0_series_4",
+	)
+	require.Len(t, group["lods"], len(neoprofTimelineBinDurationsNS))
+	require.Contains(
+		t,
+		group["lods"],
+		map[string]any{"binDuration": fineBinDuration, "sourceKey": "key_0_series_4_50000000"},
+	)
+	require.Contains(
+		t,
+		group["lods"],
+		map[string]any{"binDuration": coarseBinDuration, "sourceKey": "key_0_series_4_100000000"},
+	)
+	require.Equal(t, []any{map[string]any{
+		"type":    "single",
+		"name":    "Total",
+		"xColumn": "x_start",
+		"yColumn": "value",
+	}}, requireTimelineGroupConfig(t, group)["series"])
+
+	session := newRenderSession(t, "timeline-code-hotspots-sparse-lods-run", runRoot, model)
+	renderers := initializeRenderers(t, session, output, func(rendererConfig recipe.RendererConfig) bool {
+		return rendererConfig.Type == "SQL" && strings.HasPrefix(rendererConfig.ID, "timeline_")
+	})
+
+	testCases := []struct {
+		name        string
+		binDuration int64
+		expected    []expectedPoint
+	}{
+		{
+			name:        "fine LoD",
+			binDuration: fineBinDuration,
+			expected: []expectedPoint{
+				{xStart: 0, value: 20},
+				{xStart: 50_000_000, value: 20},
+				{xStart: 100_000_000, value: 0},
+				{xStart: 150_000_000, value: 0},
+				{xStart: 200_000_000, value: 120},
+				{xStart: 250_000_000, value: 120},
+			},
+		},
+		{
+			name:        "coarse LoD",
+			binDuration: coarseBinDuration,
+			expected: []expectedPoint{
+				{xStart: 0, value: 20},
+				{xStart: 100_000_000, value: 0},
+				{xStart: 200_000_000, value: 120},
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			query := resolveTimelineGroupQuery(
+				t,
+				session,
+				renderers,
+				timelineWidget,
+				"key_0_series_4",
+				test.binDuration,
+				rangeStart,
+				rangeEnd,
+			)
+			rows, err := session.Database().Conn.QueryContext(context.Background(), query)
+			require.NoError(t, err)
+			defer rows.Close()
+
+			columns, err := rows.Columns()
+			require.NoError(t, err)
+			require.Equal(t, []string{"x_start", "value"}, columns)
+
+			for _, expected := range test.expected {
+				require.True(t, rows.Next())
+				var xStart int64
+				var value float64
+				require.NoError(t, rows.Scan(&xStart, &value))
+				require.Equal(t, expected.xStart, xStart)
+				require.InDelta(t, expected.value, value, 1e-12)
+			}
+			require.False(t, rows.Next())
+			require.NoError(t, rows.Err())
+		})
+	}
+}
+
 type timelineComponentFixture struct {
 	RelativePath  string
 	ComponentType cdf.ComponentType
-	Contents      []byte
+	Content       []byte
+}
+
+func captureMetadataComponentFixture() timelineComponentFixture {
+	return timelineComponentFixture{
+		RelativePath: "tool/neoprof/0/output/parquet/metadata/capture_metadata.json",
+		ComponentType: cdf.ComponentType{
+			Name:          "timeline-capture-metadata-json",
+			SchemaVersion: "1.0",
+		},
+		Content: []byte(`[{"duration":60000000000,"time_unit":"nanoseconds"}]`),
+	}
 }
 
 func counterParquetComponentFixture(seriesID, binDuration int64) timelineComponentFixture {
+	return counterParquetComponentFixtureWithKey(0, seriesID, binDuration)
+}
+
+func counterParquetComponentFixtureWithKey(
+	keyType,
+	seriesID,
+	binDuration int64,
+) timelineComponentFixture {
 	return timelineComponentFixture{
 		RelativePath: fmt.Sprintf(
-			"tool/neoprof/0/output/parquet/timeline/key_type=0/series_id=%d/bin_duration=%d/counter.parquet",
+			"tool/neoprof/0/output/parquet/timeline/key_type=%d/series_id=%d/bin_duration=%d/counter.parquet",
+			keyType,
 			seriesID,
 			binDuration,
 		),
@@ -480,6 +718,66 @@ func counterParquetComponentFixture(seriesID, binDuration int64) timelineCompone
 	}
 }
 
+func counterParquetCatalogueFixtures(
+	keyType int64,
+	seriesIDs ...int64,
+) []timelineComponentFixture {
+	fixtures := make([]timelineComponentFixture, 0, len(seriesIDs)*len(neoprofTimelineBinDurationsNS))
+	for _, seriesID := range seriesIDs {
+		fixtures = append(
+			fixtures,
+			counterParquetCatalogueFixturesExcept(keyType, seriesID, -1)...,
+		)
+	}
+	return fixtures
+}
+
+func counterParquetCatalogueFixturesExcept(
+	keyType,
+	seriesID,
+	excludedDuration int64,
+) []timelineComponentFixture {
+	fixtures := make([]timelineComponentFixture, 0, len(neoprofTimelineBinDurationsNS))
+	for _, binDuration := range neoprofTimelineBinDurationsNS {
+		if binDuration == excludedDuration {
+			continue
+		}
+		fixtures = append(
+			fixtures,
+			counterParquetComponentFixtureWithKey(keyType, seriesID, binDuration),
+		)
+	}
+	return fixtures
+}
+
+func completeNeoprofTimelineSeriesFixtures(
+	fixtures []timelineCounterSeriesFixture,
+) []timelineCounterSeriesFixture {
+	completed := append([]timelineCounterSeriesFixture(nil), fixtures...)
+	durationsBySeries := map[int64]map[int64]struct{}{}
+	seriesOrder := []int64{}
+	for _, fixture := range fixtures {
+		if _, ok := durationsBySeries[fixture.SeriesID]; !ok {
+			durationsBySeries[fixture.SeriesID] = map[int64]struct{}{}
+			seriesOrder = append(seriesOrder, fixture.SeriesID)
+		}
+		durationsBySeries[fixture.SeriesID][fixture.BinDuration] = struct{}{}
+	}
+
+	for _, seriesID := range seriesOrder {
+		for _, binDuration := range neoprofTimelineBinDurationsNS {
+			if _, ok := durationsBySeries[seriesID][binDuration]; ok {
+				continue
+			}
+			completed = append(completed, timelineCounterSeriesFixture{
+				SeriesID:    seriesID,
+				BinDuration: binDuration,
+			})
+		}
+	}
+	return completed
+}
+
 func counterCapabilityFixture(
 	t *testing.T,
 	capabilityID string,
@@ -487,7 +785,7 @@ func counterCapabilityFixture(
 ) timelineComponentFixture {
 	t.Helper()
 
-	contents, err := json.Marshal(map[string]any{
+	content, err := json.Marshal(map[string]any{
 		"state":   "collected",
 		"payload": payload,
 	})
@@ -502,7 +800,7 @@ func counterCapabilityFixture(
 			Name:          "tool_capabilities/counter",
 			SchemaVersion: "1.0",
 		},
-		Contents: contents,
+		Content: content,
 	}
 }
 
@@ -524,10 +822,23 @@ func executeCodeHotspotsRenderStage(
 			"filter_start_time_ns": nil,
 			"filter_end_time_ns":   nil,
 		},
-		renderStageOptions{
-			neoprofTimelineEnabled: true,
-		},
+		renderStageOptions{neoprofTimelineEnabled: true},
 	)
+}
+
+func writeTimelineComponentFixture(
+	t *testing.T,
+	runRoot string,
+	component timelineComponentFixture,
+) {
+	t.Helper()
+	absPath := filepath.Join(runRoot, filepath.FromSlash(component.RelativePath))
+	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755))
+	content := component.Content
+	if content == nil {
+		content = []byte("fixture")
+	}
+	require.NoError(t, os.WriteFile(absPath, content, 0o644))
 }
 
 func requireTimelineWidget(t *testing.T, output recipe.RenderOutput) *recipe.WidgetConfig {
@@ -572,17 +883,6 @@ func requireTimelineGroupConfig(t *testing.T, group map[string]any) map[string]a
 	return config
 }
 
-func writeTimelineComponentFixture(t *testing.T, runRoot string, component timelineComponentFixture) {
-	t.Helper()
-	absPath := filepath.Join(runRoot, filepath.FromSlash(component.RelativePath))
-	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755))
-	contents := component.Contents
-	if contents == nil {
-		contents = []byte("fixture")
-	}
-	require.NoError(t, os.WriteFile(absPath, contents, 0o644))
-}
-
 func newRunComponentPresenceModel(
 	t *testing.T,
 	runRoot string,
@@ -592,7 +892,13 @@ func newRunComponentPresenceModel(
 
 	manifestEntries := make([]cdf.ManifestEntry, 0, len(components))
 	for _, component := range components {
-		writeTimelineComponentFixture(t, runRoot, component)
+		absPath := filepath.Join(runRoot, filepath.FromSlash(component.RelativePath))
+		require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755))
+		content := component.Content
+		if content == nil {
+			content = []byte("fixture")
+		}
+		require.NoError(t, os.WriteFile(absPath, content, 0o644))
 
 		manifestEntries = append(manifestEntries, cdf.ManifestEntry{
 			Path:          component.RelativePath,
@@ -609,6 +915,9 @@ func resolveTimelineGroupQuery(
 	renderers render.RendererList,
 	timelineWidget *recipe.WidgetConfig,
 	groupKey string,
+	binDuration int64,
+	rangeStart int64,
+	rangeEnd int64,
 ) string {
 	t.Helper()
 
@@ -620,6 +929,17 @@ func resolveTimelineGroupQuery(
 	require.True(t, ok)
 	customQuery, ok := config["customQuery"].(map[string]any)
 	require.True(t, ok)
+	lods, ok := group["lods"].([]any)
+	require.True(t, ok)
+	var sourceKey string
+	for _, rawLod := range lods {
+		lod := rawLod.(map[string]any)
+		if lod["binDuration"] == binDuration {
+			sourceKey = lod["sourceKey"].(string)
+			break
+		}
+	}
+	require.NotEmpty(t, sourceKey)
 
 	timelineConfigJSON, err := json.Marshal(timelineWidget.Config)
 	require.NoError(t, err)
@@ -630,13 +950,15 @@ func resolveTimelineGroupQuery(
 	resolvedDataSources, err := render.ResolveDataSources(session, parsedDataSources, renderers)
 	require.NoError(t, err)
 
-	groupTables, ok := resolvedDataSources[groupKey]
+	groupTables, ok := resolvedDataSources[sourceKey]
 	require.True(t, ok)
 	require.Len(t, groupTables, 1)
 
-	return strings.ReplaceAll(
+	query := strings.ReplaceAll(
 		customQuery["query"].(string),
 		customQuery["tableNamePlaceholder"].(string),
 		fmt.Sprintf(`"%s"`, groupTables[0].Name),
 	)
+	query = strings.ReplaceAll(query, customQuery["rangeStartPlaceholder"].(string), fmt.Sprint(rangeStart))
+	return strings.ReplaceAll(query, customQuery["rangeEndPlaceholder"].(string), fmt.Sprint(rangeEnd))
 }

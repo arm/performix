@@ -12,8 +12,29 @@ import (
 )
 
 func TestRecipes(t *testing.T) {
-	assert.Equal(t, []string{CodeHotspotsRecipeName, CPUMicroarchitectureRecipeName, InstructionMixRecipeName, SystemUtilizationRecipeName}, SupportedRecipeNames())
+	assert.Equal(t, []string{
+		ASCTRecipeName,
+		CacheSharingRecipeName,
+		CodeHotspotsRecipeName,
+		CPUMicroarchitectureRecipeName,
+		InstructionMixRecipeName,
+		MemoryAccessRecipeName,
+		SyscallTraceSummaryRecipeName,
+		SystemUtilizationRecipeName,
+	}, SupportedRecipeNames())
 	assert.Contains(t, GeneralGuidance(), "AI Insights Analysis Guide")
+
+	asct, ok := ForRecipe(ASCTRecipeName)
+	require.True(t, ok)
+	assert.Equal(t, MethodRunQuery, asct.Method)
+	assert.Contains(t, asct.Guidance, "Use `run_query`")
+	assert.Contains(t, asct.Guidance, "ASCT Query Guide")
+
+	cacheSharing, ok := ForRecipe(CacheSharingRecipeName)
+	require.True(t, ok)
+	assert.Equal(t, MethodRunQuery, cacheSharing.Method)
+	assert.Contains(t, cacheSharing.Guidance, "Use `run_query`")
+	assert.Contains(t, cacheSharing.Guidance, "Cache Sharing Query Guide")
 
 	codeHotspots, ok := ForRecipe(CodeHotspotsRecipeName)
 	require.True(t, ok)
@@ -33,6 +54,18 @@ func TestRecipes(t *testing.T) {
 	assert.Contains(t, instructionMix.Guidance, "Use `run_query`")
 	assert.Contains(t, instructionMix.Guidance, "Instruction Mix Query Guide")
 
+	memoryAccess, ok := ForRecipe(MemoryAccessRecipeName)
+	require.True(t, ok)
+	assert.Equal(t, MethodRunQuery, memoryAccess.Method)
+	assert.Contains(t, memoryAccess.Guidance, "Use `run_query`")
+	assert.Contains(t, memoryAccess.Guidance, "Memory Access Query Guide")
+
+	syscallTraceSummary, ok := ForRecipe(SyscallTraceSummaryRecipeName)
+	require.True(t, ok)
+	assert.Equal(t, MethodRunQuery, syscallTraceSummary.Method)
+	assert.Contains(t, syscallTraceSummary.Guidance, "Syscall Trace Query Guide")
+	assert.Contains(t, syscallTraceSummary.Guidance, "FROM flat_table_1")
+
 	cpuMicroarchitecture, ok := ForRecipe(CPUMicroarchitectureRecipeName)
 	require.True(t, ok)
 	assert.Equal(t, MethodRunQuery, cpuMicroarchitecture.Method)
@@ -49,6 +82,6 @@ func TestRecipes(t *testing.T) {
 		assert.Equal(t, 1, strings.Count(recipe.Guidance, "`read_text()`"))
 	}
 
-	_, ok = ForRecipe("memory_access")
+	_, ok = ForRecipe("unsupported_recipe")
 	assert.False(t, ok)
 }

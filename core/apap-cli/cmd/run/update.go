@@ -4,7 +4,6 @@
 package run
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -102,7 +101,7 @@ func updateRun(cc client.ClientConnector, r run.Updater, cliParams *updateCliPar
 			if err := clijson.MarshalJSONCLIResponseWithError(out, response, updateErr); err != nil {
 				return err
 			}
-			return errors.Join(clijson.ErrorAlreadyHandled, updateErr)
+			return clijson.MarkErrorHandled(updateErr)
 		}
 		return updateErr
 	}
@@ -112,7 +111,7 @@ func updateRun(cc client.ClientConnector, r run.Updater, cliParams *updateCliPar
 			if err := clijson.MarshalJSONCLIResponseWithError(out, response, failureMsg); err != nil {
 				return err
 			}
-			return errors.Join(clijson.ErrorAlreadyHandled, failureMsg)
+			return clijson.MarkErrorHandled(failureMsg)
 		}
 		printUpdateFailures(out, failureStatuses)
 		return failureMsg

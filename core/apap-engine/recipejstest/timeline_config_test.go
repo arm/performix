@@ -81,6 +81,8 @@ func TestTimelineConfigBuildsOneLogicalGroupPerSeries(t *testing.T) {
 	require.Equal(t, int64(10_000_000), timeDomain["end"])
 	require.Equal(t, "ns", timeDomain["unit"])
 	require.Equal(t, int64(0), timeline.Config["binOrigin"])
+	require.Equal(t, "s", timeline.Config["xAxisUnit"])
+	require.Equal(t, 1e-9, timeline.Config["xAxisDisplayScale"])
 
 	groups, ok := timeline.Config["groups"].(map[string]any)
 	require.True(t, ok)
@@ -131,6 +133,9 @@ func TestTimelineConfigBuildsOneLogicalGroupPerSeries(t *testing.T) {
 	series102Config, ok := series102["config"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, series101Config, series102Config)
+	require.Equal(t, "Time (s)", series101Config["xAxisTitle"])
+	require.Equal(t, "Rate", series101Config["yAxisTitle"])
+	require.Equal(t, "events/s", series101Config["yAxisUnit"])
 
 	customQuery, ok := series101Config["customQuery"].(map[string]any)
 	require.True(t, ok)
@@ -142,7 +147,7 @@ func TestTimelineConfigBuildsOneLogicalGroupPerSeries(t *testing.T) {
 	require.Equal(t, 1, strings.Count(customQuery["query"].(string), "{rangeEnd}"))
 }
 
-func TestTimelineConfigUsesDurationsSharedByEveryGroup(t *testing.T) {
+func TestTimelineConfigRejectsMissingDurationFromOneGroup(t *testing.T) {
 	parsedRecipe := parseTimelineConfigWrapperRecipe(t, map[string]any{
 		"timelineSources": []map[string]any{
 			{
@@ -170,7 +175,7 @@ func TestTimelineConfigUsesDurationsSharedByEveryGroup(t *testing.T) {
 		"timeDomain": validTimelineConfigTimeDomain(),
 	})
 
-	output, err := executeRenderStage(
+	_, err := executeRenderStage(
 		t,
 		parsedRecipe,
 		[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
@@ -178,31 +183,14 @@ func TestTimelineConfigUsesDurationsSharedByEveryGroup(t *testing.T) {
 		map[string]any{},
 		renderStageOptions{},
 	)
-	require.NoError(t, err)
-
-	require.Len(t, output.Widgets, 1)
-	groups, ok := output.Widgets[0].Config["groups"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, []any{
-		map[string]any{
-			"binDuration": int64(1_000_000),
-			"sourceKey":   "series_101_1000000",
-		},
-	}, requireTimelineConfigGroup(t, groups, "series_101")["lods"])
-	require.Equal(t, []any{
-		map[string]any{
-			"binDuration": int64(1_000_000),
-			"sourceKey":   "series_102_1000000",
-		},
-	}, requireTimelineConfigGroup(t, groups, "series_102")["lods"])
-
-	tables, ok := output.Widgets[0].Config["data_source"].(map[string]any)["tables"].(map[string]any)
-	require.True(t, ok)
-	require.Len(t, tables, 2)
-	require.NotContains(t, tables, "series_101_2000000")
+	require.ErrorContains(
+		t,
+		err,
+		"Timeline LoD catalogue is inconsistent: group series_102 defines bin durations [1000000], expected [1000000, 2000000]",
+	)
 }
 
-func TestTimelineConfigIsOmittedWithoutASharedDuration(t *testing.T) {
+func TestTimelineConfigRejectsGroupsWithoutASharedDuration(t *testing.T) {
 	parsedRecipe := parseTimelineConfigWrapperRecipe(t, map[string]any{
 		"timelineSources": []map[string]any{
 			{
@@ -223,7 +211,7 @@ func TestTimelineConfigIsOmittedWithoutASharedDuration(t *testing.T) {
 		"timeDomain": validTimelineConfigTimeDomain(),
 	})
 
-	output, err := executeRenderStage(
+	_, err := executeRenderStage(
 		t,
 		parsedRecipe,
 		[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
@@ -231,8 +219,74 @@ func TestTimelineConfigIsOmittedWithoutASharedDuration(t *testing.T) {
 		map[string]any{},
 		renderStageOptions{},
 	)
-	require.NoError(t, err)
-	require.Empty(t, output.Widgets)
+	require.ErrorContains(
+		t,
+		err,
+		"Timeline LoD catalogue is inconsistent: group series_102 defines bin durations [2000000], expected [1000000]",
+	)
+}
+
+func TestTimelineConfigRejectsConfiguredDurationMissingFromEveryGroup(t *testing.T) {
+	tests := []struct {
+		name            string
+		timelineSources []map[string]any
+	}{
+		{
+			name: "single group",
+			timelineSources: []map[string]any{
+				{
+					"rawSeriesKey": "series_101",
+					"seriesId":     101,
+					"binDuration":  1_000_000,
+					"rendererId":   "renderer_101_1000000",
+					"output":       "output_101_1000000",
+				},
+			},
+		},
+		{
+			name: "multiple groups",
+			timelineSources: []map[string]any{
+				{
+					"rawSeriesKey": "series_101",
+					"seriesId":     101,
+					"binDuration":  1_000_000,
+					"rendererId":   "renderer_101_1000000",
+					"output":       "output_101_1000000",
+				},
+				{
+					"rawSeriesKey": "series_102",
+					"seriesId":     102,
+					"binDuration":  1_000_000,
+					"rendererId":   "renderer_102_1000000",
+					"output":       "output_102_1000000",
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parsedRecipe := parseTimelineConfigWrapperRecipe(t, map[string]any{
+				"timelineSources":      test.timelineSources,
+				"expectedBinDurations": []int{1_000_000, 2_000_000},
+				"timeDomain":           validTimelineConfigTimeDomain(),
+			})
+
+			_, err := executeRenderStage(
+				t,
+				parsedRecipe,
+				[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
+				[]cdf.ModelView{cdf.NewOnDiskModel(t.TempDir(), &cdf.Manifest{}, cdf.Metadata{})},
+				map[string]any{},
+				renderStageOptions{},
+			)
+			require.ErrorContains(
+				t,
+				err,
+				"Timeline LoD catalogue is inconsistent: group series_101 defines bin durations [1000000], expected [1000000, 2000000]",
+			)
+		})
+	}
 }
 
 func TestNeoprofTimelineConfigUsesCaptureDurationAndZeroBinOrigin(t *testing.T) {

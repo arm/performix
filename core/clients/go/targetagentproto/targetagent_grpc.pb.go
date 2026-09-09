@@ -65,7 +65,7 @@ type TargetAgentClient interface {
 	GetPrivilegeInfo(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetPrivilegeInfoResponse, error)
 	// StartProcess starts a process on the target with the specified command and options.
 	// The returned PID can be used to manage the process (e.g. stream output, wait for completion, kill, etc.).
-	// Clients must call ReleaseProcessHandles with the PID when they are finished with the process to allow the agent to clean up any associated resources.
+	//Clients must call ReleaseProcessHandles with the PID when they are finished with the process to allow the agent to clean up any associated resources.
 	StartProcess(ctx context.Context, in *StartProcessRequest, opts ...grpc.CallOption) (*StartProcessResponse, error)
 	ReleaseProcessHandles(ctx context.Context, in *ReleaseProcessHandlesRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	ExecCommand(ctx context.Context, in *ExecCommandRequest, opts ...grpc.CallOption) (*CommandResult, error)
@@ -539,7 +539,7 @@ type TargetAgentServer interface {
 	GetPrivilegeInfo(context.Context, *emptypb.Empty) (*GetPrivilegeInfoResponse, error)
 	// StartProcess starts a process on the target with the specified command and options.
 	// The returned PID can be used to manage the process (e.g. stream output, wait for completion, kill, etc.).
-	// Clients must call ReleaseProcessHandles with the PID when they are finished with the process to allow the agent to clean up any associated resources.
+	//Clients must call ReleaseProcessHandles with the PID when they are finished with the process to allow the agent to clean up any associated resources.
 	StartProcess(context.Context, *StartProcessRequest) (*StartProcessResponse, error)
 	ReleaseProcessHandles(context.Context, *ReleaseProcessHandlesRequest) (*emptypb.Empty, error)
 	ExecCommand(context.Context, *ExecCommandRequest) (*CommandResult, error)

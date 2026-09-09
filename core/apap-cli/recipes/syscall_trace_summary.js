@@ -55,8 +55,9 @@ const recipe = {
   title: 'Syscall Trace Summary',
   version: '1.0.0',
   api_version: '1.0.0',
-  status: 'preview',
-  description: 'Summarizes Linux syscall activity collected with strace.',
+  status: 'stable',
+  description:
+    'The Syscall Trace Summary recipe shows the frequency, duration, and failure rate of Linux system calls made by your workload. It helps you identify excessive or failing system calls and understand how your application interacts with the operating system.',
   mcp_guidance:
     'This recipe supports launch and attach workloads only. Do not run it with the system workload because system-wide syscall tracing is not supported.',
   deployments: [

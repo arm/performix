@@ -36,6 +36,8 @@ const mainActivitiesCommand = "dumpsys package r" + // dump all resolver tables
 	" | grep '/'" + // grep only the lines containing "pkg_name/activity_name"
 	" | sort | uniq" // avoid duplicate activities
 
+const packageDetailsCommand = "dumpsys package packages | grep -E '^[[:space:]]*Package \\[|^[[:space:]]*flags=\\['"
+
 // The result of running `cmd` should be packages with MAIN activities:
 // * com.example.package1/main.activity.name1
 // * com.example.package1/main.activity.name2
@@ -65,19 +67,58 @@ func ListPackages(processManager process.ProcessManager) (*targetagentproto.Andr
 	}
 
 	mainActivitiesByPackage := parseMainActivityComponentsByPackage(resolverResult.Stdout)
+	detailsResult, err := processManager.ExecCommand(&process.LaunchCommand{Command: []string{"sh", "-c", packageDetailsCommand}})
+	if err != nil {
+		return nil, message.New(message.AgentGrpcserverApiTargetAgentListAndroidPackages).WithCause(err)
+	}
+	if detailsResult.Rc != 0 {
+		return nil, message.New(message.AgentGrpcserverApiTargetAgentListAndroidPackages).
+			WithCause(fmt.Errorf("package details query exited with code %d: %s", detailsResult.Rc, strings.TrimSpace(detailsResult.Stderr)))
+	}
+
+	debuggablePackages := parseDebuggablePackages(detailsResult.Stdout)
 	packages := make([]*targetagentproto.AndroidPackage, 0, len(packageNames))
 	for _, packageName := range packageNames {
 		activities := mainActivitiesByPackage[packageName]
 		if len(activities) == 0 {
 			continue
 		}
+		var debuggable *bool
+		if value, found := debuggablePackages[packageName]; found {
+			debuggable = &value
+		}
 		packages = append(packages, &targetagentproto.AndroidPackage{
 			Name:       packageName,
 			Activities: activitiesToProto(activities),
+			Debuggable: debuggable,
 		})
 	}
 
 	return &targetagentproto.AndroidPackageList{Packages: packages}, nil
+}
+
+func parseDebuggablePackages(output string) map[string]bool {
+	debuggablePackages := map[string]bool{}
+	packageName := ""
+
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Package [") {
+			nameAndSuffix := strings.TrimPrefix(line, "Package [")
+			name, _, found := strings.Cut(nameAndSuffix, "]")
+			if found {
+				packageName = name
+			}
+			continue
+		}
+		if packageName == "" || !strings.HasPrefix(line, "flags=[") {
+			continue
+		}
+		debuggablePackages[packageName] = strings.Contains(line, "DEBUGGABLE")
+		packageName = ""
+	}
+
+	return debuggablePackages
 }
 
 func parsePackageList(output string) []string {

@@ -45,12 +45,16 @@ func TestRunQueryTool(t *testing.T) {
 		require.NotNil(t, tool.Annotations)
 		assert.True(t, tool.Annotations.ReadOnlyHint)
 		var inputSchema struct {
-			Required []string `json:"required"`
+			Required   []string `json:"required"`
+			Properties map[string]struct {
+				Type string `json:"type"`
+			} `json:"properties"`
 		}
 		encodedInputSchema, err := json.Marshal(tool.InputSchema)
 		require.NoError(t, err)
 		require.NoError(t, json.Unmarshal(encodedInputSchema, &inputSchema))
 		assert.Equal(t, []string{"run_id", "sql"}, inputSchema.Required)
+		assert.Equal(t, "boolean", inputSchema.Properties["include_resolved_tables"].Type)
 		var outputSchema struct {
 			Required   []string `json:"required"`
 			Properties map[string]struct {
@@ -65,6 +69,7 @@ func TestRunQueryTool(t *testing.T) {
 		assert.Equal(t, []string{"columns", "rows", "returned_row_count"}, outputSchema.Required)
 		require.NotNil(t, outputSchema.Properties["rows"].Items)
 		assert.Equal(t, "array", outputSchema.Properties["rows"].Items.Type)
+		assert.Contains(t, outputSchema.Properties, "resolved_tables")
 	})
 
 	t.Run("returns columns and rows", func(t *testing.T) {
@@ -102,9 +107,73 @@ func TestRunQueryTool(t *testing.T) {
 		text, ok := result.Content[0].(*mcp.TextContent)
 		require.True(t, ok)
 		require.NoError(t, json.Unmarshal([]byte(text.Text), &content))
+		assert.NotContains(t, text.Text, "resolved_tables")
 		assert.Equal(t, []runQueryColumn{{Name: "name"}, {Name: "samples"}}, content.Columns)
 		assert.Equal(t, [][]any{{"hot", 42.0}}, content.Rows)
 		assert.Equal(t, 1, content.ReturnedRowCount)
+		assert.Nil(t, content.ResolvedTables)
+	})
+
+	t.Run("returns resolved tables when requested", func(t *testing.T) {
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		resolved := &apapproto.VisualizationResolvedTablesList{
+			Entries: []*apapproto.VisualizationResolvedTables{
+				{
+					Id: &apapproto.VisualizationId{Value: "asct_analysis"},
+					Tables: map[string]*apapproto.StringArray{
+						"numaLatencyMatrix":   {Values: []string{"flat_table"}},
+						"numaBandwidthMatrix": {Values: []string{"flat_table_1"}},
+					},
+				},
+				{
+					Id: &apapproto.VisualizationId{Value: "asct_system_info_table"},
+					Tables: map[string]*apapproto.StringArray{
+						"systemInformation": {Values: []string{"flat_table_8"}},
+					},
+				},
+			},
+		}
+		successfulRunQueryRender(engine, "run-asct", "session-asct", resolved)
+		engine.On("Query", mock.Anything, mock.Anything).Return(newRunQueryStream(
+			runQueryDescription("table_name"),
+			runQueryArrowRows(
+				t,
+				arrow.NewSchema([]arrow.Field{{Name: "table_name", Type: arrow.BinaryTypes.String}}, nil),
+				map[string]any{"table_name": "flat_table"},
+			),
+		), nil).Once()
+		expectRunQueryClose(engine, "session-asct")
+		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine}, RunQueryTool{}.Register)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "run_query",
+			Arguments: map[string]any{
+				"run_id":                  "run-asct",
+				"sql":                     "SELECT table_name FROM information_schema.tables",
+				"include_resolved_tables": true,
+			},
+		})
+
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+		var content runQueryResult
+		require.Len(t, result.Content, 1)
+		text, ok := result.Content[0].(*mcp.TextContent)
+		require.True(t, ok)
+		require.NoError(t, json.Unmarshal([]byte(text.Text), &content))
+		require.NotNil(t, content.ResolvedTables)
+		assert.Equal(t, runQueryResolvedTables{
+			"asct_analysis": {
+				"numaLatencyMatrix":   {"flat_table"},
+				"numaBandwidthMatrix": {"flat_table_1"},
+			},
+			"asct_system_info_table": {
+				"systemInformation": {"flat_table_8"},
+			},
+		}, *content.ResolvedTables)
 	})
 
 	t.Run("returns columns for an empty result", func(t *testing.T) {
@@ -319,6 +388,33 @@ func TestRunQueryTool(t *testing.T) {
 		require.ErrorContains(t, err, "serialized response")
 	})
 
+	t.Run("counts resolved tables toward the JSON size limit", func(t *testing.T) {
+		engine := apapprotomocks.NewApapClient(t)
+		resolved := &apapproto.VisualizationResolvedTablesList{
+			Entries: []*apapproto.VisualizationResolvedTables{{
+				Id: &apapproto.VisualizationId{Value: "large_visualization"},
+				Tables: map[string]*apapproto.StringArray{
+					"data": {Values: []string{strings.Repeat("t", runQueryMaxResultBytes)}},
+				},
+			}},
+		}
+		successfulRunQueryRender(engine, "run-1", "session-large-metadata", resolved)
+		engine.On("Query", mock.Anything, mock.Anything).Return(newRunQueryStream(
+			runQueryDescription("value"),
+			runQueryArrowRows(t, arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.BinaryTypes.String}}, nil)),
+		), nil).Once()
+		expectRunQueryClose(engine, "session-large-metadata")
+
+		_, err := executeRunQuery(context.Background(), engine, runQueryInput{
+			RunID:                 "run-1",
+			SQL:                   "SELECT value FROM data WHERE false",
+			IncludeResolvedTables: true,
+		})
+
+		require.ErrorContains(t, err, fmt.Sprintf("query limit (%d MiB)", runQueryMaxResultMiB))
+		require.ErrorContains(t, err, "serialized response")
+	})
+
 	t.Run("returns unsigned integer results", func(t *testing.T) {
 		engine := apapprotomocks.NewApapClient(t)
 		successfulRunQueryRender(engine, "run-1", "session-unsigned")
@@ -438,23 +534,32 @@ func (s *fakeRunQueryStream) Recv() (*apapproto.QueryResponse, error) {
 	return nil, io.EOF
 }
 
-func successfulRunQueryRender(engine *apapprotomocks.ApapClient, runID string, sessionID string) *apapproto.PrepareRenderResponse {
+func successfulRunQueryRender(
+	engine *apapprotomocks.ApapClient,
+	runID string,
+	sessionID string,
+	resolvedTables ...*apapproto.VisualizationResolvedTablesList,
+) *apapproto.PrepareRenderResponse {
 	prepared := &apapproto.PrepareRenderResponse{
 		Renderers:      []*apapproto.RendererConfig{{Renderer: "hot-functions"}},
 		Visualizations: []*apapproto.VisualizationConfig{{Type: "hot-functions-table"}},
 	}
 	expectRunQueryPrepare(engine, runID, prepared)
+	response := &apapproto.InvokeRenderResponse{
+		SessionId: sessionID,
+		InvocationStatuses: []*apapproto.RendererInvocationStatus{{
+			Status: &apapproto.RendererInvocationStatus_Success{Success: &apapproto.Success{}},
+		}},
+	}
+	if len(resolvedTables) > 0 {
+		response.VisualizationResolvedTables = resolvedTables[0]
+	}
 	engine.On("InvokeRender", mock.Anything, mock.MatchedBy(func(req *apapproto.InvokeRenderRequest) bool {
 		return len(req.GetContent().GetRuns()) == 1 &&
 			req.GetContent().GetRuns()[0].GetValue() == runID &&
 			len(req.GetRendererConfig()) == 1 &&
 			len(req.GetVisualizationConfig()) == 1
-	})).Return(&apapproto.InvokeRenderResponse{
-		SessionId: sessionID,
-		InvocationStatuses: []*apapproto.RendererInvocationStatus{{
-			Status: &apapproto.RendererInvocationStatus_Success{Success: &apapproto.Success{}},
-		}},
-	}, nil).Once()
+	})).Return(response, nil).Once()
 	return prepared
 }
 

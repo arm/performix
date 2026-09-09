@@ -117,6 +117,14 @@ func MarshalJSONCLIResponseWithErrorAndSeverity[T any](out io.Writer, data T, er
 // control over error reporting.
 var ErrorAlreadyHandled = errors.New("CLI error already handled")
 
+// MarkErrorHandled marks an error as handled after a command has written its
+// own error output. For example, a command may write a JSON response containing
+// partial results and the error. The marker stops the root command from writing
+// a second error response, while retaining the original error for the exit code.
+func MarkErrorHandled(err error) error {
+	return errors.Join(ErrorAlreadyHandled, err)
+}
+
 // HandleCLIError handles errors for CLI commands. Handling is different
 // depending on whether the output should be in JSON format or text output.
 func HandleCLIError(out io.Writer, err error) {

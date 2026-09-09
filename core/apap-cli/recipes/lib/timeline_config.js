@@ -6,6 +6,7 @@
 const TABLE_PLACEHOLDER = '{table}';
 const RANGE_START_PLACEHOLDER = '{rangeStart}';
 const RANGE_END_PLACEHOLDER = '{rangeEnd}';
+const NANOSECONDS_PER_SECOND = 1_000_000_000;
 
 /**
  * Build the chart-ready query shared by every LoD source in a logical group.
@@ -37,10 +38,7 @@ function buildTimelinePivotQuery(binOrigin) {
       SELECT
         source.start_timestamp,
         source.end_timestamp,
-        source.series_id,
         source.bin_duration,
-        source.device_no,
-        source.thread,
         source.value,
         requested_range.range_start,
         requested_range.range_end
@@ -52,14 +50,10 @@ function buildTimelinePivotQuery(binOrigin) {
     expanded AS (
       SELECT
         CAST(generated.x_start AS BIGINT) AS x_start,
-        relevant_rows.device_no,
-        relevant_rows.thread,
-        -- A compressed delta row's value covers its complete interval.
-        -- Apportion it equally across the aligned bins represented by the row.
-        relevant_rows.value * relevant_rows.bin_duration /
-          (relevant_rows.end_timestamp - relevant_rows.start_timestamp) AS value,
-        relevant_rows.range_start,
-        relevant_rows.range_end
+        -- A compressed delta row's value covers its complete interval. Convert
+        -- that delta directly to a per-second rate for every represented bin.
+        relevant_rows.value * ${NANOSECONDS_PER_SECOND}.0 /
+          (relevant_rows.end_timestamp - relevant_rows.start_timestamp) AS value
       FROM relevant_rows
       CROSS JOIN LATERAL generate_series(
         CASE
@@ -73,17 +67,12 @@ function buildTimelinePivotQuery(binOrigin) {
         bin_duration
       ) AS generated(x_start)
     ),
-    series_keys AS (
-      SELECT DISTINCT
-        device_no,
-        thread,
-        concat(
-          'dev',
-          CAST(device_no AS VARCHAR),
-          '_thread',
-          CAST(thread AS VARCHAR)
-        ) AS device_thread_key
-      FROM relevant_rows
+    aggregated_rows AS (
+      SELECT
+        x_start,
+        SUM(value) AS value
+      FROM expanded
+      GROUP BY x_start
     ),
     bin_grid AS (
       SELECT CAST(generated.x_start AS BIGINT) AS x_start
@@ -110,27 +99,14 @@ function buildTimelinePivotQuery(binOrigin) {
         range_end - 1,
         bin_duration
       ) AS generated(x_start)
-    ),
-    chart_rows AS (
-      SELECT
-        bin_grid.x_start,
-        series_keys.device_thread_key,
-        COALESCE(MAX(expanded.value), 0) AS value
-      FROM bin_grid
-      CROSS JOIN series_keys
-      LEFT JOIN expanded
-        ON expanded.x_start = bin_grid.x_start
-        AND expanded.device_no = series_keys.device_no
-        AND expanded.thread = series_keys.thread
-      GROUP BY
-        bin_grid.x_start,
-        series_keys.device_thread_key
     )
-    PIVOT chart_rows
-    ON device_thread_key
-    USING MAX(value)
-    GROUP BY x_start
-    ORDER BY x_start
+    SELECT
+      bin_grid.x_start,
+      COALESCE(aggregated_rows.value, 0) AS value
+    FROM bin_grid
+    LEFT JOIN aggregated_rows
+      ON aggregated_rows.x_start = bin_grid.x_start
+    ORDER BY bin_grid.x_start
   `.trim();
 }
 
@@ -148,6 +124,7 @@ function assertSafeInteger(value, name) {
 /**
  * @typedef {Object} TimelineSource
  * @property {string} rawSeriesKey
+ * @property {number} [keyType]
  * @property {string} rendererId
  * @property {string} output
  * @property {number} seriesId
@@ -159,6 +136,10 @@ function assertSafeInteger(value, name) {
  * @property {TimelineSource[]} timelineSources
  * @property {{start: number, end: number, unit: 'ns'}} timeDomain
  * @property {number} [binOrigin]
+ * @property {readonly number[]} [expectedBinDurations]
+ * @property {string} [incompleteCatalogueMessageCode]
+ * @property {Map<string, {title: string, description: string, units: string}>} [metadataBySeriesKey]
+ * @property {Map<number, {title: string, description: string, units: string}>} [metadataBySeriesId]
  */
 
 /**
@@ -176,7 +157,7 @@ function buildTimelineVisualization(args) {
     return { visualizations: [] };
   }
 
-  /** @type {Map<string, {seriesId: number, sources: TimelineSource[]}>} */
+  /** @type {Map<string, {keyType?: number, seriesId: number, sources: TimelineSource[]}>} */
   const sourcesByGroup = new Map();
 
   for (const source of timelineSources) {
@@ -189,6 +170,12 @@ function buildTimelineVisualization(args) {
     assertSafeInteger(source.seriesId, 'Timeline source seriesId');
     if (source.seriesId < 0) {
       throw new Error('Timeline source seriesId must not be negative');
+    }
+    if (source.keyType !== undefined) {
+      assertSafeInteger(source.keyType, 'Timeline source keyType');
+      if (source.keyType < 0) {
+        throw new Error('Timeline source keyType must not be negative');
+      }
     }
     if (
       typeof source.rendererId !== 'string' ||
@@ -207,9 +194,15 @@ function buildTimelineVisualization(args) {
           `Timeline group ${source.rawSeriesKey} contains inconsistent series IDs`,
         );
       }
+      if (existingGroup.keyType !== source.keyType) {
+        throw new Error(
+          `Timeline group ${source.rawSeriesKey} contains inconsistent key types`,
+        );
+      }
       existingGroup.sources.push(source);
     } else {
       sourcesByGroup.set(source.rawSeriesKey, {
+        ...(source.keyType === undefined ? {} : { keyType: source.keyType }),
         seriesId: source.seriesId,
         sources: [source],
       });
@@ -219,6 +212,7 @@ function buildTimelineVisualization(args) {
   const logicalGroups = [...sourcesByGroup.entries()]
     .map(([groupKey, group]) => ({
       groupKey,
+      keyType: group.keyType,
       seriesId: group.seriesId,
       sources: [...group.sources].sort(
         (left, right) => left.binDuration - right.binDuration,
@@ -226,26 +220,50 @@ function buildTimelineVisualization(args) {
     }))
     .sort(
       (left, right) =>
+        (left.keyType ?? -1) - (right.keyType ?? -1) ||
         left.seriesId - right.seriesId ||
         left.groupKey.localeCompare(right.groupKey),
     );
 
-  const commonBinDurations = logicalGroups
-    .map((group) => new Set(group.sources.map((source) => source.binDuration)))
-    .reduce(
-      (common, durations) =>
-        new Set([...common].filter((duration) => durations.has(duration))),
-    );
-  if (commonBinDurations.size === 0) {
-    return { visualizations: [] };
+  // Every series must emit every expected LoD file, even when that file
+  // contains zero rows.
+  const expectedBinDurations = [
+    ...(args.expectedBinDurations ??
+      logicalGroups[0].sources.map((source) => source.binDuration)),
+  ].sort((left, right) => left - right);
+  for (const duration of expectedBinDurations) {
+    assertSafeInteger(duration, 'Timeline expected bin duration');
+    if (duration <= 0) {
+      throw new Error('Timeline expected bin duration must be positive');
+    }
+  }
+  if (new Set(expectedBinDurations).size !== expectedBinDurations.length) {
+    throw new Error('Timeline expected bin durations must be unique');
   }
 
-  const compatibleLogicalGroups = logicalGroups.map((group) => ({
-    ...group,
-    sources: group.sources.filter((source) =>
-      commonBinDurations.has(source.binDuration),
-    ),
-  }));
+  for (const group of logicalGroups) {
+    const binDurations = group.sources.map((source) => source.binDuration);
+    if (
+      binDurations.length !== expectedBinDurations.length ||
+      binDurations.some(
+        (duration, index) => duration !== expectedBinDurations[index],
+      )
+    ) {
+      const cause = `Timeline LoD catalogue is inconsistent: group ${group.groupKey} defines bin durations [${binDurations.join(', ')}], expected [${expectedBinDurations.join(', ')}]`;
+      if (args.incompleteCatalogueMessageCode !== undefined) {
+        throw {
+          code: args.incompleteCatalogueMessageCode,
+          metadata: {
+            groupKey: group.groupKey,
+            availableBinDurations: binDurations.join(', '),
+            expectedBinDurations: expectedBinDurations.join(', '),
+          },
+          cause,
+        };
+      }
+      throw new Error(cause);
+    }
+  }
 
   /** @type {Record<string, any[]>} */
   const tables = {};
@@ -253,7 +271,7 @@ function buildTimelineVisualization(args) {
   const groups = {};
   const query = buildTimelinePivotQuery(args.binOrigin);
 
-  for (const [groupIndex, group] of compatibleLogicalGroups.entries()) {
+  for (const [groupIndex, group] of logicalGroups.entries()) {
     const lods = [];
     for (const source of group.sources) {
       const sourceKey = `${group.groupKey}_${source.binDuration}`;
@@ -269,16 +287,28 @@ function buildTimelineVisualization(args) {
       });
     }
 
-    const seriesLabel = `Series ${group.seriesId}`;
+    const seriesMetadata =
+      args.metadataBySeriesKey?.get(group.groupKey) ??
+      args.metadataBySeriesId?.get(group.seriesId);
+    const defaultSeriesLabel =
+      group.keyType === undefined
+        ? `Series ${group.seriesId}`
+        : `Key ${group.keyType}, Series ${group.seriesId}`;
+    const seriesLabel = seriesMetadata?.title ?? defaultSeriesLabel;
     groups[group.groupKey] = {
       title: seriesLabel,
       type: 'line',
       index: groupIndex,
-      description: `Timeline data for ${seriesLabel}.`,
+      description:
+        seriesMetadata?.description ?? `Timeline data for ${seriesLabel}.`,
       lods,
       config: {
-        xAxisTitle: 'Time (ns)',
-        yAxisTitle: 'Value',
+        xAxisTitle: 'Time (s)',
+        yAxisTitle: 'Rate',
+        yAxisUnit:
+          seriesMetadata?.units.length > 0
+            ? `${seriesMetadata.units}/s`
+            : 'events/s',
         customQuery: {
           tableNamePlaceholder: TABLE_PLACEHOLDER,
           rangeStartPlaceholder: RANGE_START_PLACEHOLDER,
@@ -287,10 +317,10 @@ function buildTimelineVisualization(args) {
         },
         series: [
           {
-            type: 'pattern',
-            name: { template: 'Device {y1} Thread {y2}' },
+            type: 'single',
+            name: 'Total',
             xColumn: 'x_start',
-            yColumn: { pattern: '^dev(\\d+)_thread(\\d+)$' },
+            yColumn: 'value',
           },
         ],
       },
@@ -302,11 +332,12 @@ function buildTimelineVisualization(args) {
       {
         type: 'timeline',
         id: 'timeline',
-        rendererId: compatibleLogicalGroups[0].sources[0].rendererId,
+        rendererId: logicalGroups[0].sources[0].rendererId,
         title: 'Timeline',
         description: 'Preview timeline data for hotspots analysis.',
         config: {
-          xAxisUnit: 'ns',
+          xAxisUnit: 's',
+          xAxisDisplayScale: 1e-9,
           timeDomain: args.timeDomain,
           ...(args.binOrigin === undefined
             ? {}
@@ -326,7 +357,14 @@ function buildTimelineVisualization(args) {
  * provider-owned Timeline domain. The JSON is produced from
  * capture_metadata.parquet by the parquet-to-json converter.
  *
- * @param {{timelineSources: TimelineSource[], captureMetadata: unknown}} args
+ * @param {{
+ *   timelineSources: TimelineSource[],
+ *   captureMetadata: unknown,
+ *   expectedBinDurations?: readonly number[],
+ *   incompleteCatalogueMessageCode?: string,
+ *   metadataBySeriesKey?: Map<string, {title: string, description: string, units: string}>,
+ *   metadataBySeriesId?: Map<number, {title: string, description: string, units: string}>
+ * }} args
  * @returns {{visualizations: any[]}}
  */
 function buildNeoprofTimelineVisualization(args) {
@@ -362,6 +400,10 @@ function buildNeoprofTimelineVisualization(args) {
       unit: 'ns',
     },
     binOrigin: 0,
+    expectedBinDurations: args.expectedBinDurations,
+    incompleteCatalogueMessageCode: args.incompleteCatalogueMessageCode,
+    metadataBySeriesKey: args.metadataBySeriesKey,
+    metadataBySeriesId: args.metadataBySeriesId,
   });
 }
 

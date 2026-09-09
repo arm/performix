@@ -65,7 +65,7 @@ func newMCPStartCmd(runner MCPRunner) *cobra.Command {
 			if err != nil {
 				wrappedErr := fmt.Errorf("failed to start MCP server: %w", err)
 				clijson.HandleCLIError(cmd.ErrOrStderr(), wrappedErr)
-				return errors.Join(clijson.ErrorAlreadyHandled, wrappedErr)
+				return clijson.MarkErrorHandled(wrappedErr)
 			}
 
 			return nil

@@ -1,0 +1,1108 @@
+{
+    "$defs": {
+        "Access": {
+            "description": "Enumeration of possible values for access",
+            "enum": [
+                "PMU",
+                "ETE"
+            ],
+            "title": "Access",
+            "type": "string"
+        },
+        "Description": {
+            "description": "Text written with a Markdown syntax.\ncan be templated with jinja2 and include a `link` which is used to render a link template define by the generator\n\n.. code-block:: yaml\n\n    This is a description that has link to a parameter [PARAM1]({{link('Parameter', 'PARAM1')}})\n\nThe template of the link can then be defined in when rendering the description:\n\n.. code-block:: python\n\n    my_desc.to_html({'Parameter': '#{{_type}}_{{name}}'})",
+            "title": "Description",
+            "type": "string"
+        },
+        "BitField": {
+            "additionalProperties": false,
+            "description": "Represents a bit slice of a register and its nested fields.",
+            "properties": {
+                "properties": {
+                    "type": "object",
+                    "title": "Properties"
+                },
+                "range": {
+                    "description": "Bit range covered by this slice",
+                    "title": "Range",
+                    "type": "string"
+                },
+                "fields": {
+                    "description": "Fields in this slice",
+                    "items": {
+                        "$ref": "#/$defs/RegisterField"
+                    },
+                    "title": "Fields",
+                    "type": "array"
+                }
+            },
+            "required": [
+                "range"
+            ],
+            "title": "BitField",
+            "type": "object"
+        },
+        "FilterEvent": {
+            "additionalProperties": false,
+            "description": "FilterEvent class",
+            "properties": {
+                "properties": {
+                    "type": "object",
+                    "title": "Properties"
+                },
+                "event": {
+                    "description": "Event to be combined",
+                    "title": "Event",
+                    "type": "string"
+                },
+                "filter_name": {
+                    "description": "Filter to be combined",
+                    "title": "Filter Name",
+                    "type": "string"
+                },
+                "encodings": {
+                    "description": "List of encodings to be combined",
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Encodings",
+                    "type": "array"
+                },
+                "skip_suffix": {
+                    "default": "",
+                    "description": "Configure which expanded metric will not have encodings suffixes in the name",
+                    "title": "Skip Suffix",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "event",
+                "filter_name"
+            ],
+            "title": "FilterEvent",
+            "type": "object"
+        },
+        "PayloadFilterField": {
+            "additionalProperties": false,
+            "description": "Field in payload filter",
+            "properties": {
+                "name": {
+                    "default": null,
+                    "description": "Name of the filter",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "fields": {
+                    "default": null,
+                    "description": "Field data",
+                    "title": "Fields",
+                    "type": "object"
+                }
+            },
+            "title": "PayloadFilterField",
+            "type": "object"
+        },
+        "PrivateEvent": {
+            "additionalProperties": false,
+            "description": "Private Event has only code",
+            "properties": {
+                "code": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Event register code for counting",
+                    "title": "Code"
+                }
+            },
+            "title": "PrivateEvent",
+            "type": "object"
+        },
+        "ProductDefinedAttributes": {
+            "additionalProperties": false,
+            "description": "Attributes specific to product-defined events.",
+            "properties": {
+                "debug": {
+                    "description": "True if it is a debug event",
+                    "title": "Debug",
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "debug"
+            ],
+            "title": "ProductDefinedAttributes",
+            "type": "object"
+        },
+        "Register": {
+            "additionalProperties": false,
+            "description": "Describes a register and its bit-field composition.",
+            "properties": {
+                "properties": {
+                    "type": "object",
+                    "title": "Properties"
+                },
+                "name": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Register name",
+                    "title": "Name"
+                },
+                "bit_field": {
+                    "description": "Bit field layout for the register(s)",
+                    "items": {
+                        "$ref": "#/$defs/BitField"
+                    },
+                    "title": "Bit Field",
+                    "type": "array"
+                }
+            },
+            "title": "Register",
+            "type": "object"
+        },
+        "RegisterField": {
+            "additionalProperties": false,
+            "description": "Represents a single field within a register bit slice.",
+            "properties": {
+                "properties": {
+                    "type": "object",
+                    "title": "Properties"
+                },
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                },
+                "range": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Bit range inside the parent slice",
+                    "title": "Range"
+                },
+                "description": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/$defs/Description"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Description of the field"
+                },
+                "encodings": {
+                    "additionalProperties": {
+                        "anyOf": [
+                            {
+                                "type": "integer"
+                            },
+                            {
+                                "type": "string"
+                            }
+                        ]
+                    },
+                    "description": "Optional symbolic encodings for the field",
+                    "title": "Encodings",
+                    "type": "object"
+                },
+                "default": {
+                    "anyOf": [
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Default value or encoding",
+                    "title": "Default"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "title": "RegisterField",
+            "type": "object"
+        },
+        "RegisterFilter": {
+            "additionalProperties": false,
+            "description": "Container mapping register configuration names to their definitions.",
+            "properties": {
+                "properties": {
+                    "type": "object",
+                    "title": "Properties"
+                },
+                "name": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Register name",
+                    "title": "Name"
+                },
+                "bit_field": {
+                    "description": "Bit field layout for the register(s)",
+                    "items": {
+                        "$ref": "#/$defs/BitField"
+                    },
+                    "title": "Bit Field",
+                    "type": "array"
+                },
+                "match_register": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Match register name",
+                    "title": "Match Register"
+                },
+                "mask_register": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Mask register name",
+                    "title": "Mask Register"
+                }
+            },
+            "title": "RegisterFilter",
+            "type": "object"
+        },
+        "DecisionTree": {
+            "additionalProperties": false,
+            "description": "DecisionTree model dataclass",
+            "example": {
+                "decision_tree": {
+                    "metrics": [
+                        {
+                            "group": "node_group",
+                            "name": "node",
+                            "next_items": [
+                                "Next_Node"
+                            ],
+                            "sample_events": [
+                                "NODE_EVENT"
+                            ]
+                        }
+                    ],
+                    "root_nodes": [
+                        "root_node"
+                    ]
+                }
+            },
+            "properties": {
+                "root_nodes": {
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Root Nodes",
+                    "type": "array"
+                },
+                "metrics": {
+                    "items": {
+                        "$ref": "#/$defs/MetricTree"
+                    },
+                    "title": "Metrics",
+                    "type": "array"
+                }
+            },
+            "required": [
+                "root_nodes",
+                "metrics"
+            ],
+            "title": "DecisionTree",
+            "type": "object"
+        },
+        "DocumentMetadata": {
+            "additionalProperties": false,
+            "description": "Model to validate the DocumentMetadata",
+            "example": {
+                "document": {
+                    "confidential": false,
+                    "copyright": "Copyright 2022-2023 Arm Ltd.",
+                    "description": "Telemetry Specification for Neoverse Min processor",
+                    "license": "Apache-2.0",
+                    "quality": "Development",
+                    "timestamp": "12 Mar 13:54:40 2024"
+                }
+            },
+            "properties": {
+                "timestamp": {
+                    "description": "When the document has been generated",
+                    "title": "Timestamp",
+                    "type": "string"
+                },
+                "copyright": {
+                    "description": "Document copyright",
+                    "title": "Copyright",
+                    "type": "string"
+                },
+                "confidential": {
+                    "description": "Specify if the document is confidential or not",
+                    "title": "Confidential",
+                    "type": "boolean"
+                },
+                "quality": {
+                    "description": "Quality level of the document. Available values: Development, Alpha, Beta, Release",
+                    "title": "Quality",
+                    "type": "string"
+                },
+                "license": {
+                    "description": "Document license",
+                    "title": "License",
+                    "type": "string"
+                },
+                "description": {
+                    "$ref": "#/$defs/Description",
+                    "description": "Document description"
+                },
+                "revision": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Document revision",
+                    "title": "Revision"
+                },
+                "sha1": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "sha1 or version of the repo who generated the document",
+                    "title": "Sha1"
+                }
+            },
+            "required": [
+                "timestamp",
+                "copyright",
+                "confidential",
+                "quality",
+                "license",
+                "description"
+            ],
+            "title": "DocumentMetadata",
+            "type": "object"
+        },
+        "Event": {
+            "additionalProperties": false,
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "architecture_defined": {
+                                "const": false
+                            }
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "architecture_defined_attributes": {
+                                "type": "null"
+                            }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "product_defined": {
+                                "const": false
+                            }
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "product_defined_attributes": {
+                                "type": "null"
+                            }
+                        }
+                    }
+                },
+                {
+                    "not": {
+                        "properties": {
+                            "architecture_defined": {
+                                "const": true
+                            },
+                            "product_defined": {
+                                "const": true
+                            }
+                        }
+                    }
+                }
+            ],
+            "description": "Event Model dataclass",
+            "example": {
+                "events": {
+                    "EVENTX": {
+                        "accesses": [
+                            "PMU"
+                        ],
+                        "architectural": false,
+                        "code": "0x1",
+                        "common": false,
+                        "description": "EventX description here",
+                        "impdef": false,
+                        "properties": {
+                            "A": "B"
+                        },
+                        "title": "Example"
+                    },
+                    "SYS_EVENT": {
+                        "accesses": [
+                            "PMU"
+                        ],
+                        "architectural": true,
+                        "common": true,
+                        "description": "System-level event",
+                        "impdef": false,
+                        "properties": {
+                            "X": "Y"
+                        },
+                        "system": true,
+                        "title": "System Event"
+                    }
+                }
+            },
+            "oneOf": [
+                {
+                    "properties": {
+                        "system": {
+                            "const": true
+                        }
+                    },
+                    "required": [
+                        "system"
+                    ]
+                },
+                {
+                    "properties": {
+                        "system": {
+                            "const": false
+                        }
+                    },
+                    "required": [
+                        "system",
+                        "code"
+                    ]
+                },
+                {
+                    "not": {
+                        "required": [
+                            "system"
+                        ]
+                    },
+                    "required": [
+                        "code"
+                    ]
+                }
+            ],
+            "properties": {
+                "code": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Event register code for counting",
+                    "title": "Code"
+                },
+                "title": {
+                    "description": "Title of the event",
+                    "title": "Title",
+                    "type": "string"
+                },
+                "description": {
+                    "$ref": "#/$defs/Description",
+                    "description": "Description of what is being counted for the event"
+                },
+                "accesses": {
+                    "description": "Access interface - PMU/ETM",
+                    "items": {
+                        "$ref": "#/$defs/Access"
+                    },
+                    "title": "Accesses",
+                    "type": "array"
+                },
+                "architecture_defined": {
+                    "description": "The event is defined in ARM architecture",
+                    "title": "Architecture Defined",
+                    "type": "boolean"
+                },
+                "product_defined": {
+                    "description": "The event is product defined",
+                    "title": "Product Defined",
+                    "type": "boolean"
+                },
+                "product_defined_attributes": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/$defs/ProductDefinedAttributes"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "List of product attributes if the event is product_defined"
+                },
+                "properties": {
+                    "anyOf": [
+                        {
+                            "type": "object"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "An expression for addition product specific attributes",
+                    "title": "Properties"
+                },
+                "system": {
+                    "default": false,
+                    "description": "If system is true, then it is a system event",
+                    "title": "System",
+                    "type": "boolean"
+                },
+                "payload_filter": {
+                    "$ref": "#/$defs/PayloadFilterField",
+                    "default": null,
+                    "description": "Payload filter data"
+                },
+                "monitor_config": {
+                    "additionalProperties": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "integer"
+                            }
+                        ]
+                    },
+                    "default": null,
+                    "description": "Monitor register field overrides keyed by field name",
+                    "title": "Monitor Config",
+                    "type": "object"
+                },
+                "registers": {
+                    "additionalProperties": {
+                        "type": "string"
+                    },
+                    "default": null,
+                    "description": "PMU registers configuration",
+                    "title": "Registers",
+                    "type": "object"
+                }
+            },
+            "required": [
+                "title",
+                "description",
+                "accesses",
+                "architecture_defined",
+                "product_defined"
+            ],
+            "title": "Event",
+            "type": "object"
+        },
+        "GroupCategory": {
+            "additionalProperties": false,
+            "description": "GroupCategory model dataclass",
+            "properties": {
+                "title": {
+                    "description": "Title of the category",
+                    "title": "Title",
+                    "type": "string"
+                },
+                "description": {
+                    "$ref": "#/$defs/Description",
+                    "description": "Description of the category"
+                },
+                "metrics": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "pattern": "^\\w+$",
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Group category metrics",
+                    "title": "Metrics"
+                },
+                "events": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Group category events",
+                    "title": "Events"
+                }
+            },
+            "required": [
+                "title",
+                "description"
+            ],
+            "title": "GroupCategory",
+            "type": "object"
+        },
+        "Methodology": {
+            "additionalProperties": false,
+            "description": "Methodology model dataclass",
+            "example": {
+                "topdown_methodology": {
+                    "decision_tree": {
+                        "metrics": [
+                            {
+                                "group": "stg_1_metric",
+                                "name": "root_node1",
+                                "next_items": [
+                                    "stg_2_metric"
+                                ],
+                                "sample_events": [
+                                    "NODE1"
+                                ]
+                            },
+                            {
+                                "group": "stg_1_metric",
+                                "name": "root_node2",
+                                "next_items": [
+                                    "stg_2_metric2"
+                                ],
+                                "sample_events": [
+                                    "NODE2"
+                                ]
+                            }
+                        ],
+                        "root_nodes": [
+                            "root_node1",
+                            "root_node2"
+                        ]
+                    },
+                    "description": "Topdown Performance Analysis Methodology",
+                    "metric_grouping": {
+                        "stage_1": [
+                            "stg_1_metric"
+                        ],
+                        "stage_2": [
+                            "stg_2_metric",
+                            "stg_2_metric2"
+                        ]
+                    },
+                    "title": "Topdown Methodology"
+                }
+            },
+            "properties": {
+                "title": {
+                    "description": "Methodology title",
+                    "title": "Title",
+                    "type": "string"
+                },
+                "description": {
+                    "$ref": "#/$defs/Description",
+                    "description": "Methodology description"
+                },
+                "metric_grouping": {
+                    "additionalProperties": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
+                    "description": "Metric groups used for each stage of the methodology added as lists",
+                    "title": "Metric Grouping",
+                    "type": "object"
+                },
+                "decision_tree": {
+                    "$ref": "#/$defs/DecisionTree",
+                    "description": "Stage 1 topdown analysis tree with root_nodes and child metrics. Each metric has the following fields: * name: metric name * group: metric groups the metric belong to * next_items: leaves of the node * sample_events: Events for sampling if the bottleneck is detected at this specific metric node"
+                }
+            },
+            "required": [
+                "title",
+                "description",
+                "metric_grouping",
+                "decision_tree"
+            ],
+            "title": "Methodology",
+            "type": "object"
+        },
+        "Metric": {
+            "additionalProperties": false,
+            "description": "Metric model dataclass",
+            "example": {
+                "metrics": {
+                    "a_metric": {
+                        "description": "Metric description here",
+                        "events": [],
+                        "formula": "NA",
+                        "title": "Example",
+                        "units": ""
+                    }
+                }
+            },
+            "properties": {
+                "title": {
+                    "description": "Title of the metrics",
+                    "title": "Title",
+                    "type": "string"
+                },
+                "formula": {
+                    "description": "Formula to compute the metrics",
+                    "title": "Formula",
+                    "type": "string"
+                },
+                "description": {
+                    "$ref": "#/$defs/Description",
+                    "description": "Description of the metrics"
+                },
+                "units": {
+                    "description": "Metrics unit",
+                    "title": "Units",
+                    "type": "string"
+                },
+                "events": {
+                    "description": "Events needed to calculate the metrics",
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Events",
+                    "type": "array"
+                },
+                "sample_events": {
+                    "description": "Events for sampling if the bottleneck is detected at this specific metric node",
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Sample Events",
+                    "type": "array"
+                },
+                "metrics": {
+                    "description": "Metrics needed to calculate the metrics",
+                    "items": {
+                        "pattern": "^\\w+$",
+                        "type": "string"
+                    },
+                    "title": "Metrics",
+                    "type": "array"
+                },
+                "watchpoints": {
+                    "description": "List of watchpoints needed in the metric formula",
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Watchpoints",
+                    "type": "array"
+                },
+                "filters": {
+                    "description": "List of filters with impacted events and selected values",
+                    "items": {
+                        "$ref": "#/$defs/FilterEvent"
+                    },
+                    "title": "Filters",
+                    "type": "array"
+                }
+            },
+            "required": [
+                "title",
+                "formula",
+                "description",
+                "units",
+                "events",
+                "sample_events"
+            ],
+            "title": "Metric",
+            "type": "object"
+        },
+        "MetricTree": {
+            "additionalProperties": false,
+            "description": "MetricTree model dataclass",
+            "example": {
+                "metrics": [
+                    {
+                        "group": "root_node_group",
+                        "name": "root_node",
+                        "next_items": [
+                            "Next_Root_Node"
+                        ],
+                        "sample_events": [
+                            "ROOT_NODE_EVENT"
+                        ]
+                    }
+                ]
+            },
+            "properties": {
+                "name": {
+                    "description": "Metric name",
+                    "title": "Name",
+                    "type": "string"
+                },
+                "group": {
+                    "description": "Metric groups the metric belong to",
+                    "title": "Group",
+                    "type": "string"
+                },
+                "next_items": {
+                    "description": "leaves of the node",
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Next Items",
+                    "type": "array"
+                },
+                "sample_events": {
+                    "description": "Events for sampling if the bottleneck is detected at this specific metric node",
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Sample Events",
+                    "type": "array"
+                }
+            },
+            "required": [
+                "name",
+                "group",
+                "next_items",
+                "sample_events"
+            ],
+            "title": "MetricTree",
+            "type": "object"
+        },
+        "PMUSpecification": {
+            "additionalProperties": false,
+            "description": "PMUSpecification output dataclass",
+            "properties": {
+                "$schema": {
+                    "title": "$schema",
+                    "type": "string"
+                },
+                "_type": {
+                    "const": "PMU_Specification",
+                    "default": "PMU_Specification",
+                    "enum": [
+                        "PMU_Specification"
+                    ],
+                    "title": " Type",
+                    "type": "string"
+                },
+                "document": {
+                    "$ref": "#/$defs/DocumentMetadata",
+                    "default": null,
+                    "description": "Document metadata"
+                },
+                "product_configuration": {
+                    "description": "A collection of configuration parameters",
+                    "title": "Product Configuration",
+                    "type": "object"
+                },
+                "filter_specification": {
+                    "description": "Filters specifications and definitions",
+                    "title": "Filter Specification",
+                    "type": "object"
+                },
+                "watchpoint_definition": {
+                    "additionalProperties": {
+                        "type": "object"
+                    },
+                    "default": null,
+                    "description": "Watchpoint register definition",
+                    "title": "Watchpoint Definition",
+                    "type": "object"
+                },
+                "payload_config": {
+                    "anyOf": [
+                        {
+                            "additionalProperties": {
+                                "$ref": "#/$defs/RegisterFilter"
+                            },
+                            "type": "object"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Payload register filter configuration",
+                    "title": "Payload Config"
+                },
+                "registers": {
+                    "anyOf": [
+                        {
+                            "additionalProperties": {
+                                "$ref": "#/$defs/Register"
+                            },
+                            "type": "object"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": null,
+                    "description": "Registers configuration",
+                    "title": "Registers"
+                },
+                "event_code_payload_map": {
+                    "additionalProperties": {
+                        "type": "string"
+                    },
+                    "description": "Mapping of event codes and payloads",
+                    "title": "Event Code Payload Map",
+                    "type": "object"
+                },
+                "events": {
+                    "additionalProperties": {
+                        "anyOf": [
+                            {
+                                "$ref": "#/$defs/PrivateEvent"
+                            },
+                            {
+                                "$ref": "#/$defs/Event"
+                            }
+                        ]
+                    },
+                    "description": "PMU events supported by the CPU",
+                    "title": "Events",
+                    "type": "object"
+                },
+                "watchpoints": {
+                    "additionalProperties": {
+                        "type": "object"
+                    },
+                    "description": "Supported watchpoints",
+                    "title": "Watchpoints",
+                    "type": "object"
+                },
+                "metrics": {
+                    "description": "Derived metrics supported by the CPU",
+                    "patternProperties": {
+                        "^\\w+$": {
+                            "$ref": "#/$defs/Metric"
+                        }
+                    },
+                    "title": "Metrics",
+                    "type": "object"
+                },
+                "groups": {
+                    "additionalProperties": false,
+                    "description": "Groups of events and metrics",
+                    "properties": {
+                        "function": {
+                            "additionalProperties": {
+                                "$ref": "#/$defs/GroupCategory"
+                            },
+                            "description": "Functional groups for events",
+                            "type": "object"
+                        },
+                        "metrics": {
+                            "additionalProperties": {
+                                "$ref": "#/$defs/GroupCategory"
+                            },
+                            "description": "Metrics groups",
+                            "type": "object"
+                        }
+                    },
+                    "title": "Groups",
+                    "type": "object"
+                },
+                "methodologies": {
+                    "additionalProperties": {
+                        "$ref": "#/$defs/Methodology"
+                    },
+                    "description": "Methodologies stages and decision tree",
+                    "title": "Methodologies",
+                    "type": "object"
+                },
+                "components": {
+                    "additionalProperties": {
+                        "$ref": "#/$defs/PMUSpecification"
+                    },
+                    "default": null,
+                    "description": "Components in PMU specification",
+                    "title": "Components",
+                    "type": "object"
+                }
+            },
+            "required": [
+                "product_configuration",
+                "events",
+                "metrics",
+                "groups",
+                "methodologies"
+            ],
+            "title": "PMUSpecification",
+            "type": "object"
+        }
+    },
+    "allOf": [
+        {
+            "$ref": "#/$defs/PMUSpecification"
+        }
+    ]
+}

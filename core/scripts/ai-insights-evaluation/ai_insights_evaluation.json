@@ -421,6 +421,46 @@
       "recipe_params": ["mode=static"]
     },
     {
+      "id": "test_case_41",
+      "summary": "Cpp periodic resource catalogue discovery",
+      "recipe": "syscall_trace_summary",
+      "acts": ["act2"],
+      "run_artifact": "test_case_41/latest.zip",
+      "rubric": "rubrics/test_case_41.md"
+    },
+    {
+      "id": "test_case_42",
+      "summary": "Cpp batched and per-record log persistence",
+      "recipe": "syscall_trace_summary",
+      "acts": ["act2"],
+      "run_artifact": "test_case_42/latest.zip",
+      "rubric": "rubrics/test_case_42.md"
+    },
+    {
+      "id": "test_case_43",
+      "summary": "Cpp notification polling with command-worker launches",
+      "recipe": "syscall_trace_summary",
+      "acts": ["act2"],
+      "run_artifact": "test_case_43/latest.zip",
+      "rubric": "rubrics/test_case_43.md"
+    },
+    {
+      "id": "test_case_44",
+      "summary": "Cpp sparse blocking timer-driven event-loop control",
+      "recipe": "syscall_trace_summary",
+      "acts": ["act2"],
+      "run_artifact": "test_case_44/latest.zip",
+      "rubric": "rubrics/test_case_44.md"
+    },
+    {
+      "id": "test_case_45",
+      "summary": "Cpp periodic settings-file reloads",
+      "recipe": "syscall_trace_summary",
+      "acts": ["act1"],
+      "run_artifact": "test_case_45/latest.zip",
+      "rubric": "rubrics/test_case_45.md"
+    },
+    {
       "id": "test_case_46",
       "summary": "Cpp generated request handlers with an oversized active code footprint",
       "recipe": "cpu_microarchitecture",
@@ -489,6 +529,200 @@
       "run_artifact": "test_case_52/latest.zip",
       "rubric": "rubrics/test_case_52.md",
       "recipe_params": ["sampling_freq=normal"]
+    },
+    {
+      "id": "test_case_53",
+      "summary": "ASCT system information",
+      "recipe": "asct",
+      "instance_type": "c8g.metal-24xl",
+      "prerecord": {"mode": "system-wide"},
+      "acts": ["act2"],
+      "run_artifact": "test_case_53/latest.zip",
+      "rubric": "rubrics/test_case_53.md",
+      "mcp_prompt": "Show me AI Insights for the system information in Performix run {run_id}. Use Markdown.",
+      "recipe_params": ["default_benchmarks=true"]
+    },
+    {
+      "id": "test_case_54",
+      "summary": "ASCT idle latency",
+      "recipe": "asct",
+      "instance_type": "c8g.metal-24xl",
+      "prerecord": {"mode": "system-wide"},
+      "acts": ["act2"],
+      "run_artifact": "test_case_53/latest.zip",
+      "rubric": "rubrics/test_case_54.md",
+      "mcp_prompt": "Show me AI Insights for the idle-latency benchmark in Performix run {run_id}. Use Markdown.",
+      "recipe_params": ["default_benchmarks=true"]
+    },
+    {
+      "id": "test_case_55",
+      "summary": "ASCT peak bandwidth",
+      "recipe": "asct",
+      "instance_type": "c8g.metal-24xl",
+      "prerecord": {"mode": "system-wide"},
+      "acts": ["act2"],
+      "run_artifact": "test_case_53/latest.zip",
+      "rubric": "rubrics/test_case_55.md",
+      "mcp_prompt": "Show me AI Insights for the peak-bandwidth benchmark in Performix run {run_id}. Use Markdown.",
+      "recipe_params": ["default_benchmarks=true"]
+    },
+    {
+      "id": "test_case_56",
+      "summary": "ASCT cross-NUMA bandwidth",
+      "recipe": "asct",
+      "instance_type": "c8g.metal-24xl",
+      "prerecord": {"mode": "system-wide"},
+      "acts": ["act2"],
+      "run_artifact": "test_case_53/latest.zip",
+      "rubric": "rubrics/test_case_56.md",
+      "mcp_prompt": "Show me AI Insights for the cross-NUMA-bandwidth benchmark in Performix run {run_id}. Use Markdown.",
+      "recipe_params": ["default_benchmarks=true"]
+    },
+    {
+      "id": "test_case_57",
+      "summary": "ASCT latency sweep",
+      "recipe": "asct",
+      "instance_type": "c8g.metal-24xl",
+      "prerecord": {"mode": "system-wide"},
+      "acts": ["act2"],
+      "run_artifact": "test_case_53/latest.zip",
+      "rubric": "rubrics/test_case_57.md",
+      "mcp_prompt": "Show me AI Insights for the latency-sweep benchmark in Performix run {run_id}. Use Markdown.",
+      "recipe_params": ["default_benchmarks=true"]
+    },
+    {
+      "id": "test_case_58",
+      "summary": "ASCT bandwidth sweep",
+      "recipe": "asct",
+      "instance_type": "c8g.metal-24xl",
+      "prerecord": {"mode": "system-wide"},
+      "acts": ["act2"],
+      "run_artifact": "test_case_53/latest.zip",
+      "rubric": "rubrics/test_case_58.md",
+      "mcp_prompt": "Show me AI Insights for the bandwidth-sweep benchmark in Performix run {run_id}. Use Markdown.",
+      "recipe_params": ["default_benchmarks=true"]
+    },
+    {
+      "id": "test_case_59",
+      "summary": "ASCT loaded latency",
+      "recipe": "asct",
+      "instance_type": "c8g.metal-24xl",
+      "prerecord": {"mode": "system-wide"},
+      "acts": ["act2"],
+      "run_artifact": "test_case_59/latest.zip",
+      "rubric": "rubrics/test_case_59.md",
+      "mcp_prompt": "Show me AI Insights for the loaded-latency benchmark in Performix run {run_id}. Use Markdown.",
+      "recipe_params": ["benchmark_loaded_latency=true"]
+    },
+    {
+      "id": "test_case_60",
+      "summary": "ASCT core-to-core latency",
+      "recipe": "asct",
+      "instance_type": "c8g.metal-24xl",
+      "prerecord": {"mode": "system-wide"},
+      "acts": ["act2"],
+      "run_artifact": "test_case_53/latest.zip",
+      "rubric": "rubrics/test_case_60.md",
+      "mcp_prompt": "Show me AI Insights for the core-to-core-latency benchmark in Performix run {run_id}. Use Markdown.",
+      "recipe_params": ["default_benchmarks=true"]
+    },
+    {
+      "id": "test_case_61",
+      "summary": "ASCT low peak bandwidth",
+      "recipe": "asct",
+      "instance_type": "c8g.metal-24xl",
+      "prerecord": {"mode": "system-wide"},
+      "acts": ["act1"],
+      "run_artifact": "test_case_61/latest.zip",
+      "rubric": "rubrics/test_case_61.md",
+      "mcp_prompt": "Show me AI Insights for the peak-bandwidth benchmark in Performix run {run_id}. Use Markdown.",
+      "run_modification": "low_peak_bandwidth",
+      "recipe_params": ["default_benchmarks=true"]
+    },
+    {
+      "id": "test_case_62",
+      "summary": "ASCT asymmetric core-to-core latency",
+      "recipe": "asct",
+      "instance_type": "c8g.metal-24xl",
+      "prerecord": {"mode": "system-wide"},
+      "acts": ["act2"],
+      "run_artifact": "test_case_62/latest.zip",
+      "rubric": "rubrics/test_case_62.md",
+      "mcp_prompt": "Show me AI Insights for the core-to-core-latency benchmark in Performix run {run_id}. Use Markdown.",
+      "run_modification": "core_to_core_latency_asymmetry",
+      "recipe_params": ["default_benchmarks=true"]
+    },
+    {
+      "id": "test_case_63",
+      "summary": "Cpp false sharing between compact per-worker counters",
+      "recipe": "cache_sharing",
+      "instance_type": "c8g.metal-24xl",
+      "acts": ["act2"],
+      "run_artifact": "test_case_63/latest.zip",
+      "rubric": "rubrics/test_case_63.md"
+    },
+    {
+      "id": "test_case_64",
+      "summary": "Cpp true sharing on a shared request counter",
+      "recipe": "cache_sharing",
+      "instance_type": "c8g.metal-24xl",
+      "acts": ["act2"],
+      "run_artifact": "test_case_64/latest.zip",
+      "rubric": "rubrics/test_case_64.md"
+    },
+    {
+      "id": "test_case_65",
+      "summary": "Cpp simultaneous false and true sharing",
+      "recipe": "cache_sharing",
+      "instance_type": "c8g.metal-24xl",
+      "acts": ["act1"],
+      "run_artifact": "test_case_65/latest.zip",
+      "rubric": "rubrics/test_case_65.md"
+    },
+    {
+      "id": "test_case_66",
+      "summary": "Cpp separated per-worker counters without material cache sharing",
+      "recipe": "cache_sharing",
+      "instance_type": "c8g.metal-24xl",
+      "acts": ["act2"],
+      "run_artifact": "test_case_66/latest.zip",
+      "rubric": "rubrics/test_case_66.md"
+    },
+    {
+      "id": "test_case_67",
+      "summary": "Cpp dependent traversal through oversized nodes",
+      "recipe": "memory_access",
+      "instance_type": "c8g.metal-24xl",
+      "acts": ["act2"],
+      "run_artifact": "test_case_67/latest.zip",
+      "rubric": "rubrics/test_case_67.md"
+    },
+    {
+      "id": "test_case_68",
+      "summary": "Cpp randomized page-granular value lookups",
+      "recipe": "memory_access",
+      "instance_type": "c8g.metal-24xl",
+      "acts": ["act2"],
+      "run_artifact": "test_case_68/latest.zip",
+      "rubric": "rubrics/test_case_68.md"
+    },
+    {
+      "id": "test_case_69",
+      "summary": "Cpp combined dependent and page-granular lookups",
+      "recipe": "memory_access",
+      "instance_type": "c8g.metal-24xl",
+      "acts": ["act1"],
+      "run_artifact": "test_case_69/latest.zip",
+      "rubric": "rubrics/test_case_69.md"
+    },
+    {
+      "id": "test_case_70",
+      "summary": "Cpp compact low-latency value lookups",
+      "recipe": "memory_access",
+      "instance_type": "c8g.metal-24xl",
+      "acts": ["act2"],
+      "run_artifact": "test_case_70/latest.zip",
+      "rubric": "rubrics/test_case_70.md"
     }
   ]
 }

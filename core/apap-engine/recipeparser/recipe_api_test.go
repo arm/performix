@@ -37,6 +37,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
+	tool_goja "github.com/Arm-Debug/apap-cli/apap-engine/tool/goja"
 )
 
 const toolSource = `
@@ -369,6 +370,7 @@ func TestGetRunDescriptions(t *testing.T) {
 func TestGetToolCapabilities(t *testing.T) {
 	t.Run("returns a capability query object", func(t *testing.T) {
 		vm := goja.New()
+		vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
 		execCtx := &mockExecutionContext{}
 		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{}, nil).Once()
 		t.Cleanup(func() {
@@ -397,6 +399,7 @@ func TestGetToolCapabilities(t *testing.T) {
 
 	t.Run("has() reports capability presence and state", func(t *testing.T) {
 		vm := goja.New()
+		vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
 		execCtx := &mockExecutionContext{}
 		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{
 			"one": {State: "available"},
@@ -437,6 +440,7 @@ func TestGetToolCapabilities(t *testing.T) {
 
 	t.Run("get() returns capability details", func(t *testing.T) {
 		vm := goja.New()
+		vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
 		capability := run.ToolCapability{
 			State:         "available",
 			Payload:       map[string]any{"enabled": true},
@@ -462,15 +466,15 @@ func TestGetToolCapabilities(t *testing.T) {
 
 		value, err := get(goja.Undefined(), vm.ToValue("one"))
 		require.NoError(t, err)
-		var fromJS map[string]any
+		capabilityObject := value.ToObject(vm)
+		require.Equal(t, "available", capabilityObject.Get("state").String())
+		require.Equal(t, "abc", capabilityObject.Get("componentType").ToObject(vm).Get("name").String())
+		var fromJS ToolCapability
 		require.NoError(t, vm.ExportTo(value, &fromJS))
-		require.Equal(t, map[string]any{
-			"state":   "available",
-			"payload": map[string]any{"enabled": true},
-			"componentType": map[string]string{
-				"name":    "abc",
-				"version": "123",
-			},
+		require.Equal(t, ToolCapability{
+			State:         "available",
+			Payload:       map[string]any{"enabled": true},
+			ComponentType: ComponentType{Name: "abc", Version: "123"},
 		}, fromJS)
 
 		value, err = get(goja.Undefined(), vm.ToValue("missing"))
@@ -480,6 +484,7 @@ func TestGetToolCapabilities(t *testing.T) {
 
 	t.Run("get() returns capability details for a matching component type", func(t *testing.T) {
 		vm := goja.New()
+		vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
 		expected := run.ToolCapability{
 			State:         "available",
 			Payload:       map[string]any{"enabled": true},
@@ -509,20 +514,18 @@ func TestGetToolCapabilities(t *testing.T) {
 			vm.ToValue(map[string]any{"name": "data", "version": "1.0"}),
 		)
 		require.NoError(t, err)
-		var fromJS map[string]any
+		var fromJS ToolCapability
 		require.NoError(t, vm.ExportTo(value, &fromJS))
-		require.Equal(t, map[string]any{
-			"state":   "available",
-			"payload": map[string]any{"enabled": true},
-			"componentType": map[string]string{
-				"name":    "data",
-				"version": "1.0",
-			},
+		require.Equal(t, ToolCapability{
+			State:         "available",
+			Payload:       map[string]any{"enabled": true},
+			ComponentType: ComponentType{Name: "data", Version: "1.0"},
 		}, fromJS)
 	})
 
 	t.Run("get() rejects a mismatched component type", func(t *testing.T) {
 		vm := goja.New()
+		vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
 		capability := run.ToolCapability{
 			State:         "available",
 			ComponentType: cdf.ComponentType{Name: "data", SchemaVersion: "1.0"},
@@ -559,6 +562,7 @@ func TestGetToolCapabilities(t *testing.T) {
 
 	t.Run("list() returns all capability details", func(t *testing.T) {
 		vm := goja.New()
+		vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
 		capabilities := run.ToolCapabilities{
 			"one": {
 				State:         "available",
@@ -591,30 +595,25 @@ func TestGetToolCapabilities(t *testing.T) {
 
 		value, err := list(goja.Undefined())
 		require.NoError(t, err)
-		var fromJS map[string]any
+		var fromJS map[string]ToolCapability
 		require.NoError(t, vm.ExportTo(value, &fromJS))
-		require.Equal(t, map[string]any{
-			"one": map[string]any{
-				"state":   "available",
-				"payload": map[string]any{"enabled": true},
-				"componentType": map[string]string{
-					"name":    "abc",
-					"version": "123",
-				},
+		require.Equal(t, map[string]ToolCapability{
+			"one": {
+				State:         "available",
+				Payload:       map[string]any{"enabled": true},
+				ComponentType: ComponentType{Name: "abc", Version: "123"},
 			},
-			"two": map[string]any{
-				"state":   "unavailable",
-				"payload": map[string]any{"reason": "off"},
-				"componentType": map[string]string{
-					"name":    "xyz",
-					"version": "456",
-				},
+			"two": {
+				State:         "unavailable",
+				Payload:       map[string]any{"reason": "off"},
+				ComponentType: ComponentType{Name: "xyz", Version: "456"},
 			},
 		}, fromJS)
 	})
 
 	t.Run("returns lookup errors", func(t *testing.T) {
 		vm := goja.New()
+		vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
 		execCtx := &mockExecutionContext{}
 		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{}, fmt.Errorf("lookup failed")).Once()
 		t.Cleanup(func() {
@@ -634,7 +633,9 @@ func TestGetToolCapabilities(t *testing.T) {
 	})
 
 	t.Run("rejects the wrong number of arguments", func(t *testing.T) {
-		api := &ConcreteRecipeAPI{vm: goja.New(), execCtx: &mockExecutionContext{}}
+		vm := goja.New()
+		vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: &mockExecutionContext{}}
 		fn, ok := goja.AssertFunction(api.vm.ToValue(api.getToolCapabilities))
 		require.True(t, ok)
 
@@ -644,7 +645,9 @@ func TestGetToolCapabilities(t *testing.T) {
 	})
 
 	t.Run("rejects invalid lookup arguments", func(t *testing.T) {
-		api := &ConcreteRecipeAPI{vm: goja.New(), execCtx: &mockExecutionContext{}}
+		vm := goja.New()
+		vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: &mockExecutionContext{}}
 		fn, ok := goja.AssertFunction(api.vm.ToValue(api.getToolCapabilities))
 		require.True(t, ok)
 		checks := []struct {
@@ -669,6 +672,7 @@ func TestGetToolCapabilities(t *testing.T) {
 
 	t.Run("rejects incorrect helper argument counts", func(t *testing.T) {
 		vm := goja.New()
+		vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
 		execCtx := &mockExecutionContext{}
 		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{}, nil).Once()
 		t.Cleanup(func() {
@@ -709,6 +713,7 @@ func TestGetToolCapabilities(t *testing.T) {
 
 	t.Run("rejects invalid helper arguments", func(t *testing.T) {
 		vm := goja.New()
+		vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
 		execCtx := &mockExecutionContext{}
 		execCtx.On("GetToolCapabilities", 1, "a", 2).Return(run.ToolCapabilities{
 			"one": {State: "available"},
@@ -857,6 +862,67 @@ func TestListRunComponents(t *testing.T) {
 		require.NoError(t, api.vm.ExportTo(value, &fromJS))
 		require.Empty(t, fromJS)
 	})
+}
+
+func TestReadRunComponent(t *testing.T) {
+	runDir := t.TempDir()
+	relativePath := "tool/example_tool/0/output/metadata.json"
+	absolutePath := filepath.Join(runDir, filepath.FromSlash(relativePath))
+	require.NoError(t, os.MkdirAll(filepath.Dir(absolutePath), 0o755))
+	require.NoError(t, os.WriteFile(absolutePath, []byte(`{"duration":42}`), 0o644))
+
+	model := cdf.NewOnDiskModel(runDir, &cdf.Manifest{Entries: []cdf.ManifestEntry{{
+		Path: relativePath,
+		ComponentType: cdf.ComponentType{
+			Name:          "example-json-data",
+			SchemaVersion: "1.0",
+		},
+	}}}, cdf.Metadata{})
+	api := ConcreteRecipeAPI{
+		execCtx: &recipe.RunExecutionContext{RunModels: []cdf.ModelView{model}},
+		vm:      goja.New(),
+	}
+
+	fn, ok := goja.AssertFunction(api.vm.ToValue(api.readRunComponent))
+	require.True(t, ok)
+	value, err := fn(goja.Undefined(), api.vm.ToValue(0), api.vm.ToValue(relativePath))
+	require.NoError(t, err)
+	require.Equal(t, `{"duration":42}`, value.String())
+}
+
+func TestReadRunComponentRejectsOversizedText(t *testing.T) {
+	runDir := t.TempDir()
+	relativePath := "tool/example_tool/0/output/metadata.json"
+	absolutePath := filepath.Join(runDir, filepath.FromSlash(relativePath))
+	require.NoError(t, os.MkdirAll(filepath.Dir(absolutePath), 0o755))
+	require.NoError(t, os.WriteFile(absolutePath, nil, 0o644))
+	require.NoError(t, os.Truncate(absolutePath, maxRunComponentTextBytes+1))
+
+	model := cdf.NewOnDiskModel(runDir, &cdf.Manifest{Entries: []cdf.ManifestEntry{{
+		Path: relativePath,
+		ComponentType: cdf.ComponentType{
+			Name:          "example-json-data",
+			SchemaVersion: "1.0",
+		},
+	}}}, cdf.Metadata{})
+	api := ConcreteRecipeAPI{
+		execCtx: &recipe.RunExecutionContext{RunModels: []cdf.ModelView{model}},
+		vm:      goja.New(),
+	}
+
+	fn, ok := goja.AssertFunction(api.vm.ToValue(api.readRunComponent))
+	require.True(t, ok)
+	_, err := fn(goja.Undefined(), api.vm.ToValue(0), api.vm.ToValue(relativePath))
+	require.ErrorContains(t, err, "run component is too large to read as text")
+
+	value, err := fn(
+		goja.Undefined(),
+		api.vm.ToValue(0),
+		api.vm.ToValue(relativePath),
+		api.vm.ToValue(maxRunComponentTextBytes+1),
+	)
+	require.NoError(t, err)
+	require.Len(t, value.String(), int(maxRunComponentTextBytes+1))
 }
 
 func TestGetParameter(t *testing.T) {

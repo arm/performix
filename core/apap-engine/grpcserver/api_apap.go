@@ -28,6 +28,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpclogging"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
+	"github.com/Arm-Debug/apap-cli/apap-engine/mcpclientinstaller"
+	"github.com/Arm-Debug/apap-cli/apap-engine/mcpclientinstaller/clientids"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
@@ -99,6 +101,15 @@ type ApapServer struct {
 	recipeReader         recipeparser.RecipeReader
 	packageManager       *packages.PackageManager
 	compatibilityChecker compatibility.CompatibilityChecker
+	mcpClientInstaller   MCPClientInstaller
+}
+
+type MCPClientInstaller interface {
+	ServerDefinition() mcpclientinstaller.ServerDefinition
+	List(context.Context) []mcpclientinstaller.ClientStatus
+	Status(context.Context, string) (mcpclientinstaller.ClientStatus, error)
+	Install(context.Context, string) (*mcpclientinstaller.InstallResult, error)
+	Uninstall(context.Context, string) (*mcpclientinstaller.UninstallResult, error)
 }
 
 func NewApapServer(ctx context.Context, config ApapServerConfig, deploymentPaths deployer.BaseToolDeploymentPaths, shutdownCb func()) (*ApapServer, error) {
@@ -135,6 +146,14 @@ func NewApapServer(ctx context.Context, config ApapServerConfig, deploymentPaths
 	}
 
 	packageManager := packages.NewPackageManager(executableDir, extensionsDir)
+	mcpClientInstaller, err := mcpclientinstaller.New(mcpclientinstaller.ServerDefinition{
+		Name:    terminology.GetMCPServerName(),
+		Command: execPath,
+		Args:    []string{"mcp", "start"},
+	})
+	if err != nil {
+		return nil, message.New(message.EngineLifecycleStartupFailed).WithCause(err)
+	}
 
 	optionsEvaluator := &runtime.ParameterOptionsEvaluatorConcrete{}
 	validator := &runtime.RecipeParameterValidatorConcrete{
@@ -169,6 +188,7 @@ func NewApapServer(ctx context.Context, config ApapServerConfig, deploymentPaths
 		recipeReader:         &recipeparser.FileRecipeReader{},
 		packageManager:       packageManager,
 		compatibilityChecker: &compatibility.ConcreteCompatibilityChecker{},
+		mcpClientInstaller:   mcpClientInstaller,
 	}
 
 	// Recovery
@@ -345,22 +365,22 @@ func marshalInvokeRenderResponse(in *apapproto.InvokeRenderRequest, session rend
 	}
 
 	response.InvocationStatuses = make([]*apapproto.RendererInvocationStatus, len(in.RendererConfig))
-	for i := range len(response.InvocationStatuses) {
-		if i > len(invocationErrors) {
-			return nil, fmt.Errorf("internal API error: invocation statuses returned from render system had wrong length")
-		}
+	if len(invocationErrors) != len(response.InvocationStatuses) {
+		return nil, fmt.Errorf("internal API error: invocation statuses returned from render system had wrong length")
+	}
 
+	for i, invocationErr := range invocationErrors {
 		status := &apapproto.RendererInvocationStatus{
 			Id: in.RendererConfig[i].Id,
 		}
 
-		if invocationErrors[i] == nil {
+		if invocationErr == nil {
 			status.Status = &apapproto.RendererInvocationStatus_Success{Success: &apapproto.Success{}}
-		} else if errors.Is(invocationErrors[i], cdf.ErrComponentPending) {
+		} else if errors.Is(invocationErr, cdf.ErrComponentPending) {
 			status.Status = &apapproto.RendererInvocationStatus_Pending{Pending: &apapproto.Pending{}}
 		} else {
 			status.Status = &apapproto.RendererInvocationStatus_Error{
-				Error: &apapproto.Error{Message: invocationErrorMessage(invocationErrors[i])},
+				Error: &apapproto.Error{Message: invocationErrorMessage(invocationErr)},
 			}
 		}
 
@@ -1307,4 +1327,237 @@ func (s *ApapServer) ListDirectories(ctx context.Context, in *emptypb.Empty) (*a
 		LogDir:         stateDir,
 		DefaultDataDir: defaultDataDir,
 	}, errors.Join(stateErr, dataErr)
+}
+
+func (s *ApapServer) ListMCPClients(
+	ctx context.Context,
+	in *emptypb.Empty,
+) (*apapproto.MCPClientListing, error) {
+	server := mcpServerDefinitionToProto(s.mcpClientInstaller.ServerDefinition())
+	clients := s.mcpClientInstaller.List(ctx)
+	clientStatuses := make([]*apapproto.MCPClientStatus, 0, len(clients))
+	for _, client := range clients {
+		clientStatuses = append(clientStatuses, mcpClientStatusToProto(client))
+	}
+	return &apapproto.MCPClientListing{
+		Server:  server,
+		Clients: clientStatuses,
+	}, nil
+}
+
+func (s *ApapServer) GetMCPClientStatus(
+	ctx context.Context,
+	req *apapproto.GetMCPClientStatusRequest,
+) (*apapproto.MCPClientListing, error) {
+	status, err := s.mcpClientInstaller.Status(ctx, req.GetClientId())
+	if err != nil {
+		return nil, mcpClientInstallerError(err)
+	}
+	return &apapproto.MCPClientListing{
+		Server: mcpServerDefinitionToProto(s.mcpClientInstaller.ServerDefinition()),
+		Clients: []*apapproto.MCPClientStatus{
+			mcpClientStatusToProto(status),
+		},
+	}, nil
+}
+
+func (s *ApapServer) InstallMCPClient(
+	ctx context.Context,
+	req *apapproto.InstallMCPClientRequest,
+) (*apapproto.MCPClientInstallResult, error) {
+	result, err := s.mcpClientInstaller.Install(ctx, req.GetClientId())
+	if err != nil {
+		return nil, mcpClientInstallerError(err)
+	}
+	return mcpClientInstallResultToProto(result), nil
+}
+
+func (s *ApapServer) UninstallMCPClient(
+	ctx context.Context,
+	req *apapproto.UninstallMCPClientRequest,
+) (*apapproto.MCPClientUninstallResult, error) {
+	result, err := s.mcpClientInstaller.Uninstall(ctx, req.GetClientId())
+	if err != nil {
+		return nil, mcpClientInstallerError(err)
+	}
+	return mcpClientUninstallResultToProto(result), nil
+}
+
+func mcpServerDefinitionToProto(
+	server mcpclientinstaller.ServerDefinition,
+) *apapproto.MCPServerLaunchConfiguration {
+	return &apapproto.MCPServerLaunchConfiguration{
+		Name:    server.Name,
+		Command: server.Command,
+		Args:    append([]string(nil), server.Args...),
+	}
+}
+
+func mcpClientStatusToProto(status mcpclientinstaller.ClientStatus) *apapproto.MCPClientStatus {
+	clientName := clientids.DisplayName(status.ID)
+	result := &apapproto.MCPClientStatus{
+		ClientId:          status.ID,
+		DisplayName:       clientName,
+		Detected:          status.Detected,
+		RegistrationState: mcpClientRegistrationStateToProto(status.State),
+		DiscoveryCommands: append([]string(nil), status.DiscoveryCommands...),
+		DiscoveryPaths:    append([]string(nil), status.DiscoveryPaths...),
+	}
+	if status.ExecutablePath != "" {
+		result.ExecutablePath = &status.ExecutablePath
+	}
+	if status.ConfigurationPath != "" {
+		result.ConfigurationPath = &status.ConfigurationPath
+	}
+	if detail := mcpClientRegistrationDetail(status); detail != nil {
+		result.RegistrationDetail = detail
+	}
+	if status.Err != nil {
+		result.Error = message.BuildErrorChain(mcpClientInstallerError(status.Err))
+	}
+	return result
+}
+
+func mcpClientRegistrationDetail(
+	status mcpclientinstaller.ClientStatus,
+) *apapproto.ErrorChain {
+	if len(status.RegistrationDifferences) == 0 {
+		return nil
+	}
+	return message.BuildErrorChain(mcpClientRegistrationConflictMessage(
+		clientids.DisplayName(status.ID),
+		status.RegistrationDifferences,
+		nil,
+	))
+}
+
+func mcpClientRegistrationConflictMessage(
+	clientName string,
+	differences []mcpclientinstaller.RegistrationDifference,
+	cause error,
+) error {
+	details := make([]error, 0, len(differences)+1)
+	for _, difference := range differences {
+		metadata := map[string]string{"actual": difference.Actual, "expected": difference.Expected}
+		switch difference.Field {
+		case mcpclientinstaller.RegistrationDifferenceCommand:
+			details = append(details, message.New(
+				message.EngineMcpRegistrationConfigCommandMismatch,
+			).WithMetadata(metadata))
+		case mcpclientinstaller.RegistrationDifferenceArguments:
+			details = append(details, message.New(
+				message.EngineMcpRegistrationConfigArgumentsMismatch,
+			).WithMetadata(metadata))
+		case mcpclientinstaller.RegistrationDifferenceTransport:
+			details = append(details, message.New(
+				message.EngineMcpRegistrationConfigTransportMismatch,
+			).WithMetadata(metadata))
+		case mcpclientinstaller.RegistrationDifferenceEnvironment:
+			details = append(details, message.New(
+				message.EngineMcpRegistrationConfigEnvironmentMismatch,
+			).WithMetadata(metadata))
+		}
+	}
+	if cause != nil {
+		details = append(details, cause)
+	}
+	return message.Join(
+		message.EngineMcpRegistrationConfigConflict,
+		details...,
+	).WithMetadata(map[string]string{"client": clientName})
+}
+
+func mcpClientRegistrationStateToProto(
+	state mcpclientinstaller.RegistrationState,
+) apapproto.MCPClientRegistrationState {
+	switch state {
+	case mcpclientinstaller.RegistrationStateNotConfigured:
+		return apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_NOT_CONFIGURED
+	case mcpclientinstaller.RegistrationStateConfigured:
+		return apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_CONFIGURED
+	case mcpclientinstaller.RegistrationStateConflict:
+		return apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_CONFLICT
+	case mcpclientinstaller.RegistrationStateUnreadable:
+		return apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_UNREADABLE
+	default:
+		return apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_UNSPECIFIED
+	}
+}
+
+func mcpClientInstallResultToProto(
+	result *mcpclientinstaller.InstallResult,
+) *apapproto.MCPClientInstallResult {
+	outcome := apapproto.MCPClientInstallOutcome_MCP_CLIENT_INSTALL_OUTCOME_UNSPECIFIED
+	switch result.Outcome {
+	case mcpclientinstaller.InstallOutcomeInstalled:
+		outcome = apapproto.MCPClientInstallOutcome_MCP_CLIENT_INSTALL_OUTCOME_INSTALLED
+	case mcpclientinstaller.InstallOutcomeAlreadyConfigured:
+		outcome = apapproto.MCPClientInstallOutcome_MCP_CLIENT_INSTALL_OUTCOME_ALREADY_CONFIGURED
+	}
+	return &apapproto.MCPClientInstallResult{
+		Outcome: outcome,
+		Status:  mcpClientStatusToProto(result.Status),
+	}
+}
+
+func mcpClientUninstallResultToProto(
+	result *mcpclientinstaller.UninstallResult,
+) *apapproto.MCPClientUninstallResult {
+	outcome := apapproto.MCPClientUninstallOutcome_MCP_CLIENT_UNINSTALL_OUTCOME_UNSPECIFIED
+	switch result.Outcome {
+	case mcpclientinstaller.UninstallOutcomeRemoved:
+		outcome = apapproto.MCPClientUninstallOutcome_MCP_CLIENT_UNINSTALL_OUTCOME_REMOVED
+	case mcpclientinstaller.UninstallOutcomeAlreadyAbsent:
+		outcome = apapproto.MCPClientUninstallOutcome_MCP_CLIENT_UNINSTALL_OUTCOME_ALREADY_ABSENT
+	}
+	return &apapproto.MCPClientUninstallResult{
+		Outcome: outcome,
+		Status:  mcpClientStatusToProto(result.Status),
+	}
+}
+
+func mcpClientInstallerError(err error) error {
+	var installerErr *mcpclientinstaller.InstallerError
+	if !errors.As(err, &installerErr) {
+		return err
+	}
+	clientName := clientids.DisplayName(installerErr.ClientID)
+	metadata := map[string]string{"client": clientName}
+	switch installerErr.Kind {
+	case mcpclientinstaller.ErrorUnknownClient:
+		metadata["client"] = installerErr.ClientID
+		return message.New(message.EngineMcpRegistrationClientUnknown).
+			WithMetadata(metadata).
+			WithCause(installerErr.Err)
+	case mcpclientinstaller.ErrorClientUnavailable:
+		return message.New(message.EngineMcpRegistrationClientUnavailable).
+			WithMetadata(metadata).
+			WithCause(installerErr.Err)
+	case mcpclientinstaller.ErrorConfigRead:
+		return message.New(message.EngineMcpRegistrationConfigReadFailed).
+			WithMetadata(metadata).
+			WithCause(installerErr.Err)
+	case mcpclientinstaller.ErrorConfigWrite:
+		return message.New(message.EngineMcpRegistrationConfigWriteFailed).
+			WithMetadata(metadata).
+			WithCause(installerErr.Err)
+	case mcpclientinstaller.ErrorConflict:
+		return mcpClientRegistrationConflictMessage(
+			clientName,
+			installerErr.RegistrationDifferences,
+			installerErr.Err,
+		)
+	case mcpclientinstaller.ErrorClientCommand:
+		if installerErr.CommandError != "" {
+			metadata["commandError"] = installerErr.CommandError
+		}
+		if installerErr.CommandOutput != "" {
+			metadata["commandOutput"] = installerErr.CommandOutput
+		}
+		return message.New(message.EngineMcpRegistrationClientCommandFailed).
+			WithMetadata(metadata).
+			WithCause(installerErr.Err)
+	default:
+		return err
+	}
 }

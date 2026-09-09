@@ -13,93 +13,133 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
 
-func toolCapabilitiesMethodHas(hasCall goja.FunctionCall, r *ConcreteRecipeAPI, capabilities run.ToolCapabilities) goja.Value {
-	if len(hasCall.Arguments) < 1 || len(hasCall.Arguments) > 2 {
+// ToolCapability defines a capability value exposed to recipe render stages.
+type ToolCapability struct {
+	State         string         `json:"state"`
+	Payload       map[string]any `json:"payload"`
+	ComponentType ComponentType  `json:"componentType"`
+}
+
+// JSToolCapabilities defines the capability collection exposed to recipe render stages.
+type JSToolCapabilities interface {
+	Has(capabilityID string, state *string) (bool, error)
+	Get(capabilityID string, componentType *ComponentType) (*ToolCapability, error)
+	List() (map[string]ToolCapability, error)
+}
+
+type ConcreteJSToolCapabilities struct {
+	capabilities run.ToolCapabilities
+}
+
+var _ JSToolCapabilities = (*ConcreteJSToolCapabilities)(nil)
+
+func toolCapabilitiesMethodHas(call goja.FunctionCall, r *ConcreteRecipeAPI, capabilities JSToolCapabilities) goja.Value {
+	if len(call.Arguments) < 1 || len(call.Arguments) > 2 {
 		panic(r.vm.ToValue("toolCapabilities.has called with wrong number of parameters"))
 	}
 
-	var capabilityId string
-	err := gojautils.ParseObjectFromJS(hasCall.Arguments[0], &capabilityId)
-	if err != nil {
+	var capabilityID string
+	if err := gojautils.ParseObjectFromJS(call.Arguments[0], &capabilityID); err != nil {
 		panic(r.vm.ToValue(err))
 	}
 
-	// If no requested state was provided, just return whether it exists
-	optionalState := hasCall.Argument(1)
-	if goja.IsUndefined(optionalState) {
-		_, exists := capabilities[capabilityId]
-		return r.vm.ToValue(exists)
+	var state *string
+	if !goja.IsUndefined(call.Argument(1)) {
+		state = new(string)
+		if err := gojautils.ParseObjectFromJS(call.Arguments[1], state); err != nil {
+			panic(r.vm.ToValue(err))
+		}
 	}
 
-	// Otherwise, read in requested state and validate
-	var state string
-	err = gojautils.ParseObjectFromJS(hasCall.Arguments[1], &state)
+	hasCapability, err := capabilities.Has(capabilityID, state)
 	if err != nil {
 		panic(r.vm.ToValue(err))
 	}
-
-	capability, exists := capabilities[capabilityId]
-	if !exists {
-		return r.vm.ToValue(false)
-	}
-	return r.vm.ToValue(capability.State == state)
+	return r.vm.ToValue(hasCapability)
 }
 
-func toolCapabilitiesMethodGet(getCall goja.FunctionCall, r *ConcreteRecipeAPI, capabilities run.ToolCapabilities) goja.Value {
-	if len(getCall.Arguments) < 1 || len(getCall.Arguments) > 2 {
+func toolCapabilitiesMethodGet(call goja.FunctionCall, r *ConcreteRecipeAPI, capabilities JSToolCapabilities) goja.Value {
+	if len(call.Arguments) < 1 || len(call.Arguments) > 2 {
 		panic(r.vm.ToValue("toolCapabilities.get called with wrong number of parameters"))
 	}
 
-	var capabilityId string
-	err := gojautils.ParseObjectFromJS(getCall.Arguments[0], &capabilityId)
-	if err != nil {
+	var capabilityID string
+	if err := gojautils.ParseObjectFromJS(call.Arguments[0], &capabilityID); err != nil {
 		panic(r.vm.ToValue(err))
 	}
 
-	capability, exists := capabilities[capabilityId]
-	if !exists {
-		return r.vm.ToValue(nil)
+	var componentType *ComponentType
+	if !goja.IsUndefined(call.Argument(1)) {
+		componentType = &ComponentType{}
+		if err := gojautils.ParseObjectFromJS(call.Arguments[1], componentType); err != nil {
+			panic(r.vm.ToValue(err))
+		}
 	}
 
-	// If no requested component type was provided, just return capability as-is
-	optionalComponentType := getCall.Argument(1)
-	if goja.IsUndefined(optionalComponentType) {
-		return r.vm.ToValue(capabilityToJSCapability(capability))
-	}
-
-	// Otherwise, validate requested component type
-	var componentType ComponentType
-	err = gojautils.ParseObjectFromJS(getCall.Arguments[1], &componentType)
+	capability, err := capabilities.Get(capabilityID, componentType)
 	if err != nil {
 		panic(r.vm.ToValue(err))
 	}
-
-	if capability.ComponentType.Name != componentType.Name || capability.ComponentType.SchemaVersion != componentType.Version {
-		requestedComponentType := fmt.Sprintf("{name: %v, version: %v}", componentType.Name, componentType.Version)
-		actualComponentType := fmt.Sprintf("{name: %v, version: %v}", capability.ComponentType.Name, capability.ComponentType.SchemaVersion)
-		panic(r.vm.ToValue(fmt.Sprintf("capability %v with component type %v was requested, but this capability actually has type %v", capabilityId, requestedComponentType, actualComponentType)))
-	}
-	return r.vm.ToValue(capabilityToJSCapability(capability))
+	return r.vm.ToValue(capability)
 }
 
-func toolCapabilitiesMethodList(getCall goja.FunctionCall, r *ConcreteRecipeAPI, capabilities run.ToolCapabilities) goja.Value {
-	if len(getCall.Arguments) != 0 {
+func toolCapabilitiesMethodList(call goja.FunctionCall, r *ConcreteRecipeAPI, capabilities JSToolCapabilities) goja.Value {
+	if len(call.Arguments) != 0 {
 		panic(r.vm.ToValue("toolCapabilities.list called with wrong number of parameters"))
 	}
-	jsCapabilities := map[string]any{}
-	for id, capability := range capabilities {
-		jsCapabilities[id] = capabilityToJSCapability(capability)
+
+	capabilityList, err := capabilities.List()
+	if err != nil {
+		panic(r.vm.ToValue(err))
 	}
-	return r.vm.ToValue(jsCapabilities)
+	return r.vm.ToValue(capabilityList)
 }
 
-func capabilityToJSCapability(capability run.ToolCapability) map[string]any {
-	return map[string]any{
-		"state":   capability.State,
-		"payload": util.DeepCopyJSONObject(capability.Payload),
-		"componentType": map[string]string{
-			"name":    capability.ComponentType.Name,
-			"version": capability.ComponentType.SchemaVersion,
+func (c *ConcreteJSToolCapabilities) Has(capabilityID string, state *string) (bool, error) {
+	capability, exists := c.capabilities[capabilityID]
+	if state == nil {
+		return exists, nil
+	}
+
+	if !exists {
+		return false, nil
+	}
+	return capability.State == *state, nil
+}
+
+func (c *ConcreteJSToolCapabilities) Get(capabilityID string, componentType *ComponentType) (*ToolCapability, error) {
+	capability, exists := c.capabilities[capabilityID]
+	if !exists {
+		return nil, nil
+	}
+
+	if componentType != nil {
+		if capability.ComponentType.Name != componentType.Name || capability.ComponentType.SchemaVersion != componentType.Version {
+			requestedComponentType := fmt.Sprintf("{name: %v, version: %v}", componentType.Name, componentType.Version)
+			actualComponentType := fmt.Sprintf("{name: %v, version: %v}", capability.ComponentType.Name, capability.ComponentType.SchemaVersion)
+			return nil, fmt.Errorf("capability %v with component type %v was requested, but this capability actually has type %v", capabilityID, requestedComponentType, actualComponentType)
+		}
+	}
+
+	jsCapability := capabilityToJSCapability(capability)
+	return &jsCapability, nil
+}
+
+func (c *ConcreteJSToolCapabilities) List() (map[string]ToolCapability, error) {
+	jsCapabilities := make(map[string]ToolCapability, len(c.capabilities))
+	for id, capability := range c.capabilities {
+		jsCapabilities[id] = capabilityToJSCapability(capability)
+	}
+	return jsCapabilities, nil
+}
+
+func capabilityToJSCapability(capability run.ToolCapability) ToolCapability {
+	return ToolCapability{
+		State:   capability.State,
+		Payload: util.DeepCopyJSONObject(capability.Payload),
+		ComponentType: ComponentType{
+			Name:    capability.ComponentType.Name,
+			Version: capability.ComponentType.SchemaVersion,
 		},
 	}
 }

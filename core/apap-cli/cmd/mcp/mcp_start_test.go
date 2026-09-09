@@ -36,8 +36,10 @@ func TestRootCommand(t *testing.T) {
 		assert.NotEmpty(t, cmd.Long)
 		assert.False(t, cmd.Hidden)
 		assert.Equal(t, grouping.GroupMCP, cmd.Annotations[grouping.GroupAnnotation])
-		require.Len(t, cmd.Commands(), 1)
-		assert.False(t, cmd.Commands()[0].Hidden)
+		require.Len(t, cmd.Commands(), 5)
+		for _, subcommand := range cmd.Commands() {
+			assert.False(t, subcommand.Hidden)
+		}
 	})
 
 	t.Run("shows help when help flag used", func(t *testing.T) {

@@ -96,7 +96,7 @@ class MainTests(unittest.TestCase):
             workload_cmd="openssl speed",
             pid=None,
             timeout=None,
-            prerecord="",
+            prerecord='{"mode":"launch"}',
             params_json="[]",
             ssh_target=None,
             ssh_key=None,
@@ -327,6 +327,7 @@ class MainTests(unittest.TestCase):
             ssh_key.write_text("", encoding="utf-8")
             args = self._base_args(cli_bin, tmp_path)
             args.recipe = "code_hotspots"
+            args.workload_cmd = None
             args.prerecord = json.dumps(
                 {
                     "mode": "attach",
@@ -462,8 +463,7 @@ class BuildRecipeRunCommandTests(unittest.TestCase):
             Path("/tmp/apx"),
             "code_hotspots",
             "remote_target",
-            "/tmp/workload",
-            None,
+            prerecord.Launch("/tmp/workload"),
             None,
             [],
         )
@@ -488,8 +488,7 @@ class BuildRecipeRunCommandTests(unittest.TestCase):
             Path("/tmp/apx"),
             "code_hotspots",
             "remote_target",
-            None,
-            1234,
+            prerecord.AttachToPID(1234),
             "25",
             ["collect_dotnet_stacks=true"],
         )
@@ -518,8 +517,7 @@ class BuildRecipeRunCommandTests(unittest.TestCase):
             Path("/tmp/apx"),
             "code_hotspots",
             "remote_target",
-            None,
-            1234,
+            prerecord.AttachToPID(1234),
             "25",
             [],
         )
@@ -533,6 +531,32 @@ class BuildRecipeRunCommandTests(unittest.TestCase):
                 "code_hotspots",
                 "--pid",
                 "1234",
+                "--target",
+                "remote_target",
+                "--deploy-tools",
+                "--timeout",
+                "25",
+            ],
+        )
+
+    def test_builds_system_wide_command(self):
+        command = prerecord.build_recipe_run_command(
+            Path("/tmp/apx"),
+            "system_utilization",
+            "remote_target",
+            prerecord.SystemWide(),
+            "25",
+            [],
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "/tmp/apx",
+                "recipe",
+                "run",
+                "system_utilization",
+                "--system-wide",
                 "--target",
                 "remote_target",
                 "--deploy-tools",

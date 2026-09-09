@@ -25,10 +25,20 @@ if ! command -v protoc &> /dev/null; then
 fi
 
 echo "Installing Go gRPC plugins..."
-go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.4.0
+GO_EXECUTABLE=$(command -v go)
+"$GO_EXECUTABLE" install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2
+"$GO_EXECUTABLE" install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.4.0
 
-export PATH="$HOME/go/bin:$PATH"
+GO_BIN_DIR=$("$GO_EXECUTABLE" env GOBIN)
+if [[ -z "$GO_BIN_DIR" ]]; then
+    GO_PATHS=$("$GO_EXECUTABLE" env GOPATH)
+    if [[ "$("$GO_EXECUTABLE" env GOHOSTOS)" == "windows" ]]; then
+        GO_BIN_DIR="${GO_PATHS%%;*}/bin"
+    else
+        GO_BIN_DIR="${GO_PATHS%%:*}/bin"
+    fi
+fi
+export PATH="$GO_BIN_DIR:$PATH"
 
 # === REPORT VERSIONS ===
 
@@ -54,7 +64,7 @@ echo "Code generation complete. Output is in $OUTPUT_DIR/$GO_CLIENT_DIR"
 # === GENERATE MOCKS ===
 
 echo "Installing mockery..."
-go install github.com/vektra/mockery/v2@v2.53.3
+"$GO_EXECUTABLE" install github.com/vektra/mockery/v3@v3.7.4
 
 echo "Generating testify mocks from interfaces in $OUTPUT_DIR/$GO_CLIENT_DIR ..."
 "$SCRIPT_DIR/generate-mocks.sh"

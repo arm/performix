@@ -15,8 +15,7 @@ const { isJvmProcessPid } = require('./jitdump');
 
 const toolBundleName = 'jitdump-jvm';
 const toolIntegrationVersion = '1.0.0';
-// NOTE: The current bundle version 0.9.0 does not support JFR capture.
-const bundleVersion = '0.9.0';
+const bundleVersion = '1.0.0';
 const collectionProgressTracker = 'Collecting Java runtime data';
 const defaultJfrSettings = 'profile';
 

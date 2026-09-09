@@ -9,10 +9,10 @@ import argparse
 import json
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 sys.path.append(str(Path(__file__).resolve().parent))
-from recipe_support import resolve_recipe
+from recipe_support import SPE_RECIPES, resolve_prerecord_config, resolve_recipe
 
 MANIFEST = Path(__file__).with_name("ai_insights_evaluation.json")
 SAFE_CASE_ID = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
@@ -56,7 +56,7 @@ def parse_testcase_ids(value: str) -> list[str]:
 def resolve_workloads(
     tests: list[dict], act: str, testcase_ids: list[str]
 ) -> list[dict]:
-    """Return manifest entries for the requested act or testcase IDs."""
+    """Return prerecord fixture entries for the requested act or testcase IDs."""
 
     if not testcase_ids:
         if not act:
@@ -64,30 +64,47 @@ def resolve_workloads(
         selected = [test for test in tests if act in test.get("acts", [])]
         if not selected:
             raise ValueError("no matching AI Insights workloads")
-        return selected
+    else:
+        selected = []
+        unknown_ids = []
+        for testcase_id in testcase_ids:
+            matches = [test for test in tests if test["id"] == testcase_id]
+            if not matches:
+                unknown_ids.append(testcase_id)
+            elif len(matches) != 1:
+                raise ValueError(f"testcase ID is not unique: {testcase_id}")
+            else:
+                selected.append(matches[0])
 
-    selected = []
-    unknown_ids = []
-    for testcase_id in testcase_ids:
-        matches = [test for test in tests if test["id"] == testcase_id]
-        if not matches:
-            unknown_ids.append(testcase_id)
-        elif len(matches) != 1:
-            raise ValueError(f"testcase ID is not unique: {testcase_id}")
-        else:
-            selected.append(matches[0])
+        if unknown_ids:
+            raise ValueError(
+                f"unknown AI Insights workload(s): {','.join(unknown_ids)}"
+            )
 
-    if unknown_ids:
-        raise ValueError(f"unknown AI Insights workload(s): {','.join(unknown_ids)}")
-    return selected
+    fixtures = []
+    seen_fixture_ids = set()
+    for test in selected:
+        run_artifact = test.get("run_artifact")
+        fixture = test
+        if isinstance(run_artifact, str):
+            fixture_id = PurePosixPath(run_artifact).parent.name
+            matches = [
+                candidate for candidate in tests if candidate["id"] == fixture_id
+            ]
+            if len(matches) != 1:
+                raise ValueError(
+                    f"run artifact owner for {test['id']} is not a unique testcase: "
+                    f"{fixture_id!r}"
+                )
+            fixture = matches[0]
+        if fixture["id"] not in seen_fixture_ids:
+            fixtures.append(fixture)
+            seen_fixture_ids.add(fixture["id"])
+    return fixtures
 
 def resolve_case_config(test: dict, defaults: dict) -> dict:
     """Resolve the generic prerecord inputs for one evaluation testcase."""
 
-    default_prerecord = defaults.get("prerecord", {})
-    test_prerecord = test.get("prerecord", {})
-    if not isinstance(default_prerecord, dict) or not isinstance(test_prerecord, dict):
-        raise ValueError(f"prerecord for {test['id']} must be an object")
     recipe_params = test.get("recipe_params", [])
     if not isinstance(recipe_params, list) or not all(
         isinstance(param, str) for param in recipe_params
@@ -98,12 +115,20 @@ def resolve_case_config(test: dict, defaults: dict) -> dict:
         not isinstance(instance_type, str) or not instance_type
     ):
         raise ValueError(f"instance_type for {test['id']} must be a non-empty string")
+    prerecord = resolve_prerecord_config(test, defaults)
+    if "run_modification" in test:
+        prerecord["run_modification"] = test["run_modification"]
+    profile_mode = prerecord["mode"]
+    if profile_mode == "system-wide" and any(
+        prerecord.get(name) is not None for name in ("setup", "cleanup")
+    ):
+        raise ValueError("system-wide prerecord cannot use setup or cleanup lifecycle commands")
     case = {
         "id": test["id"],
-        "workload": f"ai_insights_tests/{test['id']}",
+        "workload": "" if profile_mode == "system-wide" else f"ai_insights_tests/{test['id']}",
         "recipe": resolve_recipe(test, defaults),
         "recipe_params": recipe_params,
-        "prerecord": {**default_prerecord, **test_prerecord},
+        "prerecord": prerecord,
     }
     if instance_type is not None:
         case["instance_type"] = instance_type
@@ -165,15 +190,23 @@ def validate_cases(cases: list[dict]) -> None:
         if not isinstance(case_id, str) or not SAFE_CASE_ID.fullmatch(case_id):
             raise ValueError(f"invalid prerecord case ID: {case_id!r}")
         case_ids.append(case_id)
-        for field in ("workload", "recipe"):
-            if not isinstance(case.get(field), str) or not case[field]:
-                raise ValueError(f"{field} for {case_id} must be a non-empty string")
+        if not isinstance(case.get("prerecord"), dict):
+            raise ValueError(f"prerecord for {case_id} must be an object")
+        prerecord = resolve_prerecord_config(case)
+        profile_mode = prerecord["mode"]
+        workload = case.get("workload")
+        workload_required = profile_mode != "system-wide"
+        if not isinstance(workload, str) or bool(workload) != workload_required:
+            requirement = "non-empty" if workload_required else "empty"
+            raise ValueError(
+                f"workload for {case_id} must be {requirement} for the execution mode"
+            )
+        if not isinstance(case.get("recipe"), str) or not case["recipe"]:
+            raise ValueError(f"recipe for {case_id} must be a non-empty string")
         if not isinstance(case.get("recipe_params"), list) or not all(
             isinstance(param, str) for param in case["recipe_params"]
         ):
             raise ValueError(f"recipe_params for {case_id} must be a list of strings")
-        if not isinstance(case.get("prerecord"), dict):
-            raise ValueError(f"prerecord for {case_id} must be an object")
     if len(case_ids) != len(set(case_ids)):
         raise ValueError("prerecord case IDs must be unique")
 
@@ -215,7 +248,11 @@ def main() -> int:
                 )
             grouped.setdefault(instance_type, []).append(case)
         output = [
-            {"instance_type": instance_type, "cases": grouped_cases}
+            {
+                "instance_type": instance_type,
+                "cases": grouped_cases,
+                "enable_spe": any(case["recipe"] in SPE_RECIPES for case in grouped_cases),
+            }
             for instance_type, grouped_cases in grouped.items()
         ]
     else:

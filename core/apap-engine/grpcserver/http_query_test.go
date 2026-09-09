@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
@@ -25,6 +26,18 @@ type stubQueryExecutor struct {
 	err       error
 	sessionID string
 	sql       string
+}
+
+type cancellationQueryExecutor struct {
+	started chan struct{}
+	stopped chan error
+}
+
+func (e *cancellationQueryExecutor) QueryIPCStream(ctx context.Context, _ string, _ string) (io.ReadCloser, error) {
+	close(e.started)
+	<-ctx.Done()
+	e.stopped <- ctx.Err()
+	return nil, ctx.Err()
 }
 
 func (s *stubQueryExecutor) QueryIPCStream(_ context.Context, sessionID string, sql string) (io.ReadCloser, error) {
@@ -116,6 +129,57 @@ func TestHTTPQueryHandlerExecError(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestHTTPQueryHandlerClientCancellationStopsExecutor(t *testing.T) {
+	executor := &cancellationQueryExecutor{
+		started: make(chan struct{}),
+		stopped: make(chan error, 1),
+	}
+	server := httptest.NewServer(newHTTPQueryHandler(executor, 0))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		server.URL+"/query?session_id=session-1",
+		bytes.NewBufferString("select 1"),
+	)
+	require.NoError(t, err)
+
+	requestDone := make(chan struct{})
+	go func() {
+		resp, requestErr := server.Client().Do(req)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		if requestErr != nil && !errors.Is(requestErr, context.Canceled) {
+			t.Errorf("HTTP query returned an unexpected error: %v", requestErr)
+		}
+		close(requestDone)
+	}()
+
+	select {
+	case <-executor.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the HTTP query executor to start")
+	}
+	cancel()
+
+	select {
+	case err := <-executor.stopped:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for cancellation to reach the query executor")
+	}
+
+	select {
+	case <-requestDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the cancelled HTTP request to finish")
+	}
 }
 
 func TestHTTPQueryHandlerExecErrorLogging(t *testing.T) {

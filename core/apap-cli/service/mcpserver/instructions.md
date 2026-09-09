@@ -64,10 +64,14 @@ Unless `recipe_info` returns different MCP guidance, omit the timeout for initia
 ### Generating Insights
 Dynamic Insights are available only for successful runs produced by a supported recipe. Supported recipes are:
 
+- `asct`
+- `cache_sharing`
 - `code_hotspots`
 - `cpu_microarchitecture`
-- `system_utilization`
 - `instruction_mix`
+- `memory_access`
+- `syscall_trace_summary`
+- `system_utilization`
 
 This limitation applies to Dynamic Insights, not to `run_recipe`; continue to use other recipes when they better match the user's profiling goal.
 

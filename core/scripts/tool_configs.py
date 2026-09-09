@@ -84,7 +84,7 @@ DOTNET_AGENT_CONFIG = ToolConfig(
 JITDUMP_JVM_CONFIG = ToolConfig(
     tool_name="jitdump-jvm",
     binary_name="jitdump-jvm",
-    version="0.9.0",
+    version="1.0.0",
     available_platforms=[
         Platform(os=ATPERF_TOOL_OS_LINUX, arch=ATPERF_TOOL_ARCH_AARCH64),
         Platform(os=ATPERF_TOOL_OS_LINUX, arch=ATPERF_TOOL_ARCH_X86_64),

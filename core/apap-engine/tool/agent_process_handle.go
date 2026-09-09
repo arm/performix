@@ -5,11 +5,16 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/privilege"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
@@ -40,7 +45,7 @@ func pipeStream(ctx context.Context, streamName string, stream targetagentproto.
 			break
 		} else if err != nil {
 			logx.FromContext(ctx).WithFields(logrus.Fields{"err": err, "stream": streamName}).Errorf("stream receive error")
-			pw.CloseWithError(err)
+			pw.CloseWithError(classifyStreamReceiveError(ctx, err))
 			return
 		}
 
@@ -50,6 +55,30 @@ func pipeStream(ctx context.Context, streamName string, stream targetagentproto.
 			return
 		}
 	}
+}
+
+// classifyStreamReceiveError checks and classifies user cancellation, preserves
+// messages returned by the agent, identifies transport failures, and wraps
+// remaining errors as process stream failures.
+func classifyStreamReceiveError(ctx context.Context, err error) error {
+	if errors.Is(context.Cause(ctx), context.Canceled) {
+		return message.New(message.EngineCommonUserCanceled).WithCause(err)
+	}
+
+	grpcStatus, isGRPCStatus := status.FromError(err)
+	if isGRPCStatus {
+		decodedErr := message.FromGRPCStatus(err)
+		if message.IsMessage(decodedErr) != nil {
+			return decodedErr
+		}
+	}
+
+	if errors.Is(context.Cause(ctx), agent.ErrAgentDisconnected) ||
+		(isGRPCStatus && grpcStatus.Code() == codes.Unavailable) {
+		return message.New(message.EngineAgentConnectionTransportError).WithCause(err)
+	}
+
+	return message.Wrap(message.EngineAgentProcessStreamReceiveFailed, err)
 }
 
 // NewAgentProcessHandle creates a handle for a process with optional stdout/stderr streaming.

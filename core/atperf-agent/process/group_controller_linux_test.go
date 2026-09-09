@@ -53,8 +53,9 @@ func runInSubprocess(t *testing.T, body func(t *testing.T)) {
 	}
 
 	// Parent: Re-exec the test process in a subprocess
-	// #nosec G204 -- this just re-execs the current test binary. no need to panic
-	cmd := exec.Command(os.Args[0], "-test.run", "^"+t.Name()+"$", "-test.v", "-test.timeout", "30s")
+	testBinary, err := os.Executable()
+	require.NoError(t, err)
+	cmd := exec.Command(testBinary, "-test.run", "^"+t.Name()+"$", "-test.v", "-test.timeout", "30s")
 	cmd.Env = append(os.Environ(), "GC_SUBPROC=1")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Pdeathsig: syscall.SIGKILL}
 

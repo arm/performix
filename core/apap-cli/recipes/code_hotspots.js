@@ -8,11 +8,17 @@ const {
   findTimelineCounterBindings,
   buildTimelineSQLRendererBundle,
 } = require('./lib/timeline_sql_renderer');
+const { buildNeoprofTimelineVisualization } = require('./lib/timeline_config');
+const {
+  NEOPROF_TIMELINE_BIN_DURATIONS_NS,
+} = require('../tool-integrations/neoprof_timeline');
 
 const TOOL_NEOPROF = { name: 'neoprof', version: '1.1.0' };
 const TOOL_WPERF = { name: 'wperf', version: '1.0.1' };
 const NEOPROF_TIMELINE_COUNTER_PARQUET_PATTERN =
   'tool/neoprof/0/output/parquet/timeline/key_type=*/series_id=*/bin_duration=*/counter.parquet';
+const NEOPROF_TIMELINE_CAPTURE_METADATA_PATTERN =
+  'tool/neoprof/0/output/parquet/metadata/capture_metadata.json';
 const COUNTER_CAPABILITY_COMPONENT_TYPE = {
   name: 'tool_capabilities/counter',
   version: '1.0',
@@ -21,6 +27,8 @@ const readinessMessageCode =
   'engine.recipeparser.js_recipe_stage.READINESS_MESSAGE';
 const telemetrySpecificationUnavailableMessageCode =
   'recipes.code_hotspots.TELEMETRY_SPECIFICATION_UNAVAILABLE';
+const timelineDataIncompleteMessageCode =
+  'recipes.code_hotspots.TIMELINE_DATA_INCOMPLETE';
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
 
 /**
@@ -412,7 +420,9 @@ function runHotspots(context) {
   const windowsTarget = isWindowsTarget(targetInfo);
 
   if (windowsTarget) {
-    context.runTools(generateWperfConfig(workload, buildWperfParams()));
+    context.runTools(
+      generateWperfConfig(workload, buildWperfParams(samplingFreq)),
+    );
     return;
   }
 
@@ -467,62 +477,6 @@ function getRenderRunTool(context) {
 function getRenderParameterIfExists(context, parameterId) {
   const param = context.getRenderParameter(parameterId);
   return param === null || param === undefined ? null : Number(param);
-}
-
-/**
- * @param {number} binDuration
- * @returns {string}
- */
-function buildProvisionalTimelineSystemWideQuery(binDuration) {
-  return `
-    -- Presentation-layer query for provisional timeline charts.
-    --
-    -- The upstream timeline SQL bundle retains compressed source intervals.
-    -- This legacy full-capture query expands them before summing values across
-    -- all discovered device/thread pairs, then zero-fills uncovered bins to
-    -- match current Streamline rendering behaviour. Treat this as display-only
-    -- policy until Code Hotspots uses viewport-driven queries.
-    WITH series_points AS (
-      SELECT
-        CAST(generated.x_start AS BIGINT) AS x_start,
-        source.value
-      FROM {table} AS source
-      CROSS JOIN LATERAL generate_series(
-        source.start_timestamp,
-        source.end_timestamp - source.bin_duration,
-        source.bin_duration
-      ) AS generated(x_start)
-    ),
-    aggregated_series_points AS (
-      SELECT
-        x_start,
-        SUM(value) AS value
-      FROM series_points
-      GROUP BY x_start
-    ),
-    x_bounds AS (
-      SELECT
-        MIN(x_start) AS min_x_start,
-        MAX(x_start) AS max_x_start
-      FROM aggregated_series_points
-    ),
-    x_domain AS (
-      SELECT generated.x_start
-      FROM x_bounds
-      CROSS JOIN generate_series(
-        CAST(x_bounds.min_x_start AS BIGINT),
-        CAST(x_bounds.max_x_start AS BIGINT),
-        ${binDuration}
-      ) AS generated(x_start)
-    )
-    SELECT
-      CAST(x_domain.x_start AS DOUBLE) / 1000000000.0 AS x_start,
-      COALESCE(aggregated_series_points.value, 0.0) AS value
-    FROM x_domain
-    LEFT JOIN aggregated_series_points
-      ON aggregated_series_points.x_start = x_domain.x_start
-    ORDER BY x_domain.x_start
-  `.trim();
 }
 
 /**
@@ -590,92 +544,6 @@ function getTimelineCounterMetadata(context) {
   }
 
   return metadataBySeriesKey;
-}
-
-/**
- * @param {Array<{
- *   rawSeriesKey: string,
- *   keyType: number,
- *   rendererId: string,
- *   output: string,
- *   seriesId: number,
- *   binDuration: number,
- * }>} timelineSources
- * @param {Map<string, {title: string, description: string, units: string}>} metadataBySeriesKey
- * @returns {{ visualizations: any[] }}
- */
-function buildProvisionalTimelineVisualization(
-  timelineSources,
-  metadataBySeriesKey,
-) {
-  if (timelineSources.length === 0) {
-    return { visualizations: [] };
-  }
-
-  const tables = {};
-  const groups = {};
-  const rendererId = timelineSources[0].rendererId;
-
-  for (const [groupIndex, source] of timelineSources.entries()) {
-    const groupKey = `${source.rawSeriesKey}_${source.binDuration}`;
-    const binDuration = source.binDuration;
-    const seriesMetadata = metadataBySeriesKey.get(source.rawSeriesKey);
-    const seriesTitle =
-      seriesMetadata?.title ??
-      `Key ${source.keyType}, Series ${source.seriesId}`;
-    tables[groupKey] = [
-      {
-        renderer_id: source.rendererId,
-        output: source.output,
-      },
-    ];
-    groups[groupKey] = {
-      title: seriesTitle,
-      type: 'line',
-      index: groupIndex,
-      description:
-        seriesMetadata?.description ??
-        `Provisional timeline series ${seriesTitle} at ${binDuration} ns resolution.`,
-      config: {
-        xAxisTitle: 'Time (s)',
-        yAxisTitle: 'Value',
-        ...(seriesMetadata?.units.length > 0
-          ? { yAxisUnit: seriesMetadata.units }
-          : {}),
-        customQuery: {
-          tableNamePlaceholder: '{table}',
-          query: buildProvisionalTimelineSystemWideQuery(binDuration),
-        },
-        series: [
-          {
-            type: 'single',
-            name: 'Total',
-            xColumn: 'x_start',
-            yColumn: 'value',
-          },
-        ],
-      },
-    };
-  }
-
-  return {
-    visualizations: [
-      {
-        type: 'timeline',
-        id: 'timeline',
-        rendererId,
-        title: 'Timeline',
-        description: 'Preview provisional timeline data for hotspots analysis.',
-        config: {
-          xAxisUnit: 's',
-          data_source: {
-            tables,
-          },
-          groups,
-        },
-      },
-    ],
-  };
 }
 
 const timeRangeFilter = {
@@ -1442,14 +1310,33 @@ function renderHotspots(context) {
         bindings: timelineBindings,
       });
       if (timelineSourceBundle.renderers.length > 0) {
-        const timelineCounterMetadata = getTimelineCounterMetadata(context);
-        const timelineVisualization = buildProvisionalTimelineVisualization(
-          timelineSourceBundle.timelineSources,
-          timelineCounterMetadata,
+        const captureMetadataComponents = context.listRunComponents(
+          0,
+          NEOPROF_TIMELINE_CAPTURE_METADATA_PATTERN,
         );
+        if (captureMetadataComponents.length > 1) {
+          throw new Error(
+            'Code Hotspots supports only one NeoProf timeline capture metadata component',
+          );
+        }
+        if (captureMetadataComponents.length === 1) {
+          const captureMetadata = JSON.parse(
+            context.readRunComponent(
+              0,
+              captureMetadataComponents[0].relativePath,
+            ),
+          );
+          const timelineVisualization = buildNeoprofTimelineVisualization({
+            timelineSources: timelineSourceBundle.timelineSources,
+            captureMetadata,
+            expectedBinDurations: NEOPROF_TIMELINE_BIN_DURATIONS_NS,
+            incompleteCatalogueMessageCode: timelineDataIncompleteMessageCode,
+            metadataBySeriesKey: getTimelineCounterMetadata(context),
+          });
 
-        renderers.push(...timelineSourceBundle.renderers);
-        visualizations.push(...timelineVisualization.visualizations);
+          renderers.push(...timelineSourceBundle.renderers);
+          visualizations.push(...timelineVisualization.visualizations);
+        }
       }
     }
   }

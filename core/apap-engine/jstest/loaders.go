@@ -4,6 +4,7 @@
 package jstest
 
 import (
+	"flag"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -15,14 +16,27 @@ import (
 
 var resolveJSFilePath = resolveJSFilePathImpl
 
+var jsSourceRoot = flag.String(
+	"jstest.source-root",
+	"",
+	"absolute path to an alternative apap-cli JavaScript source tree",
+)
+
 func resolveJSFilePathImpl(t *testing.T, relativePath string) string {
 	t.Helper()
 
 	require.True(t, filepath.IsLocal(relativePath), "JS file path must be relative to apap-cli")
 
-	_, filename, _, ok := runtime.Caller(0)
-	require.True(t, ok, "failed to locate the jstest package")
+	root := *jsSourceRoot
+	if root == "" {
+		_, filename, _, ok := runtime.Caller(0)
+		require.True(t, ok, "failed to locate the jstest package")
 
-	dir := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "apap-cli"))
-	return util.CanonicalPath(filepath.Join(dir, relativePath))
+		root = filepath.Join(filepath.Dir(filename), "..", "..", "apap-cli")
+	} else {
+		require.True(t, filepath.IsAbs(root),
+			"jstest.source-root must be absolute")
+	}
+
+	return util.CanonicalPath(filepath.Join(root, relativePath))
 }

@@ -19,6 +19,7 @@ type terminology struct {
 	AgentBinaryName   string `json:"AGENT_BINARY_NAME"`
 	DaemonDirName     string `json:"DAEMON_DIR_NAME"`
 	EnvVarPrefix      string `json:"ENV_VAR_PREFIX"`
+	MCPServerName     string `json:"MCP_SERVER_NAME"`
 }
 
 func init() {
@@ -54,4 +55,9 @@ func GetDaemonDirName() string {
 // GetEnvVarPrefix returns the prefix to each environment variable name
 func GetEnvVarPrefix() string {
 	return terms.EnvVarPrefix
+}
+
+// GetMCPServerName returns the name registered with MCP clients.
+func GetMCPServerName() string {
+	return terms.MCPServerName
 }

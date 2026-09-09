@@ -6,6 +6,7 @@ package recipejstest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -27,13 +28,13 @@ import (
 )
 
 const (
-	jitdumpJvmBundleVersion = "0.9.0"
-	jitdumpJvmBinaryPath    = "/target/tools/jitdump-jvm/0.9.0/jitdump-jvm"
+	jitdumpJvmBundleVersion = "1.0.0"
 	jitdumpJvmTempDir       = "/tmp/apx-agent-test"
 	jitdumpJvmJfrDir        = "/tmp/apx-agent-test/jfr"
 	jitdumpJvmParquetDir    = jitdumpJvmTempDir + "/parquet"
 )
 
+var jitdumpJvmBinaryPath = fmt.Sprintf("/target/tools/jitdump-jvm/%s/jitdump-jvm", jitdumpJvmBundleVersion)
 var jitdumpJvmRequiredParquetFiles = []string{
 	"metadata/jfr_recordings.parquet",
 	"events/jfr_jvm_information.parquet",

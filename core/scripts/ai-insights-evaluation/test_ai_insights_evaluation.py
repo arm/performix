@@ -54,7 +54,7 @@ from codex_session_metrics import (
     iter_jsonl,
 )
 from performance_quality import PERFORMIX_MCP_MODE
-from recipe_support import mode_supports_recipe, requires_source_archive, resolve_recipe
+from recipe_support import mode_supports_recipe, requires_source_archive, resolve_prerecord_config, resolve_recipe
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from run_export_helper import sha256_file
@@ -172,7 +172,11 @@ def iter_manifest_parameters(pytestconfig, manifest: dict[str, Any]) -> list[dic
     for test_case in manifest.get("tests", []):
         if acts and not acts.intersection(test_case.get("acts", [])):
             continue
-        test_case = {**test_case, "recipe": resolve_recipe(test_case, defaults)}
+        test_case = {
+            **test_case,
+            "recipe": resolve_recipe(test_case, defaults),
+            "prerecord": resolve_prerecord_config(test_case, defaults),
+        }
         for mode in modes:
             if not mode_supports_recipe(mode, test_case["recipe"]):
                 continue
@@ -499,7 +503,7 @@ def mcp_mode_env(mode: McpServer, cfg: dict[str, Any]) -> dict[str, str]:
             "ATP_ENGINE_PORT": os.environ.get("ATP_ENGINE_PORT", "9000"),
         }
     if mode.id == PERFORMIX_MCP_MODE:
-        return {}
+        return {"APXD_ENABLE_EXPERIMENTAL_RECIPES": "true"}
     raise ValueError(f"unsupported AI Insights mode: {mode.id}")
 
 
@@ -619,6 +623,20 @@ def collect_token_usage(raw_jsonl: Path) -> list[Any]:
     return usage
 
 
+def mcp_tool_failure_message(item: dict[str, Any]) -> str:
+    """Return the most useful error message recorded for a failed MCP call."""
+    error = item.get("error") or {}
+    if message := error.get("message"):
+        return str(message)
+
+    result = item.get("result") or {}
+    structured_error = (result.get("structured_content") or {}).get("error") or {}
+    if message := structured_error.get("message"):
+        return str(message)
+
+    return "unknown MCP tool failure"
+
+
 def validate_mcp_call(raw_jsonl: Path, mode: McpServer) -> dict[str, Any]:
     """Confirm the client used the expected AI Insights MCP tool.
 
@@ -632,6 +650,7 @@ def validate_mcp_call(raw_jsonl: Path, mode: McpServer) -> dict[str, Any]:
     LOGGER.info("Validating %s MCP tool call in Codex event log", mode.id)
     failed_messages: list[str] = []
     completed_by_tool: dict[str, int] = {}
+    failed_by_tool: dict[str, int] = {}
     for event in iter_jsonl(raw_jsonl):
         if event.get("type") != "item.completed":
             continue
@@ -644,12 +663,26 @@ def validate_mcp_call(raw_jsonl: Path, mode: McpServer) -> dict[str, Any]:
         if item.get("status") == "completed":
             completed_by_tool[tool] = completed_by_tool.get(tool, 0) + 1
         elif item.get("status") == "failed":
-            error = item.get("error") or {}
-            failed_messages.append(f"{tool}: {error.get('message') or 'unknown MCP tool failure'}")
+            failed_by_tool[tool] = failed_by_tool.get(tool, 0) + 1
+            failed_messages.append(f"{tool}: {mcp_tool_failure_message(item)}")
+    observed_tools = completed_by_tool.keys() | failed_by_tool.keys()
+    failure_rate_percent_by_tool = {
+        tool: failed_by_tool.get(tool, 0)
+        * 100.0
+        / (failed_by_tool.get(tool, 0) + completed_by_tool.get(tool, 0))
+        for tool in sorted(observed_tools)
+    }
     if failed_messages:
+        failure_rates = "; ".join(
+            f"{tool}: {failed_by_tool[tool]}/"
+            f"{failed_by_tool[tool] + completed_by_tool.get(tool, 0)} failed "
+            f"({failure_rate_percent_by_tool[tool]:.1f}%)"
+            for tool in sorted(failed_by_tool)
+        )
         LOGGER.warning(
-            "%s MCP tool call failure(s): %s",
+            "%s MCP tool call failure rate(s): %s. Failure details: %s",
             mode.server,
+            failure_rates,
             "; ".join(failed_messages),
         )
     required_completed = completed_by_tool.get(mode.tool, 0)
@@ -672,6 +705,8 @@ def validate_mcp_call(raw_jsonl: Path, mode: McpServer) -> dict[str, Any]:
         "required_completed_calls": required_completed,
         "completed_by_tool": completed_by_tool,
         "failed_calls": len(failed_messages),
+        "failed_by_tool": failed_by_tool,
+        "failure_rate_percent_by_tool": failure_rate_percent_by_tool,
         "failed_messages": failed_messages,
     }
 

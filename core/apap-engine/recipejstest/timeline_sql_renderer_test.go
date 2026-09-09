@@ -5,7 +5,6 @@ package recipejstest
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -113,6 +112,63 @@ func TestTimelineSQLRendererBuildsOrderedTimelineSources(t *testing.T) {
 	}
 }
 
+func TestTimelineSQLRendererDistinguishesKeyTypesWithTheSameSeriesID(t *testing.T) {
+	runRoot := t.TempDir()
+	fixture := writeTimelineBinnedDeltaParquetFixture(t, runRoot, []timelineCounterSeriesFixture{
+		{
+			KeyType:     9,
+			SeriesID:    101,
+			BinDuration: timelinePrimaryBinDurationNs,
+			CounterRows: []timelineCounterRowFixture{{Value: 9}},
+		},
+		{
+			KeyType:     8,
+			SeriesID:    101,
+			BinDuration: timelinePrimaryBinDurationNs,
+			CounterRows: []timelineCounterRowFixture{{Value: 8}},
+		},
+	})
+	model := newCodeHotspotsTimelineFixtureModel(t, runRoot, fixture)
+	parsedRecipe := parseTimelineWrapperRecipe(t, timelineCounterParquetPattern)
+
+	renderOutput, err := executeRenderStage(
+		t,
+		parsedRecipe,
+		[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
+		[]cdf.ModelView{model},
+		map[string]any{},
+		renderStageOptions{},
+	)
+	require.NoError(t, err)
+
+	var metadataWidget *recipe.WidgetConfig
+	for i := range renderOutput.Widgets {
+		if renderOutput.Widgets[i].ID == "timeline_sources" {
+			metadataWidget = &renderOutput.Widgets[i]
+			break
+		}
+	}
+	require.NotNil(t, metadataWidget)
+	timelineSources := metadataWidget.Config["timelineSources"].([]any)
+	require.Len(t, timelineSources, 2)
+	require.Equal(t, map[string]any{
+		"rawSeriesKey": "key_8_series_101",
+		"keyType":      int64(8),
+		"seriesId":     int64(101),
+		"binDuration":  timelinePrimaryBinDurationNs,
+		"rendererId":   "timeline_sql_source_key_8_series_101_1000000",
+		"output":       "timeline_source_key_8_series_101_1000000",
+	}, timelineSources[0])
+	require.Equal(t, map[string]any{
+		"rawSeriesKey": "key_9_series_101",
+		"keyType":      int64(9),
+		"seriesId":     int64(101),
+		"binDuration":  timelinePrimaryBinDurationNs,
+		"rendererId":   "timeline_sql_source_key_9_series_101_1000000",
+		"output":       "timeline_source_key_9_series_101_1000000",
+	}, timelineSources[1])
+}
+
 func TestTimelineSQLRendererRetainsCompressedRows(t *testing.T) {
 	env := setupTimelineSourceEnvironment(t, []timelineCounterSeriesFixture{{
 		SeriesID:    101,
@@ -138,6 +194,16 @@ func TestTimelineSQLRendererRetainsCompressedRows(t *testing.T) {
 			Value:          2,
 		},
 	}, rows)
+}
+
+func TestTimelineSQLRendererQueriesEmptyParquetAsEmptyData(t *testing.T) {
+	env := setupTimelineSourceEnvironment(t, []timelineCounterSeriesFixture{{
+		SeriesID:    101,
+		BinDuration: timelinePrimaryBinDurationNs,
+	}})
+
+	rows := queryTimelineSourceRows(t, env.Session, timelinePrimaryBinDurationNs, "key_0_series_101")
+	require.Empty(t, rows)
 }
 
 func TestTimelineSQLRendererRetainsIntervalBoundaryRows(t *testing.T) {
@@ -240,48 +306,28 @@ func TestTimelineRangeQueryFiltersBeforeBoundedExpansion(t *testing.T) {
 
 	columns, err := rows.Columns()
 	require.NoError(t, err)
-	require.Equal(t, []string{
-		"x_start",
-		"dev7_thread11",
-		"dev7_thread22",
-		"dev7_thread33",
-	}, columns)
+	require.Equal(t, []string{"x_start", "value"}, columns)
 
 	type resultRow struct {
-		x        int64
-		thread11 sql.NullFloat64
-		thread22 sql.NullFloat64
-		thread33 sql.NullFloat64
+		x     int64
+		value float64
 	}
 	var results []resultRow
 	for rows.Next() {
 		var result resultRow
-		require.NoError(t, rows.Scan(
-			&result.x,
-			&result.thread11,
-			&result.thread22,
-			&result.thread33,
-		))
+		require.NoError(t, rows.Scan(&result.x, &result.value))
 		results = append(results, result)
 	}
 	require.NoError(t, rows.Err())
 	require.Len(t, results, 4)
 	require.Equal(t, int64(1_004_000_000), results[0].x)
-	require.Equal(t, sql.NullFloat64{Float64: 0.2, Valid: true}, results[0].thread11)
-	require.Equal(t, sql.NullFloat64{Float64: 0.75, Valid: true}, results[0].thread22)
-	require.Equal(t, sql.NullFloat64{Float64: 0, Valid: true}, results[0].thread33)
+	require.InDelta(t, 950, results[0].value, 1e-12)
 	require.Equal(t, int64(1_005_000_000), results[1].x)
-	require.Equal(t, sql.NullFloat64{Float64: 0.2, Valid: true}, results[1].thread11)
-	require.Equal(t, sql.NullFloat64{Float64: 0, Valid: true}, results[1].thread22)
-	require.Equal(t, sql.NullFloat64{Float64: 0, Valid: true}, results[1].thread33)
+	require.InDelta(t, 200, results[1].value, 1e-12)
 	require.Equal(t, int64(1_006_000_000), results[2].x)
-	require.Equal(t, sql.NullFloat64{Float64: 0.2, Valid: true}, results[2].thread11)
-	require.Equal(t, sql.NullFloat64{Float64: 0, Valid: true}, results[2].thread22)
-	require.Equal(t, sql.NullFloat64{Float64: 0, Valid: true}, results[2].thread33)
+	require.InDelta(t, 200, results[2].value, 1e-12)
 	require.Equal(t, int64(1_007_000_000), results[3].x)
-	require.Equal(t, sql.NullFloat64{Float64: 0.2, Valid: true}, results[3].thread11)
-	require.Equal(t, sql.NullFloat64{Float64: 0, Valid: true}, results[3].thread22)
-	require.Equal(t, sql.NullFloat64{Float64: 1, Valid: true}, results[3].thread33)
+	require.InDelta(t, 1_200, results[3].value, 1e-12)
 }
 
 func TestTimelineRangeQueryAlignsGridToBinOrigin(t *testing.T) {
@@ -347,7 +393,7 @@ func TestTimelineRangeQueryAlignsGridToBinOrigin(t *testing.T) {
 				var value float64
 				require.NoError(t, rows.Scan(&timestamp, &value))
 				timestamps = append(timestamps, timestamp)
-				require.Equal(t, float64(10), value)
+				require.Equal(t, float64(1_000_000_000), value)
 			}
 			require.NoError(t, rows.Err())
 			require.Equal(t, tc.expectedBinStart, timestamps)
@@ -519,7 +565,6 @@ func buildTimelineRangeQueryWithOrigin(
 	args := map[string]any{
 		"timelineSources": []map[string]any{{
 			"rawSeriesKey": rawSeriesKey,
-			"keyType":      0,
 			"seriesId":     101,
 			"binDuration":  binDuration,
 			"rendererId":   "renderer_101",

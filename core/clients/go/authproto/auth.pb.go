@@ -198,7 +198,6 @@ type TargetLoginClientMessage struct {
 	unknownFields protoimpl.UnknownFields
 
 	// Types that are assignable to Message:
-	//
 	//	*TargetLoginClientMessage_Request
 	//	*TargetLoginClientMessage_Credentials
 	//	*TargetLoginClientMessage_FingerprintAcceptance
@@ -294,7 +293,6 @@ type TargetLoginServerMessage struct {
 	unknownFields protoimpl.UnknownFields
 
 	// Types that are assignable to Message:
-	//
 	//	*TargetLoginServerMessage_Prompt
 	//	*TargetLoginServerMessage_Response
 	//	*TargetLoginServerMessage_FingerprintPrompt

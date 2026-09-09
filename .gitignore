@@ -15,6 +15,9 @@ apx.*
 # Test binary, built with `go test -c`
 *.test
 
+# MCP client command stub, built by the Robot test task
+core/robot/resources/files/mcp-client-stub/mcp-client-stub
+
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 

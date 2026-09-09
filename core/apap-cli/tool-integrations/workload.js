@@ -219,16 +219,50 @@ function formatTimestamp(date) {
 
 async function captureWorkloadLogs(engine, logHandle, processHandle, command) {
   let writeChain = Promise.resolve();
+  let lastEntry = null;
+  let pendingEntry = null;
+  const appendEntry = (entry) => {
+    const line = `${JSON.stringify(entry)}\n`;
+    writeChain = writeChain.then(() => logHandle.append(line));
+  };
+
+  const flushPendingEntry = () => {
+    if (!pendingEntry) {
+      return;
+    }
+    appendEntry(pendingEntry);
+    pendingEntry = null;
+  };
+
   const enqueueLine = (severity, message, streamName) => {
+    if (
+      lastEntry &&
+      lastEntry.severity === severity &&
+      lastEntry.message === message &&
+      lastEntry.context.stream === streamName
+    ) {
+      if (pendingEntry) {
+        pendingEntry.context.repeat_count += 1;
+      } else {
+        pendingEntry = {
+          timestamp: formatTimestamp(new Date()),
+          severity,
+          message,
+          context: { stream: streamName, repeat_count: 1 },
+        };
+      }
+      return;
+    }
+
+    flushPendingEntry();
     const entry = {
       timestamp: formatTimestamp(new Date()),
       severity,
       message,
       context: { stream: streamName },
     };
-    writeChain = writeChain.then(() =>
-      logHandle.append(`${JSON.stringify(entry)}\n`),
-    );
+    appendEntry(entry);
+    lastEntry = entry;
   };
 
   const drainStream = async (stream, streamName, severity) => {
@@ -244,16 +278,18 @@ async function captureWorkloadLogs(engine, logHandle, processHandle, command) {
       }
       const chunkText = String(chunk);
       buffer += chunkText;
-      let newlineIndex = buffer.indexOf('\n');
+      let lineStart = 0;
+      let newlineIndex = buffer.indexOf('\n', lineStart);
       while (newlineIndex !== -1) {
-        let line = buffer.slice(0, newlineIndex);
+        let line = buffer.slice(lineStart, newlineIndex);
         if (line.endsWith('\r')) {
           line = line.slice(0, -1);
         }
         enqueueLine(severity, line, streamName);
-        buffer = buffer.slice(newlineIndex + 1);
-        newlineIndex = buffer.indexOf('\n');
+        lineStart = newlineIndex + 1;
+        newlineIndex = buffer.indexOf('\n', lineStart);
       }
+      buffer = buffer.slice(lineStart);
       if (buffer.length >= MAX_UNTERMINATED_BYTES) {
         enqueueLine(severity, buffer, streamName);
         buffer = '';
@@ -269,6 +305,7 @@ async function captureWorkloadLogs(engine, logHandle, processHandle, command) {
       drainStream(processHandle.stdout, 'stdout', 'info'),
       drainStream(processHandle.stderr, 'stderr', 'error'),
     ]);
+    flushPendingEntry();
     await writeChain;
   } finally {
     await logHandle.close();

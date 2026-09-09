@@ -33,6 +33,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/client"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/clijson"
 	"github.com/Arm-Debug/apap-cli/apap-cli/utils"
+	"github.com/Arm-Debug/apap-cli/apap-engine/logging"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/apap-engine/userdirs"
@@ -180,6 +181,10 @@ func initConfig() {
 		// If a config file is found, read it in.
 		if err := viper.ReadInConfig(); err == nil {
 			log.Debugf("Using config file: %s", viper.ConfigFileUsed())
+		}
+
+		if err := logging.SetLogLevel(viper.GetString("log-level")); err != nil {
+			log.WithError(err).Warn("Invalid CLI log level")
 		}
 	})
 }

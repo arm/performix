@@ -103,13 +103,16 @@ func TestCPUMicroarchitectureOptionsAreEmptyWithoutTelemetry(t *testing.T) {
 	assert.Empty(t, stageContext.ParameterOptions.MultiSelectOptions[0])
 }
 
-func TestCodeHotspotsManagedStackParamsInToolConfigs(t *testing.T) {
+func TestCodeHotspotsParamsInToolConfigs(t *testing.T) {
 	tests := []struct {
 		os                  string
+		toolName            string
+		toolVersion         string
 		expectManagedStacks bool
 	}{
-		{os: "Android", expectManagedStacks: false},
-		{os: "Linux", expectManagedStacks: true},
+		{os: "Android", toolName: "neoprof", toolVersion: "1.1.0", expectManagedStacks: false},
+		{os: "Linux", toolName: "neoprof", toolVersion: "1.1.0", expectManagedStacks: true},
+		{os: "Windows", toolName: "wperf", toolVersion: "1.0.1", expectManagedStacks: false},
 	}
 
 	for _, test := range tests {
@@ -124,6 +127,7 @@ func TestCodeHotspotsManagedStackParamsInToolConfigs(t *testing.T) {
 			paramValues, err := parameters.BindRecipeParameters(map[string]any{
 				"collect_java_stacks":   true,
 				"collect_dotnet_stacks": true,
+				"sampling_freq":         "high",
 			}, parsedRecipe.Parameters, parsedRecipe.Name)
 			require.NoError(t, err)
 
@@ -131,7 +135,7 @@ func TestCodeHotspotsManagedStackParamsInToolConfigs(t *testing.T) {
 				ParamValues:      paramValues,
 				ResolvedWorkload: &tool.WorkloadLaunch{RawCommand: "com.example/com.example.MainActivity", Command: []string{"com.example/com.example.MainActivity"}},
 				RecipeMetadata:   recipe.RecipeMetadata{Name: parsedRecipe.Name},
-				ToolVersions:     map[string]string{"neoprof": "1.1.0"},
+				ToolVersions:     map[string]string{test.toolName: test.toolVersion},
 			}
 			execCtx := newMockExecutionContext(t, recipeCtx, &target.Description{
 				Os: target.OsInfo{OSFamily: test.os},
@@ -140,29 +144,35 @@ func TestCodeHotspotsManagedStackParamsInToolConfigs(t *testing.T) {
 			execCtx.On("ToolsDir").Return("/data/local/tmp/ArmPerformix/tools")
 			execCtx.On("IsFullCaptureSupportEnabled").Return(false)
 			execCtx.On("IsNeoprofTimelineEnabled").Return(false)
-			hasExpectedManagedStackParams := mock.MatchedBy(func(contexts []tool.IntegrationContext) bool {
+			hasExpectedParams := mock.MatchedBy(func(contexts []tool.IntegrationContext) bool {
 				if len(contexts) != 1 {
 					return false
 				}
+				if contexts[0].Name != test.toolName {
+					return false
+				}
 				params := contexts[0].Params
+				if params["mode"] != "samples" || params["sampling_frequency"] != "high" {
+					return false
+				}
 				javaStacks, hasJavaStacks := params["collect_java_stacks"]
 				dotnetStacks, hasDotnetStacks := params["collect_dotnet_stacks"]
 				if test.expectManagedStacks {
-					return params["mode"] == "samples" && hasJavaStacks && javaStacks == true && hasDotnetStacks && dotnetStacks == true
+					return hasJavaStacks && javaStacks == true && hasDotnetStacks && dotnetStacks == true
 				}
-				return params["mode"] == "samples" && !hasJavaStacks && !hasDotnetStacks
+				return !hasJavaStacks && !hasDotnetStacks
 			})
 			execCtx.On(
 				"ProbeToolsFromIntegrations",
 				mock.Anything,
 				mock.Anything,
-				hasExpectedManagedStackParams,
+				hasExpectedParams,
 			).Return([]tool.ProbeResult{{Available: true}}, []error(nil))
 			execCtx.On(
 				"RunToolIntegrations",
 				mock.Anything,
 				mock.Anything,
-				hasExpectedManagedStackParams,
+				hasExpectedParams,
 			).Return(func() {}, []error(nil))
 
 			readyStage := &stages.CustomRecipeStage{
@@ -1042,6 +1052,23 @@ func TestJavaAnalysisRenderContract(t *testing.T) {
 	assert.Len(t, output.Renderers, 9)
 	recordingOptionsSQL := renderersByID["jfr_recording_options"].Config["sql"]
 	assert.Contains(t, recordingOptionsSQL, "COALESCE(CAST(jvm_pid AS VARCHAR), 'unknown')")
+	recordingsSQL := renderersByID["jfr_recordings"].Config["sql"]
+	assert.Contains(t, recordingsSQL, "jvm_start_epoch_ns")
+	assert.NotContains(t, recordingsSQL, "jvm_start_epoch_ms")
+	jvmInfoSQL := renderersByID["jvm_info"].Config["sql"]
+	assert.Contains(t, jvmInfoSQL, "jvm_start_epoch_ns")
+	assert.NotContains(t, jvmInfoSQL, "jvm_start_epoch_ms")
+	heapSummarySQL, ok := renderersByID["jvm_heap_summary"].Config["sql"].(string)
+	require.True(t, ok)
+	assert.Contains(t, heapSummarySQL, "before_event_start_epoch_ns")
+	assert.Contains(t, heapSummarySQL, "after_event_start_epoch_ns")
+	assert.Contains(t, heapSummarySQL, "before_heap_space_committed_size_bytes")
+	assert.Contains(t, heapSummarySQL, "after_heap_space_committed_size_bytes")
+	assert.Equal(t, 1, strings.Count(heapSummarySQL, "read_parquet"))
+	assert.NotContains(t, heapSummarySQL, "start_address_hex")
+	garbageCollectionSQL := renderersByID["jvm_garbage_collections"].Config["sql"]
+	assert.Contains(t, garbageCollectionSQL, "event_thread_os_name")
+	assert.Contains(t, garbageCollectionSQL, "event_thread_virtual")
 	summarySQL := renderersByID["java_summary"].Config["sql"]
 	assert.Contains(t, summarySQL, "SELECT MIN(recording_id)")
 	assert.Contains(t, summarySQL, "'Recording ID'")
@@ -1053,10 +1080,16 @@ func TestJavaAnalysisRenderContract(t *testing.T) {
 	assert.Contains(t, summarySQL, "property_key, property_value")
 	assert.NotContains(t, summarySQL, "performix.")
 	assert.NotContains(t, summarySQL, "'Source JFR'")
+	assert.Contains(t, summarySQL, "recording_start_epoch_ns - jvm_start_epoch_ns")
+	assert.NotContains(t, summarySQL, "jvm_start_epoch_ms")
 	heapTimelineSQL := renderersByID["jvm_heap_timeline"].Config["sql"]
 	assert.Contains(t, heapTimelineSQL, "SELECT MIN(recording_id)")
 	assert.Contains(t, heapTimelineSQL, "recording_start_epoch_ns")
-	assert.Contains(t, heapTimelineSQL, "heap.gc_phase = 'After GC'")
+	assert.Contains(t, heapTimelineSQL, "after_event_start_epoch_ns")
+	assert.Contains(t, heapTimelineSQL, "after_used_bytes")
+	assert.Contains(t, heapTimelineSQL, "after_heap_space_committed_size_bytes")
+	assert.Contains(t, heapTimelineSQL, "after_heap_space_reserved_size_bytes")
+	assert.NotContains(t, heapTimelineSQL, "heap.gc_phase")
 	assert.Contains(t, heapTimelineSQL, "used_after_gc_mib")
 	assert.Contains(t, heapTimelineSQL, "committed_mib")
 	assert.Contains(t, heapTimelineSQL, "reserved_mib")

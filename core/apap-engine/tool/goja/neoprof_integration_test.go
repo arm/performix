@@ -8,9 +8,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/iotest"
 
 	"github.com/dop251/goja"
 	"github.com/stretchr/testify/assert"
@@ -65,6 +67,23 @@ func TestNeoprofAndroidProbe(t *testing.T) {
 		Type:     deploymentsupport.DependencyTypeToolBundle,
 		Name:     "sl-analyze",
 		Version:  slAnalyzeVersion,
+		Locality: deploymentsupport.DeploymentLocalityHost,
+		RequiredWhen: deploymentsupport.RequirementSpec{
+			Type: deploymentsupport.RequirementTypeAlways,
+		},
+	})
+	var parquetToJSONVersion string
+	for _, dependency := range androidDependencies {
+		if dependency.Name == "parquet-to-json" {
+			parquetToJSONVersion = dependency.Version
+			break
+		}
+	}
+	require.NotEmpty(t, parquetToJSONVersion)
+	require.Contains(t, androidDependencies, deploymentsupport.Dependency{
+		Type:     deploymentsupport.DependencyTypeToolBundle,
+		Name:     "parquet-to-json",
+		Version:  parquetToJSONVersion,
 		Locality: deploymentsupport.DeploymentLocalityHost,
 		RequiredWhen: deploymentsupport.RequirementSpec{
 			Type: deploymentsupport.RequirementTypeAlways,
@@ -314,7 +333,6 @@ func TestNeoprofTimelineCapabilityIDsDistinguishSameNamedSeries(t *testing.T) {
 
 	sts, err := LoadFromSource(string(data), toolPath)
 	require.NoError(t, err)
-
 	ti, err := sts.NewIntegration(integrationContext(&tool_mocks.MockEngineContext{}, nil))
 	require.NoError(t, err)
 
@@ -337,6 +355,102 @@ func TestNeoprofTimelineCapabilityIDsDistinguishSameNamedSeries(t *testing.T) {
 	assert.Equal(t, "counter.key_type_8.cycles.cpu_cycles.series_1080", first.String())
 	assert.Equal(t, "counter.key_type_8.cycles.cpu_cycles.series_1081", second.String())
 	assert.NotEqual(t, first.String(), second.String())
+}
+
+func TestNeoprofTimelineMetadataIsReadableAfterPrivilegedConversion(t *testing.T) {
+	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+	data = append(data, []byte(`
+tool.run = async (engine, ctx) => {
+	await convertNeoprofTimelineCaptureMetadata(engine, "/capture.apc", true);
+};
+`)...)
+
+	sts, err := LoadFromSource(string(data), toolPath)
+	require.NoError(t, err)
+	var converterVersion string
+	for _, dependency := range sts.ToolDeployments[0].Dependencies {
+		if dependency.Name == "parquet-to-json" {
+			converterVersion = dependency.Version
+			break
+		}
+	}
+	require.NotEmpty(t, converterVersion)
+	converterPath := "/target/tools/parquet-to-json/" + converterVersion + "/parquet-to-json"
+	parquetPath := "/capture.apc/report-new/apx/metadata/capture_metadata.parquet"
+	jsonPath := "/capture.apc/report-new/apx/metadata/capture_metadata.json"
+
+	engine := &tool_mocks.MockEngineContext{}
+	engine.On("GetPlatform").Return(conductor.PlatformConfiguration{OS: conductor.Linux}).Twice()
+	engine.On("ExecCommand", &process.LaunchCommand{
+		Command: []string{"stat", converterPath},
+	}).Return(&process.CommandResult{}, nil).Once()
+	engine.On("ExecCommand", &process.LaunchCommand{
+		Command:      []string{converterPath, parquetPath},
+		AsPrivileged: true,
+	}).Return(&process.CommandResult{}, nil).Once()
+	engine.On("ExecCommand", &process.LaunchCommand{
+		Command:      []string{"chmod", "644", jsonPath},
+		AsPrivileged: true,
+	}).Return(&process.CommandResult{}, nil).Once()
+
+	ic := integrationContext(engine, nil)
+	ic.IsNeoprofTimelineEnabled = true
+	ti, err := sts.NewIntegration(ic)
+	require.NoError(t, err)
+	ti.(*GojaToolInstance).asyncHelper.StartLoop()
+	require.NoError(t, ti.Run())
+	ti.(*GojaToolInstance).asyncHelper.StopLoop()
+	engine.AssertExpectations(t)
+}
+
+func TestNeoprofTimelineMetadataConversionUsesWindowsExecutable(t *testing.T) {
+	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+	data = append(data, []byte(`
+tool.run = async (engine, ctx) => {
+	await convertNeoprofTimelineCaptureMetadata(engine, "/capture.apc", false);
+};
+`)...)
+
+	sts, err := LoadFromSource(string(data), toolPath)
+	require.NoError(t, err)
+	var converterVersion string
+	for _, dependency := range sts.ToolDeployments[0].Dependencies {
+		if dependency.Name == "parquet-to-json" {
+			converterVersion = dependency.Version
+			break
+		}
+	}
+	require.NotEmpty(t, converterVersion)
+	converterPath := "/target/tools/parquet-to-json/" + converterVersion + "/parquet-to-json.exe"
+	parquetPath := "/capture.apc/report-new/apx/metadata/capture_metadata.parquet"
+
+	engine := &tool_mocks.MockEngineContext{}
+	engine.On("GetPlatform").Return(conductor.PlatformConfiguration{OS: conductor.Win}).Twice()
+	engine.On("ExecCommand", &process.LaunchCommand{
+		Command: []string{
+			"powershell",
+			"-NoProfile",
+			"-Command",
+			"if (Test-Path -LiteralPath $env:APX_TEST_PATH) { exit 0 } else { exit 1 }",
+		},
+		Environment: map[string]string{"APX_TEST_PATH": converterPath},
+	}).Return(&process.CommandResult{}, nil).Once()
+	engine.On("ExecCommand", &process.LaunchCommand{
+		Command: []string{converterPath, parquetPath},
+	}).Return(&process.CommandResult{}, nil).Once()
+
+	ic := integrationContext(engine, nil)
+	ic.IsNeoprofTimelineEnabled = true
+	ti, err := sts.NewIntegration(ic)
+	require.NoError(t, err)
+	ti.(*GojaToolInstance).asyncHelper.StartLoop()
+	require.NoError(t, ti.Run())
+	ti.(*GojaToolInstance).asyncHelper.StopLoop()
+	engine.AssertExpectations(t)
 }
 
 func TestNeoprofIdentifiesAndroidLaunchFromWorkloadType(t *testing.T) {
@@ -370,6 +484,92 @@ func TestNeoprofIdentifiesAndroidLaunchFromWorkloadType(t *testing.T) {
 			result, err := isAndroidLaunch(goja.Undefined(), ctx)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result.ToBoolean())
+		})
+	}
+}
+
+func TestNeoprofDrainStreamToFile(t *testing.T) {
+	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
+	toolSource, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+
+	const testHarness = `
+var closed = false;
+const handle = {
+	append: async () => {},
+	close: async () => { closed = true; },
+	path: () => "/capture_log_err.txt",
+};
+const failingHandle = {
+	append: async () => { throw new Error("disk full"); },
+	close: async () => { closed = true; },
+	path: () => "/capture_log_err.txt",
+};
+`
+
+	transportErr := message.New(message.EngineAgentConnectionTransportError)
+
+	tests := []struct {
+		name         string
+		reader       io.Reader
+		drain        string
+		expectedCode message.MessageCode
+	}{
+		{
+			name: "preserves an agent transport error",
+			reader: io.MultiReader(
+				bytes.NewBufferString("stream data"),
+				iotest.ErrReader(transportErr),
+			),
+			drain:        "drainStreamToFileAndClose(handle, stream)",
+			expectedCode: message.EngineAgentConnectionTransportError,
+		},
+		{
+			name: "preserves an agent transport error while tracking progress",
+			reader: io.MultiReader(
+				bytes.NewBufferString("stream data"),
+				iotest.ErrReader(transportErr),
+			),
+			drain:        `drainStreamToFileAndTrackProgress(handle, stream, null, "analysis")`,
+			expectedCode: message.EngineAgentConnectionTransportError,
+		},
+		{
+			name:         "maps a host file append error to WRITE_STREAM",
+			reader:       bytes.NewBufferString("stream data"),
+			drain:        "drainStreamToFileAndClose(failingHandle, stream)",
+			expectedCode: message.ToolIntegrationsNeoprofWriteStream,
+		},
+		{
+			name:         "maps a host file append error to WRITE_STREAM while tracking progress",
+			reader:       bytes.NewBufferString("stream data"),
+			drain:        `drainStreamToFileAndTrackProgress(failingHandle, stream, null, "analysis")`,
+			expectedCode: message.ToolIntegrationsNeoprofWriteStream,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := fmt.Sprintf("%s\n%s\ntool.run = async () => { await %s; };", toolSource, testHarness, tt.drain)
+			sts, err := LoadFromSource(source, toolPath)
+			require.NoError(t, err)
+
+			ti, err := sts.NewIntegration(integrationContext(&tool_mocks.MockEngineContext{}, nil))
+			require.NoError(t, err)
+			instance := ti.(*GojaToolInstance)
+			vm := instance.asyncHelper.Vm
+
+			stream, err := instance.asyncHelper.RegisterAsyncIterator(vm, tt.reader)
+			require.NoError(t, err)
+			require.NoError(t, vm.Set("stream", stream))
+
+			instance.asyncHelper.StartLoop()
+			err = ti.Run()
+			instance.asyncHelper.StopLoop()
+
+			var messageErr *message.MessageImpl
+			require.ErrorAs(t, err, &messageErr)
+			require.Equal(t, tt.expectedCode, messageErr.Code())
+			require.True(t, vm.Get("closed").ToBoolean())
 		})
 	}
 }

@@ -16,6 +16,7 @@ const {
   posixTestWorkload,
 } = require('./utils.js');
 const { getExecutableFromWorkload } = require('./workload');
+const { NEOPROF_TIMELINE_BIN_DURATIONS_NS } = require('./neoprof_timeline');
 
 let slAnalyzeVersion = '2.2.0-build-4';
 let slRecordVersion = '2.2.0.v20260729_1543-neoprof';
@@ -27,7 +28,7 @@ const slRecordToolName = 'sl-record';
 const slRecordStopDelayMs = 2000;
 const gatorCollectionFinishedMessage = 'Ending capture...';
 
-const jitdumpJvmVersion = '0.9.0';
+const jitdumpJvmVersion = '1.0.0';
 const jitdumpJvmToolName = 'jitdump-jvm';
 
 const dotnetAgentVersion = '0.9.0';
@@ -39,7 +40,6 @@ const performixGlobal =
   );
 const parquetToJsonName = 'parquet-to-json';
 const parquetToJsonVersion = performixGlobal.engineVersion;
-
 /**
  * Resolve deployment paths for the current engine locality.
  * @param {import("../recipes/docs/jsdocs").Engine} engine
@@ -845,6 +845,11 @@ async function reformatOnHost(engine, ctx) {
   if (engine.isNeoprofTimelineEnabled()) {
     await addToolCapabilities(engine, hostCaptureDirectory);
   }
+  await convertNeoprofTimelineCaptureMetadata(
+    engine,
+    hostCaptureDirectory,
+    false,
+  );
 
   engine.endProgress(progressTrackerId);
 }
@@ -895,8 +900,61 @@ async function reformatOnTarget(engine, ctx) {
       ctx.metadata.outputDirectory + '/capture.apc',
     );
   }
+  await convertNeoprofTimelineCaptureMetadata(
+    engine,
+    ctx.metadata.captureDirectory,
+    ctx.metadata.neoprofAsPrivileged,
+  );
 
   engine.endProgress(progressTrackerId);
+}
+
+async function convertNeoprofTimelineCaptureMetadata(
+  engine,
+  outputDirectory,
+  asPrivileged,
+) {
+  if (!engine.isNeoprofTimelineEnabled()) {
+    return;
+  }
+
+  const paths = getNeoprofPaths(engine);
+  const converterPath =
+    paths.parquetToJsonDeployPath + getParquetToJSONFilename(engine);
+  await ensureDeployed(engine, converterPath, parquetToJsonName);
+
+  const captureMetadataPath =
+    outputDirectory + '/report-new/apx/metadata/capture_metadata.parquet';
+  const captureMetadataJSONPath =
+    outputDirectory + '/report-new/apx/metadata/capture_metadata.json';
+  const result = await engine.execCommand(
+    [converterPath, captureMetadataPath],
+    { asPrivileged },
+  );
+  if (result.rc !== 0) {
+    throw {
+      code: 'tool_integrations.neoprof.NEOPROF_FAILED',
+      metadata: { tool: parquetToJsonName, code: result.rc },
+      cause: result.stderr,
+    };
+  }
+
+  // parquet-to-json writes atomically through an owner-only temporary file.
+  // When analysis requires privilege, make the final file readable by the
+  // unprivileged target-to-host transfer worker.
+  if (asPrivileged) {
+    const chmodResult = await engine.execCommand(
+      ['chmod', '644', captureMetadataJSONPath],
+      { asPrivileged: true },
+    );
+    if (chmodResult.rc !== 0) {
+      throw {
+        code: 'tool_integrations.neoprof.NEOPROF_FAILED',
+        metadata: { tool: parquetToJsonName, code: chmodResult.rc },
+        cause: chmodResult.stderr,
+      };
+    }
+  }
 }
 
 function buildAnalyzeArgs(engine, ctx, options) {
@@ -919,7 +977,7 @@ function buildAnalyzeArgs(engine, ctx, options) {
   }
 
   if (engine.isNeoprofTimelineEnabled()) {
-    args.push('--bin-durations', '1000000000');
+    args.push('--bin-durations', NEOPROF_TIMELINE_BIN_DURATIONS_NS.join(','));
   }
 
   if (ctx.workload.type === 'attach') {
@@ -1580,6 +1638,13 @@ async function checkAndThrowNeoprofError(engine, ctx, exitCode, stdErr, tool) {
       },
     ],
     [
+      /^ERROR: Perf agent failed\. Invalid event and\/or could not online CPUs$/m,
+      {
+        msgCode: 'tool_integrations.neoprof.PERF_AGENT_FAILED',
+        metadataProvider: (match) => ({}),
+      },
+    ],
+    [
       /No space left on device/m,
       {
         msgCode: 'tool_integrations.neoprof.INSUFFICIENT_DISK_SPACE',
@@ -1843,14 +1908,27 @@ async function readHostFile(engine, path) {
  */
 async function drainStreamToFileAndClose(handle, stream) {
   try {
-    await forAwait(stream, (chunk) => handle.append(chunk));
-  } catch {
+    await forAwait(stream, (chunk) => appendStreamDataToFile(handle, chunk));
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+/**
+ * Appends stream data to a host file, translating only host-file failures.
+ * @param {import("../recipes/docs/jsdocs").FileHandle} handle
+ * @param {string} data
+ * @returns {Promise<void>}
+ */
+async function appendStreamDataToFile(handle, data) {
+  try {
+    await handle.append(data);
+  } catch (err) {
     throw {
       code: 'tool_integrations.neoprof.WRITE_STREAM',
       metadata: { file: handle.path() },
+      cause: err,
     };
-  } finally {
-    await handle.close().catch(() => {});
   }
 }
 
@@ -1886,14 +1964,14 @@ async function drainStreamToFileAndTrackProgress(
     const progressRegex = /^Progress: (.+): (\d+)% /;
     const match = line.match(progressRegex);
     if (!match) {
-      await handle.append(rawLine + suffix);
+      await appendStreamDataToFile(handle, rawLine + suffix);
       return;
     }
 
     const message = match[1].trim();
     const percent = Number.parseFloat(match[2]);
     if (Number.isNaN(percent)) {
-      await handle.append(rawLine + suffix);
+      await appendStreamDataToFile(handle, rawLine + suffix);
       return;
     }
 
@@ -1929,12 +2007,6 @@ async function drainStreamToFileAndTrackProgress(
     if (buffer.length > 0) {
       await processLine(buffer);
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw {
-      code: 'tool_integrations.neoprof.WRITE_STREAM',
-      metadata: { file: handle.path(), reason: message },
-    };
   } finally {
     await handle.close().catch(() => {});
   }
@@ -2253,6 +2325,14 @@ function emitDisassemblyFiles(engine, outputDir) {
  * @returns {void}
  */
 function emitNeoprofTimelineFiles(engine, outputDir) {
+  engine.emitOutput(
+    outputDir + '/report-new/apx/metadata/capture_metadata.json',
+    'output/parquet/metadata/capture_metadata.json',
+    {
+      name: 'timeline-capture-metadata-json',
+      version: '1.0',
+    },
+  );
   engine.emitOutput(
     outputDir + '/report-new/apx/metadata/capture_metadata.parquet',
     'output/parquet/metadata/capture_metadata.parquet',

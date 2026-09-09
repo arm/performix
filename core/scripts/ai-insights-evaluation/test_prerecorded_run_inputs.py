@@ -17,6 +17,7 @@ def make_testcase(recipe: str) -> dict[str, str]:
     return {
         "id": "test_case_32",
         "recipe": recipe,
+        "prerecord": {"mode": "launch"},
         "run_artifact": "test_case_32/latest.zip",
     }
 
@@ -47,13 +48,14 @@ def make_instruction_mix_testcase(mode: str) -> dict[str, str | list[str]]:
     return test_case
 
 
-def test_system_utilization_does_not_require_source_archive(
-    tmp_path: Path,
+@pytest.mark.parametrize("recipe", ["system_utilization", "syscall_trace_summary"])
+def test_recipes_without_source_data_do_not_require_source_archive(
+    tmp_path: Path, recipe: str
 ) -> None:
-    write_common_inputs(tmp_path, "system_utilization")
+    write_common_inputs(tmp_path, recipe)
 
     missing = harness._missing_run_artifacts_for_testcases(
-        [make_testcase("system_utilization")], tmp_path
+        [make_testcase(recipe)], tmp_path
     )
 
     assert missing == []
@@ -83,34 +85,43 @@ def test_static_instruction_mix_does_not_require_source_archive(tmp_path: Path) 
     assert missing == []
 
 
-def test_code_hotspots_requires_source_archive(tmp_path: Path) -> None:
-    case_dir = write_common_inputs(tmp_path, "code_hotspots")
-
-    missing = harness._missing_run_artifacts_for_testcases(
-        [make_testcase("code_hotspots")], tmp_path
-    )
-
-    assert missing == [
-        ("test_case_32", "source archive", case_dir / "test_src.zip")
-    ]
-
-
-def test_cpu_microarchitecture_requires_source_archive(tmp_path: Path) -> None:
-    case_dir = write_common_inputs(tmp_path, "cpu_microarchitecture")
-
-    missing = harness._missing_run_artifacts_for_testcases(
-        [make_testcase("cpu_microarchitecture")], tmp_path
-    )
-
-    assert missing == [
-        ("test_case_32", "source archive", case_dir / "test_src.zip")
-    ]
-
-
-def test_system_utilization_does_not_download_source_archive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("profile_mode", ["launch", "system-wide"])
+def test_code_hotspots_requires_source_archive_regardless_of_execution_mode(
+    tmp_path: Path, profile_mode: str
 ) -> None:
-    write_common_inputs(tmp_path, "system_utilization")
+    case_dir = write_common_inputs(tmp_path, "code_hotspots")
+    test_case = make_testcase("code_hotspots")
+    test_case["prerecord"] = {"mode": profile_mode}
+
+    missing = harness._missing_run_artifacts_for_testcases(
+        [test_case], tmp_path
+    )
+
+    assert missing == [
+        ("test_case_32", "source archive", case_dir / "test_src.zip")
+    ]
+
+
+@pytest.mark.parametrize(
+    "recipe", ["cpu_microarchitecture", "cache_sharing", "memory_access"]
+)
+def test_sampled_recipe_requires_source_archive(tmp_path: Path, recipe: str) -> None:
+    case_dir = write_common_inputs(tmp_path, recipe)
+
+    missing = harness._missing_run_artifacts_for_testcases(
+        [make_testcase(recipe)], tmp_path
+    )
+
+    assert missing == [
+        ("test_case_32", "source archive", case_dir / "test_src.zip")
+    ]
+
+
+@pytest.mark.parametrize("recipe", ["system_utilization", "syscall_trace_summary"])
+def test_recipes_without_source_data_do_not_download_source_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recipe: str
+) -> None:
+    write_common_inputs(tmp_path, recipe)
     downloads = []
     monkeypatch.setattr(
         harness,
@@ -119,10 +130,36 @@ def test_system_utilization_does_not_download_source_archive(
     )
 
     harness._download_missing_run_artifacts(
-        [make_testcase("system_utilization")], tmp_path, "repository/path"
+        [make_testcase(recipe)], tmp_path, "repository/path"
     )
 
     assert downloads == []
+
+
+def test_shared_run_artifact_downloads_from_declared_artifact_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    downloads = []
+
+    def record_download(*args, **kwargs):
+        downloads.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(harness, "_download_artifactory_input", record_download)
+    test_case = {
+        "id": "test_case_54",
+        "recipe": "asct",
+        "run_artifact": "test_case_53/latest.zip",
+    }
+
+    harness._download_missing_run_artifacts(
+        [test_case], tmp_path, "repository/path"
+    )
+
+    assert [call[0][1] for call in downloads] == [
+        "test_case_53",
+        "test_case_53",
+    ]
 
 
 def test_metadata_recipe_must_match_manifest(tmp_path: Path) -> None:
@@ -144,10 +181,84 @@ def test_instruction_mix_metadata_mode_must_match_manifest(tmp_path: Path) -> No
         )
 
 
-def test_system_utilization_import_does_not_attach_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "recorded_modification", [None, "core_to_core_latency_asymmetry"]
+)
+def test_metadata_run_modification_must_match_manifest(
+    tmp_path: Path, recorded_modification: str | None
 ) -> None:
+    case_dir = write_common_inputs(tmp_path, "asct")
+    write_metadata(
+        case_dir,
+        {
+            "recipe": "asct",
+            "run_modification": recorded_modification,
+            "workload_command": "/remote/test_case_32",
+        },
+    )
+    test_case = make_testcase("asct")
+    test_case["run_modification"] = "low_peak_bandwidth"
+
+    with pytest.raises(pytest.UsageError, match="run modification mismatch"):
+        harness._validate_prerecorded_metadata([test_case], tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("profile_mode", "recorded_mode"),
+    [
+        ("system-wide", "launch"),
+        ("launch", "system-wide"),
+    ],
+)
+def test_metadata_profile_mode_must_match_manifest(
+    tmp_path: Path,
+    profile_mode: str,
+    recorded_mode: str,
+) -> None:
+    case_dir = write_common_inputs(tmp_path, "system_utilization")
+    write_metadata(
+        case_dir,
+        {
+            "recipe": "system_utilization",
+            "profile_mode": recorded_mode,
+        },
+    )
+    test_case = make_testcase("system_utilization")
+    test_case["prerecord"] = {"mode": profile_mode}
+
+    with pytest.raises(pytest.UsageError, match="profile mode mismatch"):
+        harness._validate_prerecorded_metadata([test_case], tmp_path)
+
+
+def test_missing_metadata_profile_mode_defaults_to_launch(tmp_path: Path) -> None:
     write_common_inputs(tmp_path, "system_utilization")
+
+    harness._validate_prerecorded_metadata(
+        [make_testcase("system_utilization")], tmp_path
+    )
+
+
+def test_attach_metadata_mode_matches_manifest(tmp_path: Path) -> None:
+    case_dir = write_common_inputs(tmp_path, "system_utilization")
+    write_metadata(
+        case_dir,
+        {
+            "recipe": "system_utilization",
+            "profile_mode": "attach",
+        },
+    )
+
+    test_case = make_testcase("system_utilization")
+    test_case["prerecord"] = {"mode": "attach"}
+
+    harness._validate_prerecorded_metadata([test_case], tmp_path)
+
+
+@pytest.mark.parametrize("recipe", ["system_utilization", "syscall_trace_summary"])
+def test_recipes_without_source_data_import_without_attaching_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recipe: str
+) -> None:
+    write_common_inputs(tmp_path, recipe)
     calls = []
 
     def run_cli(command, cwd):
@@ -170,7 +281,7 @@ def test_system_utilization_import_does_not_attach_source(
     monkeypatch.setattr(harness, "run_cli", run_cli)
 
     harness._prepare_imported_runs(
-        [make_testcase("system_utilization")],
+        [make_testcase(recipe)],
         cache,
         tmp_path / "apx",
         tmp_path,

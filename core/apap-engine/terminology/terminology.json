@@ -3,5 +3,6 @@
   "PRODUCT_BINARY_NAME": "apx",
   "AGENT_BINARY_NAME": "apx-agent",
   "DAEMON_DIR_NAME": "apxd",
-  "ENV_VAR_PREFIX": "APXD"
+  "ENV_VAR_PREFIX": "APXD",
+  "MCP_SERVER_NAME": "arm-performix"
 }

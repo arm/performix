@@ -237,6 +237,8 @@
  * Lists manifest components for an indexed run matching the given component glob.
  * @property {function(runIndex:number, toolInvocation:ToolInvocation): ToolCapabilities} getToolCapabilities
  * Lists the registered capabilities for the specified tool invocation of the indexed run.
+ * @property {function(runIndex:number, componentPath:string, maxBytes?:number): string} readRunComponent
+ * Reads a manifest component from an indexed run as text. The optional maximum size defaults to 10 MiB.
  * @property {function(string): any} getRenderParameter - Retrieves a render parameter by ID.
  * @property {function(): Object.<string, any>} getRenderParameters - Retrieves all render parameters by ID.
  * @property {function(string, any): void} setDefaultRenderParameter

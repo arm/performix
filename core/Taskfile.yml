@@ -6,6 +6,7 @@ version: '3'
 vars:
   APX_BINARY: '{{if eq OS "windows"}}apx.exe{{else}}apx{{end}}'
   PYTHON_SYSTEM: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
+  PYTHON_VENV: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
   TOOLS_PYTHON: '{{.PYTHON_SYSTEM}}'
   DEFAULT_APX_BUILD_TAGS: duckdb_arrow
 
@@ -50,6 +51,11 @@ tasks:
       SKIP_APX_AGENT_BUILD: true
     cmds:
       - '{{.TOOLS_PYTHON}} scripts/get-tools.py'
+
+  telemetry:validate:
+    desc: Validate CPU telemetry specifications against the vendored schemas
+    cmds:
+      - '{{.TOOLS_PYTHON}} scripts/validate_telemetry.py'
 
   deps:
     desc: Install dependencies required by the current checkout

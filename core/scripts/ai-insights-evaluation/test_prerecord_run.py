@@ -26,6 +26,7 @@ def configure_run(
     monkeypatch,
     recipe: str,
     recipe_params: list[str] | None = None,
+    profile_mode: str = "launch",
 ):
     cli = tmp_path / "apx"
     cli.write_text("", encoding="utf-8")
@@ -35,10 +36,10 @@ def configure_run(
         cli_bin=cli,
         target="target",
         recipe=recipe,
-        workload_cmd="/remote/test_case_32",
+        workload_cmd=None if profile_mode == "system-wide" else "/remote/test_case_32",
         pid=None,
         timeout=None,
-        prerecord="",
+        prerecord=json.dumps({"mode": profile_mode}),
         params_json=json.dumps(recipe_params or []),
         ssh_target=None,
         ssh_key=None,
@@ -63,7 +64,74 @@ def configure_run(
     return output_dir, run_cli
 
 
-@pytest.mark.parametrize("recipe", ["system_utilization", "custom_recipe"])
+@pytest.mark.parametrize("modification", [{}, [], "unknown"])
+def test_run_modification_validation_rejects_invalid_config(
+    modification: object,
+) -> None:
+    with pytest.raises(ValueError, match=r"run[_ ]modification"):
+        prerecord.run_modification_from_config(
+            {"run_modification": modification}, "asct"
+        )
+
+
+@pytest.mark.parametrize(
+    "modification",
+    ["core_to_core_latency_asymmetry", "low_peak_bandwidth"],
+)
+def test_asct_modifications_require_asct_recipe(modification: str) -> None:
+    with pytest.raises(ValueError, match="requires recipe 'asct'"):
+        prerecord.run_modification_from_config(
+            {"run_modification": modification}, "code_hotspots"
+        )
+
+
+def test_materialize_run_artifact_copies_ordinary_archive(tmp_path: Path) -> None:
+    source = tmp_path / "source.zip"
+    destination = tmp_path / "latest.zip"
+    stale_report = tmp_path / "run-modification-report.json"
+    source.write_bytes(b"run")
+    stale_report.write_bytes(b"stale")
+
+    prerecord.materialize_run_artifact(source, destination, None)
+
+    assert destination.read_bytes() == b"run"
+    assert not stale_report.exists()
+
+
+def test_prerecord_metadata_describes_transformed_archive(
+    tmp_path: Path, monkeypatch
+) -> None:
+    output_dir, _ = configure_run(
+        tmp_path, monkeypatch, "asct", profile_mode="system-wide"
+    )
+    args = prerecord.parse_args()
+    args.prerecord = json.dumps(
+        {"mode": "system-wide", "run_modification": "low_peak_bandwidth"}
+    )
+
+    def materialize(source, destination, modification):
+        assert source.read_bytes() == b"run"
+        assert modification == "low_peak_bandwidth"
+        destination.write_bytes(b"transformed run")
+        destination.with_name("run-modification-report.json").write_bytes(b"report")
+
+    monkeypatch.setattr(prerecord, "materialize_run_artifact", materialize)
+
+    assert prerecord.main() == 0
+
+    case_dir = output_dir / "test_case_32"
+    latest = case_dir / "latest.zip"
+    metadata = json.loads((case_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert latest.read_bytes() == b"transformed run"
+    assert (case_dir / "run-modification-report.json").read_bytes() == b"report"
+    assert metadata["archive_size_bytes"] == latest.stat().st_size
+    assert metadata["archive_sha256"] == prerecord.sha256_file(latest)
+    assert metadata["run_modification"] == "low_peak_bandwidth"
+
+
+@pytest.mark.parametrize(
+    "recipe", ["system_utilization", "syscall_trace_summary", "custom_recipe"]
+)
 def test_recipe_without_source_query_omits_source_archive(
     tmp_path: Path, monkeypatch, recipe: str
 ) -> None:
@@ -80,6 +148,46 @@ def test_recipe_without_source_query_omits_source_archive(
     assert "source_archive_path" not in metadata
     collect_sources.assert_not_called()
     assert "--source" not in run_cli.call_args.args[0]
+
+
+def test_system_wide_prerecord_omits_workload(
+    tmp_path: Path, monkeypatch
+) -> None:
+    output_dir, run_cli = configure_run(
+        tmp_path,
+        monkeypatch,
+        "system_utilization",
+        profile_mode="system-wide",
+    )
+
+    assert prerecord.main() == 0
+
+    command = run_cli.call_args.args[0]
+    assert "--system-wide" in command
+    assert "--workload" not in command
+    metadata = json.loads((output_dir / "test_case_32" / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["profile_mode"] == "system-wide"
+
+
+def test_system_wide_prerecord_rejects_lifecycle_commands(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    output_dir, run_cli = configure_run(
+        tmp_path, monkeypatch, "code_hotspots", profile_mode="system-wide"
+    )
+    args = prerecord.parse_args()
+    args.prerecord = json.dumps(
+        {
+            "mode": "system-wide",
+            "setup": ["bash", "sidecar.sh", "setup"],
+            "cleanup": ["bash", "sidecar.sh", "cleanup"],
+        }
+    )
+
+    assert prerecord.main() == 1
+    assert "system-wide prerecord cannot use" in capsys.readouterr().err
+    assert not output_dir.exists()
+    run_cli.assert_not_called()
 
 
 def test_code_hotspots_prerecord_writes_source_archive(
@@ -105,18 +213,24 @@ def test_code_hotspots_prerecord_writes_source_archive(
     assert "--source" not in run_cli.call_args.args[0]
 
 
-def test_cpu_microarchitecture_prerecord_writes_source_archive(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize(
+    ("expected_recipe", "query_marker"),
+    [
+        ("cpu_microarchitecture", "periodic_samples"),
+        ("cache_sharing", "perf.c2c.samples"),
+        ("memory_access", "spe.samples.count"),
+    ],
+)
+def test_sampled_recipe_prerecord_writes_source_archive(
+    tmp_path: Path, monkeypatch, expected_recipe: str, query_marker: str
 ) -> None:
-    output_dir, run_cli = configure_run(
-        tmp_path, monkeypatch, "cpu_microarchitecture"
-    )
+    output_dir, run_cli = configure_run(tmp_path, monkeypatch, expected_recipe)
 
     def collect_sources(cli_bin, run_id, case_dir, recipe, query):
         archive = case_dir / "test_src.zip"
         archive.write_bytes(b"source")
-        assert recipe == "cpu_microarchitecture"
-        assert "periodic_samples" in query
+        assert recipe == expected_recipe
+        assert query_marker in query
         return archive
 
     monkeypatch.setattr(prerecord, "collect_sampled_sources", collect_sources)

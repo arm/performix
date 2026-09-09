@@ -5,12 +5,17 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 	"github.com/Arm-Debug/apap-cli/clients/go/mocks"
 	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
@@ -215,4 +220,66 @@ func TestAgentProcessHandle_PrivilegePath(t *testing.T) {
 		mockPrivilegeSession.AssertExpectations(t)
 		mockClient.AssertExpectations(t)
 	})
+}
+
+func TestClassifyStreamReceiveError(t *testing.T) {
+	// Create reusable contexts for testing cancellation and disconnection
+	disconnectedCtx, disconnect := context.WithCancelCause(context.Background())
+	disconnect(agent.ErrAgentDisconnected)
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name         string
+		ctx          context.Context
+		err          error
+		expectedCode message.MessageCode
+	}{
+		{
+			name:         "preserves agent error messages",
+			ctx:          disconnectedCtx,
+			err:          message.AsGRPCStatus(message.New(message.AgentElevatePrivilegesInvalidToken)),
+			expectedCode: message.AgentElevatePrivilegesInvalidToken,
+		},
+		{
+			name:         "classifies user cancellation",
+			ctx:          canceledCtx,
+			err:          status.Error(codes.Canceled, "agent context canceled"),
+			expectedCode: message.EngineCommonUserCanceled,
+		},
+		{
+			name:         "classifies connection-loss cancellation as a transport error",
+			ctx:          disconnectedCtx,
+			err:          errors.New("agent connection closed"),
+			expectedCode: message.EngineAgentConnectionTransportError,
+		},
+		{
+			name:         "classifies Unavailable grpc error as a transport error",
+			ctx:          context.Background(),
+			err:          status.Error(codes.Unavailable, "stream receive failed"),
+			expectedCode: message.EngineAgentConnectionTransportError,
+		},
+		{
+			name:         "classifies generic grpc error as a process stream failure",
+			ctx:          context.Background(),
+			err:          status.Error(codes.Unknown, "stream not available"),
+			expectedCode: message.EngineAgentProcessStreamReceiveFailed,
+		},
+		{
+			name:         "classifies generic non-grpc error as a process stream failure",
+			ctx:          context.Background(),
+			err:          errors.New("stream not available"),
+			expectedCode: message.EngineAgentProcessStreamReceiveFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := classifyStreamReceiveError(tt.ctx, tt.err)
+
+			messageErr := message.IsMessage(err)
+			require.NotNil(t, messageErr)
+			require.Equal(t, tt.expectedCode, messageErr.Code())
+		})
+	}
 }

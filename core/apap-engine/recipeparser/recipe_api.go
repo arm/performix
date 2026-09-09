@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"os"
 	"path"
 	"regexp"
 	"sort"
@@ -78,25 +80,27 @@ type RunDescription struct {
 }
 
 type RunComponentDescription struct {
-	RelativePath  string
-	FileName      string
-	ComponentType ComponentType
+	RelativePath  string        `json:"relativePath"`
+	FileName      string        `json:"fileName"`
+	ComponentType ComponentType `json:"componentType"`
 }
 
+const maxRunComponentTextBytes int64 = 10 << 20
+
 type ToolConfiguration struct {
-	Name     string
-	Params   map[string]interface{}
-	Workload WorkloadArg
-	Env      map[string]string
+	Name     string            `json:"name"`
+	Params   map[string]any    `json:"params"`
+	Workload WorkloadArg       `json:"workload"`
+	Env      map[string]string `json:"env"`
 }
 
 type RunToolConfigurationsArg struct {
-	ToolConfigs []ToolConfiguration
+	ToolConfigs []ToolConfiguration `json:"toolConfigs"`
 }
 
 type ToolInvocation struct {
-	ToolName        string
-	InvocationIndex int
+	ToolName        string `json:"toolName"`
+	InvocationIndex int    `json:"invocationIndex"`
 }
 
 // RecipeAPI defines the API functions that we expose to the JS runtime
@@ -104,6 +108,7 @@ type RecipeAPI interface {
 	getRunDescriptions(goja.FunctionCall) goja.Value
 	listRunComponents(goja.FunctionCall) goja.Value
 	getToolCapabilities(goja.FunctionCall) goja.Value
+	readRunComponent(goja.FunctionCall) goja.Value
 	getParameter(goja.FunctionCall) goja.Value
 	getRenderParameter(goja.FunctionCall) goja.Value
 	getRenderParameters(goja.FunctionCall) goja.Value
@@ -240,19 +245,20 @@ func (r *ConcreteRecipeAPI) getToolCapabilities(call goja.FunctionCall) goja.Val
 		panic(r.vm.ToValue(err))
 	}
 
+	jsCapabilities := &ConcreteJSToolCapabilities{capabilities: capabilities}
 	result := r.vm.NewObject()
 	if err = result.Set("has", func(hasCall goja.FunctionCall) goja.Value {
-		return toolCapabilitiesMethodHas(hasCall, r, capabilities)
+		return toolCapabilitiesMethodHas(hasCall, r, jsCapabilities)
 	}); err != nil {
 		panic(r.vm.ToValue(err))
 	}
 	if err = result.Set("get", func(getCall goja.FunctionCall) goja.Value {
-		return toolCapabilitiesMethodGet(getCall, r, capabilities)
+		return toolCapabilitiesMethodGet(getCall, r, jsCapabilities)
 	}); err != nil {
 		panic(r.vm.ToValue(err))
 	}
 	if err = result.Set("list", func(listCall goja.FunctionCall) goja.Value {
-		return toolCapabilitiesMethodList(listCall, r, capabilities)
+		return toolCapabilitiesMethodList(listCall, r, jsCapabilities)
 	}); err != nil {
 		panic(r.vm.ToValue(err))
 	}
@@ -305,6 +311,64 @@ func (r *ConcreteRecipeAPI) listRunComponents(call goja.FunctionCall) goja.Value
 	}
 
 	return r.vm.ToValue(out)
+}
+
+func (r *ConcreteRecipeAPI) readRunComponent(call goja.FunctionCall) goja.Value {
+	log.Debug("Recipe API: readRunComponent")
+
+	if len(call.Arguments) < 2 || len(call.Arguments) > 3 {
+		panic(r.vm.ToValue("readRunComponent called with wrong number of parameters"))
+	}
+
+	var runIndex int
+	if err := gojautils.ParseObjectFromJS(call.Arguments[0], &runIndex); err != nil {
+		panic(r.vm.ToValue(err))
+	}
+	var componentPath string
+	if err := gojautils.ParseObjectFromJS(call.Arguments[1], &componentPath); err != nil {
+		panic(r.vm.ToValue(err))
+	}
+	maxBytes := maxRunComponentTextBytes
+	if len(call.Arguments) == 3 {
+		var requestedMaxBytes float64
+		if err := gojautils.ParseObjectFromJS(call.Arguments[2], &requestedMaxBytes); err != nil {
+			panic(r.vm.ToValue(err))
+		}
+		if requestedMaxBytes <= 0 ||
+			math.IsNaN(requestedMaxBytes) ||
+			math.IsInf(requestedMaxBytes, 0) ||
+			math.Trunc(requestedMaxBytes) != requestedMaxBytes ||
+			requestedMaxBytes > float64(1<<53-1) {
+			panic(r.vm.ToValue("readRunComponent maxBytes must be a positive safe integer"))
+		}
+		maxBytes = int64(requestedMaxBytes)
+	}
+
+	runModels := r.execCtx.GetRunModels()
+	if runIndex < 0 || runIndex >= len(runModels) {
+		panic(r.vm.ToValue(fmt.Sprintf("run index out of range: %d", runIndex)))
+	}
+	component, err := runModels[runIndex].ResolveComponentByManifestPattern(componentPath)
+	if err != nil {
+		panic(r.vm.ToValue(err))
+	}
+	componentInfo, err := os.Stat(component.AbsolutePath)
+	if err != nil {
+		panic(r.vm.ToValue(err))
+	}
+	if componentInfo.Size() > maxBytes {
+		panic(r.vm.ToValue(fmt.Errorf(
+			"run component is too large to read as text: %d bytes exceeds %d bytes",
+			componentInfo.Size(),
+			maxBytes,
+		)))
+	}
+	content, err := os.ReadFile(component.AbsolutePath)
+	if err != nil {
+		panic(r.vm.ToValue(err))
+	}
+
+	return r.vm.ToValue(string(content))
 }
 
 func (r *ConcreteRecipeAPI) getParameter(call goja.FunctionCall) goja.Value {

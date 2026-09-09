@@ -12,9 +12,15 @@ GO_CLIENT_DIR="clients/go"
 SHARED_HEADER="$REPOSITORY_ROOT/copyright-license-header.txt"
 
 MOCKERY_BOILERPLATE=$(mktemp)
-trap 'rm -f "$MOCKERY_BOILERPLATE"' EXIT
+MOCKERY_CONFIG=$(mktemp "$PROJECT_ROOT/$GO_CLIENT_DIR/.mockery.generated.yaml.XXXXXX")
+trap 'rm -f "$MOCKERY_BOILERPLATE" "$MOCKERY_CONFIG"' EXIT
 
 awk '{ print "// " $0 }' "$SHARED_HEADER" > "$MOCKERY_BOILERPLATE"
 printf "\n" >> "$MOCKERY_BOILERPLATE"
 
-(cd "$PROJECT_ROOT/$GO_CLIENT_DIR" && mockery --boilerplate-file "$MOCKERY_BOILERPLATE")
+awk -v boilerplate="$MOCKERY_BOILERPLATE" '
+  { print }
+  /^template-data:$/ { printf "  boilerplate-file: \"%s\"\n", boilerplate }
+' "$PROJECT_ROOT/$GO_CLIENT_DIR/.mockery.yaml" > "$MOCKERY_CONFIG"
+
+(cd "$PROJECT_ROOT/$GO_CLIENT_DIR" && mockery --config "$MOCKERY_CONFIG")

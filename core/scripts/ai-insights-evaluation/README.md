@@ -139,8 +139,9 @@ interpreter or refreshed dependencies.
 
 The suite defaults `--ai-prerecorded-run-cache` to
 `$HOME/.cache/performix/ai-insights-evaluation/pre-recorded-runs`. If
-you use a different directory, it must contain one subdirectory per
-testcase. The cache can also be set with
+you use a different directory, it must contain the subdirectories referenced
+by each testcase's `run_artifact`. Multiple testcases may intentionally
+reference the same fixture directory. The cache can also be set with
 `AI_INSIGHTS_PRERECORDED_RUN_CACHE`; the older
 `AI_INSIGHTS_RUN_ARTIFACT_BASE` name remains supported for existing
 scripts. Each testcase directory must contain:
@@ -148,10 +149,15 @@ scripts. Each testcase directory must contain:
 - `latest.zip`: the exported Performix run archive.
 - `metadata.json`: provenance for the pre-recorded run input.
 
-Code Hotspots, CPU Microarchitecture and dynamic-enabled Instruction Mix
-testcase directories must also contain `test_src.zip`, holding source files
-fetched from sampled source IDs in the run through `load_source_content`.
-System Utilisation and static-only Instruction Mix do not use a source archive.
+Modified testcases contain `run-modification-report.json`. This audit
+sidecar records how the exported source run was transformed and is uploaded
+with the pre-recorded artifact, but it is not exposed to the evaluation model.
+
+Code Hotspots, CPU Microarchitecture, Cache Sharing, Memory Access and
+dynamic-enabled Instruction Mix testcase directories must also contain
+`test_src.zip`, holding source files fetched from sampled source IDs in the run
+through `load_source_content`. ASCT, Syscall Trace, System Utilisation and
+static-only Instruction Mix do not use a source archive.
 The testcase recipe in `ai_insights_evaluation.json` selects the input handling;
 the recipe in `metadata.json` is checked as recording provenance.
 
@@ -160,6 +166,30 @@ managed-runtime stack collection flags, are defined in
 `ai_insights_evaluation.json`, together with the recipe and optional
 `prerecord` settings. The workflow resolves these values before invoking the
 workload-agnostic `prerecord-run.py` helper.
+
+Some recipes support an optional run modification that changes the exported
+archive during pre-recording. Set `run_modification` to a modification supported
+by the testcase's recipe.
+
+Available modifications by recipe:
+
+- `asct`:
+  - `core_to_core_latency_asymmetry`
+  - `low_peak_bandwidth`
+
+For example:
+
+```json
+{
+  "id": "test_case_01",
+  "recipe": "asct",
+  "run_modification": "low_peak_bandwidth"
+}
+```
+
+The modification produces the final `latest.zip` after the successful run is
+exported and before the external metadata is written. Unknown modifications and
+incompatible recipes are rejected before the recipe is run.
 
 Optional MCP performance thresholds are also defined per test. A testcase must
 specify all three thresholds in `ai_insights_evaluation.json` to enable its
@@ -196,21 +226,22 @@ exposed to the model under test. Summaries should use the form
 `<language> <description>`, for example `Cpp missing crc32c
 specialization`.
 
-For Code Hotspots, CPU Microarchitecture and dynamic-enabled Instruction Mix,
-the evaluation suite extracts `test_src.zip` under the results directory and
-updates the imported run to use that extracted source tree. This avoids
-depending on source paths from the machine that runs pytest. Static-only
-Instruction Mix and System Utilisation import only the run archive.
+For Code Hotspots, CPU Microarchitecture, Cache Sharing, Memory Access and
+dynamic-enabled Instruction Mix, the evaluation suite extracts `test_src.zip`
+under the results directory and updates the imported run to use that extracted
+source tree. This avoids depending on source paths from the machine that runs
+pytest. Static-only Instruction Mix, ASCT, Syscall Trace and System Utilisation
+import only the run archive.
 
 Pytest downloads missing run inputs for the selected testcases from
 `its.apx-prerecorded-runs/ai-insights-evaluation` before checking the
 local input directory. These are `latest.zip` and `metadata.json` for every
-supported recipe, plus `test_src.zip` for Code Hotspots, CPU Microarchitecture
-and dynamic-enabled Instruction Mix. Override that Artifactory path with
-`--ai-artifactory-run-base` or `AI_INSIGHTS_ARTIFACTORY_RUN_BASE` if
-needed. The download uses the same `ARTIFACTORY_API_TOKEN` environment
-variable as the other local Performix tooling. This keeps local and CI
-runs on the same input-resolution path.
+supported recipe, plus `test_src.zip` for Code Hotspots, CPU Microarchitecture,
+Cache Sharing, Memory Access and dynamic-enabled Instruction Mix. Override that
+Artifactory path with `--ai-artifactory-run-base` or
+`AI_INSIGHTS_ARTIFACTORY_RUN_BASE` if needed. The download uses the same
+`ARTIFACTORY_API_TOKEN` environment variable as the other local Performix
+tooling. This keeps local and CI runs on the same input-resolution path.
 
 ## Authentication
 

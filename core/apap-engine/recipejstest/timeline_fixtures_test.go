@@ -198,6 +198,10 @@ func newCodeHotspotsTimelineFixtureModel(
 	fixture timelineBinnedDeltaParquetFixture,
 ) cdf.ModelView {
 	t.Helper()
+	const captureMetadataRelPath = "tool/neoprof/0/output/parquet/metadata/capture_metadata.json"
+	runDir, err := os.OpenRoot(runRoot)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, runDir.Close()) })
 
 	translatePath := func(path string) string {
 		return strings.Replace(
@@ -209,14 +213,14 @@ func newCodeHotspotsTimelineFixtureModel(
 	}
 
 	copyFile := func(srcRelPath string) {
-		srcAbsPath := filepath.Join(runRoot, filepath.FromSlash(srcRelPath))
+		srcPath := filepath.FromSlash(srcRelPath)
 		dstRelPath := translatePath(srcRelPath)
-		dstAbsPath := filepath.Join(runRoot, filepath.FromSlash(dstRelPath))
+		dstPath := filepath.FromSlash(dstRelPath)
 
-		data, err := os.ReadFile(srcAbsPath)
+		data, err := runDir.ReadFile(srcPath)
 		require.NoError(t, err)
-		require.NoError(t, os.MkdirAll(filepath.Dir(dstAbsPath), 0o755))
-		require.NoError(t, os.WriteFile(dstAbsPath, data, 0o644))
+		require.NoError(t, runDir.MkdirAll(filepath.Dir(dstPath), 0o755))
+		require.NoError(t, runDir.WriteFile(dstPath, data, 0o644))
 	}
 
 	copyFile(fixture.MetadataComponentRelPath)
@@ -225,8 +229,21 @@ func newCodeHotspotsTimelineFixtureModel(
 			copyFile(componentPath)
 		}
 	}
+	captureMetadataAbsPath := filepath.Join(runRoot, filepath.FromSlash(captureMetadataRelPath))
+	require.NoError(t, os.MkdirAll(filepath.Dir(captureMetadataAbsPath), 0o755))
+	require.NoError(t, os.WriteFile(
+		captureMetadataAbsPath,
+		[]byte(`[{"duration":60000000000,"time_unit":"nanoseconds"}]`),
+		0o644,
+	))
 
 	manifestEntries := []cdf.ManifestEntry{{
+		Path: captureMetadataRelPath,
+		ComponentType: cdf.ComponentType{
+			Name:          "timeline-capture-metadata-json",
+			SchemaVersion: "1.0",
+		},
+	}, {
 		Path: translatePath(fixture.MetadataComponentRelPath),
 		ComponentType: cdf.ComponentType{
 			Name:          "timeline-counter-series-files-metadata",

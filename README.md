@@ -17,7 +17,7 @@ Arm is gradually making source code for Arm Performix available to the public. C
 ## How To Build
 
 > [!NOTE]
-> This build process is fully supported on Linux and MacOS systems. For Windows users, we recommend using WSL.
+> This build process is fully supported on Linux and macOS 13 or later. For Windows users, we recommend using WSL.
 
 ### Step 1 - Pre-requisites
 Ensure the following are available on your system:
@@ -32,8 +32,8 @@ For example, on Ubuntu or Debian:
 sudo apt install build-essential git curl unzip
 ```
 
-On macOS, install the Xcode Command Line Tools (`curl` and `unzip` are included
-with the operating system):
+On macOS 13 or later, install the Xcode Command Line Tools (`curl` and `unzip`
+are included with the operating system):
 
 ```bash
 xcode-select --install

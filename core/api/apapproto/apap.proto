@@ -108,6 +108,22 @@ service Apap {
 
   // Fetch data required by the MCP server to generate insights
   rpc GetRunSummaryBundle(RunSummaryBundleRequest) returns (RunSummaryBundleResponse);
+
+  // Lists supported MCP clients and their current MCP configuration status.
+  // The response also includes the MCP server definition used by install and
+  // uninstall operations.
+  rpc ListMCPClients(google.protobuf.Empty) returns (MCPClientListing);
+
+  // Gets the current MCP configuration status for one supported client.
+  rpc GetMCPClientStatus(GetMCPClientStatusRequest) returns (MCPClientListing);
+
+  // Adds the Performix MCP server to one supported client. A conflicting
+  // existing server entry is left unchanged.
+  rpc InstallMCPClient(InstallMCPClientRequest) returns (MCPClientInstallResult);
+
+  // Removes the Performix MCP server from one supported client. Other MCP
+  // servers and conflicting entries are left unchanged.
+  rpc UninstallMCPClient(UninstallMCPClientRequest) returns (MCPClientUninstallResult);
 }
 
 // Standardized run description extras that can be requested
@@ -665,6 +681,7 @@ message AndroidActivity {
 message AndroidPackage {
   string name = 1;
   repeated AndroidActivity activities = 2;
+  optional bool debuggable = 3;
 }
 
 message ListAndroidPackagesResponse {
@@ -1377,6 +1394,105 @@ message LookupMessageResponse {
 message ListDirectoriesResponse {
   string log_dir = 1;
   string default_data_dir = 2;
+}
+
+// MCPClientRegistrationState describes the current Performix MCP entry.
+enum MCPClientRegistrationState {
+  MCP_CLIENT_REGISTRATION_STATE_UNSPECIFIED = 0;
+  MCP_CLIENT_REGISTRATION_STATE_NOT_CONFIGURED = 1;
+  MCP_CLIENT_REGISTRATION_STATE_CONFIGURED = 2;
+  MCP_CLIENT_REGISTRATION_STATE_CONFLICT = 3;
+  MCP_CLIENT_REGISTRATION_STATE_UNREADABLE = 4;
+}
+
+// MCPClientInstallOutcome describes the result of an install request.
+enum MCPClientInstallOutcome {
+  MCP_CLIENT_INSTALL_OUTCOME_UNSPECIFIED = 0;
+  MCP_CLIENT_INSTALL_OUTCOME_INSTALLED = 1;
+  MCP_CLIENT_INSTALL_OUTCOME_ALREADY_CONFIGURED = 2;
+}
+
+// MCPClientUninstallOutcome describes the result of an uninstall request.
+enum MCPClientUninstallOutcome {
+  MCP_CLIENT_UNINSTALL_OUTCOME_UNSPECIFIED = 0;
+  MCP_CLIENT_UNINSTALL_OUTCOME_REMOVED = 1;
+  MCP_CLIENT_UNINSTALL_OUTCOME_ALREADY_ABSENT = 2;
+}
+
+// MCPServerLaunchConfiguration describes the Performix MCP server.
+message MCPServerLaunchConfiguration {
+  // Name used to identify the MCP server in client configuration.
+  string name = 1;
+  // Command used to launch the server.
+  string command = 2;
+  // Arguments passed to the command.
+  repeated string args = 3;
+}
+
+// MCPClientStatus describes one supported MCP client.
+message MCPClientStatus {
+  // Stable identifier accepted by the MCP client RPCs.
+  string client_id = 1;
+  // Human-readable client name for CLI and GUI presentation.
+  string display_name = 2;
+  // Whether the client was found and can be configured.
+  bool detected = 3;
+  // Current status of the Performix MCP server.
+  MCPClientRegistrationState registration_state = 4;
+  // Configuration file used by this client, when applicable.
+  optional string configuration_path = 5;
+  // Error details for failed detection or configuration reads.
+  optional ErrorChain error = 6;
+  // Executable used by this client, when applicable.
+  optional string executable_path = 7;
+  // Details of a conflicting MCP server entry.
+  optional ErrorChain registration_detail = 11;
+  // Executable names inspected on PATH during automatic discovery.
+  repeated string discovery_commands = 12;
+  // Platform-specific paths inspected during automatic discovery.
+  repeated string discovery_paths = 13;
+}
+
+// MCPClientListing contains a server definition and client status results.
+message MCPClientListing {
+  // Performix MCP server definition.
+  MCPServerLaunchConfiguration server = 1;
+  // Status for each requested client.
+  repeated MCPClientStatus clients = 2;
+}
+
+// GetMCPClientStatusRequest selects one supported MCP client.
+message GetMCPClientStatusRequest {
+  // Stable client ID.
+  string client_id = 1;
+}
+
+// InstallMCPClientRequest selects one supported MCP client.
+message InstallMCPClientRequest {
+  // Stable client ID.
+  string client_id = 1;
+}
+
+// UninstallMCPClientRequest selects one supported MCP client.
+message UninstallMCPClientRequest {
+  // Stable client ID.
+  string client_id = 1;
+}
+
+// MCPClientInstallResult reports the install outcome and client status.
+message MCPClientInstallResult {
+  // Result of the install request.
+  MCPClientInstallOutcome outcome = 1;
+  // Client status after the operation.
+  MCPClientStatus status = 2;
+}
+
+// MCPClientUninstallResult reports the uninstall outcome and client status.
+message MCPClientUninstallResult {
+  // Result of the uninstall request.
+  MCPClientUninstallOutcome outcome = 1;
+  // Client status after the operation.
+  MCPClientStatus status = 2;
 }
 
 // Generic request from the MCP server to fetch run data for agentic insights

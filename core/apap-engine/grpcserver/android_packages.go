@@ -72,6 +72,7 @@ func androidPackageListToApapProto(packageList *targetagentproto.AndroidPackageL
 		packages = append(packages, &apapproto.AndroidPackage{
 			Name:       pkg.Name,
 			Activities: androidActivitiesToApapProto(pkg.Activities),
+			Debuggable: pkg.Debuggable,
 		})
 	}
 	return &apapproto.ListAndroidPackagesResponse{Packages: packages}
