@@ -48,6 +48,7 @@ func (r *ReadyStageAPIExposer) ExposeAPI(api RecipeAPI, jsContext *goja.Object) 
 		{jsName: "targetInfo", fn: api.targetInfo},
 		{jsName: "runCommand", fn: api.runCommand},
 		{jsName: "isFullCaptureSupportEnabled", fn: api.isFullCaptureSupportEnabled},
+		{jsName: "isJfrCaptureEnabled", fn: api.isJfrCaptureEnabled},
 		// UPDATE jsdocs (recipes/docs/jsdocs.js) when adding or changing any API functions
 	}
 	for _, f := range funcList {
@@ -77,6 +78,7 @@ func (r *RunStageAPIExposer) ExposeAPI(api RecipeAPI, jsContext *goja.Object) er
 		{jsName: "retrieveFile", fn: api.retrieveFile},
 		{jsName: "runCommand", fn: api.runCommand},
 		{jsName: "isFullCaptureSupportEnabled", fn: api.isFullCaptureSupportEnabled},
+		{jsName: "isJfrCaptureEnabled", fn: api.isJfrCaptureEnabled},
 		// UPDATE jsdocs (recipes/docs/jsdocs.js) when adding or changing any API functions
 	}
 	for _, f := range funcList {

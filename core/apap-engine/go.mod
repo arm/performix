@@ -28,6 +28,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
+	github.com/klauspost/compress v1.18.3
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/pkg/sftp v1.13.8
 	github.com/simukti/sqldb-logger v0.0.0-20230108155151-646c1a075551
@@ -43,8 +44,8 @@ require (
 	golang.org/x/crypto v0.56.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478
-	google.golang.org/grpc v1.82.1
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -80,7 +81,6 @@ require (
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/iamacarpet/go-win64api v0.0.0-20230324134531-ef6dbdd6db97 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
-	github.com/klauspost/compress v1.18.3 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
@@ -108,7 +108,7 @@ require (
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/mod v0.38.0 // indirect
-	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260708182218-49f421fb7959 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect

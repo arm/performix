@@ -119,14 +119,9 @@ func (f *RunStageFactory) BuildStages(config *StageConfiguration, notifier notif
 	// Add the scripted recipe stages
 	execCtx := config.NewRunExecutionContext(hostFs)
 
-	var collector *recipe.Collector
-	if config.TransferManagerEnabled {
-		startTransferManagerStage := stages.NewStartTransferManagerStage(config.CollectionState.RunManifestUpdater)
-		collector = recipe.NewTransferManagerCollector(config.CollectionState, startTransferManagerStage.TransferManager)
-		s = append(s, startTransferManagerStage)
-	} else {
-		collector = recipe.NewRetrieveAgentFilesCollector(config.CollectionState)
-	}
+	startTransferManagerStage := stages.NewStartTransferManagerStage(config.CollectionState.RunManifestUpdater)
+	collector := recipe.NewCollector(config.CollectionState, startTransferManagerStage.TransferManager)
+	s = append(s, startTransferManagerStage)
 
 	execCtx.AgentSupplier = agentSupplier
 	execCtx.TargetInfoSupplier = collectTargetInfoStage.InfoSupplier
@@ -154,16 +149,8 @@ func (f *RunStageFactory) BuildStages(config *StageConfiguration, notifier notif
 
 	releaseTargetLockStage := stages.NewReleaseTargetLockStage(targetLockStage.Release)
 	s = append(s, releaseTargetLockStage)
-	if config.TransferManagerEnabled {
-		tm := collector.FileRetriever.(*recipe.TransferManagerRetriever).TransferManager
-		waitForTransfersStage := stages.NewWaitForTransfersStage(tm, config.OnPhase1TransferComplete)
-		s = append(s, waitForTransfersStage)
-	} else {
-		// Fall back to old RetrieveAgentFiles path
-		s = append(s, &stages.RetrieveAgentFilesStage{
-			RecipeCollector: execCtx.Collector,
-		})
-	}
+	waitForTransfersStage := stages.NewWaitForTransfersStage(collector.TransferManager, config.OnPhase1TransferComplete)
+	s = append(s, waitForTransfersStage)
 
 	// Now that all stages are created, find the deployment stages and set their progress callback with the correct stage number and count.
 	for _, toolDeploymentStage := range toolDeploymentStages {

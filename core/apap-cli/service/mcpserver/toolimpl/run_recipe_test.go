@@ -104,9 +104,10 @@ var expectedBundledRecipeNames = []string{
 	"cmn_analysis",
 	"code_hotspots",
 	"cpu_microarchitecture",
+	"gpu",
 	"instruction_mix",
-	"java_analysis",
 	"memory_access",
+	"ml_analysis",
 	"syscall_trace_summary",
 	"system_utilization",
 }

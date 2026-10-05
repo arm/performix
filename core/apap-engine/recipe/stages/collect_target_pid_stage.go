@@ -73,7 +73,7 @@ func (c *CollectTargetPIDStage) Execute(ctx *recipe.StageContext) (func(), error
 
 	relativePath := targetPIDComponentRelativePath()
 	outputPath := c.ManifestUpdater.ComponentPath(relativePath)
-	if err := c.ManifestUpdater.AddPendingComponent(relativePath, targetPIDOutputs.ComponentType); err != nil {
+	if err := c.ManifestUpdater.AddComponentWithFlags(relativePath, targetPIDOutputs.ComponentType, run.ComponentFlags{Pending: true}); err != nil {
 		return nil, err
 	}
 	if err := c.ManifestUpdater.WriteEntityDirs(); err != nil {

@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["apx_parquet_writer"]
+
+[project]
+name = "apx-parquet-writer"
+version = "0.1.0"
+description = "Control the bundled APX Parquet writer process."
+requires-python = ">=3.8"
+license = "Apache-2.0"
+dependencies = []

@@ -739,6 +739,23 @@ func TestResolveToolBundles_ToolBundleType(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []ds.ToolBundleInfo{{Name: "param-not-set-tool", Version: "1.0", Locality: ds.DeploymentLocalityTarget}}, bundles)
 
+		// Filters in when other parameters are bound but the parameter in the requirement is absent
+		paramsWithoutFeature := parameters.BoundParameters{
+			Parameters: parameters.Parameters{
+				Input: []parameters.InputParameter{
+					{
+						Parameter: parameters.Parameter{ID: "other-feature"},
+					},
+				},
+			},
+			Values: parameters.ParameterValues{
+				Input: []string{"on"},
+			},
+		}
+		bundles, err = ds.ResolveToolBundles(t.Context(), platformConfig, &paramsWithoutFeature, deployments, nil)
+		require.NoError(t, err)
+		assert.Equal(t, []ds.ToolBundleInfo{{Name: "param-not-set-tool", Version: "1.0", Locality: ds.DeploymentLocalityTarget}}, bundles)
+
 		// Filters in with non-matching parameter
 		paramMismatch := parameters.BoundParameters{
 			Parameters: parameters.Parameters{

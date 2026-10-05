@@ -12,30 +12,23 @@ benchmark families before prioritizing material findings.
 
 ## Resolve the available tables
 
-Do not hard-code rendered table names. Start with:
+Do not hard-code rendered table names. In
+`render_session.visualization_resolved_tables.entries`, find the entry whose
+`id.value` matches the visualization ID below. Use the first table name in the
+listed `tables` data source's `values` list to replace the corresponding
+`<..._table>` placeholder:
 
-```json
-{
-  "run_id": "<run_id>",
-  "include_resolved_tables": true,
-  "sql": "SELECT 1"
-}
-```
-
-Use the first table at each returned `resolved_tables` path to replace the
-corresponding `<..._table>` placeholder:
-
-- System information: `asct_system_info_table.systemInformation`.
-- Idle-latency matrix: `asct_analysis.numaLatencyMatrix`.
-- Cross-NUMA-bandwidth matrix: `asct_analysis.numaBandwidthMatrix`.
-- Peak bandwidth: `asct_analysis.peakBandwidthGrid`.
-- Core-to-core latency: `asct_analysis.coreToCoreLatencyHeatmap`.
-- Loaded latency: `asct_analysis.loadedLatencyGrid` or
-  `asct_analysis.loadedLatencyLineChart`.
-- Latency-sweep summary: `asct_analysis.latencySweepGrid`.
-- Bandwidth-sweep summary: `asct_analysis.bandwidthSweepGrid`.
-- Detailed latency sweep: `asct_analysis.latencySweepLineChart`.
-- Detailed bandwidth sweep: `asct_analysis.bandwidthSweepLineChart`.
+- System information: `asct_system_info_table` / `systemInformation`.
+- Idle-latency matrix: `asct_analysis` / `numaLatencyMatrix`.
+- Cross-NUMA-bandwidth matrix: `asct_analysis` / `numaBandwidthMatrix`.
+- Peak bandwidth: `asct_analysis` / `peakBandwidthGrid`.
+- Core-to-core latency: `asct_analysis` / `coreToCoreLatencyHeatmap`.
+- Loaded latency: `asct_analysis` / `loadedLatencyGrid` or
+  `loadedLatencyLineChart`.
+- Latency-sweep summary: `asct_analysis` / `latencySweepGrid`.
+- Bandwidth-sweep summary: `asct_analysis` / `bandwidthSweepGrid`.
+- Detailed latency sweep: `asct_analysis` / `latencySweepLineChart`.
+- Detailed bandwidth sweep: `asct_analysis` / `bandwidthSweepLineChart`.
 
 Use only table names returned by the current run's mapping. Never infer or query
 a `flat_table` name from its numbering. Use recipe parameters to interpret absent
@@ -43,8 +36,7 @@ output. Describe an explicitly disabled benchmark as not collected. Report an
 explicitly requested benchmark with no mapping or usable rows as a collection
 gap. Otherwise say it is unavailable without assuming why. If supporting
 metadata required for interpretation is missing, state the limitation and skip
-dependent calculations. Leave `include_resolved_tables` disabled on subsequent
-queries.
+dependent calculations.
 
 ## System context
 

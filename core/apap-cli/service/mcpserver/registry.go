@@ -25,11 +25,15 @@ func NewToolRegistry(tools ...Tool) ToolRegistry {
 func DefaultToolRegistry() ToolRegistry {
 	return NewToolRegistry(
 		toolimpl.GenerateAIInsightsTool{},
+		toolimpl.OpenRenderSessionTool{},
+		toolimpl.ListRenderSessionsTool{},
+		toolimpl.CloseRenderSessionTool{},
 		toolimpl.RunQueryTool{},
 		toolimpl.ListRecipesTool{},
 		toolimpl.RecipeInfoTool{},
 		toolimpl.ListRunsTool{},
 		toolimpl.ListTargetsTool{},
+		toolimpl.SearchTargetProcessesTool{},
 		toolimpl.AddTargetTool{},
 		toolimpl.RunRecipeTool{},
 	)

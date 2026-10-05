@@ -83,7 +83,7 @@ func TestRecovery_recoverStaleRuns(t *testing.T) {
 		builder, err := rc.RunBuilder()
 		require.NoError(t, err)
 		builder.AddComponent(readyType, "entity/ready.txt")
-		builder.AddPendingComponent(pendingType, "entity/pending.txt")
+		builder.AddComponentWithFlags(pendingType, "entity/pending.txt", run.ComponentFlags{Pending: true})
 		runId, err := rc.CreateRun(builder, &cdf.Metadata{RunResult: string(run.RecipeInProgress)})
 		require.NoError(t, err)
 

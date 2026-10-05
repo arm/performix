@@ -42,6 +42,7 @@ type TransferRequest struct {
 	AgentSupplier        AgentConnSupplier
 	ImmediateRetrieval   bool
 	BackgroundTransfer   bool
+	Compressed           bool
 	completion           *transferRequestCompletion
 }
 
@@ -262,8 +263,15 @@ func (t *TransferManager) Listen(logger logrus.FieldLogger, cmdStateChannel *cmd
 		case msg := <-t.transferRequestChannel:
 			req := msg.t
 			phase := transferPhaseForRequest(req)
+			if err := t.addPendingManifestEntry(req); err != nil {
+				// Manifest registration may fail to persist the component.
+				// Do not start a transfer whose destination was not successfully registered in the manifest.
+				t.recordTransferError(err, req.FileTransfer, phase)
+				req.completion.complete(err)
+				close(msg.confirm)
+				continue
+			}
 			t.addTransferCount(phase)
-			t.addPendingManifestEntry(req)
 			if !req.ImmediateRetrieval {
 				if req.BackgroundTransfer {
 					t.deferredBackgroundTransfers = append(t.deferredBackgroundTransfers, req)
@@ -595,9 +603,17 @@ func (t *TransferManager) startTransferRequest(request TransferRequest) {
 			continue
 		}
 
-		resolvedTransfer := conductor.FileTransfer{RemotePath: fi.Path, LocalPath: localPath, ComponentType: transfer.ComponentType}
+		destination := agent.NewTransferDestination(cdf.ManifestEntry{
+			Path:       localPath,
+			Compressed: request.Compressed,
+		})
+		resolvedTransfer := conductor.FileTransfer{
+			RemotePath:    fi.Path,
+			LocalPath:     destination.LocalPath(),
+			ComponentType: transfer.ComponentType,
+		}
 
-		t.startConcreteTransfer(transferCtx, wg, phase, resolvedTransfer, fi.Size, agentConn.Client, requestCompletion.done)
+		t.startConcreteTransfer(transferCtx, wg, phase, resolvedTransfer, destination, fi.Size, agentConn.Client, requestCompletion.done)
 	}
 }
 
@@ -648,14 +664,18 @@ func (c *transferRequestCompletionTracker) done(success bool) {
 	c.t.finishTransferRequest(c.request, !c.failed)
 }
 
-func (t *TransferManager) addPendingManifestEntry(request TransferRequest) {
+func (t *TransferManager) addPendingManifestEntry(request TransferRequest) error {
 	if request.ManifestRelativePath == "" {
-		return
+		return nil
 	}
-	err := t.manifestUpdater.AddPendingComponent(request.ManifestRelativePath, request.ComponentType)
+	err := t.manifestUpdater.AddComponentWithFlags(request.ManifestRelativePath, request.ComponentType, run.ComponentFlags{
+		Pending:    true,
+		Compressed: request.Compressed,
+	})
 	if err != nil {
-		t.recordTransferError(fmt.Errorf("failed to write pending manifest entry: %w", err), request.FileTransfer, transferPhaseForRequest(request))
+		return fmt.Errorf("failed to register component transfer: %w", err)
 	}
+	return nil
 }
 
 // finishManifestRequest applies the final manifest state for one original request.
@@ -693,6 +713,7 @@ func (t *TransferManager) startConcreteTransfer(
 	wg *sync.WaitGroup,
 	phase transferPhase,
 	resolvedTransfer conductor.FileTransfer,
+	destination agent.TransferDestination,
 	fileSize int64,
 	agentClient targetagentproto.TargetAgentClient,
 	onComplete func(bool),
@@ -735,7 +756,7 @@ func (t *TransferManager) startConcreteTransfer(
 		}()
 
 		t.observer.OnTransferStarted(resolvedTransfer)
-		err = agent.ReceiveFile(transferCtx, resolvedTransfer.LocalPath, resolvedTransfer.RemotePath, agentClient, transferProgress)
+		err = agent.ReceiveFile(transferCtx, resolvedTransfer.RemotePath, destination, agentClient, transferProgress)
 		if err != nil {
 			t.recordTransferError(fmt.Errorf("transfer failed %w", err), resolvedTransfer, phase)
 		} else {

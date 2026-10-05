@@ -73,17 +73,12 @@ type attachOpts struct {
 // systemOpts profiles the whole system. It carries no options; its presence selects the mode.
 type systemOpts struct{}
 
-var runRecipeInputSchema = &jsonschema.Schema{
-	Type:     "object",
-	Required: []string{"recipe", "target"},
-	// Exactly one workload mode must be supplied.
-	OneOf: []*jsonschema.Schema{
-		{Required: []string{"launch"}},
-		{Required: []string{"android_launch"}},
-		{Required: []string{"attach_to_pid"}},
-		{Required: []string{"system"}},
-	},
-	Properties: map[string]*jsonschema.Schema{
+// validateRanges is true for the root schema, which validates the shared
+// timeout and PID ranges once. The oneOf variants pass false because a range
+// failure within every variant produces a generic oneOf error instead of the
+// specific invalid field error.
+func runRecipeInputProperties(validateRanges bool) map[string]*jsonschema.Schema {
+	properties := map[string]*jsonschema.Schema{
 		"recipe": {
 			Type:        "string",
 			Description: "The recipe to run. Use the list_recipes tool to discover currently available recipes.",
@@ -94,7 +89,6 @@ var runRecipeInputSchema = &jsonschema.Schema{
 		},
 		"timeout": {
 			Type:        "integer",
-			Minimum:     jsonschema.Ptr(0.0),
 			Description: fmt.Sprintf("Maximum number of seconds to profile for. Omitted uses a %d-second default. Set 0 for no timeout.", defaultRunTimeoutSeconds),
 		},
 		"parameters": {
@@ -148,7 +142,6 @@ var runRecipeInputSchema = &jsonschema.Schema{
 			Properties: map[string]*jsonschema.Schema{
 				"pid": {
 					Type:        "integer",
-					Minimum:     jsonschema.Ptr(1.0),
 					Description: "Process ID of the already-running process to attach to and profile.",
 				},
 			},
@@ -157,6 +150,34 @@ var runRecipeInputSchema = &jsonschema.Schema{
 			Type:        "object",
 			Description: "Profile the whole target system instead of a specific workload. Pass an empty object ({}).",
 		},
+	}
+	if validateRanges {
+		properties["timeout"].Minimum = jsonschema.Ptr(0.0)
+		properties["attach_to_pid"].Properties["pid"].Minimum = jsonschema.Ptr(1.0)
+	}
+	return properties
+}
+
+func runRecipeInputVariant(workload string) *jsonschema.Schema {
+	return &jsonschema.Schema{
+		Type:       "object",
+		Required:   []string{"recipe", "target", workload},
+		Properties: runRecipeInputProperties(false),
+	}
+}
+
+var runRecipeInputSchema = &jsonschema.Schema{
+	Type:       "object",
+	Required:   []string{"recipe", "target"},
+	Properties: runRecipeInputProperties(true),
+	// Codex code mode renders each root oneOf variant independently and otherwise
+	// loses the common fields. Repeat the complete input schema in each variant
+	// to work around https://github.com/openai/codex/issues/42283.
+	OneOf: []*jsonschema.Schema{
+		runRecipeInputVariant("launch"),
+		runRecipeInputVariant("android_launch"),
+		runRecipeInputVariant("attach_to_pid"),
+		runRecipeInputVariant("system"),
 	},
 }
 

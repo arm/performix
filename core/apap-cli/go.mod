@@ -22,7 +22,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jedib0t/go-pretty/v6 v6.8.3
 	github.com/mitchellh/go-homedir v1.1.0
-	github.com/modelcontextprotocol/go-sdk v1.6.0
+	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/pkg/sftp v1.13.8
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/afero v1.14.0
@@ -32,8 +32,8 @@ require (
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.56.0
 	golang.org/x/term v0.45.0
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478
-	google.golang.org/grpc v1.82.1
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -43,7 +43,7 @@ require (
 	github.com/Arm-Debug/apap-cli/atperf-compatibility v0.0.0-00010101000000-000000000000 // indirect
 	github.com/OneOfOne/xxhash v1.2.8 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
-	github.com/apache/thrift v0.22.0 // indirect
+	github.com/apache/thrift v0.24.0 // indirect
 	github.com/avast/retry-go/v4 v4.6.0 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/bmatcuk/doublestar v1.3.4 // indirect
@@ -126,12 +126,13 @@ require (
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/mod v0.38.0 // indirect
-	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260708182218-49f421fb7959 // indirect
 	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect

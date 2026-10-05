@@ -102,29 +102,32 @@ func (b *RunBuilder) EntityCount() int {
 
 func (b *RunBuilder) ComponentCount() int { return len(b.components) }
 
+// ComponentFlags controls a component's initial state and on-disk storage.
+type ComponentFlags struct {
+	Pending    bool
+	Compressed bool
+}
+
 // AddComponent records a complete component and returns its absolute path.
 // Duplicate manifest paths are still added to the manifest.
 func (b *RunBuilder) AddComponent(componentType cdf.ComponentType, relativePath string) string {
-	return b.addComponent(componentType, relativePath, false)
+	return b.AddComponentWithFlags(componentType, relativePath, ComponentFlags{})
 }
 
-// AddPendingComponent records a component that is expected but not complete yet and returns its absolute path.
-// Duplicate manifest paths are still added to the manifest.
-func (b *RunBuilder) AddPendingComponent(componentType cdf.ComponentType, relativePath string) string {
-	return b.addComponent(componentType, relativePath, true)
-}
-
-// addComponent adds a component using the normalized manifest path.
-func (b *RunBuilder) addComponent(componentType cdf.ComponentType, relativePath string, pending bool) string {
+// AddComponentWithFlags records a component with the supplied state and storage flags.
+func (b *RunBuilder) AddComponentWithFlags(componentType cdf.ComponentType, relativePath string, flags ComponentFlags) string {
 	relativePath = cdf.NormalizePath(relativePath)
 
 	dir, _ := filepath.Split(relativePath)
 	b.AddEntity(dir)
 
-	absolutePath := filepath.Join(b.runPath, relativePath)
+	absolutePath := filepath.Join(b.runPath, cdf.ManifestEntry{
+		Path:       relativePath,
+		Compressed: flags.Compressed,
+	}.StoragePath())
 	b.components = append(b.components, builderComponent{
-		Component: cdf.Component{Type: componentType, RelativePath: relativePath, AbsolutePath: absolutePath},
-		Pending:   pending,
+		Component: cdf.Component{Type: componentType, RelativePath: relativePath, AbsolutePath: absolutePath, Compressed: flags.Compressed},
+		Pending:   flags.Pending,
 	})
 
 	return absolutePath
@@ -171,6 +174,7 @@ func (b *RunBuilder) buildManifest() *cdf.Manifest {
 			Path:          b.components[i].RelativePath,
 			ComponentType: b.components[i].Type,
 			Pending:       b.components[i].Pending,
+			Compressed:    b.components[i].Compressed,
 		}
 	}
 

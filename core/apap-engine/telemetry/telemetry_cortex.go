@@ -15,8 +15,14 @@ var cortexA520JSON string
 //go:embed "data/private/cortex-a720.json"
 var cortexA720JSON string
 
+//go:embed "data/private/cortex-a725.json"
+var cortexA725JSON string
+
 //go:embed "data/private/cortex-x4.json"
 var cortexX4JSON string
+
+//go:embed "data/private/cortex-x925.json"
+var cortexX925JSON string
 
 //go:embed "data/private/generic-cortex.json"
 var genericCortexJSON string
@@ -24,7 +30,9 @@ var genericCortexJSON string
 var cortexTelemetryDataByCPUModel = map[string]string{
 	"Cortex-A520": cortexA520JSON,
 	"Cortex-A720": cortexA720JSON,
+	"Cortex-A725": cortexA725JSON,
 	"Cortex-X4":   cortexX4JSON,
+	"Cortex-X925": cortexX925JSON,
 }
 
 var genericCortexCPUModels = map[string]struct{}{

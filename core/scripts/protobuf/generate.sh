@@ -29,14 +29,18 @@ GO_EXECUTABLE=$(command -v go)
 "$GO_EXECUTABLE" install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2
 "$GO_EXECUTABLE" install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.4.0
 
+GO_HOST_OS=$("$GO_EXECUTABLE" env GOHOSTOS)
 GO_BIN_DIR=$("$GO_EXECUTABLE" env GOBIN)
 if [[ -z "$GO_BIN_DIR" ]]; then
     GO_PATHS=$("$GO_EXECUTABLE" env GOPATH)
-    if [[ "$("$GO_EXECUTABLE" env GOHOSTOS)" == "windows" ]]; then
+    if [[ "$GO_HOST_OS" == "windows" ]]; then
         GO_BIN_DIR="${GO_PATHS%%;*}/bin"
     else
         GO_BIN_DIR="${GO_PATHS%%:*}/bin"
     fi
+fi
+if [[ "$GO_HOST_OS" == "windows" ]]; then
+    GO_BIN_DIR=$(cygpath -u "$GO_BIN_DIR")
 fi
 export PATH="$GO_BIN_DIR:$PATH"
 

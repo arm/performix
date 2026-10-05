@@ -4,7 +4,7 @@ Use `run_query` to inspect the Syscall Trace summary tables and Syscall Frequenc
 
 ## Available tables
 
-The descriptive renderer names are not DuckDB table names. Use the unqualified queryable names exactly as shown; do not reuse generated schema qualifiers discovered during another `run_query` call because each call creates a new render.
+The descriptive renderer names are not DuckDB table names. Confirm the queryable names from `render_session.visualization_resolved_tables`, then use the unqualified names shown below when they match. Replace them with the returned names if they differ. The names remain stable for the lifetime of the session.
 
 | Descriptive renderer name | Queryable table | Contents |
 | --- | --- | --- |

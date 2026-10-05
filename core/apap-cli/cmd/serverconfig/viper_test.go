@@ -65,9 +65,10 @@ func TestFromViper(t *testing.T) {
 		viper.Set("log-level", logLevel)
 		viper.Set("enable-experimental-recipes", true)
 		viper.Set("enable-secondary-run-paths", false)
-		viper.Set("enable-transfer-manager", !DefaultEnableTransferManager)
+		viper.Set(EnableGPURecipeConfigKey, true)
 		viper.Set("enable-render-db-sandbox", false)
 		viper.Set("enable-neoprof-timeline", !DefaultEnableNeoprofTimeline)
+		viper.Set("enable-jfr-capture", !DefaultEnableJfrCapture)
 
 		config := FromViper()
 
@@ -83,9 +84,10 @@ func TestFromViper(t *testing.T) {
 			LogLevel:                  logLevel,
 			EnableExperimentalRecipes: true,
 			EnableSecondaryRunPaths:   false,
-			EnableTransferManager:     !DefaultEnableTransferManager,
+			EnableGPURecipe:           true,
 			EnableRenderDBSandbox:     false,
 			EnableNeoprofTimeline:     !DefaultEnableNeoprofTimeline,
+			EnableJfrCapture:          !DefaultEnableJfrCapture,
 			ConfigDirectory:           DefaultConfigDir,
 		}, config)
 	})

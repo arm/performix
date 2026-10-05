@@ -30,20 +30,10 @@ type instructionSection struct {
 }
 
 // registerInstructionResources exposes the embedded instructions document through the MCP
-// resources API so agents can list and read the guidance as resources, not only as the
-// server initialization instructions. The whole document is exposed as one resource, and
-// each top-level heading is exposed as its own resource.
+// resources API as independently readable sections. The complete document is sent
+// as the server initialization instructions, and is not duplicated as a resource.
 func registerInstructionResources(server *mcp.Server) {
 	scheme := terminology.GetProductBinaryName()
-
-	fullURI := fmt.Sprintf("%s://instructions", scheme)
-	server.AddResource(&mcp.Resource{
-		URI:         fullURI,
-		Name:        "instructions",
-		Title:       "Server instructions",
-		Description: "Full " + terminology.GetProductFullName() + " MCP server guidance.",
-		MIMEType:    instructionsResourceMIMEType,
-	}, staticTextResourceHandler(fullURI, instructions))
 
 	for _, section := range parseInstructionSections(instructions) {
 		uri := fmt.Sprintf("%s://instructions/%s", scheme, section.slug)

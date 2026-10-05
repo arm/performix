@@ -145,6 +145,11 @@ func (m *mockExecutionContext) IsNeoprofTimelineEnabled() bool {
 	return args.Bool(0)
 }
 
+func (m *mockExecutionContext) IsJfrCaptureEnabled() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
 func (m *mockExecutionContext) ToolVersions() map[string]string {
 	args := m.Called()
 	toolVersions, _ := args.Get(0).(map[string]string)

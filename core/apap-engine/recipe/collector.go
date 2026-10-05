@@ -105,15 +105,11 @@ func (r *CollectionState) ConfigureCollectorRunBuilder(c *run.RunCollection) err
 
 type Collector struct {
 	CollectionState *CollectionState
-	FileRetriever   FileRetriever
+	TransferManager *TransferManager
 }
 
-func NewRetrieveAgentFilesCollector(collectionState *CollectionState) *Collector {
-	return &Collector{CollectionState: collectionState, FileRetriever: &RetrieveAgentFilesStageRetriever{}}
-}
-
-func NewTransferManagerCollector(runState *CollectionState, tm *TransferManager) *Collector {
-	return &Collector{CollectionState: runState, FileRetriever: &TransferManagerRetriever{TransferManager: tm}}
+func NewCollector(collectionState *CollectionState, transferManager *TransferManager) *Collector {
+	return &Collector{CollectionState: collectionState, TransferManager: transferManager}
 }
 
 func (r *Collector) AddComponent(componentType cdf.ComponentType, relativePath string) string {
@@ -135,21 +131,11 @@ func (r *Collector) QueueFileRetrieval(
 	// If the targetPath is not absolute, then append the temporary working directory from the target.
 	targetPath = platform.Path.GetFullPath(targetPath, workingDir)
 
-	var componentAbsolutePath string
-	manifestRelativePath := ""
-	if _, ok := r.FileRetriever.(*TransferManagerRetriever); ok {
-		// TransferManager-backed retrieval owns manifest updates.
-		componentAbsolutePath = r.CollectionState.RunManifestUpdater.ComponentPath(destRelativePath)
-		manifestRelativePath = destRelativePath
-	} else {
-		var err error
-		componentAbsolutePath, err = r.StoreComponent(destRelativePath, componentType)
-		if err != nil {
-			return err
-		}
-	}
+	// TransferManager owns manifest updates. Keep transfer paths logical;
+	// compression is applied after glob expansion.
+	componentAbsolutePath := r.CollectionState.RunManifestUpdater.ComponentPath(destRelativePath)
 
-	r.FileRetriever.AddResolvedComponentTransfer(TransferRequest{
+	r.TransferManager.AddTransfer(TransferRequest{
 		FileTransfer: conductor.FileTransfer{
 			RemotePath:    targetPath,
 			LocalPath:     componentAbsolutePath,
@@ -157,9 +143,10 @@ func (r *Collector) QueueFileRetrieval(
 			ComponentType: componentType,
 		},
 		AgentSupplier:        agentSupplier,
-		ManifestRelativePath: manifestRelativePath,
+		ManifestRelativePath: destRelativePath,
 		ImmediateRetrieval:   transferOptions.ImmediateRetrieval,
 		BackgroundTransfer:   transferOptions.BackgroundTransfer,
+		Compressed:           transferOptions.Compressed,
 	})
 
 	return nil
@@ -171,9 +158,17 @@ func (r *Collector) StoreComponent(
 	destRelativePath string,
 	componentType cdf.ComponentType,
 ) (string, error) {
+	return r.storeComponent(destRelativePath, componentType, false)
+}
+
+func (r *Collector) storeComponent(destRelativePath string, componentType cdf.ComponentType, compressed bool) (string, error) {
 	manifestUpdater := r.CollectionState.RunManifestUpdater
-	componentAbsolutePath := manifestUpdater.ComponentPath(destRelativePath)
-	if err := manifestUpdater.AddComponent(destRelativePath, componentType); err != nil {
+	componentAbsolutePath := manifestUpdater.ComponentPath(cdf.ManifestEntry{
+		Path:       destRelativePath,
+		Compressed: compressed,
+	}.StoragePath())
+	err := manifestUpdater.AddComponentWithFlags(destRelativePath, componentType, run.ComponentFlags{Compressed: compressed})
+	if err != nil {
 		return "", err
 	}
 	if err := manifestUpdater.WriteEntityDirs(); err != nil {
@@ -181,50 +176,6 @@ func (r *Collector) StoreComponent(
 	}
 
 	return componentAbsolutePath, nil
-}
-
-// FileRetriever is an interface for retrieving files, backed either by a RetrieveAgentFilesStage
-// or a TransferManager
-type FileRetriever interface {
-	AddResolvedComponentTransfer(transfer TransferRequest)
-}
-
-type RetrieveAgentFilesStageRetriever struct {
-	FileTransfers []TransferRequest
-	LogTransfers  []TransferRequest
-}
-
-// AddResolvedFileTransfer explicitly adds a transfer operation to the list of transfers. Most callers should use
-// QueueFileTransfer instead, as that performs path resolution and adds the file to the CDF model. However, for
-// some use cases, direct control is useful.
-func (r *RetrieveAgentFilesStageRetriever) AddResolvedFileTransfer(transfer TransferRequest) {
-	r.FileTransfers = append(r.FileTransfers, transfer)
-}
-
-// AddResolvedLogFileTransfer explicitly adds a transfer operation to the list of log transfers. Most callers should use
-// QueueFileTransfer instead, as that performs path resolution and adds the file to the CDF model. However, for
-// some use cases, direct control is useful.
-func (r *RetrieveAgentFilesStageRetriever) AddResolvedLogFileTransfer(transfer TransferRequest) {
-	r.LogTransfers = append(r.LogTransfers, transfer)
-}
-
-// AddResolvedComponentTransfer adds either a log transfer or a regular file transfer depending on the component type
-func (r *RetrieveAgentFilesStageRetriever) AddResolvedComponentTransfer(transfer TransferRequest) {
-	if cdf.IsLogComponentType(transfer.ComponentType) {
-		r.AddResolvedLogFileTransfer(transfer)
-	} else {
-		r.AddResolvedFileTransfer(transfer)
-	}
-}
-
-// TransferManagerRetriever implements FileRetriever, backed by a TransferManager. Calls to
-// AddResolvedComponentTransfer are forwarded to the TransferManager's AddTransfer method.
-type TransferManagerRetriever struct {
-	TransferManager *TransferManager
-}
-
-func (r *TransferManagerRetriever) AddResolvedComponentTransfer(transfer TransferRequest) {
-	r.TransferManager.AddTransfer(transfer)
 }
 
 type RecipeFileCollector struct {

@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
+	"sort"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,6 +28,8 @@ import (
 	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
 )
 
+const mcpProtocolVersion20260728 = "2026-07-28"
+
 func connectTestServer(t *testing.T, ctx context.Context, engine apapproto.ApapClient) (*mcp.ClientSession, *mcp.ServerSession) {
 	t.Helper()
 
@@ -40,6 +44,106 @@ func connectTestServer(t *testing.T, ctx context.Context, engine apapproto.ApapC
 	require.NoError(t, err)
 
 	return clientSession, serverSession
+}
+
+// Codex code mode renders anyOf and oneOf branches independently of fields
+// defined alongside the union. For example, it loses common when processing:
+//
+//	{
+//	  "required": ["common"],
+//	  "properties": {"common": {}, "a": {}, "b": {}},
+//	  "oneOf": [
+//	    {"required": ["a"]},
+//	    {"required": ["b"]}
+//	  ]
+//	}
+//
+// Make each variant self-contained by repeating the sibling properties and
+// required fields, while leaving the root constraints in place:
+//
+//	"oneOf": [
+//	  {
+//	    "required": ["common", "a"],
+//	    "properties": {"common": {}, "a": {}, "b": {}}
+//	  },
+//	  {
+//	    "required": ["common", "b"],
+//	    "properties": {"common": {}, "a": {}, "b": {}}
+//	  }
+//	]
+//
+// This is equivalent under JSON Schema because the root and selected variant
+// are both applied; the repeated constraints do not admit or reject any new
+// inputs. See https://github.com/openai/codex/issues/42283.
+func checkSelfContainedUnionVariants(t *testing.T, schema any, path string) {
+	t.Helper()
+
+	switch schema := schema.(type) {
+	case map[string]any:
+		outerProperties, _ := schema["properties"].(map[string]any)
+		outerRequired, _ := schema["required"].([]any)
+		for _, keyword := range []string{"anyOf", "oneOf"} {
+			variants, ok := schema[keyword].([]any)
+			if !ok {
+				continue
+			}
+
+			for index, rawVariant := range variants {
+				variant, ok := rawVariant.(map[string]any)
+				if !ok {
+					t.Errorf("%s.%s[%d] is not an object schema", path, keyword, index)
+					continue
+				}
+
+				variantProperties, _ := variant["properties"].(map[string]any)
+				missingProperties := make([]string, 0)
+				for name := range outerProperties {
+					if _, found := variantProperties[name]; !found {
+						missingProperties = append(missingProperties, name)
+					}
+				}
+				sort.Strings(missingProperties)
+
+				variantRequired, _ := variant["required"].([]any)
+				variantRequiredSet := make(map[string]struct{}, len(variantRequired))
+				for _, value := range variantRequired {
+					if name, ok := value.(string); ok {
+						variantRequiredSet[name] = struct{}{}
+					}
+				}
+				missingRequired := make([]string, 0)
+				for _, value := range outerRequired {
+					name, ok := value.(string)
+					if !ok {
+						continue
+					}
+					if _, found := variantRequiredSet[name]; !found {
+						missingRequired = append(missingRequired, name)
+					}
+				}
+				sort.Strings(missingRequired)
+
+				if len(missingProperties) > 0 || len(missingRequired) > 0 {
+					t.Errorf(
+						"%s.%s[%d] is not self-contained: missing properties %v, missing required fields %v",
+						path,
+						keyword,
+						index,
+						missingProperties,
+						missingRequired,
+					)
+				}
+			}
+		}
+
+		for name, child := range schema {
+			checkSelfContainedUnionVariants(t, child, path+"."+name)
+		}
+	case []any:
+		for index, child := range schema {
+			checkSelfContainedUnionVariants(t, child, fmt.Sprintf("%s[%d]", path, index))
+		}
+	}
 }
 
 func TestMCPServerRun(t *testing.T) {
@@ -82,7 +186,51 @@ func TestMCPServerProtocol(t *testing.T) {
 		assert.Contains(t, names, "list_recipes")
 		assert.Contains(t, names, "recipe_info")
 		assert.Contains(t, names, "list_runs")
+		assert.Contains(t, names, "open_render_session")
+		assert.Contains(t, names, "list_render_sessions")
+		assert.Contains(t, names, "close_render_session")
 		assert.Contains(t, names, "run_query")
+	})
+
+	t.Run("negotiates latest supported protocol with SDK client", func(t *testing.T) {
+		ctx := context.Background()
+		clientSession, serverSession := connectTestServer(t, ctx, nil)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		initResult := clientSession.InitializeResult()
+		require.NotNil(t, initResult)
+		assert.Equal(t, mcpProtocolVersion20260728, initResult.ProtocolVersion)
+		require.NotNil(t, initResult.ServerInfo)
+		assert.Equal(t, terminology.GetMCPServerName()+"-mcp-server", initResult.ServerInfo.Name)
+
+		tools, err := clientSession.ListTools(ctx, nil)
+		require.NoError(t, err)
+		assert.NotEmpty(t, tools.Tools)
+	})
+
+	t.Run("advertises self-contained union variants", func(t *testing.T) {
+		ctx := context.Background()
+		clientSession, serverSession := connectTestServer(t, ctx, nil)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		tools, err := clientSession.ListTools(ctx, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, tools.Tools)
+
+		for _, tool := range tools.Tools {
+			tool := tool
+			t.Run(tool.Name, func(t *testing.T) {
+				require.NotNil(t, tool.InputSchema)
+
+				schemaJSON, err := json.Marshal(tool.InputSchema)
+				require.NoError(t, err)
+				var inputSchema any
+				require.NoError(t, json.Unmarshal(schemaJSON, &inputSchema))
+				checkSelfContainedUnionVariants(t, inputSchema, "$")
+			})
+		}
 	})
 
 	t.Run("advertises server instructions on initialize", func(t *testing.T) {
@@ -114,11 +262,10 @@ func TestMCPServerProtocol(t *testing.T) {
 		}
 
 		scheme := terminology.GetProductBinaryName()
-		fullURI := scheme + "://instructions"
-		require.Contains(t, byURI, fullURI)
 
 		sections := parseInstructionSections(instructions)
 		require.NotEmpty(t, sections, "embedded instructions should contain at least one section")
+		require.Len(t, resources.Resources, len(sections))
 
 		// Every parsed section should be advertised as its own resource.
 		for _, section := range sections {
@@ -135,14 +282,6 @@ func TestMCPServerProtocol(t *testing.T) {
 		require.Len(t, read.Contents, 1)
 		assert.Equal(t, instructionsResourceMIMEType, read.Contents[0].MIMEType)
 		assert.Equal(t, section.body, read.Contents[0].Text)
-
-		// Reading the full document returns the complete instructions.
-		fullRead, err := clientSession.ReadResource(ctx, &mcp.ReadResourceParams{
-			URI: fullURI,
-		})
-		require.NoError(t, err)
-		require.Len(t, fullRead.Contents, 1)
-		assert.Equal(t, instructions, fullRead.Contents[0].Text)
 	})
 
 	t.Run("unknown tool returns error", func(t *testing.T) {
@@ -198,7 +337,7 @@ func TestMCPServerProtocol(t *testing.T) {
 
 		_, err = clientSession.ListTools(context.Background(), nil)
 		require.NoError(t, err)
-		assert.Contains(t, errOut.String(), "session initialized")
+		assert.Contains(t, errOut.String(), "server session connected")
 	})
 
 	t.Run("tools receive engine client", func(t *testing.T) {

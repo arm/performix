@@ -85,7 +85,7 @@ The CPU Microarchitecture Recipe Reports As Not Ready For Java Collection When J
   ...  cpu_microarchitecture
   ...  --param collect_java_stacks=true --target ${G_TARGET_NAME} --workload ${LAUNCH_WORKLOAD}
   Then The Recipe Is Not Ready
-  And Check Advice Messages Contain When Target Is Aarch64  "The `jitdump-jvm` tool is not deployed on the target."
+  And Check Advice Messages Contain When Target Is Aarch64  "The target does not have the `jitdump-jvm` tool."
   [Teardown]  Set Ready Suite Default State
 
 The CPU Microarchitecture Recipe Reports As Not Ready For Dotnet Collection When Dotnet Agent Is Not Deployed
@@ -104,7 +104,7 @@ The CPU Microarchitecture Recipe Reports As Not Ready For Dotnet Collection When
   ...  cpu_microarchitecture
   ...  --param collect_dotnet_stacks=true --target ${G_TARGET_NAME} --workload ${LAUNCH_WORKLOAD}
   Then The Recipe Is Not Ready
-  And Check Advice Messages Contain When Target Is Aarch64  "The `dotnet-agent` tool is not deployed on the target."
+  And Check Advice Messages Contain When Target Is Aarch64  "The target does not have the `dotnet-agent` tool."
   [Teardown]  Set Ready Suite Default State
 
 The CPU Microarchitecture Recipe Reports An Error For Java Collection On Unsupported Architectures
@@ -162,7 +162,7 @@ The Instruction Mix Recipe Reports As Not Ready In Static Mode When Tool Not Dep
   ...  instruction_mix
   ...  --param mode=static --target ${G_TARGET_NAME} --workload ${LAUNCH_WORKLOAD}
   Then The Recipe Is Not Ready
-  And Check Advice Messages Contain  "The `instruction_mix` tool is not deployed on the target."
+  And Check Advice Messages Contain  "The target does not have the `instruction_mix` tool."
   [Teardown]  Set Ready Suite Default State
 
 The Instruction Mix Recipe Reports As Not Ready In Dynamic Mode When Jitdump-JVM Tool Not Deployed
@@ -177,7 +177,7 @@ The Instruction Mix Recipe Reports As Not Ready In Dynamic Mode When Jitdump-JVM
   ...  instruction_mix
   ...  --param collect_java_stacks=true --param mode=dynamic --target ${G_TARGET_NAME} --workload ${LAUNCH_WORKLOAD}
   Then The Recipe Is Not Ready
-  And Check Advice Messages Contain When Target Is Aarch64  "The `jitdump-jvm` tool is not deployed on the target."
+  And Check Advice Messages Contain When Target Is Aarch64  "The target does not have the `jitdump-jvm` tool."
   [Teardown]  Set Ready Suite Default State
 
 The System Utilization Recipe Reports As Ready When Tools Are Deployed
@@ -205,7 +205,7 @@ The System Utilization Recipe Reports As Not Ready When Tools Are Not Deployed
   And The Target Is Prepared
   When Check Recipe Is Ready  system_utilization  --target ${G_TARGET_NAME} --system-wide
   Then The Recipe Is Not Ready
-  And Check Advice Messages Contain  "The `sysutil-timeline` tool is not deployed on the target."
+  And Check Advice Messages Contain  "The target does not have the `sysutil-timeline` tool."
   [Teardown]  Set Ready Suite Default State
 
 The System Utilization Recipe Reports As Not Ready On Unsupported OSes

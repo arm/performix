@@ -17,7 +17,9 @@ func TestCortexSpecificationsAreAvailable(t *testing.T) {
 	expectedDescriptions := map[string]string{
 		"Cortex-A520": "Telemetry Specification for Cortex-A520",
 		"Cortex-A720": "Telemetry Specification for Cortex-A720",
+		"Cortex-A725": "Telemetry Specification (PMU Events, Metrics and Methodology) for Cortex-A725 processor",
 		"Cortex-X4":   "Telemetry Specification for Cortex-X4",
+		"Cortex-X925": "Telemetry Specification (PMU Events, Metrics and Methodology) for Cortex-X925 processor",
 	}
 	supportedModels := SupportedCPUModels()
 
@@ -30,6 +32,12 @@ func TestCortexSpecificationsAreAvailable(t *testing.T) {
 			assert.Contains(t, specification.JSON, expectedDescription)
 			assert.NotContains(t, specification.JSON, "Generic Telemetry Specification")
 			assert.Contains(t, supportedModels, cpuModel)
+
+			telemetryData, err := GetTelemetryData(cpuModel)
+			require.NoError(t, err)
+			require.NotNil(t, telemetryData)
+			assert.NotEmpty(t, telemetryData.Events)
+			assert.NotEmpty(t, telemetryData.Metrics)
 		})
 	}
 }
@@ -38,7 +46,9 @@ func TestCortexSpecificationsAreMarkedConfidential(t *testing.T) {
 	specifications := map[string]string{
 		"Cortex-A520":    cortexA520JSON,
 		"Cortex-A720":    cortexA720JSON,
+		"Cortex-A725":    cortexA725JSON,
 		"Cortex-X4":      cortexX4JSON,
+		"Cortex-X925":    cortexX925JSON,
 		"Generic Cortex": genericCortexJSON,
 	}
 

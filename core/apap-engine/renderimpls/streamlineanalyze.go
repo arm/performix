@@ -75,6 +75,17 @@ func flattenCallTree(callTreeJSON *StreamlineJSONCalltreeNode) ([]CallTreeNode, 
 	return flattened, nil
 }
 
+func readCallTree(component cdf.Component) (*StreamlineJSONCalltreeNode, error) {
+	data, err := component.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return &StreamlineJSONCalltreeNode{}, nil
+	}
+	return util.DecodeJSON[StreamlineJSONCalltreeNode](data)
+}
+
 type StreamlineAnalyzeFunctionProfileRenderer struct {
 	config         *render.Config
 	specificConfig *ComponentConfig
@@ -276,8 +287,8 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer) loadCallPathFiles(
 	return loaded, nil
 }
 
-func (renderer *StreamlineAnalyzeFunctionProfileRenderer) loadCallTreeFile(filename string, session render.Session, id run.RunID) (CallTreeTable, error) {
-	callTree, err := util.ReadJSONFile[StreamlineJSONCalltreeNode](filename)
+func (renderer *StreamlineAnalyzeFunctionProfileRenderer) loadCallTreeFile(component cdf.Component, session render.Session, id run.RunID) (CallTreeTable, error) {
+	callTree, err := readCallTree(component)
 	if err != nil {
 		return CallTreeTable{}, err
 	}
@@ -419,7 +430,7 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer) Initialize(session ren
 			return err
 		}
 
-		callTreeTable, err := renderer.loadCallTreeFile(callTreeComponent.AbsolutePath, session, entry.ID)
+		callTreeTable, err := renderer.loadCallTreeFile(callTreeComponent, session, entry.ID)
 		if err != nil {
 			return err
 		}

@@ -66,3 +66,49 @@ func TestRegisterCoverageExport(t *testing.T) {
 		}
 	}`, string(data))
 }
+
+func TestLifecycleHarnessesRegisterCoverageExport(t *testing.T) {
+	coverageDir := t.TempDir()
+	originalCoverageDir := *jsCoverageDir
+	*jsCoverageDir = coverageDir
+	t.Cleanup(func() {
+		*jsCoverageDir = originalCoverageDir
+	})
+
+	coverageSource := `
+		globalThis.__coverage__ = {
+			"/source.js": {
+				path: "/source.js",
+				statementMap: {},
+				fnMap: {},
+				branchMap: {},
+				s: { "0": 1 },
+				f: {},
+				b: {},
+			},
+		};
+	`
+
+	t.Run("tool integration", func(t *testing.T) {
+		loadTestToolIntegration(t, coverageSource+`
+			let tool = {
+				name: "test",
+				version: "1",
+				description: { short: "short", long: "long" },
+				probe: () => ({ available: true, capabilities: {}, advice: [] }),
+				run: () => {},
+				reformat: () => {},
+				onStop: () => {},
+				onCancel: () => {},
+			};
+		`)
+	})
+
+	t.Run("recipe", func(t *testing.T) {
+		loadTestRecipe(t, coverageSource)
+	})
+
+	coverageFiles, err := filepath.Glob(filepath.Join(coverageDir, "coverage-*.json"))
+	require.NoError(t, err)
+	require.Len(t, coverageFiles, 2)
+}

@@ -333,6 +333,7 @@ func LoadRecipe(t *testing.T, recipeName string) *RecipeJSHarness {
 		return nil
 	})
 	require.NoError(t, err, "failed to load requested recipe")
+	registerCoverageExport(t, genericHarness)
 
 	return harness
 }

@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent/mocks"
+	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
 	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
 	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
@@ -41,7 +43,7 @@ func TestRetrieveFile(t *testing.T) {
 			Return((targetagentproto.TargetAgent_RetrieveFileClient)(nil), errors.New("boom")).
 			Once()
 
-		err := ReceiveFile(context.Background(), local, remote, mockAgent, nil)
+		err := ReceiveFile(context.Background(), remote, NewTransferDestination(cdf.ManifestEntry{Path: local}), mockAgent, nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "start retrieve")
@@ -57,7 +59,7 @@ func TestRetrieveFile(t *testing.T) {
 		local := filepath.Join(parent, "child.txt")
 		remote := "/ok/stream"
 
-		err := ReceiveFile(context.Background(), local, remote, nil, nil)
+		err := ReceiveFile(context.Background(), remote, NewTransferDestination(cdf.ManifestEntry{Path: local}), nil, nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "mkdir")
@@ -81,7 +83,7 @@ func TestRetrieveFile(t *testing.T) {
 			Return(stream, nil).
 			Once()
 
-		err := ReceiveFile(context.Background(), local, remote, mockAgent, nil)
+		err := ReceiveFile(context.Background(), remote, NewTransferDestination(cdf.ManifestEntry{Path: local}), mockAgent, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "create")
 
@@ -105,7 +107,7 @@ func TestRetrieveFile(t *testing.T) {
 			Return(stream, nil).
 			Once()
 
-		err := ReceiveFile(context.Background(), local, remote, mockAgent, nil)
+		err := ReceiveFile(context.Background(), remote, NewTransferDestination(cdf.ManifestEntry{Path: local}), mockAgent, nil)
 
 		require.ErrorContains(t, err, "boom")
 
@@ -139,7 +141,7 @@ func TestRetrieveFile(t *testing.T) {
 			progressUpdates = append(progressUpdates, transferred)
 		}
 
-		err := ReceiveFile(context.Background(), local, remote, mockAgent, progress)
+		err := ReceiveFile(context.Background(), remote, NewTransferDestination(cdf.ManifestEntry{Path: local}), mockAgent, progress)
 
 		require.NoError(t, err)
 
@@ -151,6 +153,37 @@ func TestRetrieveFile(t *testing.T) {
 		assertNoTemps(t, tmp)
 		mockAgent.AssertExpectations(t)
 		stream.AssertExpectations(t)
+	})
+
+	t.Run("compressed path stores zstd and preserves source-byte progress", func(t *testing.T) {
+		tmp := filepath.Join(t.TempDir(), "out")
+		local := filepath.Join(tmp, "hello.txt")
+		storedPath := local + cdf.ZstdSuffix
+		remote := "/remote/hello.txt"
+
+		stream := &mocks.MockRetrieveFileStream{}
+		mocks.SetStreamRecv(stream, "hello ", nil)
+		mocks.SetStreamRecv(stream, "world", nil)
+		mocks.SetStreamRecv(stream, "", io.EOF)
+		mockAgent := &targetagentmocks.TargetAgentClient{}
+		mockAgent.On("RetrieveFile", mock.Anything, &targetagentproto.FileRequest{Path: remote}, mock.Anything).Return(stream, nil).Once()
+
+		var progressUpdates []int64
+		require.NoError(t, ReceiveFile(context.Background(), remote, NewTransferDestination(cdf.ManifestEntry{Path: local, Compressed: true}), mockAgent, func(received int64) {
+			progressUpdates = append(progressUpdates, received)
+		}))
+
+		file, err := os.Open(storedPath)
+		require.NoError(t, err)
+		defer file.Close()
+		decoder, err := zstd.NewReader(file)
+		require.NoError(t, err)
+		defer decoder.Close()
+		data, err := io.ReadAll(decoder)
+		require.NoError(t, err)
+		require.Equal(t, "hello world", string(data))
+		require.Equal(t, []int64{6, 5}, progressUpdates)
+		assertNoTemps(t, tmp)
 	})
 }
 

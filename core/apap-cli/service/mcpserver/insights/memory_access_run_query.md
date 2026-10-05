@@ -243,8 +243,8 @@ sampled walks.
 
 Compare the bounded latency and TLB results by stable function and image names,
 using source paths when available. Keep each finding attached to its responsible
-function and treat the two evidence sets independently. Numeric symbol IDs can
-change between queries, so do not use them to correlate results across
+function and treat the two evidence sets independently. Numeric symbol IDs are
+stable within the render session and can be used to correlate results across
 `run_query` calls.
 
 ## 5. Inspect source when useful

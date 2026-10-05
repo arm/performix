@@ -7,8 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
-	"os"
 	"path"
 	"regexp"
 	"sort"
@@ -73,6 +73,7 @@ type FileArg struct {
 }
 
 type RunDescription struct {
+	WorkloadType          string
 	Parameters            map[string]any
 	ToolsUsed             []string
 	IsRunInProgress       bool
@@ -129,6 +130,7 @@ type RecipeAPI interface {
 	runCommand(goja.FunctionCall) goja.Value
 	isFullCaptureSupportEnabled(goja.FunctionCall) goja.Value
 	isRerenderingEnabled(goja.FunctionCall) goja.Value
+	isJfrCaptureEnabled(goja.FunctionCall) goja.Value
 	isNeoprofTimelineEnabled(goja.FunctionCall) goja.Value
 }
 
@@ -210,6 +212,7 @@ func (r *ConcreteRecipeAPI) getRunDescriptions(call goja.FunctionCall) goja.Valu
 				toolsUsed = append(toolsUsed, tu.Tool)
 			}
 			return RunDescription{
+				WorkloadType:          runDescription.WorkloadType,
 				Parameters:            runDescription.Parameters,
 				ToolsUsed:             toolsUsed,
 				IsRunInProgress:       runDescription.RunResult == string(run.RecipeInProgress) || runDescription.RunResult == string(run.RecipeInProgressPhase1Complete),
@@ -352,20 +355,21 @@ func (r *ConcreteRecipeAPI) readRunComponent(call goja.FunctionCall) goja.Value 
 	if err != nil {
 		panic(r.vm.ToValue(err))
 	}
-	componentInfo, err := os.Stat(component.AbsolutePath)
+	reader, err := component.Open()
 	if err != nil {
 		panic(r.vm.ToValue(err))
 	}
-	if componentInfo.Size() > maxBytes {
+	defer reader.Close()
+
+	content, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+	if err != nil {
+		panic(r.vm.ToValue(err))
+	}
+	if int64(len(content)) > maxBytes {
 		panic(r.vm.ToValue(fmt.Errorf(
-			"run component is too large to read as text: %d bytes exceeds %d bytes",
-			componentInfo.Size(),
+			"run component is too large to read as text: decompressed content exceeds %d bytes",
 			maxBytes,
 		)))
-	}
-	content, err := os.ReadFile(component.AbsolutePath)
-	if err != nil {
-		panic(r.vm.ToValue(err))
 	}
 
 	return r.vm.ToValue(string(content))
@@ -870,4 +874,8 @@ func (r *ConcreteRecipeAPI) isRerenderingEnabled(call goja.FunctionCall) goja.Va
 
 func (r *ConcreteRecipeAPI) isNeoprofTimelineEnabled(call goja.FunctionCall) goja.Value {
 	return r.vm.ToValue(r.execCtx.IsNeoprofTimelineEnabled())
+}
+
+func (r *ConcreteRecipeAPI) isJfrCaptureEnabled(call goja.FunctionCall) goja.Value {
+	return r.vm.ToValue(r.execCtx.IsJfrCaptureEnabled())
 }

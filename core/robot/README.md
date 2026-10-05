@@ -46,6 +46,31 @@ the repository root, or alternatively `make robot-test` from the `apap-cli`
 directory. Both methods handle virtual environment setup and dependency
 installation automatically.
 
+### Testing MCP clients
+
+The suite is opt-in because it calls the OpenAI API and requires Codex
+credentials in the environment.
+
+Run the smoke tests locally with:
+
+```shell
+task core:test:robot:mcp-clients TARGET=<name>
+```
+
+The suite currently uses the Codex version pinned in
+[`config.mcp-testing.toml`](../../.mise/config.mcp-testing.toml).
+
+Test Codex upgrades in a pull request rather than changing the pin to
+`latest`. Update the version in `.mise/config.mcp-testing.toml`, then regenerate
+the environment lockfile from the repository root:
+
+```shell
+mise lock -E mcp-testing aqua:openai/codex
+```
+
+Commit `.mise/config.mcp-testing.toml` and `.mise/mise.mcp-testing.lock`
+together.
+
 ### MCP client installation
 
 The MCP client-installation suite is host-only and does not require a profiling
@@ -126,7 +151,7 @@ python3 scripts/run-robot.py --help
 
 ### Running `robot` directly
 
-If you need to invoke `robot` directly (e.g. for dry runs or targeting a single suite), you will need a Python virtual environment with `robot/requirements.txt` installed. You can reuse the one created automatically by `make robot-test` (located at `env/` in the repository root), or create your own:
+If you need to invoke `robot` directly (e.g. for dry runs or targeting a single suite), you will need a Python virtual environment with `robot/requirements.txt` installed. You can reuse the one created automatically by `make robot-test` (`env/` on Unix-like hosts, or the applicable platform-specific `env-*` directory on Windows), or create your own:
 
 ```shell
 python3 -m venv path/to/venv
@@ -184,7 +209,7 @@ Each concurrent provisioned shard has its own runner and target. The workflow de
 
 ## Workload-dependent tests (skipped by default if not set up)
 
-Some test suites (e.g. `jitdump.robot`) require workloads to be pre-installed on the target. The workloads are defined in `robot/resources/files/workloads/workloads.json` and downloaded as GitHub release assets from the `Arm-Debug/performix-workloads` repo. Requires `GITHUB_TOKEN` in the environment (a GitHub personal access token with read access to the `Arm-Debug` organisation).
+Some test suites (e.g. `jitdump.robot`) require workloads to be pre-installed on the target. The workloads are defined in `robot/resources/files/workloads/workloads.json` and downloaded as GitHub release assets from the `Arm-Debug/performix-workloads` repo. Set `GITHUB_TOKEN` as described in the shared [private package access setup](../../DEVELOPMENT.md#package-access).
 
 If workloads are not prepared, workload-dependent tests skip automatically with an informational message.
 

@@ -138,6 +138,7 @@ type TransferOptions struct {
 	ImmediateRetrieval bool     `json:"immediateRetrieval,omitempty"`
 	Exclude            []string `json:"exclude,omitempty"`
 	BackgroundTransfer bool     `json:"backgroundTransfer,omitempty"`
+	Compressed         bool     `json:"compressed,omitempty"`
 }
 
 type FileCollector interface {

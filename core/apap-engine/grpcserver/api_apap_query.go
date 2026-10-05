@@ -171,6 +171,7 @@ func (s *ApapServer) Query(in *apapproto.QueryRequest, out apapproto.Apap_QueryS
 	if err != nil {
 		return err
 	}
+	opts.ReadOnly = in.GetReadOnly()
 
 	table, err := query.Execute(out.Context(), sessionAccess.S.Database(), in.QuerySql, opts)
 	if err != nil {
@@ -208,6 +209,7 @@ func (s *ApapServer) executeQueryInternal(ctx context.Context, req *apapproto.Qu
 	if err != nil {
 		return nil, nil, err
 	}
+	opts.ReadOnly = req.GetReadOnly()
 
 	table, err := query.Execute(ctx, sessionAccess.S.Database(), req.QuerySql, opts)
 	if err != nil {

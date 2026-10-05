@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# Codex is required only by the MCP client smoke tests. This opt-in Mise
+# environment avoids replacing a developer's selected Codex version when they
+# enter this repository.
+[tools]
+"aqua:openai/codex" = "0.152.1"

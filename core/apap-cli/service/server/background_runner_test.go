@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -333,4 +334,19 @@ type testApapServer struct {
 
 func (testApapServer) GetVersion(context.Context, *emptypb.Empty) (*apapproto.ServiceVersion, error) {
 	return &apapproto.ServiceVersion{Version: "test-version"}, nil
+}
+
+func TestBackgroundRunnerForwardsJfrCapture(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			var receivedArgs []string
+			stop := errors.New("stop before starting a daemon")
+			runner := backgroundRunner{runCommand: func(_ string, args ...string) (startedProcess, error) {
+				receivedArgs = args
+				return nil, stop
+			}}
+			require.ErrorIs(t, runner.Run(grpcserver.GrpcServerConfig{EnableJfrCapture: enabled}), stop)
+			assert.Contains(t, receivedArgs, fmt.Sprintf("--enable-jfr-capture=%t", enabled))
+		})
+	}
 }

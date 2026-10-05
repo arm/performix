@@ -58,6 +58,7 @@ New targets can be added directly via MCP using the `add_target` tool, or altern
 
 ### Workloads & Running a Recipe
 You can run a recipe live using the `run_recipe` tool, which generates a new run and returns the run's ID among other relevant details.
+To find the PID of a running process on the target, call `search_target_processes` with the target name. Pass that PID to `run_recipe` using `attach_to_pid`.
 Unless `recipe_info` returns different MCP guidance, omit the timeout for initial profiling runs to use the MCP default of 10 seconds. Use a longer timeout when the user or the recipe guidance requires it. Set timeout to 0 only when the user explicitly wants no collection timeout.
 
 
@@ -75,6 +76,6 @@ Dynamic Insights are available only for successful runs produced by a supported 
 
 This limitation applies to Dynamic Insights, not to `run_recipe`; continue to use other recipes when they better match the user's profiling goal.
 
-Use `list_runs` to find a suitable existing successful run when the user has not supplied a run ID. Call `generate_ai_insights` with that run ID. If any returned payload is incomplete, use its bundle ID, payload name and `next_offset` with `read_ai_insights_payload_details`, repeating as needed until the relevant evidence is complete.
+Use `list_runs` to find a suitable existing successful run when the user has not supplied a run ID. Call `generate_ai_insights` with that run ID. If the user specifies a PID, TID, time range or another render filter, use `recipe_info` to check whether the recipe exposes a matching render parameter and obtain its exact name and type. Pass matching values in `render_parameters`. `generate_ai_insights` accepts render parameters for every supported AI Insights recipe except `code_hotspots`; recipes with no listed parameters use their default render. If any returned payload is incomplete, use its bundle ID, payload name and `next_offset` with `read_ai_insights_payload_details`, repeating as needed until the relevant evidence is complete.
 
 The `run_query` tool provides advanced SELECT access to rendered run data. Use it when recipe-specific guidance requests direct querying, or when the user explicitly asks to query a run.

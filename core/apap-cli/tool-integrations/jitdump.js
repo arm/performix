@@ -18,6 +18,281 @@
 
 // jitdump-dotnet merge mode reads raw .NET inputs from this APX capture subdirectory.
 const dotnetInputRelativeDir = 'external/jitdump-dotnet';
+const defaultJfrSettings = 'profile';
+const { decodeXmlAttribute } = require('./utils');
+const jfrRecordingsParquetFile = 'metadata/jfr_recordings.parquet';
+
+function eventParquetPath(eventName) {
+  const shortName = eventName.slice(eventName.lastIndexOf('.') + 1);
+  const tableName = shortName
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+
+  if (!tableName) {
+    throw new Error(`JFR schema event name '${eventName}' is invalid`);
+  }
+
+  return `events/jfr_${tableName}.parquet`;
+}
+
+/**
+ * Uses the event declarations in jfr_schema.xml as the manifest for Parquet
+ * files emitted by jitdump-jvm. Recording metadata is emitted independently
+ * of the event schema, so it remains an explicit required file.
+ *
+ * @param {string} schema
+ * @returns {string[]}
+ */
+function parquetManifestFromJfrSchema(schema) {
+  const uncommentedSchema = schema.replace(/<!--[\s\S]*?-->/g, '');
+  const eventTags = uncommentedSchema.match(/<event\b[^>]*>/g) || [];
+
+  if (eventTags.length === 0) {
+    throw new Error('JFR schema does not define any events');
+  }
+
+  const manifest = [jfrRecordingsParquetFile];
+  const paths = new Set(manifest);
+  for (const eventTag of eventTags) {
+    const nameMatch = /\bname\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(eventTag);
+    const eventName = decodeXmlAttribute(
+      nameMatch?.[1] || nameMatch?.[2] || '',
+    ).trim();
+    if (!eventName) {
+      throw new Error('JFR schema event does not have a name');
+    }
+
+    const path = eventParquetPath(eventName);
+    if (paths.has(path)) {
+      throw new Error(`JFR schema defines duplicate output '${path}'`);
+    }
+    paths.add(path);
+    manifest.push(path);
+  }
+
+  return manifest;
+}
+
+/**
+ * Builds the JFR flags accepted by jitdump-jvm capture mode.
+ * @param {string} jfrOutputDir
+ * @param {string} recordingName
+ * @param {string} [settings]
+ * @returns {string[]}
+ */
+function buildJfrCaptureArgs(
+  jfrOutputDir,
+  recordingName,
+  settings = defaultJfrSettings,
+) {
+  return [
+    '--jfr-output-dir',
+    jfrOutputDir,
+    '--jfr-name',
+    recordingName,
+    '--jfr-settings',
+    settings,
+  ];
+}
+
+/**
+ * Builds the option that starts a named JFR recording in a launched JVM.
+ * @param {string} recordingName
+ * @param {string} jfrOutputDir
+ * @param {string} [settings]
+ * @returns {string}
+ */
+function buildJfrStartOption(
+  recordingName,
+  jfrOutputDir,
+  settings = defaultJfrSettings,
+) {
+  return `-XX:StartFlightRecording=name=${recordingName},settings=${settings},filename=${jfrOutputDir},dumponexit=true`;
+}
+
+/**
+ * Appends the JFR start option without replacing an existing JVM option set.
+ * @param {Object.<string, string>} environment
+ * @param {string} jfrStartOption
+ * @returns {Object.<string, string>}
+ */
+function mergeJdkJavaOptions(environment, jfrStartOption) {
+  const merged = { ...(environment || {}) };
+  merged.JDK_JAVA_OPTIONS = merged.JDK_JAVA_OPTIONS
+    ? `${merged.JDK_JAVA_OPTIONS} ${jfrStartOption}`
+    : jfrStartOption;
+  return merged;
+}
+
+/**
+ * Builds jitdump-jvm conversion-mode arguments.
+ * @param {string} binaryPath
+ * @param {string} jfrInputDir
+ * @param {string} parquetOutputDir
+ * @returns {string[]}
+ */
+function buildJfrConversionArgs(binaryPath, jfrInputDir, parquetOutputDir) {
+  return [
+    binaryPath,
+    '--jfr-input-dir',
+    jfrInputDir,
+    '--jfr-parquet-output-dir',
+    parquetOutputDir,
+  ];
+}
+
+/**
+ * Registers raw JFR and helper logs before conversion so failed conversions
+ * remain diagnosable.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {{jfrInputDir:string, helperStdoutPath:string, helperStderrPath:string}} artifacts
+ */
+function emitJfrCaptureArtifacts(engine, artifacts) {
+  engine.emitOutput(
+    `${artifacts.jfrInputDir}/**/*`,
+    'java/jfr/**/*',
+    { name: 'jfr', version: '1.0' },
+    { immediateRetrieval: true },
+  );
+  for (const [source, destination] of [
+    [artifacts.helperStdoutPath, 'java/jitdump-jvm.log'],
+    [artifacts.helperStderrPath, 'java/jitdump-jvm_stderr.txt'],
+  ]) {
+    engine.emitOutput(
+      source,
+      destination,
+      { name: 'log-text', version: '1.0' },
+      { immediateRetrieval: true },
+    );
+  }
+}
+
+/**
+ * Converts JFR files into Parquet and always registers conversion logs.
+ * Process lifecycle here is limited to the finite conversion command; capture
+ * helper ownership remains with the calling integration.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {{binaryPath:string, jfrInputDir:string, parquetOutputDir:string, conversionStdoutPath:string, conversionStderrPath:string, asPrivileged?:boolean}} artifacts
+ */
+async function convertJfrToParquet(engine, artifacts) {
+  await engine.mkDir(artifacts.parquetOutputDir);
+  const progressTrackerId = 'Converting Java Flight Recorder data';
+  engine.startProgressTracker(progressTrackerId);
+  let handle;
+  try {
+    handle = await engine.startProcess(
+      buildJfrConversionArgs(
+        artifacts.binaryPath,
+        artifacts.jfrInputDir,
+        artifacts.parquetOutputDir,
+      ),
+      {
+        asPrivileged: artifacts.asPrivileged === true,
+        stdout: { redirect: 'file', path: artifacts.conversionStdoutPath },
+        stderr: { redirect: 'file', path: artifacts.conversionStderrPath },
+      },
+    );
+    const result = await handle.wait();
+    if (result.exitCode !== 0) {
+      throw new Error(`JFR conversion exited with code ${result.exitCode}`);
+    }
+  } finally {
+    try {
+      if (handle) {
+        for (const [source, destination] of [
+          [artifacts.conversionStdoutPath, 'java/jitdump-jvm-reformat.log'],
+          [
+            artifacts.conversionStderrPath,
+            'java/jitdump-jvm-reformat_stderr.txt',
+          ],
+        ]) {
+          engine.emitOutput(
+            source,
+            destination,
+            { name: 'log-text', version: '1.0' },
+            { immediateRetrieval: true },
+          );
+        }
+      }
+    } finally {
+      engine.endProgress(progressTrackerId);
+    }
+  }
+}
+
+/**
+ * Reads the deployed schema that defines JFR conversion output.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {string} binaryPath
+ * @returns {Promise<string[]>}
+ */
+async function readParquetManifest(engine, binaryPath) {
+  const bundleDir = binaryPath.slice(0, binaryPath.lastIndexOf('/'));
+  const schemaPath = `${bundleDir}/jfr_schema.xml`;
+  let schema;
+  try {
+    schema = await engine.execCommand(['cat', schemaPath], {});
+  } catch (error) {
+    throw new Error(`Failed to read JFR schema '${schemaPath}': ${error}`);
+  }
+  if (schema.rc !== 0) {
+    throw new Error(
+      `Failed to read JFR schema '${schemaPath}' (exit code ${schema.rc}): ${schema.stderr}`,
+    );
+  }
+  try {
+    return parquetManifestFromJfrSchema(schema.stdout);
+  } catch (error) {
+    throw new Error(`Failed to parse JFR schema '${schemaPath}': ${error}`);
+  }
+}
+
+/**
+ * Validates all Parquet files declared by the deployed JFR schema.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {string} parquetOutputDir
+ * @param {string} binaryPath
+ * @returns {Promise<void>}
+ */
+async function validateJfrParquetComponents(
+  engine,
+  parquetOutputDir,
+  binaryPath,
+) {
+  const requiredJfrParquetFiles = await readParquetManifest(engine, binaryPath);
+  const missingComponents = [];
+  for (const relativePath of requiredJfrParquetFiles) {
+    const check = await engine.execCommand(
+      ['stat', `${parquetOutputDir}/${relativePath}`],
+      {},
+    );
+    if (check.rc !== 0) {
+      missingComponents.push(relativePath);
+    }
+  }
+  if (missingComponents.length > 0) {
+    const error = new Error('JFR conversion output is incomplete');
+    error.missingComponents = missingComponents;
+    throw error;
+  }
+}
+
+/**
+ * Registers validated JFR Parquet output beneath the owning tool invocation.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {string} parquetOutputDir
+ */
+function emitJfrParquetArtifacts(engine, parquetOutputDir) {
+  engine.emitOutput(
+    `${parquetOutputDir}/**/*.parquet`,
+    'java/parquet/**/*.parquet',
+    { name: 'jfr-parquet', version: '1.0' },
+    { immediateRetrieval: true },
+  );
+}
 
 /**
  * Reformats files generated during jitdump captures.
@@ -747,7 +1022,7 @@ async function isDotnetProcessPid(engine, pid, asPrivileged) {
  */
 function immediateEmitJitdumpLogs(engine, ctx) {
   let files = [];
-  if (ctx.metadata.jitdumpJvmAvailable) {
+  if (ctx.metadata.jitdumpJvmAvailable && !ctx.metadata.jfrCaptureEnabled) {
     files.push('jitdumpjvm.log', 'jitdumpjvm_stderr.txt');
   }
   if (ctx.metadata.dotnetAgentAvailable) {
@@ -771,6 +1046,16 @@ function immediateEmitJitdumpLogs(engine, ctx) {
 }
 
 module.exports = {
+  eventParquetPath,
+  parquetManifestFromJfrSchema,
+  readParquetManifest,
+  buildJfrCaptureArgs,
+  buildJfrStartOption,
+  mergeJdkJavaOptions,
+  convertJfrToParquet,
+  validateJfrParquetComponents,
+  emitJfrCaptureArtifacts,
+  emitJfrParquetArtifacts,
   reformatJitdumps,
   immediateEmitJitdumpLogs,
   isJvmProcessPid,

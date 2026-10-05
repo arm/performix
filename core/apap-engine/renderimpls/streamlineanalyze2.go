@@ -43,6 +43,7 @@ type ComponentConfig struct {
 	Measurements      []SLMeasurements `json:"measurements"`
 	SourceCodeSamples string           `json:"source-code-samples"`
 	Entity            string           `json:"entity"`
+	CPUName           string           `json:"cpu_name,omitempty"`
 }
 
 type StreamlineAnalyzeFunctionProfileRenderer2 struct {
@@ -147,12 +148,13 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) loadCallPathFile(
 	if err != nil {
 		return CallpathTables2{}, err
 	}
-	var nrows int
+	var nrows, measurementCount int
 	err = session.Database().Conn.QueryRowContext(context.Background(), `
 	  SELECT
-		COALESCE(len(rows),    0) AS nrows
+		COALESCE(len(rows), 0) AS nrows,
+		COALESCE(len(columns), 0) AS ncolumns
 	  FROM temp
-	`).Scan(&nrows)
+	`).Scan(&nrows, &measurementCount)
 	if err != nil {
 		return CallpathTables2{}, err
 	}
@@ -163,8 +165,8 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) loadCallPathFile(
 	// Split out the columns table by unnesting; some of these are null, and we want to grab only the non-null fields
 	// in the next step.
 	//
-	// Count the non-empty columns, unnest the rows table, and sub-select non-null column parts from its values array in
-	// one step
+	// Preserve raw array positions, including unnamed columns, so later files use a
+	// disjoint source-ID range and values after gaps retain their original IDs.
 	query := fmt.Sprint(
 		`CREATE TABLE `, colsDataTableName, ` AS
 				SELECT * FROM (
@@ -177,19 +179,6 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) loadCallPathFile(
 	)
 	_, err = session.Database().Conn.ExecContext(context.Background(), query)
 	if err != nil {
-		return CallpathTables2{}, err
-	}
-
-	query = fmt.Sprint(`SELECT COUNT(name) AS cnt FROM `, colsDataTableName)
-	rows, err := session.Database().Conn.QueryContext(context.Background(), query)
-	if err != nil {
-		return CallpathTables2{}, err
-	}
-	defer rows.Close()
-
-	var measurementCount int
-	rows.Next()
-	if err = rows.Scan(&measurementCount); err != nil {
 		return CallpathTables2{}, err
 	}
 
@@ -263,8 +252,8 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) loadCallPathFiles(
 	return loaded, measurementIDOffset, nil
 }
 
-func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) loadCallTreeFile(filename string, session render.Session, id run.RunID) (CallTreeTable, error) {
-	callTree, err := util.ReadJSONFile[StreamlineJSONCalltreeNode](filename)
+func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) loadCallTreeFile(component cdf.Component, session render.Session, id run.RunID) (CallTreeTable, error) {
+	callTree, err := readCallTree(component)
 	if err != nil {
 		return CallTreeTable{}, err
 	}
@@ -328,8 +317,24 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) joinDrilldownTable(
 	session render.Session,
 ) error {
 	unions := make([]string, len(callPathTables))
-	for i := range callPathTables {
-		unions[i] = fmt.Sprint("(SELECT * FROM ", callPathTables[i].rowsTableName, ")")
+	for i, tables := range callPathTables {
+		// Filtered mixed-core analyzer output repeats derived names with null
+		// values for the other core. Coalesce equal/non-null values below;
+		// conflicting populated values cannot safely be summed or averaged.
+		// Map every named source column before combining total/self tables. Never
+		// leave an unmapped source ID in the registered measurement namespace.
+		ids := measurementIDs[i]
+		mappings := make([]string, len(ids.IDs))
+		for j, id := range ids.IDs {
+			mappings[j] = fmt.Sprintf("(%d, %d)", ids.SourceIDs[j], id)
+		}
+		mappingSQL := "SELECT NULL::BIGINT AS source_id, NULL::BIGINT AS registered_id WHERE false"
+		if len(mappings) > 0 {
+			mappingSQL = "SELECT * FROM (VALUES " + strings.Join(mappings, ",") + ") AS m(source_id, registered_id)"
+		}
+		unions[i] = fmt.Sprintf(
+			"(SELECT r.call_frame_id, r.value, m.registered_id AS measurement_id FROM %s r JOIN (%s) m ON r.measurement_id = m.source_id)",
+			tables.rowsTableName, mappingSQL)
 	}
 
 	query := fmt.Sprint(
@@ -338,7 +343,10 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) joinDrilldownTable(
                'function'               AS node_type,
                tree.call_tree_id        AS call_tree_id,
                tree.call_tree_parent_id AS call_tree_parent_id,
-               unions.value             AS measurement_value,
+               CASE WHEN count(DISTINCT unions.value) > 1
+                    THEN error('conflicting call-path values for a registered measurement')
+                    ELSE first(unions.value) FILTER (WHERE unions.value IS NOT NULL)
+               END                      AS measurement_value,
                unions.measurement_id    AS measurement_id,
                tree.symbol_id           AS symbol_id
            FROM `, callTreeTable.callTreeTableName, ` AS tree
@@ -348,7 +356,8 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) joinDrilldownTable(
 		   ON symbols.image_id = images.image_id
        LEFT JOIN (`, strings.Join(unions, " UNION ALL "), `) AS unions
            ON unions.call_frame_id = tree.call_tree_id
-       WHERE unions.value IS NOT NULL OR tree.call_tree_parent_id = -1`,
+       WHERE unions.value IS NOT NULL OR tree.call_tree_parent_id = -1
+       GROUP BY tree.call_tree_id, tree.call_tree_parent_id, unions.measurement_id, tree.symbol_id`,
 	)
 
 	_, err := session.Database().Conn.ExecContext(context.Background(), query)
@@ -356,32 +365,12 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) joinDrilldownTable(
 		return err
 	}
 
-	// Replace measurement IDs starting from offset with IDs from the reference database, in the same order as they
-	// appear in the measurementIDs slice.
-	var cases []string
-	for i, ids := range measurementIDs {
-		for j, id := range ids.IDs {
-			tempID := callPathTables[i].measurementIDOffset + j + 1
-			cases = append(cases, fmt.Sprintf("WHEN measurement_id = %d THEN %d", tempID, id))
-		}
-	}
-	if len(cases) > 0 {
-		query = fmt.Sprintf(
-			"UPDATE %s SET measurement_id = CASE %s ELSE measurement_id END",
-			drilldownTable.name,
-			strings.Join(cases, " "),
-		)
-		_, err = session.Database().Conn.ExecContext(context.Background(), query)
-		if err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
 type MeasurementIDs struct {
-	IDs []render.MeasurementID
+	SourceIDs []int
+	IDs       []render.MeasurementID
 }
 
 type OverallMeasurementsTables struct {
@@ -403,27 +392,30 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) createDrilldownMeasur
 	insertedIDs := make([][]MeasurementIDs, len(callPathTables))
 	flattenIDs := make([]render.MeasurementID, 0)
 
-	for entryIndex := range callPathTables {
-		insertedIDs[entryIndex] = make([]MeasurementIDs, len(callPathTables[entryIndex]))
+	for entryIndex, tables := range callPathTables {
+		insertedIDs[entryIndex] = make([]MeasurementIDs, len(tables))
 
-		for tableIndex := range callPathTables[entryIndex] {
+		for tableIndex, table := range tables {
 			targetInfoTable := renderer.resolvedData["target_info_cpus"][entryIndex]
-			targetInfoQueryTemplate := "SELECT name FROM __TARGET_INFO_TABLE__ LIMIT 1"
-			targetInfoQuery := strings.NewReplacer("__TARGET_INFO_TABLE__", targetInfoTable.Name).Replace(targetInfoQueryTemplate)
-			var cpuName string
-			if err := session.Database().Conn.QueryRowContext(context.Background(), targetInfoQuery).Scan(&cpuName); err != nil {
-				return OverallMeasurementsTables{}, fmt.Errorf("failed to query target CPU name from table '%s': %w", targetInfoTable.Name, err)
+			cpuName, err := resolveTelemetryCPUName(
+				context.Background(),
+				session.Database().Conn,
+				targetInfoTable.Name,
+				renderer.specificConfig.CPUName,
+			)
+			if err != nil {
+				return OverallMeasurementsTables{}, err
 			}
 
-			var err error
 			var telemetryData *telemetry.Payload
 			if telemetryData, err = telemetry.GetTelemetryData(cpuName); err != nil {
 				return OverallMeasurementsTables{}, fmt.Errorf("failed to get telemetry data for CPU model '%s': %w", cpuName, err)
 			}
 
-			queryTemplate := "SELECT DISTINCT ON (name) name, units FROM __COLS_TABLE__ ORDER BY measurement_id"
-			qry := strings.NewReplacer("__COLS_TABLE__", callPathTables[entryIndex][tableIndex].colsTableName).Replace(queryTemplate)
+			queryTemplate := "SELECT measurement_id, name, units FROM __COLS_TABLE__ ORDER BY measurement_id"
+			qry := strings.NewReplacer("__COLS_TABLE__", table.colsTableName).Replace(queryTemplate)
 			specs := make([]render.MeasurementSpec, 0)
+			sourceIDs := make([]int, 0)
 
 			var rows *sql.Rows
 			if rows, err = session.Database().Conn.QueryContext(context.Background(), qry); err != nil {
@@ -433,13 +425,14 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) createDrilldownMeasur
 
 			// Insert or update measurements in the reference database
 			for rows.Next() {
+				var sourceID int
 				var name string
 				var units string
-				if err := rows.Scan(&name, &units); err != nil {
+				if err := rows.Scan(&sourceID, &name, &units); err != nil {
 					return OverallMeasurementsTables{}, err
 				}
 
-				affiliation := callPathTables[entryIndex][tableIndex].affiliation
+				affiliation := table.affiliation
 
 				// Create measurement spec using our helper function
 				desc := "Function profile measurement from Streamline Analyze"
@@ -462,7 +455,12 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) createDrilldownMeasur
 					},
 				}
 				specs = append(specs, spec)
+				sourceIDs = append(sourceIDs, sourceID)
 			}
+			if err := rows.Err(); err != nil {
+				return OverallMeasurementsTables{}, err
+			}
+			rows.Close()
 
 			// Process measurement groups (create, upsert, link to specs)
 			err = UpsertAndLinkTelemetryGroups(specs, telemetryData, session)
@@ -474,7 +472,7 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) createDrilldownMeasur
 			if ids, err := session.Reference().Measurements().Upsert(context.Background(), specs); err != nil {
 				return OverallMeasurementsTables{}, err
 			} else {
-				insertedIDs[entryIndex][tableIndex] = MeasurementIDs{IDs: ids}
+				insertedIDs[entryIndex][tableIndex] = MeasurementIDs{SourceIDs: sourceIDs, IDs: ids}
 				flattenIDs = append(flattenIDs, ids...)
 
 			}
@@ -606,7 +604,7 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) Initialize(session re
 			cdf.ComponentType{Name: "state", SchemaVersion: "1.0"},
 		)
 
-		callTreeTable, err := renderer.loadCallTreeFile(callTreeComponent.AbsolutePath, session, entry.ID)
+		callTreeTable, err := renderer.loadCallTreeFile(callTreeComponent, session, entry.ID)
 		if err != nil {
 			return err
 		}

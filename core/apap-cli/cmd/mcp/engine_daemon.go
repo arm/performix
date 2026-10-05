@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 
 	log "github.com/sirupsen/logrus"
 
@@ -89,23 +90,47 @@ func (r *engineDaemonRunner) Run(ctx context.Context, in io.ReadCloser, out io.W
 		return err
 	}
 
-	// MCP stdout is reserved for protocol messages. Redirect the process-wide
-	// logger to stderr for this invocation, then restore it for other commands
-	// and tests using the same process.
+	// MCP stdout is reserved for protocol messages. Mirror the process-wide
+	// logger to stderr and the engine log file for this invocation, then
+	// restore it for other commands and tests using the same process.
 	previousOutput := log.StandardLogger().Out
 	previousLevel := log.GetLevel()
-	log.SetOutput(errOut)
+	var logFile *os.File
+	if config.LogPath == "" || config.LogPath == "stdout" {
+		log.SetOutput(errOut)
+	} else {
+		logFile, err = logging.SetLogOutputFile(config.LogPath)
+		if err != nil {
+			log.SetOutput(errOut)
+			fmt.Fprintf(
+				errOut,
+				"Warning. Non-fatal error: Could not set log file. Error: %v\nContinuing...\n",
+				err,
+			)
+		} else {
+			log.SetOutput(fanoutWriter{errOut, logFile})
+		}
+	}
 	if err := logging.SetLogLevel(config.LogLevel); err != nil {
 		log.SetOutput(previousOutput)
+		if logFile != nil {
+			_ = logFile.Close()
+		}
 		return err
 	}
 	defer func() {
 		log.SetOutput(previousOutput)
 		log.SetLevel(previousLevel)
+		if logFile != nil {
+			_ = logFile.Close()
+		}
 	}()
 
 	log.WithFields(log.Fields{
+		"component":   "mcp",
 		"host":        config.Host,
+		"pid":         os.Getpid(),
+		"ppid":        os.Getppid(),
 		"server-port": config.Port,
 		"auth-port":   config.AuthPort,
 	}).Debug("Engine daemon configuration complete")
@@ -120,7 +145,7 @@ func (r *engineDaemonRunner) Run(ctx context.Context, in io.ReadCloser, out io.W
 	// Register shutdown only after a successful connection: before this point
 	// there is no engine client through which to request graceful shutdown.
 	defer func() {
-		log.Debug("Engine daemon shutdown start")
+		log.WithField("cause", context.Cause(ctx)).Debug("Engine daemon shutdown start")
 		shutdownErr := r.shutdown(engine)
 		log.WithError(shutdownErr).Debug("Engine daemon shutdown complete")
 		// A process-group signal can stop the engine before this RPC reaches it.
@@ -133,7 +158,10 @@ func (r *engineDaemonRunner) Run(ctx context.Context, in io.ReadCloser, out io.W
 
 	log.Debug("MCP protocol start")
 	runErr = r.newProtocol(engine).Run(ctx, in, out, errOut)
-	log.WithError(runErr).Debug("MCP protocol complete")
+	log.WithFields(log.Fields{
+		"cause": context.Cause(ctx),
+		"error": runErr,
+	}).Debug("MCP protocol complete")
 	if errors.Is(runErr, context.Canceled) && ctx.Err() != nil {
 		return nil
 	}

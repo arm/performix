@@ -117,6 +117,10 @@ url = "https://dl.google.com/go/go1.27.0.windows-arm64.zip"
 checksum = "sha256:f0c0a0d33ba94f4d2c5dbc887334ce678b21813504ddb3aafcb06e60a5a667c4"
 url = "https://dl.google.com/go/go1.27.0.windows-amd64.zip"
 
+[[tools."npm:@modelcontextprotocol/inspector"]]
+version = "2.6.0"
+backend = "npm:@modelcontextprotocol/inspector"
+
 [[tools.python]]
 version = "3.10.20"
 backend = "core:python"

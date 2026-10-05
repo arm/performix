@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import os
-import platform
 import shutil
 import stat
 import subprocess
@@ -20,6 +19,13 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
+from lib.msys2 import (
+    find_msys2_bash,
+    is_windows_host,
+    to_msys2_path,
+    ucrt64_environment,
+)
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_TOOLS_DIR = SCRIPT_DIR.parent / "apap-cli" / "tools"
@@ -27,6 +33,10 @@ INTERNAL_SCRIPT = SCRIPT_DIR / "get-tools-internal.py"
 
 SYSUTIL_TOOL_NAME = "sysutil-timeline"
 SYSUTIL_TARGETS = (("Linux", "aarch64"), ("Linux", "x86_64"))
+PYTORCH_COLLECT_TOOL_NAME = "pytorch-collect"
+PYTORCH_COLLECT_TARGETS = (("Linux", "aarch64"), ("Linux", "x86_64"))
+PARQUET_WRITER_TOOL_NAME = "parquet-writer"
+PARQUET_WRITER_TARGETS = PYTORCH_COLLECT_TARGETS
 PARQUET_TO_JSON_TOOL_NAME = "parquet-to-json"
 
 TARGET_AGENT_VARIANTS = (
@@ -39,7 +49,13 @@ TARGET_AGENT_VARIANTS = (
     ("Darwin", "x86_64", "darwin-amd64"),
 )
 
-PUBLIC_TOOLS = ["target_agent", SYSUTIL_TOOL_NAME, PARQUET_TO_JSON_TOOL_NAME]
+PUBLIC_TOOLS = [
+    "target_agent",
+    SYSUTIL_TOOL_NAME,
+    PYTORCH_COLLECT_TOOL_NAME,
+    PARQUET_WRITER_TOOL_NAME,
+    PARQUET_TO_JSON_TOOL_NAME,
+]
 
 RELEASE_TARGETS = [
     ("linux", "amd64"),
@@ -98,27 +114,6 @@ def _get_builtin_tool_source(tool_name: str, required_file: str) -> Path:
     return source_dir
 
 
-def find_msys2_bash() -> Path:
-    """
-    Locate MSYS2 bash.exe on Windows. Checks PATH first, then common
-    MSYS2 installation locations. MSYS2 is a prerequisite on Windows.
-    """
-    bash = shutil.which("bash")
-    if bash:
-        return Path(bash)
-    for candidate in [
-        Path(r"C:\msys64\usr\bin\bash.exe"),
-        Path(r"C:\msys32\usr\bin\bash.exe"),
-        Path(r"C:\tools\msys64\usr\bin\bash.exe"),
-    ]:
-        if candidate.is_file():
-            return candidate
-    raise RuntimeError(
-        "bash.exe not found. MSYS2 is required on Windows. "
-        r"Ensure MSYS2 is installed and C:\msys64\usr\bin is in your PATH."
-    )
-
-
 def run_script(cmd: list) -> None:
     """
     Synchronously run a subprocess, inheriting stdout/stderr.
@@ -129,17 +124,14 @@ def run_script(cmd: list) -> None:
     # On Windows, use MSYS2 bash
     if is_windows_host() and Path(str(cmd[0])).suffix == ".sh":
         bash = str(find_msys2_bash())
-        str_cmd = [str(c) for c in cmd]
-        cmd = [bash] + [c.replace("\\", "/") for c in str_cmd]
+        cmd = [bash] + [to_msys2_path(c) for c in cmd]
+        environment = ucrt64_environment()
+    else:
+        environment = None
 
-    result = subprocess.run(cmd)
+    result = subprocess.run(cmd, env=environment)
     if result.returncode != 0:
         raise RuntimeError(f"Command failed (exit {result.returncode})")
-
-
-def is_windows_host() -> bool:
-    s = platform.system().lower()
-    return s.startswith(("mingw", "msys", "cygwin", "windows"))
 
 
 # ------------------------------------------------------------------------------
@@ -150,19 +142,20 @@ def is_windows_host() -> bool:
 def package_builtin_go_tool(
     source_relative_dir: Path,
     tool_name: str,
-    variants: list[tuple[str, str]],
+    variants: Sequence[tuple[str, str]],
     tools_dir: Path,
-) -> None:
+    additional_files: Sequence[Path] = (),
+) -> tuple[Path, ...]:
     """
     Builds all variants of a built-in Go tool locally and packages them. The tool will be versioned
     according to the current Performix engine version. Tools are built using `-trimpath -ldflags "-s -w"`
-    which strips debug info to reduce the tarball size.
+    which strips debug info to reduce the tarball size. Additional files are resolved relative to
+    the tool's source directory and stored under the same relative path in each archive.
     """
     source_dir = SCRIPT_DIR.parent / "apap-cli" / "tools-builtin" / source_relative_dir
     source_file = source_dir / "main.go"
     if not source_file.exists():
         raise FileNotFoundError(f"main.go not found for {tool_name} at {source_file}")
-
     if not shutil.which("go"):
         raise RuntimeError(f"go is required to build the {tool_name} tool")
 
@@ -170,6 +163,7 @@ def package_builtin_go_tool(
     tool_dst_dir = tools_dir / tool_name / version
     tool_dst_dir.mkdir(parents=True, exist_ok=True)
 
+    archives: list[Path] = []
     for os_name, arch in variants:
         archive_name = f"{tool_name}-{os_name}-{arch}.tar.gz"
         output_file = tool_dst_dir / archive_name
@@ -197,7 +191,6 @@ def package_builtin_go_tool(
                 env=env,
                 check=True,
             )
-
             binary.chmod(
                 binary.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
             )
@@ -212,12 +205,17 @@ def package_builtin_go_tool(
                 ])
 
             with tarfile.open(output_file, "w:gz") as tf:
+                for relative_path in additional_files:
+                    tf.add(source_dir / relative_path, arcname=relative_path.as_posix())
                 info = tf.gettarinfo(str(binary), arcname=binary_name)
                 info.mode = 0o755
                 with binary.open("rb") as fileobj:
                     tf.addfile(info, fileobj)
 
         print(f"[{tool_name}] Package created: {output_file}")
+        archives.append(output_file)
+
+    return tuple(archives)
 
 
 # ------------------------------------------------------------------------------
@@ -262,6 +260,58 @@ def package_sysutil_timeline(tools_dir: Path) -> tuple[Path, ...]:
         archives.append(output_file)
 
     return tuple(archives)
+
+
+# ------------------------------------------------------------------------------
+# pytorch-collect
+# ------------------------------------------------------------------------------
+
+
+def package_pytorch_collect(tools_dir: Path) -> tuple[Path, ...]:
+    """Create source-only PyTorch collector bundles for Linux targets."""
+    source_dir = _get_builtin_tool_source(
+        PYTORCH_COLLECT_TOOL_NAME,
+        "pytorch_collect/cli.py",
+    )
+    package_dir = source_dir / "pytorch_collect"
+    version = get_engine_version()
+    destination_dir = tools_dir / PYTORCH_COLLECT_TOOL_NAME / version
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    archives: list[Path] = []
+    for os_name, arch in PYTORCH_COLLECT_TARGETS:
+        archive_name = f"{PYTORCH_COLLECT_TOOL_NAME}-{os_name}-{arch}.tar.gz"
+        output_file = destination_dir / archive_name
+        print(f"[{PYTORCH_COLLECT_TOOL_NAME}] Creating {archive_name} …")
+        with tarfile.open(output_file, "w:gz") as archive:
+            archive.add(
+                package_dir,
+                arcname="pytorch_collect",
+                filter=lambda info: None
+                if "__pycache__" in Path(info.name).parts
+                or info.name.endswith(".pyc")
+                else info,
+            )
+        print(f"[{PYTORCH_COLLECT_TOOL_NAME}] Package created: {output_file}")
+        archives.append(output_file)
+
+    return tuple(archives)
+
+
+# ------------------------------------------------------------------------------
+# parquet-writer
+# ------------------------------------------------------------------------------
+
+
+def package_parquet_writer(tools_dir: Path) -> tuple[Path, ...]:
+    """Package the shared Python wrapper and pure-Go writer for Linux targets."""
+    return package_builtin_go_tool(
+        Path(PARQUET_WRITER_TOOL_NAME),
+        PARQUET_WRITER_TOOL_NAME,
+        PARQUET_WRITER_TARGETS,
+        tools_dir,
+        additional_files=(Path("apx_parquet_writer.py"),),
+    )
 
 
 # ------------------------------------------------------------------------------
@@ -414,6 +464,10 @@ def package_tool(
         package_target_agent(tools_dir)
     elif tool == SYSUTIL_TOOL_NAME:
         package_sysutil_timeline(tools_dir)
+    elif tool == PYTORCH_COLLECT_TOOL_NAME:
+        package_pytorch_collect(tools_dir)
+    elif tool == PARQUET_WRITER_TOOL_NAME:
+        package_parquet_writer(tools_dir)
     elif tool == PARQUET_TO_JSON_TOOL_NAME:
         package_parquet_to_json(tools_dir)
     else:

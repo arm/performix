@@ -353,9 +353,7 @@ function buildTimelineVisualization(args) {
 }
 
 /**
- * Convert the temporary neoprof capture-metadata JSON contract into the
- * provider-owned Timeline domain. The JSON is produced from
- * capture_metadata.parquet by the parquet-to-json converter.
+ * Convert neoprof capture metadata into the Timeline domain.
  *
  * @param {{
  *   timelineSources: TimelineSource[],
@@ -368,18 +366,13 @@ function buildTimelineVisualization(args) {
  * @returns {{visualizations: any[]}}
  */
 function buildNeoprofTimelineVisualization(args) {
+  const captureRow = args.captureMetadata;
   if (
-    !Array.isArray(args.captureMetadata) ||
-    args.captureMetadata.length !== 1
+    !captureRow ||
+    typeof captureRow !== 'object' ||
+    Array.isArray(captureRow)
   ) {
-    throw new Error(
-      'Timeline capture metadata must contain exactly one capture row',
-    );
-  }
-
-  const captureRow = args.captureMetadata[0];
-  if (!captureRow || typeof captureRow !== 'object') {
-    throw new Error('Timeline capture metadata row must be an object');
+    throw new Error('Timeline capture metadata must be an object');
   }
   const capture = /** @type {{duration?: unknown, time_unit?: unknown}} */ (
     captureRow

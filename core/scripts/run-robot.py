@@ -55,8 +55,10 @@ Arguments:
                           Overrides the default dd command. Optional.
   --include-tags TAG      Robot tag to include. May be repeated.
   --exclude-tags TAG      Additional Robot tag to exclude. May be repeated.
+                          Tests tagged mcp-functional are excluded by default;
+                          include that tag to opt in.
   --run-remote-localhost  Enable remote-localhost setup and additionally run tests
-                          with the remote-localhost tag.
+                          with the remote-localhost tag (excluded by default).
   --fail-fast             Stop the Robot run on the first test failure.
   --retry-failed-count N  Immediately retry a failed Robot test up to N times.
   --results-dir DIR       Where Robot writes output files (default: robot/results).
@@ -125,7 +127,7 @@ REPO_ROOT = os.path.abspath(os.path.join(CORE_ROOT, os.pardir))
 TARGET_CONFIG_DIR = os.path.join(CORE_ROOT, "robot", "resources", "files", "targets")
 SSH_OPTS = ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=15"]
 REMOTE_LOCALHOST_TAG = "remote-localhost"
-
+MCP_FUNCTIONAL_TAG = "mcp-functional"
 # Remote directory layout for the remote-localhost test setup.
 REMOTE_BASE = "/tmp/apx-remote-localhost"
 REMOTE_REPO = f"{REMOTE_BASE}/repo"
@@ -205,7 +207,7 @@ def parse_args():
         help=(
             "Copy the repo to the remote target, install Go/gcc if needed, "
             "generate required source, and build the apx CLI natively. "
-            f"Then include {REMOTE_LOCALHOST_TAG} tests."
+            f"Then include {REMOTE_LOCALHOST_TAG} tests (excluded by default)."
         ),
     )
     parser.add_argument(
@@ -253,7 +255,10 @@ def parse_args():
         action="append",
         default=[],
         metavar="TAG",
-        help="Robot tag to include. May be repeated.",
+        help=(
+            "Robot tag to include. May be repeated. Tests tagged mcp-functional "
+            "are excluded by default; include that tag to opt in."
+        ),
     )
     parser.add_argument(
         "--exclude-tags",
@@ -433,8 +438,12 @@ def setup_remote_localhost(target, dry_run=False, force=False):
                 # Exclude generated Robot output.
                 if parts[:3] == ["core", "robot", "results"]:
                     return None
-                # Exclude the core/env virtual environment created by setup-venv.sh.
-                if parts[:2] == ["core", "env"]:
+                # Exclude virtual environments created by setup-venv.sh.
+                if (
+                    len(parts) > 1
+                    and parts[0] == "core"
+                    and (parts[1] == "env" or parts[1].startswith("env-"))
+                ):
                     return None
                 # get-tools.py creates release-specific copies of the complete tool
                 # tree. The remote build only consumes core/apap-cli/tools.
@@ -614,6 +623,9 @@ def build_robot_command(args, target):
 
     if not args.run_remote_localhost:
         exclude_expr += f"OR{REMOTE_LOCALHOST_TAG}"
+
+    if MCP_FUNCTIONAL_TAG not in args.include_tags:
+        exclude_expr += f"OR{MCP_FUNCTIONAL_TAG}"
 
     for tag in args.exclude_tags:
         exclude_expr += f"OR{tag}"

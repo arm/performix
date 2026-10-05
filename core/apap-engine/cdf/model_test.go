@@ -181,6 +181,55 @@ func TestModelResolveExpectedComponentType(t *testing.T) {
 	})
 }
 
+func TestModelResolvesCompressedPhysicalPaths(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	typeCSV := ComponentType{Name: "csv", SchemaVersion: "1.0"}
+	model := NewOnDiskModel("/run", &Manifest{Entries: []ManifestEntry{
+		{Path: "output/exact.csv", ComponentType: typeCSV, Compressed: true},
+		{Path: "output/glob-*.csv", ComponentType: typeCSV, Compressed: true},
+		{Path: "output/ordinary.zst", ComponentType: typeCSV},
+		{Path: "output/*", ComponentType: typeCSV, Compressed: true},
+	}}, Metadata{})
+	model.FS = fs
+	require.NoError(t, fs.MkdirAll("/run/output", perms.LocalDirPerm))
+	for _, path := range []string{
+		"/run/output/exact.csv.zst",
+		"/run/output/glob-one.csv.zst",
+		"/run/output/ordinary.zst",
+	} {
+		file, err := fs.Create(path)
+		require.NoError(t, err)
+		require.NoError(t, file.Close())
+	}
+
+	exact, err := model.ResolveComponent("output/exact.csv")
+	require.NoError(t, err)
+	require.Equal(t, "output/exact.csv", exact.RelativePath)
+	require.Equal(t, filepath.FromSlash("/run/output/exact.csv.zst"), exact.AbsolutePath)
+	require.True(t, exact.Compressed)
+
+	concrete, err := model.ResolveComponentByManifestPattern("output/glob-one.csv")
+	require.NoError(t, err)
+	require.Equal(t, "output/glob-*.csv", concrete.RelativePath)
+	require.Equal(t, filepath.FromSlash("/run/output/glob-one.csv.zst"), concrete.AbsolutePath)
+	require.True(t, concrete.Compressed)
+
+	components, err := model.FindComponents("output/**")
+	require.NoError(t, err)
+	require.Len(t, components, 3)
+	require.Equal(t, filepath.FromSlash("/run/output/exact.csv.zst"), components[0].AbsolutePath)
+	require.Equal(t, "output/glob-one.csv", components[1].RelativePath)
+	require.Equal(t, filepath.FromSlash("/run/output/glob-one.csv.zst"), components[1].AbsolutePath)
+	require.Equal(t, "output/ordinary.zst", components[2].RelativePath)
+	require.False(t, components[2].Compressed)
+
+	listed, err := model.ListEntityComponents(Entity{RelativePath: "output"})
+	require.NoError(t, err)
+	require.Len(t, listed, 3)
+	require.Equal(t, "output/ordinary.zst", listed[2].RelativePath)
+	require.False(t, listed[2].Compressed)
+}
+
 func TestModelFindEntities(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	model := NewOnDiskModel("/a/model", &Manifest{}, Metadata{})
@@ -557,6 +606,7 @@ func TestModelListEntityComponents(t *testing.T) {
 				unknownComponentType,
 				"component_in_root",
 				filepath.FromSlash("/a/model/component_in_root"),
+				false,
 			},
 		}, components)
 	})
@@ -569,6 +619,7 @@ func TestModelListEntityComponents(t *testing.T) {
 				cType1,
 				"entity1/component1",
 				filepath.FromSlash("/a/model/entity1/component1"),
+				false,
 			},
 		}, components)
 	})
@@ -581,11 +632,13 @@ func TestModelListEntityComponents(t *testing.T) {
 				cType2,
 				"entity1/sub/sub_component1",
 				filepath.FromSlash("/a/model/entity1/sub/sub_component1"),
+				false,
 			},
 			{
 				cType3,
 				"entity1/sub/sub_component2",
 				filepath.FromSlash("/a/model/entity1/sub/sub_component2"),
+				false,
 			},
 		}, components)
 	})
@@ -635,6 +688,7 @@ func TestModelListEntityComponentsByTypeName(t *testing.T) {
 				cType1,
 				"entity1/component1",
 				filepath.FromSlash("/a/model/entity1/component1"),
+				false,
 			},
 		}, components)
 	})

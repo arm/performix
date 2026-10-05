@@ -11,7 +11,7 @@ project_name: apx-agent
 
 before:
   hooks:
-    - bash ./core/scripts/go/generate-all.sh
+    - '"{{ envOrDefault "PERFORMIX_PYTHON_EXECUTABLE" "python3" }}" ./core/scripts/run-bash.py ./core/scripts/go/generate-all.sh'
 
 builds:
   - id: apx-agent

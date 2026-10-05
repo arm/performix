@@ -248,6 +248,24 @@ func TestNewSourceMapper(t *testing.T) {
 	})
 }
 
+func TestNewSourceMapperFromModelReadsCompressedComponent(t *testing.T) {
+	sourceRoot := t.TempDir()
+	hostSource := filepath.Join(sourceRoot, "source.cpp")
+	require.NoError(t, os.WriteFile(hostSource, []byte("source"), perms.LocalFilePerm))
+
+	component := writeCompressedComponent(t, run.SourceCodeFilename, []byte(fmt.Sprintf(`{"paths":[%q]}`, sourceRoot)))
+	model := cdf.NewOnDiskModel(filepath.Dir(component.AbsolutePath), &cdf.Manifest{Entries: []cdf.ManifestEntry{{
+		Path:          run.SourceCodeFilename,
+		ComponentType: run.SourceCodeCT(),
+		Compressed:    true,
+	}}}, cdf.Metadata{})
+
+	mapped := newSourceMapperFromModel(model)("/target/source.cpp")
+
+	require.True(t, mapped.Valid)
+	assert.Equal(t, hostSource, mapped.String)
+}
+
 func TestMapFilePaths(t *testing.T) {
 	sourceFilesTableName := "temp"
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dop251/goja"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -70,8 +71,55 @@ func TestCodeHotspotsResolvesAndroidToolBundles(t *testing.T) {
 	assert.ElementsMatch(t, []toolBundleIdentity{
 		{Name: "sl-record", Locality: deploymentsupport.DeploymentLocalityTarget},
 		{Name: "sl-analyze", Locality: deploymentsupport.DeploymentLocalityHost},
-		{Name: "parquet-to-json", Locality: deploymentsupport.DeploymentLocalityHost},
 	}, identities)
+}
+
+func TestCodeHotspotsResolvesJavaConverterBundle(t *testing.T) {
+	recipePath := filepath.Join("..", "..", "..", "core", "apap-cli", "recipes", "code_hotspots.js")
+	recipeData, err := os.ReadFile(recipePath)
+	require.NoError(t, err)
+
+	parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
+	parsedRecipe, err := parser.ParseRecipe(recipePath, string(recipeData))
+	require.NoError(t, err)
+
+	toolPath := filepath.Join("..", "..", "..", "core", "apap-cli", "tool-integrations", "neoprof.js")
+	toolData, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+	neoprof, err := tool_goja.LoadFromSource(string(toolData), toolPath)
+	require.NoError(t, err)
+
+	for _, enabled := range []bool{false, true} {
+		name := "without Java stacks"
+		if enabled {
+			name = "with Java stacks"
+		}
+		t.Run(name, func(t *testing.T) {
+			paramValues, err := parameters.BindRecipeParameters(map[string]any{
+				"collect_java_stacks": enabled,
+			}, parsedRecipe.Parameters, parsedRecipe.Name)
+			require.NoError(t, err)
+			bundles, err := deploymentsupport.ResolveToolBundles(
+				context.Background(),
+				conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64},
+				&paramValues,
+				parsedRecipe.Deployments,
+				func(name, _ string) ([]deploymentsupport.DeploymentDeclaration, error) {
+					assert.Equal(t, "neoprof", name)
+					return neoprof.Deployments(), nil
+				},
+			)
+			require.NoError(t, err)
+			found := false
+			for _, bundle := range bundles {
+				if bundle.Name == "parquet-to-json" {
+					found = true
+					assert.Equal(t, deploymentsupport.DeploymentLocalityTarget, bundle.Locality)
+				}
+			}
+			assert.Equal(t, enabled, found, "Java collection must deploy the recording-index converter")
+		})
+	}
 }
 
 func TestCPUMicroarchitectureOptionsAreEmptyWithoutTelemetry(t *testing.T) {
@@ -109,10 +157,11 @@ func TestCodeHotspotsParamsInToolConfigs(t *testing.T) {
 		toolName            string
 		toolVersion         string
 		expectManagedStacks bool
+		expectJFR           bool
 	}{
-		{os: "Android", toolName: "neoprof", toolVersion: "1.1.0", expectManagedStacks: false},
-		{os: "Linux", toolName: "neoprof", toolVersion: "1.1.0", expectManagedStacks: true},
-		{os: "Windows", toolName: "wperf", toolVersion: "1.0.1", expectManagedStacks: false},
+		{os: "Android", toolName: "neoprof", toolVersion: "1.1.0", expectManagedStacks: false, expectJFR: false},
+		{os: "Linux", toolName: "neoprof", toolVersion: "1.1.0", expectManagedStacks: true, expectJFR: true},
+		{os: "Windows", toolName: "wperf", toolVersion: "1.0.1", expectManagedStacks: false, expectJFR: false},
 	}
 
 	for _, test := range tests {
@@ -127,6 +176,7 @@ func TestCodeHotspotsParamsInToolConfigs(t *testing.T) {
 			paramValues, err := parameters.BindRecipeParameters(map[string]any{
 				"collect_java_stacks":   true,
 				"collect_dotnet_stacks": true,
+				"rich_data_capture":     true,
 				"sampling_freq":         "high",
 			}, parsedRecipe.Parameters, parsedRecipe.Name)
 			require.NoError(t, err)
@@ -144,6 +194,7 @@ func TestCodeHotspotsParamsInToolConfigs(t *testing.T) {
 			execCtx.On("ToolsDir").Return("/data/local/tmp/ArmPerformix/tools")
 			execCtx.On("IsFullCaptureSupportEnabled").Return(false)
 			execCtx.On("IsNeoprofTimelineEnabled").Return(false)
+			execCtx.On("IsJfrCaptureEnabled").Return(true)
 			hasExpectedParams := mock.MatchedBy(func(contexts []tool.IntegrationContext) bool {
 				if len(contexts) != 1 {
 					return false
@@ -155,12 +206,21 @@ func TestCodeHotspotsParamsInToolConfigs(t *testing.T) {
 				if params["mode"] != "samples" || params["sampling_frequency"] != "high" {
 					return false
 				}
+				if test.os != "Windows" && params["rich_data_capture"] != true {
+					return false
+				}
+				if _, hasCoreFilter := params["filter_core_numbers"]; hasCoreFilter {
+					return false
+				}
 				javaStacks, hasJavaStacks := params["collect_java_stacks"]
+				collectJFR, hasCollectJFR := params["collect_jfr"]
 				dotnetStacks, hasDotnetStacks := params["collect_dotnet_stacks"]
 				if test.expectManagedStacks {
-					return hasJavaStacks && javaStacks == true && hasDotnetStacks && dotnetStacks == true
+					return hasJavaStacks && javaStacks == true &&
+						hasCollectJFR && collectJFR == test.expectJFR &&
+						hasDotnetStacks && dotnetStacks == true
 				}
-				return !hasJavaStacks && !hasDotnetStacks
+				return !hasJavaStacks && !hasCollectJFR && !hasDotnetStacks
 			})
 			execCtx.On(
 				"ProbeToolsFromIntegrations",
@@ -194,6 +254,162 @@ func TestCodeHotspotsParamsInToolConfigs(t *testing.T) {
 			_, err = runStage.Execute(&recipe.StageContext{Context: t.Context()})
 			require.NoError(t, err)
 		})
+	}
+}
+
+func TestJavaRenderUsesProcessSelection(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "apap-cli", "recipes", "lib", "java_analysis_render.js"))
+	require.NoError(t, err)
+	for _, workload := range []string{"Launch", "Attach", "System Wide"} {
+		for _, scenario := range []struct {
+			name, selectedPID, recordings, predicate string
+		}{
+			{"no process selected", "null", `[{recording_id: 1, jvm_pid: 99}, {recording_id: 0, jvm_pid: 42}]`, "recording_id IN (0)"},
+			{"selected JVM", "99", `[{recording_id: 1, jvm_pid: 99}, {recording_id: 0, jvm_pid: 42}]`, "recording_id IN (1)"},
+			{"multiple recordings for selected JVM", "42", `[{recording_id: 2, jvm_pid: 42}, {recording_id: 1, jvm_pid: 99}, {recording_id: 0, jvm_pid: 42}]`, "recording_id IN (0, 2)"},
+			{"PID without recording", "123", `[{recording_id: 0, jvm_pid: 42}]`, ""},
+			{"invalid index", "42", "null", ""},
+			{"empty index", "42", "[]", ""},
+		} {
+			t.Run(workload+"/"+scenario.name, func(t *testing.T) {
+				vm := goja.New()
+				require.NoError(t, vm.Set("workloadType", workload))
+				_, err := vm.RunString("var module = {exports: {}};\n" + string(data))
+				require.NoError(t, err)
+				_, err = vm.RunString(`
+function renderJava(selectedPid, recordings) {
+  return buildJavaAnalysisRender({
+    getRunDescriptions: () => [{WorkloadType: workloadType}],
+    getRenderParameter: name => { if (name !== 'filter_pid') throw new Error('Unexpected filter'); return selectedPid; },
+    listRunComponents: (_, path) => path.endsWith('launch.json') ? [] : [{}],
+    readRunComponent: () => JSON.stringify(recordings),
+    logWarn: () => {},
+  }, 'java', []);
+}
+function sql(result) { return result.renderers.find(r => r.id === 'java_summary').config.sql; }
+`)
+				require.NoError(t, err)
+				_, err = vm.RunString("var result = renderJava(" + scenario.selectedPID + ", " + scenario.recordings + ");")
+				require.NoError(t, err)
+				filters, err := vm.RunString("result.ui.side_panel_filters.length")
+				require.NoError(t, err)
+				assert.Zero(t, filters.ToInteger(), "No separate Recording filter")
+				targetInfo, err := vm.RunString("result.renderers.some(r => r.id === 'target_info')")
+				require.NoError(t, err)
+				assert.False(t, targetInfo.ToBoolean(), "The owning recipe provides target information")
+				if scenario.name == "invalid index" {
+					count, err := vm.RunString("result.ui.visualizations.length + result.renderers.length")
+					require.NoError(t, err)
+					assert.Zero(t, count.ToInteger(), "Java views must be hidden")
+				} else {
+					query, err := vm.RunString("sql(result)")
+					require.NoError(t, err)
+					predicate := scenario.predicate
+					if predicate == "" || (workload == "System Wide" && scenario.selectedPID == "null") {
+						predicate = "WHERE FALSE"
+					}
+					assert.Contains(t, query.String(), predicate)
+				}
+			})
+		}
+	}
+}
+
+func TestCodeHotspotsIncludesJavaFlightRecorderVisualisations(t *testing.T) {
+	recipePath := filepath.Join("..", "..", "..", "core", "apap-cli", "recipes", "code_hotspots.js")
+	recipeData, err := os.ReadFile(recipePath)
+	require.NoError(t, err)
+
+	parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
+	parsedRecipe, err := parser.ParseRecipe(recipePath, string(recipeData))
+	require.NoError(t, err)
+	for _, parameter := range parsedRecipe.RenderParameters {
+		assert.NotEqual(t, "recording_id", parameter.ID)
+	}
+
+	boundRenderParams, err := parameters.BindRenderParameters(map[string]any{"filter_pid": float64(42)}, parsedRecipe.RenderParameters, parsedRecipe.Name)
+	require.NoError(t, err)
+
+	const javaParquetRoot = "tool/neoprof/0/java/parquet"
+	manifest := &cdf.Manifest{Entries: []cdf.ManifestEntry{
+		{Path: javaParquetRoot + "/metadata/jfr_recordings.json"},
+		{Path: javaParquetRoot + "/metadata/jfr_recordings.parquet"},
+		{Path: javaParquetRoot + "/events/jfr_jvm_information.parquet"},
+		{Path: javaParquetRoot + "/events/jfr_initial_system_property.parquet"},
+		{Path: javaParquetRoot + "/events/jfr_gc_heap_summary.parquet"},
+		{Path: javaParquetRoot + "/events/jfr_garbage_collection.parquet"},
+	}}
+	runRoot := t.TempDir()
+	recordingsPath := filepath.Join(runRoot, javaParquetRoot, "metadata", "jfr_recordings.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(recordingsPath), 0o755))
+	require.NoError(t, os.WriteFile(recordingsPath, []byte(`[{"recording_id":0,"jvm_pid":42}]`), 0o644))
+	runModel := cdf.NewOnDiskModel(runRoot, manifest, cdf.Metadata{})
+	renderNotifier := &runtime.RendererStageCollector{}
+	recipeStage := &stages.CustomRecipeStage{
+		StageName:     parsedRecipe.RenderStages[0].Name(),
+		ScriptedStage: parsedRecipe.RenderStages[0],
+		Ctx: &recipe.RunExecutionContext{
+			RecipeCtx: &recipe.RecipeCtx{RenderParamValues: boundRenderParams.CollapseToMap()},
+			RunDescriptions: []*run.RunDescription{{
+				Parameters: map[string]any{"mode": "dynamic"},
+				ToolsUsed:  []cdf.ToolUsed{{Tool: "neoprof", Version: "1.1.0"}},
+			}},
+			RunModels: []cdf.ModelView{runModel},
+		},
+	}
+
+	_, err = recipeStage.Execute(&recipe.StageContext{RendererNotifier: renderNotifier})
+	require.NoError(t, err)
+
+	initialOutput := renderNotifier.Output
+	for _, workloadType := range []string{"Launch", "Attach", "System Wide"} {
+		for _, pid := range []any{nil, float64(123), float64(42)} {
+			execution := recipeStage.Ctx.(*recipe.RunExecutionContext)
+			execution.RunDescriptions[0].WorkloadType = workloadType
+			execution.RecipeCtx.RenderParamValues["filter_pid"] = pid
+			renderNotifier = &runtime.RendererStageCollector{}
+			_, err = recipeStage.Execute(&recipe.StageContext{RendererNotifier: renderNotifier})
+			require.NoError(t, err)
+			rendererIDs := func(output recipe.RenderOutput) []string {
+				ids := []string{}
+				for _, renderer := range output.Renderers {
+					ids = append(ids, renderer.ID+":"+renderer.Type)
+				}
+				return ids
+			}
+			widgetIDs := func(output recipe.RenderOutput) []string {
+				ids := []string{}
+				for _, widget := range output.Widgets {
+					ids = append(ids, widget.ID+":"+widget.Type+":"+widget.RendererID)
+				}
+				return ids
+			}
+			assert.Equal(t, rendererIDs(initialOutput), rendererIDs(renderNotifier.Output), "%s PID %v", workloadType, pid)
+			assert.Equal(t, widgetIDs(initialOutput), widgetIDs(renderNotifier.Output), "%s PID %v", workloadType, pid)
+		}
+	}
+
+	widgetsByID := make(map[string]recipe.WidgetConfig, len(renderNotifier.Output.Widgets))
+	for _, widget := range renderNotifier.Output.Widgets {
+		widgetsByID[widget.ID] = widget
+	}
+
+	jvmInfo := widgetsByID["jvm_info"]
+	assert.Equal(t, "java_analysis_summary", jvmInfo.Type)
+	assert.Equal(t, "JVM Info", jvmInfo.Title)
+
+	timeline := widgetsByID["timeline"]
+	assert.Equal(t, "timeline", timeline.Type)
+	groups, ok := timeline.Config["groups"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, groups, "heap_summary")
+
+	assert.NotContains(t, widgetsByID, "jfr_recording")
+	for _, renderer := range renderNotifier.Output.Renderers {
+		if renderer.ID == "java_summary" || renderer.ID == "jvm_heap_timeline" {
+			assert.Contains(t, renderer.Config["sql"], "recording_id IN (0)")
+			assert.NotContains(t, renderer.Config["sql"], "MIN(recording_id)")
+		}
 	}
 }
 
@@ -236,6 +452,169 @@ func TestCPUMicroarchitectureReadinessFailsWithoutTelemetry(t *testing.T) {
 		readiness.Advice[0].AdviceMessage.Code(),
 	)
 	assert.Equal(t, map[string]string{"cpuName": "Cortex-A76"}, readiness.Advice[0].AdviceMessage.Metadata())
+}
+
+func TestCPUMicroarchitectureFiltersInitialAnalysisToFirstSupportedCoreType(t *testing.T) {
+	recipePath := filepath.Join("..", "..", "..", "core", "apap-cli", "recipes", "cpu_microarchitecture.js")
+	recipeData, err := os.ReadFile(recipePath)
+	require.NoError(t, err)
+
+	parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
+	parsedRecipe, err := parser.ParseRecipe(recipePath, string(recipeData))
+	require.NoError(t, err)
+	boundParameters, err := parameters.BindRecipeParameters(
+		map[string]any{"metrics_group": []string{"topdown_l1"}},
+		parsedRecipe.Parameters,
+		parsedRecipe.Name,
+	)
+	require.NoError(t, err)
+
+	recipeContext := &recipe.RecipeCtx{
+		OutputDir:        t.TempDir(),
+		ResolvedWorkload: &tool.WorkloadSystemWide{},
+		ParamValues:      boundParameters,
+		RecipeMetadata:   recipe.RecipeMetadata{Name: parsedRecipe.Name},
+		ToolVersions:     parsedRecipe.ToolVersions,
+	}
+	executionContext := newMockExecutionContext(t, recipeContext, &target.Description{
+		Os:             target.OsInfo{OSFamily: "Linux"},
+		PrimaryCPUName: "Unsupported Primary",
+		CPUs: []target.CPUDescription{
+			{CoreNumber: 3, Name: "Neoverse-V2"},
+			{CoreNumber: 2, Name: "Neoverse-N1"},
+			{CoreNumber: 0, Name: "Unsupported Primary"},
+			{CoreNumber: 1, Name: "Neoverse-N1"},
+		},
+	})
+	executionContext.On("ToolVersions").Return(parsedRecipe.ToolVersions)
+	executionContext.On("ToolsDir").Return(t.TempDir())
+	executionContext.On("IsFullCaptureSupportEnabled").Return(false)
+	executionContext.On("IsNeoprofTimelineEnabled").Return(false)
+	executionContext.On("LogInfo", mock.Anything, mock.Anything).Return()
+
+	var configuredCoreNumbers []string
+	captureCoreNumbers := func(arguments mock.Arguments) {
+		contexts := arguments.Get(2).([]tool.IntegrationContext)
+		require.Len(t, contexts, 1)
+		coreNumbers, ok := contexts[0].Params["filter_core_numbers"].(string)
+		require.True(t, ok)
+		configuredCoreNumbers = append(configuredCoreNumbers, coreNumbers)
+	}
+	executionContext.
+		On("ProbeToolsFromIntegrations", mock.Anything, mock.Anything, mock.Anything).
+		Run(captureCoreNumbers).
+		Return([]tool.ProbeResult{{Available: true}}, []error(nil)).
+		Once()
+	executionContext.
+		On("RunToolIntegrations", mock.Anything, mock.Anything, mock.Anything).
+		Run(captureCoreNumbers).
+		Return(func() {}, []error(nil)).
+		Once()
+
+	readyStage := &stages.CustomRecipeStage{
+		StageName:     parsedRecipe.ReadyStages[0].Name(),
+		ScriptedStage: parsedRecipe.ReadyStages[0],
+		Ctx:           executionContext,
+	}
+	_, err = readyStage.Execute(&recipe.StageContext{
+		Context:           t.Context(),
+		ReadinessNotifier: &recipe.NullReadinessNotifier{},
+	})
+	require.NoError(t, err)
+
+	runStage := &stages.CustomRecipeStage{
+		StageName:     parsedRecipe.RunStages[0].Name(),
+		ScriptedStage: parsedRecipe.RunStages[0],
+		Ctx:           executionContext,
+	}
+	_, err = runStage.Execute(&recipe.StageContext{Context: t.Context()})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{
+		"1,2",
+		"1,2",
+	}, configuredCoreNumbers)
+}
+
+func TestInstructionMixFiltersInitialAnalysisToFirstSupportedCoreType(t *testing.T) {
+	recipePath := filepath.Join("..", "..", "..", "core", "apap-cli", "recipes", "instruction_mix.js")
+	recipeData, err := os.ReadFile(recipePath)
+	require.NoError(t, err)
+
+	parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
+	parsedRecipe, err := parser.ParseRecipe(recipePath, string(recipeData))
+	require.NoError(t, err)
+	boundParameters, err := parameters.BindRecipeParameters(
+		map[string]any{"mode": "dynamic"},
+		parsedRecipe.Parameters,
+		parsedRecipe.Name,
+	)
+	require.NoError(t, err)
+
+	recipeContext := &recipe.RecipeCtx{
+		OutputDir:        t.TempDir(),
+		ResolvedWorkload: &tool.WorkloadSystemWide{},
+		ParamValues:      boundParameters,
+		RecipeMetadata:   recipe.RecipeMetadata{Name: parsedRecipe.Name},
+		ToolVersions:     parsedRecipe.ToolVersions,
+	}
+	executionContext := newMockExecutionContext(t, recipeContext, &target.Description{
+		Os:             target.OsInfo{OSFamily: "Linux"},
+		PrimaryCPUName: "Unsupported Primary",
+		CPUs: []target.CPUDescription{
+			{CoreNumber: 3, Name: "Neoverse-V2"},
+			{CoreNumber: 2, Name: "Neoverse-N1"},
+			{CoreNumber: 0, Name: "Unsupported Primary"},
+			{CoreNumber: 1, Name: "Neoverse-N1"},
+		},
+	})
+	executionContext.On("ToolVersions").Return(parsedRecipe.ToolVersions)
+	executionContext.On("ToolsDir").Return(t.TempDir())
+	executionContext.On("IsFullCaptureSupportEnabled").Return(false)
+	executionContext.On("IsNeoprofTimelineEnabled").Return(false)
+
+	var configuredCoreNumbers []string
+	captureCoreNumbers := func(arguments mock.Arguments) {
+		contexts := arguments.Get(2).([]tool.IntegrationContext)
+		require.Len(t, contexts, 1)
+		coreNumbers, ok := contexts[0].Params["filter_core_numbers"].(string)
+		require.True(t, ok)
+		configuredCoreNumbers = append(configuredCoreNumbers, coreNumbers)
+	}
+	executionContext.
+		On("ProbeToolsFromIntegrations", mock.Anything, mock.Anything, mock.Anything).
+		Run(captureCoreNumbers).
+		Return([]tool.ProbeResult{{Available: true}}, []error(nil)).
+		Once()
+	executionContext.
+		On("RunToolIntegrations", mock.Anything, mock.Anything, mock.Anything).
+		Run(captureCoreNumbers).
+		Return(func() {}, []error(nil)).
+		Once()
+
+	readyStage := &stages.CustomRecipeStage{
+		StageName:     parsedRecipe.ReadyStages[0].Name(),
+		ScriptedStage: parsedRecipe.ReadyStages[0],
+		Ctx:           executionContext,
+	}
+	_, err = readyStage.Execute(&recipe.StageContext{
+		Context:           t.Context(),
+		ReadinessNotifier: &recipe.NullReadinessNotifier{},
+	})
+	require.NoError(t, err)
+
+	runStage := &stages.CustomRecipeStage{
+		StageName:     parsedRecipe.RunStages[1].Name(),
+		ScriptedStage: parsedRecipe.RunStages[1],
+		Ctx:           executionContext,
+	}
+	_, err = runStage.Execute(&recipe.StageContext{Context: t.Context()})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{
+		"1,2",
+		"1,2",
+	}, configuredCoreNumbers)
 }
 
 func TestCPUMicroarchitectureWarnsAboutSoftLockupRisk(t *testing.T) {
@@ -499,6 +878,14 @@ func executeCPUMicroarchitectureReadiness(t *testing.T, opts cpuMicroarchitectur
 		Os:             target.OsInfo{OSFamily: osFamily},
 		PrimaryCPUName: "Neoverse-N1",
 		CPUs:           make([]target.CPUDescription, cpuCount),
+	}
+	var coreNumber uint32
+	for index := range targetInfo.CPUs {
+		targetInfo.CPUs[index] = target.CPUDescription{
+			CoreNumber: coreNumber,
+			Name:       targetInfo.PrimaryCPUName,
+		}
+		coreNumber++
 	}
 	executionContext := newMockExecutionContext(t, recipeContext, targetInfo)
 	executionContext.On("ToolVersions").Return(recipeDefinition.ToolVersions)
@@ -982,129 +1369,254 @@ func TestRerenderCapableRecipesWireFilteringParameters(t *testing.T) {
 	}
 }
 
-func TestJavaAnalysisRenderContract(t *testing.T) {
-	recipePath := filepath.Join("..", "..", "..", "core", "apap-cli", "recipes", "java_analysis.js")
+func TestCodeHotspotsCoreTypeFiltering(t *testing.T) {
+	recipePath := filepath.Join("..", "..", "..", "core", "apap-cli", "recipes", "code_hotspots.js")
 	recipeData, err := os.ReadFile(recipePath)
 	require.NoError(t, err)
 
 	parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
-	recipeProp, err := parser.ParseRecipe(recipePath, string(recipeData))
+	parsedRecipe, err := parser.ParseRecipe(recipePath, string(recipeData))
 	require.NoError(t, err)
 
-	require.Len(t, recipeProp.RenderParameters, 1)
-	assert.Equal(t, "recording_id", recipeProp.RenderParameters[0].ID)
-	assert.Equal(t, parameters.RenderParameterValueTypeString, recipeProp.RenderParameters[0].Type)
-
-	output := executeFilteredRenderStage(t, recipeProp, true, map[string]any{})
-	widgetsByID := make(map[string]recipe.WidgetConfig, len(output.Widgets))
-	for _, widget := range output.Widgets {
-		widgetsByID[widget.ID] = widget
+	render := func(renderParams map[string]any, richDataCapture bool) (map[string]recipe.RendererConfig, map[string]recipe.WidgetConfig) {
+		output := executeFilteredRenderStage(t, parsedRecipe, true, renderParams, &run.RunDescription{
+			Parameters: map[string]any{"rich_data_capture": richDataCapture},
+			RunResult:  string(run.RecipeSuccess),
+		})
+		renderers := make(map[string]recipe.RendererConfig, len(output.Renderers))
+		for _, renderer := range output.Renderers {
+			renderers[renderer.ID] = renderer
+		}
+		widgets := make(map[string]recipe.WidgetConfig, len(output.Widgets))
+		for _, widget := range output.Widgets {
+			widgets[widget.ID] = widget
+		}
+		return renderers, widgets
 	}
 
-	summary := widgetsByID["java_analysis_summary"]
-	assert.Equal(t, "java_analysis_summary", summary.Type)
-	assert.Equal(t, "Summary", summary.Title)
-	assert.Equal(t, "visualizations", summary.Placement)
+	unfilteredRenderers, widgets := render(map[string]any{}, true)
+	assert.NotContains(t, unfilteredRenderers["sl_analyze"].Config, "filter_core_type")
+	assert.NotContains(t, unfilteredRenderers["flat"].Config, "cpu_name")
+	assert.NotContains(t, unfilteredRenderers["drilldown"].Config, "cpu_name")
+	assert.Equal(t, "SupportedCoreTypes", unfilteredRenderers["supported_core_types"].Type)
+	assert.Equal(t, true, widgets["core_type"].Config["allowNone"])
+	assert.Nil(t, widgets["core_type"].Disabled)
 
-	garbageCollection := widgetsByID["java_analysis_garbage_collection"]
-	assert.Equal(t, "timeline", garbageCollection.Type)
-	assert.Equal(t, "Garbage Collection", garbageCollection.Title)
-	assert.Equal(t, "visualizations", garbageCollection.Placement)
-	assert.Equal(t, "jvm_heap_timeline", garbageCollection.RendererID)
-	assert.Len(t, output.Widgets, 3)
+	filteredRenderers, _ := render(map[string]any{"filter_core_type": "Neoverse-V2"}, true)
+	assert.Equal(t, "Neoverse-V2", filteredRenderers["sl_analyze"].Config["filter_core_type"])
+	assert.Equal(t, "Neoverse-V2", filteredRenderers["flat"].Config["cpu_name"])
+	assert.Equal(t, "Neoverse-V2", filteredRenderers["drilldown"].Config["cpu_name"])
 
-	groups, ok := garbageCollection.Config["groups"].(map[string]any)
-	require.True(t, ok)
-	heapSummary, ok := groups["heap_summary"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "line", heapSummary["type"])
-	heapSummaryConfig, ok := heapSummary["config"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "mebibyte", heapSummaryConfig["yAxisUnit"])
-	series, ok := heapSummaryConfig["series"].([]any)
-	require.True(t, ok)
-	require.Len(t, series, 3)
-	assert.Equal(t, "Used heap after GC", series[0].(map[string]any)["name"])
-	assert.Equal(t, "Committed heap", series[1].(map[string]any)["name"])
-	assert.Equal(t, "Reserved heap", series[2].(map[string]any)["name"])
+	disabledRenderers, disabledWidgets := render(map[string]any{"filter_core_type": "Neoverse-V2"}, false)
+	assert.NotContains(t, disabledRenderers["sl_analyze"].Config, "filter_core_type")
+	require.NotNil(t, disabledWidgets["core_type"].Disabled)
+}
 
-	filter := widgetsByID["jfr_recording"]
-	assert.Equal(t, "single_selection_list_filter", filter.Type)
-	assert.Equal(t, "side_panel_filters", filter.Placement)
-	assert.Equal(t, map[string]string{"value": "recording_id"}, filter.ParameterBindings)
+func TestCPUMicroarchitectureCoreTypeFiltering(t *testing.T) {
+	recipePath := filepath.Join("..", "..", "..", "core", "apap-cli", "recipes", "cpu_microarchitecture.js")
+	recipeData, err := os.ReadFile(recipePath)
+	require.NoError(t, err)
 
-	renderersByID := make(map[string]recipe.RendererConfig, len(output.Renderers))
-	for _, renderer := range output.Renderers {
-		renderersByID[renderer.ID] = renderer
-	}
-	for _, rendererID := range []string{
-		"jfr_recordings",
-		"jvm_info",
-		"jvm_system_properties",
-		"jvm_heap_summary",
-		"jvm_garbage_collections",
-		"jfr_recording_options",
-		"java_summary",
-		"jvm_heap_timeline",
+	parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
+	parsedRecipe, err := parser.ParseRecipe(recipePath, string(recipeData))
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		name                string
+		parameters          map[string]any
+		richDataCapture     bool
+		expected            string
+		expectsCoreRerender bool
+	}{
+		{
+			name:                "defaults to the first supported core type",
+			parameters:          map[string]any{},
+			richDataCapture:     true,
+			expected:            "Neoverse-N1",
+			expectsCoreRerender: true,
+		},
+		{
+			name:                "preserves an explicit core type",
+			parameters:          map[string]any{"filter_core_type": "Neoverse-V2"},
+			richDataCapture:     true,
+			expected:            "Neoverse-V2",
+			expectsCoreRerender: true,
+		},
+		{
+			name:            "locks the initial core type without rich data",
+			parameters:      map[string]any{},
+			expected:        "Neoverse-N1",
+			richDataCapture: false,
+		},
 	} {
-		assert.Equal(t, "SQL", renderersByID[rendererID].Type)
-	}
-	assert.Len(t, output.Renderers, 9)
-	recordingOptionsSQL := renderersByID["jfr_recording_options"].Config["sql"]
-	assert.Contains(t, recordingOptionsSQL, "COALESCE(CAST(jvm_pid AS VARCHAR), 'unknown')")
-	recordingsSQL := renderersByID["jfr_recordings"].Config["sql"]
-	assert.Contains(t, recordingsSQL, "jvm_start_epoch_ns")
-	assert.NotContains(t, recordingsSQL, "jvm_start_epoch_ms")
-	jvmInfoSQL := renderersByID["jvm_info"].Config["sql"]
-	assert.Contains(t, jvmInfoSQL, "jvm_start_epoch_ns")
-	assert.NotContains(t, jvmInfoSQL, "jvm_start_epoch_ms")
-	heapSummarySQL, ok := renderersByID["jvm_heap_summary"].Config["sql"].(string)
-	require.True(t, ok)
-	assert.Contains(t, heapSummarySQL, "before_event_start_epoch_ns")
-	assert.Contains(t, heapSummarySQL, "after_event_start_epoch_ns")
-	assert.Contains(t, heapSummarySQL, "before_heap_space_committed_size_bytes")
-	assert.Contains(t, heapSummarySQL, "after_heap_space_committed_size_bytes")
-	assert.Equal(t, 1, strings.Count(heapSummarySQL, "read_parquet"))
-	assert.NotContains(t, heapSummarySQL, "start_address_hex")
-	garbageCollectionSQL := renderersByID["jvm_garbage_collections"].Config["sql"]
-	assert.Contains(t, garbageCollectionSQL, "event_thread_os_name")
-	assert.Contains(t, garbageCollectionSQL, "event_thread_virtual")
-	summarySQL := renderersByID["java_summary"].Config["sql"]
-	assert.Contains(t, summarySQL, "SELECT MIN(recording_id)")
-	assert.Contains(t, summarySQL, "'Recording ID'")
-	assert.Contains(t, summarySQL, "'PID'")
-	assert.Contains(t, summarySQL, "'JVM age'")
-	assert.Contains(t, summarySQL, "'Recording duration'")
-	assert.Contains(t, summarySQL, "sort_order,")
-	assert.NotContains(t, summarySQL, "'JVM flags'")
-	assert.Contains(t, summarySQL, "property_key, property_value")
-	assert.NotContains(t, summarySQL, "performix.")
-	assert.NotContains(t, summarySQL, "'Source JFR'")
-	assert.Contains(t, summarySQL, "recording_start_epoch_ns - jvm_start_epoch_ns")
-	assert.NotContains(t, summarySQL, "jvm_start_epoch_ms")
-	heapTimelineSQL := renderersByID["jvm_heap_timeline"].Config["sql"]
-	assert.Contains(t, heapTimelineSQL, "SELECT MIN(recording_id)")
-	assert.Contains(t, heapTimelineSQL, "recording_start_epoch_ns")
-	assert.Contains(t, heapTimelineSQL, "after_event_start_epoch_ns")
-	assert.Contains(t, heapTimelineSQL, "after_used_bytes")
-	assert.Contains(t, heapTimelineSQL, "after_heap_space_committed_size_bytes")
-	assert.Contains(t, heapTimelineSQL, "after_heap_space_reserved_size_bytes")
-	assert.NotContains(t, heapTimelineSQL, "heap.gc_phase")
-	assert.Contains(t, heapTimelineSQL, "used_after_gc_mib")
-	assert.Contains(t, heapTimelineSQL, "committed_mib")
-	assert.Contains(t, heapTimelineSQL, "reserved_mib")
-	assert.NotContains(t, heapTimelineSQL, "event_duration_ns")
+		t.Run(tt.name, func(t *testing.T) {
+			output, bound := executeCPUMicroarchitectureCoreTypeRenderStage(
+				t,
+				parsedRecipe,
+				tt.parameters,
+				tt.richDataCapture,
+			)
+			assert.Equal(t, tt.expected, bound.Values["filter_core_type"])
 
-	filteredOutput := executeFilteredRenderStage(t, recipeProp, true, map[string]any{
-		"recording_id": "2",
-	})
-	filteredRenderersByID := make(map[string]recipe.RendererConfig, len(filteredOutput.Renderers))
-	for _, renderer := range filteredOutput.Renderers {
-		filteredRenderersByID[renderer.ID] = renderer
+			renderersByID := make(map[string]recipe.RendererConfig, len(output.Renderers))
+			rendererIndexes := make(map[string]int, len(output.Renderers))
+			for index, renderer := range output.Renderers {
+				renderersByID[renderer.ID] = renderer
+				rendererIndexes[renderer.ID] = index
+			}
+			require.Contains(t, renderersByID, "supported_core_types")
+			require.Contains(t, renderersByID, "target_info")
+			require.Contains(t, renderersByID, "sl_analyze")
+			require.Contains(t, renderersByID, "flat")
+			require.Contains(t, renderersByID, "drilldown")
+			assert.Equal(t, "SupportedCoreTypes", renderersByID["supported_core_types"].Type)
+			assert.Less(t, rendererIndexes["target_info"], rendererIndexes["supported_core_types"])
+			assert.Less(t, rendererIndexes["target_info"], rendererIndexes["sl_analyze"])
+			if tt.expectsCoreRerender {
+				assert.Equal(t, tt.expected, renderersByID["sl_analyze"].Config["filter_core_type"])
+				assert.Equal(
+					t,
+					map[string]any{
+						"tables": map[string]any{
+							"target_info_cpus": []any{
+								map[string]any{
+									"renderer_id": "target_info",
+									"output":      "target_info_cpus",
+								},
+							},
+						},
+					},
+					renderersByID["sl_analyze"].Config["data_source"],
+				)
+			} else {
+				assert.NotContains(t, renderersByID["sl_analyze"].Config, "filter_core_type")
+				assert.NotContains(t, renderersByID["sl_analyze"].Config, "data_source")
+			}
+			assert.Equal(t, tt.expected, renderersByID["flat"].Config["cpu_name"])
+			assert.Equal(t, tt.expected, renderersByID["drilldown"].Config["cpu_name"])
+
+			widgetsByID := make(map[string]recipe.WidgetConfig, len(output.Widgets))
+			for _, widget := range output.Widgets {
+				widgetsByID[widget.ID] = widget
+			}
+			require.Contains(t, widgetsByID, "core_type")
+			coreTypeWidget := widgetsByID["core_type"]
+			assert.Equal(t, "single_selection_list_filter", coreTypeWidget.Type)
+			assert.Equal(t, "supported_core_types", coreTypeWidget.RendererID)
+			assert.Equal(t, "side_panel_filters", coreTypeWidget.Placement)
+			assert.Equal(t, map[string]string{"value": "filter_core_type"}, coreTypeWidget.ParameterBindings)
+			assert.Equal(t, false, coreTypeWidget.Config["allowNone"])
+			if tt.richDataCapture {
+				assert.Nil(t, coreTypeWidget.Disabled)
+			} else {
+				require.NotNil(t, coreTypeWidget.Disabled)
+				assert.Equal(
+					t,
+					`This run contains data for Neoverse-N1 only. Re-run the recipe with "Collect rich data" enabled to view other core types.`,
+					coreTypeWidget.Disabled.Reason,
+				)
+			}
+		})
 	}
-	assert.NotContains(t, filteredRenderersByID["java_summary"].Config["sql"], "SELECT MIN(recording_id)")
-	assert.Contains(t, filteredRenderersByID["java_summary"].Config["sql"], "recording_id = 2")
-	assert.Contains(t, filteredRenderersByID["jvm_heap_timeline"].Config["sql"], "recording_id = 2")
+
+	t.Run("explicit empty core type disables the default and filtering", func(t *testing.T) {
+		output := executeFilteredRenderStage(t, parsedRecipe, true, map[string]any{
+			"filter_core_type": "",
+		})
+
+		renderersByID := make(map[string]recipe.RendererConfig, len(output.Renderers))
+		for _, renderer := range output.Renderers {
+			renderersByID[renderer.ID] = renderer
+		}
+		assert.NotContains(t, renderersByID["sl_analyze"].Config, "filter_core_type")
+		assert.NotContains(t, renderersByID["flat"].Config, "cpu_name")
+		assert.NotContains(t, renderersByID["drilldown"].Config, "cpu_name")
+	})
+}
+
+func TestInstructionMixCoreTypeFiltering(t *testing.T) {
+	recipePath := filepath.Join("..", "..", "..", "core", "apap-cli", "recipes", "instruction_mix.js")
+	recipeData, err := os.ReadFile(recipePath)
+	require.NoError(t, err)
+
+	parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
+	parsedRecipe, err := parser.ParseRecipe(recipePath, string(recipeData))
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		name                string
+		parameters          map[string]any
+		richDataCapture     bool
+		expected            string
+		expectsCoreRerender bool
+	}{
+		{
+			name:                "defaults to the first supported core type",
+			parameters:          map[string]any{},
+			richDataCapture:     true,
+			expected:            "Neoverse-N1",
+			expectsCoreRerender: true,
+		},
+		{
+			name:                "preserves an explicit core type",
+			parameters:          map[string]any{"filter_core_type": "Neoverse-V2"},
+			richDataCapture:     true,
+			expected:            "Neoverse-V2",
+			expectsCoreRerender: true,
+		},
+		{
+			name:            "locks the initial core type without rich data",
+			parameters:      map[string]any{},
+			richDataCapture: false,
+			expected:        "Neoverse-N1",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			output, bound := executeInstructionMixCoreTypeRenderStage(
+				t,
+				parsedRecipe,
+				tt.parameters,
+				tt.richDataCapture,
+			)
+			assert.Equal(t, tt.expected, bound.Values["filter_core_type"])
+
+			renderersByID := make(map[string]recipe.RendererConfig, len(output.Renderers))
+			rendererIndexes := make(map[string]int, len(output.Renderers))
+			for index, renderer := range output.Renderers {
+				renderersByID[renderer.ID] = renderer
+				rendererIndexes[renderer.ID] = index
+			}
+			require.Contains(t, renderersByID, "supported_core_types")
+			require.Contains(t, renderersByID, "target_info")
+			require.Contains(t, renderersByID, "sl_analyze")
+			assert.Equal(t, "SupportedCoreTypes", renderersByID["supported_core_types"].Type)
+			assert.Less(t, rendererIndexes["target_info"], rendererIndexes["supported_core_types"])
+			assert.Less(t, rendererIndexes["target_info"], rendererIndexes["sl_analyze"])
+			if tt.expectsCoreRerender {
+				assert.Equal(t, tt.expected, renderersByID["sl_analyze"].Config["filter_core_type"])
+				assert.Contains(t, renderersByID["sl_analyze"].Config, "data_source")
+			} else {
+				assert.NotContains(t, renderersByID["sl_analyze"].Config, "filter_core_type")
+				assert.NotContains(t, renderersByID["sl_analyze"].Config, "data_source")
+			}
+			assert.Equal(t, tt.expected, renderersByID["flat"].Config["cpu_name"])
+			assert.Equal(t, tt.expected, renderersByID["drilldown"].Config["cpu_name"])
+
+			widgetsByID := make(map[string]recipe.WidgetConfig, len(output.Widgets))
+			for _, widget := range output.Widgets {
+				widgetsByID[widget.ID] = widget
+			}
+			coreTypeWidget := widgetsByID["core_type"]
+			assert.Equal(t, "single_selection_list_filter", coreTypeWidget.Type)
+			assert.Equal(t, map[string]string{"value": "filter_core_type"}, coreTypeWidget.ParameterBindings)
+			if tt.richDataCapture {
+				assert.Nil(t, coreTypeWidget.Disabled)
+			} else {
+				require.NotNil(t, coreTypeWidget.Disabled)
+				assert.Contains(t, coreTypeWidget.Disabled.Reason, "Neoverse-N1 only")
+			}
+		})
+	}
 }
 
 func requireSlAnalyzeRendererDependency(t *testing.T, renderer recipe.RendererConfig) {
@@ -1143,6 +1655,33 @@ func executeFilteredRenderStage(
 	recipeProp recipe.Recipe,
 	rerenderingEnabled bool,
 	renderParams map[string]any,
+	runDescription ...*run.RunDescription,
+) recipe.RenderOutput {
+	t.Helper()
+
+	var runModel cdf.ModelView = cdf.NewOnDiskModel(t.TempDir(), &cdf.Manifest{}, cdf.Metadata{})
+	if recipeProp.Name == "cpu_microarchitecture" || recipeProp.Name == "instruction_mix" {
+		runModel = newPrimaryCPUNameRunModel(t, `[
+			{"core_number": 0, "name": "Neoverse-N1"}
+		]`)
+	}
+	description := &run.RunDescription{Parameters: map[string]any{"mode": "dynamic"}}
+	if len(runDescription) > 0 {
+		description = runDescription[0]
+	}
+	if description.Parameters["rich_data_capture"] == true || description.Parameters["include_raw_data"] == true {
+		runModel = withRichCaptureComponent(t, runModel)
+	}
+	return executeFilteredRenderStageWithModel(t, recipeProp, rerenderingEnabled, renderParams, description, runModel)
+}
+
+func executeFilteredRenderStageWithModel(
+	t *testing.T,
+	recipeProp recipe.Recipe,
+	rerenderingEnabled bool,
+	renderParams map[string]any,
+	description *run.RunDescription,
+	runModel cdf.ModelView,
 ) recipe.RenderOutput {
 	t.Helper()
 
@@ -1151,17 +1690,16 @@ func executeFilteredRenderStage(
 
 	renderNotifier := &runtime.RendererStageCollector{}
 	stageContext := &recipe.StageContext{RendererNotifier: renderNotifier}
-	runModel := cdf.NewOnDiskModel(t.TempDir(), &cdf.Manifest{}, cdf.Metadata{})
 	recipeStage := &stages.CustomRecipeStage{
 		StageName:     recipeProp.RenderStages[0].Name(),
 		ScriptedStage: recipeProp.RenderStages[0],
 		Ctx: &recipe.RunExecutionContext{
 			RecipeCtx: &recipe.RecipeCtx{
-				RenderParamValues: boundRenderParams.CollapseToMap(),
+				RenderParamValues: boundRenderParams.Values,
+				BoundRenderParams: &boundRenderParams,
+				RecipeMetadata:    recipe.RecipeMetadata{Name: recipeProp.Name},
 			},
-			RunDescriptions: []*run.RunDescription{
-				{Parameters: map[string]any{"mode": "dynamic"}},
-			},
+			RunDescriptions:    []*run.RunDescription{description},
 			RunModels:          []cdf.ModelView{runModel},
 			RerenderingEnabled: rerenderingEnabled,
 		},
@@ -1170,4 +1708,177 @@ func executeFilteredRenderStage(
 	_, err = recipeStage.Execute(stageContext)
 	require.NoError(t, err)
 	return renderNotifier.Output
+}
+
+func executeCPUMicroarchitectureCoreTypeRenderStage(
+	t *testing.T,
+	parsedRecipe recipe.Recipe,
+	renderParams map[string]any,
+	richDataCapture bool,
+) (recipe.RenderOutput, parameters.BoundRenderParameters) {
+	t.Helper()
+
+	boundRenderParams, err := parameters.BindRenderParameters(renderParams, parsedRecipe.RenderParameters, parsedRecipe.Name)
+	require.NoError(t, err)
+	runModel := newPrimaryCPUNameRunModel(t, `[
+		{"core_number": 0, "name": "Unsupported Primary"},
+		{"core_number": 1, "name": "Neoverse-N1"},
+		{"core_number": 2, "name": "Neoverse-V2"}
+	]`)
+	if richDataCapture {
+		runModel = withRichCaptureComponent(t, runModel)
+	}
+	renderNotifier := &runtime.RendererStageCollector{}
+	recipeStage := &stages.CustomRecipeStage{
+		StageName:     parsedRecipe.RenderStages[0].Name(),
+		ScriptedStage: parsedRecipe.RenderStages[0],
+		Ctx: &recipe.RunExecutionContext{
+			RecipeCtx: &recipe.RecipeCtx{
+				RenderParamValues: boundRenderParams.Values,
+				BoundRenderParams: &boundRenderParams,
+				RecipeMetadata:    recipe.RecipeMetadata{Name: parsedRecipe.Name},
+			},
+			RunDescriptions: []*run.RunDescription{{
+				Parameters: map[string]any{"mode": "dynamic", "rich_data_capture": richDataCapture},
+				RunResult:  string(run.RecipeSuccess),
+			}},
+			RunModels:          []cdf.ModelView{runModel},
+			RerenderingEnabled: true,
+		},
+	}
+
+	_, err = recipeStage.Execute(&recipe.StageContext{RendererNotifier: renderNotifier})
+	require.NoError(t, err)
+	return renderNotifier.Output, boundRenderParams
+}
+
+func executeInstructionMixCoreTypeRenderStage(
+	t *testing.T,
+	parsedRecipe recipe.Recipe,
+	renderParams map[string]any,
+	richDataCapture bool,
+) (recipe.RenderOutput, parameters.BoundRenderParameters) {
+	t.Helper()
+
+	boundRenderParams, err := parameters.BindRenderParameters(renderParams, parsedRecipe.RenderParameters, parsedRecipe.Name)
+	require.NoError(t, err)
+	runModel := newPrimaryCPUNameRunModel(t, `[
+		{"core_number": 0, "name": "Unsupported Primary"},
+		{"core_number": 1, "name": "Neoverse-N1"},
+		{"core_number": 2, "name": "Neoverse-V2"}
+	]`)
+	if richDataCapture {
+		runModel = withRichCaptureComponent(t, runModel)
+	}
+	renderNotifier := &runtime.RendererStageCollector{}
+	recipeStage := &stages.CustomRecipeStage{
+		StageName:     parsedRecipe.RenderStages[0].Name(),
+		ScriptedStage: parsedRecipe.RenderStages[0],
+		Ctx: &recipe.RunExecutionContext{
+			RecipeCtx: &recipe.RecipeCtx{
+				RenderParamValues: boundRenderParams.Values,
+				BoundRenderParams: &boundRenderParams,
+				RecipeMetadata:    recipe.RecipeMetadata{Name: parsedRecipe.Name},
+			},
+			RunDescriptions: []*run.RunDescription{{
+				Parameters: map[string]any{"mode": "dynamic", "rich_data_capture": richDataCapture},
+				RunResult:  string(run.RecipeSuccess),
+			}},
+			RunModels:          []cdf.ModelView{runModel},
+			RerenderingEnabled: true,
+		},
+	}
+
+	_, err = recipeStage.Execute(&recipe.StageContext{RendererNotifier: renderNotifier})
+	require.NoError(t, err)
+	return renderNotifier.Output, boundRenderParams
+}
+
+func withRichCaptureComponent(t *testing.T, model cdf.ModelView) cdf.ModelView {
+	t.Helper()
+	manifest := model.(*cdf.OnDiskModel).Manifest()
+	path := "tool/neoprof/0/capture.apc/db/data.db"
+	manifest.Entries = append(manifest.Entries, cdf.ManifestEntry{
+		Path:          path,
+		ComponentType: cdf.ComponentType{Name: "capture_apc", SchemaVersion: "1.0"},
+	})
+	fullPath := filepath.Join(model.BasePath(), filepath.FromSlash(path))
+	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
+	// Render-contract tests inspect registration only; they do not run sl-analyze.
+	require.NoError(t, os.WriteFile(fullPath, nil, 0o600))
+	return cdf.NewOnDiskModel(model.BasePath(), &manifest, model.Metadata())
+}
+
+// Exercise the complete recipe render stage: widget eligibility and the
+// SlAnalyzeRenderer configuration must agree for raw-only and missing captures.
+func TestCoreTypeFilteringRequiresRetainedRichCapture(t *testing.T) {
+	for _, recipeName := range []string{"code_hotspots", "cpu_microarchitecture", "instruction_mix"} {
+		t.Run(recipeName, func(t *testing.T) {
+			recipePath := filepath.Join("..", "..", "..", "core", "apap-cli", "recipes", recipeName+".js")
+			source, err := os.ReadFile(recipePath)
+			require.NoError(t, err)
+			parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
+			parsed, err := parser.ParseRecipe(recipePath, string(source))
+			require.NoError(t, err)
+			for _, tc := range []struct {
+				name                 string
+				hasCapture, complete bool
+				selected             string
+			}{
+				{"raw-only selected core", true, true, "Neoverse-V2"},
+				{"missing capture selected core", false, true, "Neoverse-V2"},
+				{"missing capture default core", false, true, ""},
+				{"pending capture selected core", true, false, "Neoverse-V2"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					model := newPrimaryCPUNameRunModel(t, `[{"core_number":0,"name":"Neoverse-N1"},{"core_number":1,"name":"Neoverse-V2"}]`)
+					if tc.hasCapture {
+						model = withRichCaptureComponent(t, model)
+					}
+					params := map[string]any{}
+					if tc.selected != "" {
+						params["filter_core_type"] = tc.selected
+					}
+					description := &run.RunDescription{
+						Parameters: map[string]any{"mode": "dynamic", "rich_data_capture": false, "include_raw_data": true},
+						RunResult:  string(run.RecipeInProgressPhase1Complete),
+					}
+					if tc.complete {
+						description.RunResult = string(run.RecipeSuccess)
+					}
+					output := executeFilteredRenderStageWithModel(t, parsed, true, params, description, model)
+					enabled := tc.hasCapture && tc.complete
+					renderers := map[string]recipe.RendererConfig{}
+					for _, renderer := range output.Renderers {
+						renderers[renderer.ID] = renderer
+					}
+					require.Contains(t, renderers, "sl_analyze")
+					if enabled {
+						assert.Equal(t, tc.selected, renderers["sl_analyze"].Config["filter_core_type"])
+					} else {
+						assert.NotContains(t, renderers["sl_analyze"].Config, "filter_core_type")
+					}
+					if recipeName == "code_hotspots" {
+						for _, id := range []string{"flat", "drilldown"} {
+							if enabled {
+								assert.Equal(t, tc.selected, renderers[id].Config["cpu_name"])
+							} else {
+								assert.NotContains(t, renderers[id].Config, "cpu_name")
+							}
+						}
+					}
+					widgets := map[string]recipe.WidgetConfig{}
+					for _, widget := range output.Widgets {
+						widgets[widget.ID] = widget
+					}
+					require.Contains(t, widgets, "core_type")
+					if enabled {
+						assert.Nil(t, widgets["core_type"].Disabled)
+					} else {
+						assert.NotNil(t, widgets["core_type"].Disabled)
+					}
+				})
+			}
+		})
+	}
 }

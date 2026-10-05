@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/dop251/goja"
+	"github.com/klauspost/compress/zstd"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -312,6 +313,15 @@ func TestProbeTools_WithIntegrations(t *testing.T) {
 }
 
 func TestGetRunDescriptions(t *testing.T) {
+	t.Run("returns workload identity", func(t *testing.T) {
+		api := ConcreteRecipeAPI{vm: goja.New(), execCtx: &recipe.RunExecutionContext{
+			RunDescriptions: []*run.RunDescription{{WorkloadType: "Attach", Pid: 42}},
+		}}
+		value := api.getRunDescriptions(goja.FunctionCall{})
+		row := value.ToObject(api.vm).Get("0").ToObject(api.vm)
+		require.NotNil(t, row.Get("WorkloadType"))
+		require.Equal(t, "Attach", row.Get("WorkloadType").String())
+	})
 	t.Run("returns tools used", func(t *testing.T) {
 		execCtx := &recipe.RunExecutionContext{
 			RunDescriptions: []*run.RunDescription{
@@ -888,6 +898,49 @@ func TestReadRunComponent(t *testing.T) {
 	value, err := fn(goja.Undefined(), api.vm.ToValue(0), api.vm.ToValue(relativePath))
 	require.NoError(t, err)
 	require.Equal(t, `{"duration":42}`, value.String())
+}
+
+func TestReadRunComponentReadsCompressedContentAndEnforcesDecompressedLimit(t *testing.T) {
+	runDir := t.TempDir()
+	relativePath := "tool/example_tool/0/output/metadata.json"
+	storedPath := filepath.Join(runDir, filepath.FromSlash(relativePath)) + cdf.ZstdSuffix
+	require.NoError(t, os.MkdirAll(filepath.Dir(storedPath), 0o755))
+
+	content := string(bytes.Repeat([]byte("a"), 2048))
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+	require.NoError(t, err)
+	compressed := encoder.EncodeAll([]byte(content), nil)
+	encoder.Close()
+	const compressedMaxBytes = 1024
+	require.Less(t, len(compressed), compressedMaxBytes)
+	require.NoError(t, os.WriteFile(storedPath, compressed, 0o644))
+
+	model := cdf.NewOnDiskModel(runDir, &cdf.Manifest{Entries: []cdf.ManifestEntry{{
+		Path:       relativePath,
+		Compressed: true,
+		ComponentType: cdf.ComponentType{
+			Name:          "example-json-data",
+			SchemaVersion: "1.0",
+		},
+	}}}, cdf.Metadata{})
+	api := ConcreteRecipeAPI{
+		execCtx: &recipe.RunExecutionContext{RunModels: []cdf.ModelView{model}},
+		vm:      goja.New(),
+	}
+	fn, ok := goja.AssertFunction(api.vm.ToValue(api.readRunComponent))
+	require.True(t, ok)
+
+	value, err := fn(goja.Undefined(), api.vm.ToValue(0), api.vm.ToValue(relativePath))
+	require.NoError(t, err)
+	assert.Equal(t, content, value.String())
+
+	_, err = fn(
+		goja.Undefined(),
+		api.vm.ToValue(0),
+		api.vm.ToValue(relativePath),
+		api.vm.ToValue(compressedMaxBytes),
+	)
+	require.ErrorContains(t, err, "run component is too large to read as text")
 }
 
 func TestReadRunComponentRejectsOversizedText(t *testing.T) {
@@ -2212,6 +2265,52 @@ func TestExtractWorkload(t *testing.T) {
 			if test.expectedErr == nil {
 				assert.Equal(t, test.expectedOutput, output)
 			}
+		})
+	}
+}
+
+func TestJfrCaptureIsExposedToCaptureStages(t *testing.T) {
+	for _, exposer := range []APIExposer{&ReadyStageAPIExposer{}, &RunStageAPIExposer{}} {
+		vm := goja.New()
+		api := &ConcreteRecipeAPI{vm: vm, execCtx: &recipe.RunExecutionContext{}}
+		obj := vm.NewObject()
+		require.NoError(t, exposer.ExposeAPI(api, obj))
+		fn, ok := goja.AssertFunction(obj.Get("isJfrCaptureEnabled"))
+		require.True(t, ok, "capture stages must expose the JFR flag")
+		value, err := fn(goja.Undefined())
+		require.NoError(t, err)
+		assert.False(t, value.ToBoolean())
+	}
+}
+
+func TestIsJfrCaptureEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+	}{
+		{
+			name:    "returns false when disabled",
+			enabled: false,
+		},
+		{
+			name:    "returns true when enabled",
+			enabled: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			execCtx := &recipe.RunExecutionContext{JfrCaptureEnabled: tt.enabled}
+			vm := goja.New()
+			recipeAPI := ConcreteRecipeAPI{vm: vm, execCtx: execCtx, cmdState: &cmdsync.CommandState{}, context: context.Background()}
+			fn, _ := goja.AssertFunction(vm.ToValue(recipeAPI.isJfrCaptureEnabled))
+			out, err := fn(goja.Undefined())
+			assert.NoError(t, err)
+
+			isEnabled := false
+			parseErr := gojautils.ParseObjectFromJS(out, &isEnabled)
+			assert.NoError(t, parseErr)
+			assert.Equal(t, tt.enabled, isEnabled)
 		})
 	}
 }

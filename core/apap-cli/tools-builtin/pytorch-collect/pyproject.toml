@@ -11,15 +11,16 @@ include = ["pytorch_collect*"]
 [project]
 name = "pytorch-collect"
 version = "0.1.0"
-description = "Trace and collect PyTorch operators and dispatchers."
+description = "Trace and collect PyTorch API calls and operator calls."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.8"
 license = "Apache-2.0"
 classifiers = ["Programming Language :: Python :: 3"]
-dependencies = ["torch", "pyarrow"]
+dependencies = ["torch"]
 
 [project.optional-dependencies]
 samples = ["torch", "transformers"]
+test = ["pytest", "pyarrow"]
 
 [project.scripts]
 pytorch-collect = "pytorch_collect.cli:main"

@@ -233,7 +233,7 @@ func newCodeHotspotsTimelineFixtureModel(
 	require.NoError(t, os.MkdirAll(filepath.Dir(captureMetadataAbsPath), 0o755))
 	require.NoError(t, os.WriteFile(
 		captureMetadataAbsPath,
-		[]byte(`[{"duration":60000000000,"time_unit":"nanoseconds"}]`),
+		[]byte(`{"schema_version":20260902,"duration":60000000000,"time_unit":"nanoseconds"}`),
 		0o644,
 	))
 
@@ -437,6 +437,45 @@ func buildCounterRowsSelectSQL(rows []timelineCounterRowFixture) string {
 			row.DeviceNo,
 			row.Thread,
 			row.Value,
+		))
+	}
+
+	return strings.Join(parts, " UNION ALL ")
+}
+
+func buildCounterAggregateRowsSelectSQL(rows []timelineCounterRowFixture) string {
+	if len(rows) == 0 {
+		return `SELECT
+			CAST(NULL AS BIGINT) AS start_timestamp,
+			CAST(NULL AS BIGINT) AS end_timestamp,
+			CAST(NULL AS UINTEGER) AS device_no,
+			CAST(NULL AS UINTEGER) AS thread,
+			CAST(NULL AS DOUBLE) AS min_value,
+			CAST(NULL AS DOUBLE) AS max_value,
+			CAST(NULL AS DOUBLE) AS sum_value,
+			CAST(NULL AS UBIGINT) AS count
+		WHERE FALSE`
+	}
+
+	parts := make([]string, 0, len(rows))
+	for _, row := range rows {
+		parts = append(parts, fmt.Sprintf(
+			`SELECT
+				%d::BIGINT AS start_timestamp,
+				%d::BIGINT AS end_timestamp,
+				%d::UINTEGER AS device_no,
+				%d::UINTEGER AS thread,
+				%g::DOUBLE AS min_value,
+				%g::DOUBLE AS max_value,
+				%g::DOUBLE AS sum_value,
+				2::UBIGINT AS count`,
+			row.StartTimestamp,
+			row.EndTimestamp,
+			row.DeviceNo,
+			row.Thread,
+			row.Value,
+			row.Value,
+			row.Value*2,
 		))
 	}
 

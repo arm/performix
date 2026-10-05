@@ -46,6 +46,27 @@ def create_sysutil_source(root: Path) -> Path:
     return source_dir
 
 
+def create_pytorch_collect_source(root: Path) -> Path:
+    source_dir = root / "pytorch-collect"
+    package_dir = source_dir / "pytorch_collect"
+    package_dir.mkdir(parents=True)
+    (package_dir / "__pycache__").mkdir()
+
+    (package_dir / "__main__.py").write_text("from .cli import main\n")
+    (package_dir / "cli.py").write_text("def main(): pass\n")
+    (package_dir / "writer.py").write_text("WRITER = True\n")
+    (package_dir / "__pycache__" / "cli.pyc").write_bytes(b"cache")
+    return source_dir
+
+
+def create_parquet_writer_source(root: Path) -> Path:
+    source_dir = root / "apap-cli" / "tools-builtin" / "parquet-writer"
+    source_dir.mkdir(parents=True)
+    (source_dir / "main.go").write_text("package main\n")
+    (source_dir / "apx_parquet_writer.py").write_text("class ParquetWriter: pass\n")
+    return source_dir
+
+
 class VersionTests(unittest.TestCase):
     def test_release_version_uses_engine_version(self):
         environment = {"PERFORMIX_ENGINE_VERSION": "1.2.3"}
@@ -148,6 +169,76 @@ class ParquetToJsonPackagingTests(unittest.TestCase):
                 ],
                 tools_dir,
             )
+
+
+class PytorchCollectPackagingTests(unittest.TestCase):
+    def test_packages_source_without_python_dependencies(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            temporary_path = Path(temporary_dir)
+            with (
+                patch.object(
+                    get_tools,
+                    "_get_builtin_tool_source",
+                    return_value=create_pytorch_collect_source(temporary_path),
+                ),
+                patch.object(
+                    get_tools,
+                    "get_engine_version",
+                    return_value="5.0.0",
+                ),
+            ):
+                archives = get_tools.package_pytorch_collect(
+                    temporary_path / "tools"
+                )
+
+            self.assertEqual(
+                {
+                    "pytorch-collect-Linux-aarch64.tar.gz",
+                    "pytorch-collect-Linux-x86_64.tar.gz",
+                },
+                {archive.name for archive in archives},
+            )
+            for archive_path in archives:
+                with tarfile.open(archive_path, "r:gz") as archive:
+                    names = set(archive.getnames())
+                self.assertIn("pytorch_collect/__main__.py", names)
+                self.assertIn("pytorch_collect/cli.py", names)
+                self.assertIn("pytorch_collect/writer.py", names)
+                self.assertFalse(any("__pycache__" in name for name in names))
+
+
+class ParquetWriterPackagingTests(unittest.TestCase):
+    def test_packages_wrapper_and_target_binary(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            temporary_path = Path(temporary_dir)
+            create_parquet_writer_source(temporary_path)
+
+            def build_binary(command, **_kwargs):
+                output = Path(command[command.index("-o") + 1])
+                output.write_bytes(b"executable")
+
+            with (
+                patch.object(get_tools, "SCRIPT_DIR", temporary_path / "scripts"),
+                patch.object(get_tools.shutil, "which", return_value="go"),
+                patch.object(get_tools.subprocess, "run", side_effect=build_binary),
+                patch.object(get_tools, "get_engine_version", return_value="5.0.0"),
+                patch.dict(os.environ, {}, clear=True),
+            ):
+                archives = get_tools.package_parquet_writer(temporary_path / "tools")
+
+            self.assertEqual(
+                {
+                    "parquet-writer-Linux-aarch64.tar.gz",
+                    "parquet-writer-Linux-x86_64.tar.gz",
+                },
+                {archive.name for archive in archives},
+            )
+            for archive_path in archives:
+                with tarfile.open(archive_path, "r:gz") as archive:
+                    members = {member.name: member for member in archive.getmembers()}
+                self.assertIn("apx_parquet_writer.py", members)
+                self.assertEqual(members["parquet-writer"].mode, 0o755)
+                self.assertFalse(any("__pycache__" in name for name in members))
 
 class StagingTests(unittest.TestCase):
     def test_release_staging_keeps_linux_target_bundles_for_every_host(self):

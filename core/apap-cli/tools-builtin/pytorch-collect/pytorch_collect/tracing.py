@@ -1,21 +1,21 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-from torch.overrides import TorchFunctionMode
+from torch.overrides import TorchFunctionMode, resolve_name
 from torch.utils._python_dispatch import TorchDispatchMode
 from torch import Tensor
-from .tracker import OperationTracker
+from .tracker import TraceTracker
 
 
-class OperatorTrace(TorchFunctionMode):
-    def __init__(self, tracker: OperationTracker, *args, **kwargs):
+class ApiCallTrace(TorchFunctionMode):
+    def __init__(self, tracker: TraceTracker, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.tracker = tracker
 
     def __torch_function__(self, func, types, args=(), kwargs=None):
         kwargs = kwargs or {}
-        self.tracker.begin_operation(
-            func.__name__,
+        call_id = self.tracker.begin_api_call(
+            resolve_name(func) or func.__name__,
             _extract_args_specs(args),
             _extract_kwargs_specs(kwargs)
         )
@@ -23,22 +23,25 @@ class OperatorTrace(TorchFunctionMode):
         try:
             output = func(*args, **kwargs)
 
-            self.tracker.end_operation(_extract_output_specs(output))
+            self.tracker.end_api_call(
+                call_id,
+                _extract_output_specs(output),
+            )
         except Exception as ex:
-            self.tracker.end_operation(None)
-            raise ex
+            self.tracker.end_api_call(call_id, None)
+            raise
 
         return output
 
 
-class DispatchTrace(TorchDispatchMode):
-    def __init__(self, tracker: OperationTracker, *args, **kwargs):
+class OperatorCallTrace(TorchDispatchMode):
+    def __init__(self, tracker: TraceTracker, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.tracker = tracker
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
         kwargs = kwargs or {}
-        self.tracker.begin_dispatch(
+        call_id = self.tracker.begin_operator_call(
             str(func),
             _extract_args_specs(args),
             _extract_kwargs_specs(kwargs)
@@ -47,9 +50,12 @@ class DispatchTrace(TorchDispatchMode):
         try:
             output = func(*args, **kwargs)
 
-            self.tracker.end_dispatch(_extract_output_specs(output))
+            self.tracker.end_operator_call(
+                call_id,
+                _extract_output_specs(output),
+            )
         except Exception as ex:
-            self.tracker.end_dispatch(None)
+            self.tracker.end_operator_call(call_id, None)
             raise ex
 
         return output
@@ -63,9 +69,9 @@ def _extract_arg_spec(arg):
     if isinstance(arg, Tensor):
         spec['shape'] = list(arg.shape)
         spec['dtype'] = str(arg.dtype)
-    elif isinstance(arg, bool | int | float | str):
+    elif isinstance(arg, (bool, int, float, str)):
         spec['value'] = arg
-    elif isinstance(arg, tuple | list):
+    elif isinstance(arg, (tuple, list)):
         spec['values'] = _extract_args_specs(arg)
 
     return spec

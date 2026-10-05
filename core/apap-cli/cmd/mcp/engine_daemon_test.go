@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -55,6 +57,8 @@ func setEngineDaemonTestConfig(t *testing.T) {
 	viper.Set("jobs", 7)
 	viper.Set("log-level", "debug")
 	viper.Set("enable-experimental-recipes", true)
+	viper.SetConfigType("yaml")
+	require.NoError(t, viper.ReadConfig(bytes.NewBufferString("enable-jfr-capture: true\n")))
 }
 
 func fixedDaemonPorts() (int, int, error) {
@@ -90,7 +94,7 @@ func TestEngineDaemonRunner(t *testing.T) {
 				config.HttpPort == 0 &&
 				config.ParallelJobs == 7 &&
 				config.LogLevel == "debug" &&
-				config.EnableExperimentalRecipes
+				config.EnableExperimentalRecipes && config.EnableJfrCapture
 		})).Return(engine, nil).Once()
 
 		protocol := &mockProtocolRunner{}
@@ -116,6 +120,22 @@ func TestEngineDaemonRunner(t *testing.T) {
 		err := runner.Run(context.Background(), io.NopCloser(bytes.NewReader(nil)), io.Discard, io.Discard)
 
 		require.NoError(t, err)
+		connector.AssertExpectations(t)
+		protocol.AssertExpectations(t)
+		shutter.AssertExpectations(t)
+	})
+
+	t.Run("continues when the log file cannot be opened", func(t *testing.T) {
+		runner, connector, protocol, shutter := newRunner(t, nil, nil)
+		filePath := filepath.Join(t.TempDir(), "not-a-directory")
+		require.NoError(t, os.WriteFile(filePath, nil, 0o600))
+		viper.Set("log-file", filepath.Join(filePath, "mcp.log"))
+		var errOut bytes.Buffer
+
+		err := runner.Run(context.Background(), io.NopCloser(bytes.NewReader(nil)), io.Discard, &errOut)
+
+		require.NoError(t, err)
+		assert.Contains(t, errOut.String(), "Could not set log file")
 		connector.AssertExpectations(t)
 		protocol.AssertExpectations(t)
 		shutter.AssertExpectations(t)

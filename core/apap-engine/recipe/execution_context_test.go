@@ -194,18 +194,6 @@ func TestRunExecutionContextCopyFileRejectsUnsupportedLocalities(t *testing.T) {
 	}
 }
 
-func TestRunExecutionContextCopyFileRequiresTransferManager(t *testing.T) {
-	ctx := &RunExecutionContext{
-		Collector: &Collector{FileRetriever: &RetrieveAgentFilesStageRetriever{}},
-	}
-
-	err := ctx.copyFile("target", "host", "/remote/file", "/local/file")
-
-	var msgErr *message.MessageImpl
-	require.ErrorAs(t, err, &msgErr)
-	require.Equal(t, message.EngineToolCopyFromTransferManagerDisabled, msgErr.Code())
-}
-
 func TestCollectMonitorTargets(t *testing.T) {
 	intCtxs := []tool.IntegrationContext{
 		{Workload: &tool.WorkloadAttach{PID: 123}},

@@ -20,8 +20,10 @@ to distinguish independent adjacent state from genuinely shared state.
 source. Its measurements include total, coherence, and store samples. The
 queries below resolve measurements by stable identifier rather than numeric ID.
 
-If a named table or column is unavailable, inspect the resolved tables and
-`duckdb_columns()` once before adapting the queries. Do not guess a schema.
+If a named table is unavailable, inspect
+`render_session.visualization_resolved_tables`. If a column is unavailable,
+inspect `duckdb_columns()` once before adapting the queries. Do not guess a
+schema.
 
 ## 1. Establish materiality
 
@@ -93,7 +95,15 @@ WITH accesses AS (
     FROM drilldown_measurements AS m
     LEFT JOIN drilldown AS d USING (measurement_id)
   )
-  ON identifier
+  ON identifier IN (
+    'perf.c2c.samples',
+    'perf.c2c.coherence_samples',
+    'perf.c2c.store_samples',
+    'perf.c2c.cacheline_address',
+    'perf.c2c.byte_offset',
+    'perf.c2c.thread_count',
+    'perf.c2c.writer_thread_count'
+  )
   USING max(measurement_value)
   GROUP BY call_tree_id, symbol_id
 )

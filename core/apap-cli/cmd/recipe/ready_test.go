@@ -291,7 +291,7 @@ func TestReadyCLIOutput(t *testing.T) {
 			},
 			{
 				ReadyStatus:    apapproto.ReadyStatus_READY_STATUS_UNKNOWN,
-				ExpectedString: "[Info]: The recipe might not be ready to be run on your target machine. One or more of the following readiness messages have unknown severity:",
+				ExpectedString: "[Info]: The recipe might not be ready to run on your target machine. One or more readiness messages have unknown severity:",
 			},
 		}
 

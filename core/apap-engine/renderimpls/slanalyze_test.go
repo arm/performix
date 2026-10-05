@@ -211,6 +211,13 @@ func TestSlAnalyzeRendererConfigureAndParamsExist(t *testing.T) {
 		assert.True(t, renderer.DoRenderParamsExist())
 		assert.Equal(t, "tool/custom/0/", renderer.getEntity())
 	})
+
+	t.Run("core type filter enables rendering", func(t *testing.T) {
+		renderer := &SlAnalyzeRenderer{}
+		err := renderer.Configure(&render.Config{JSON: `{"filter_core_type": "Cortex-A725"}`})
+		require.NoError(t, err)
+		assert.True(t, renderer.DoRenderParamsExist())
+	})
 }
 
 // TestSlAnalyzeRendererBuildArgs ensures filter and grouping flags are emitted correctly.
@@ -220,7 +227,7 @@ func TestSlAnalyzeRendererBuildArgs(t *testing.T) {
 		err := renderer.Configure(&render.Config{JSON: `{"filter_pid": 3620, "grouping": ["process", "thread"]}`})
 		require.NoError(t, err)
 
-		args := renderer.buildSlAnalyzeArgs("/bin/sl-analyze", "/tmp/out", "/tmp/capture.apc")
+		args := renderer.buildSlAnalyzeArgs("/bin/sl-analyze", "/tmp/out", "/tmp/capture.apc", nil)
 		assert.Equal(t, []string{
 			"/bin/sl-analyze",
 			"-o",
@@ -244,7 +251,7 @@ func TestSlAnalyzeRendererBuildArgs(t *testing.T) {
 		err := renderer.Configure(&render.Config{JSON: `{"filter_start_time_ns": 30000000000, "filter_end_time_ns": 60000000000}`})
 		require.NoError(t, err)
 
-		args := renderer.buildSlAnalyzeArgs("/bin/sl-analyze", "/tmp/out", "/tmp/capture.apc")
+		args := renderer.buildSlAnalyzeArgs("/bin/sl-analyze", "/tmp/out", "/tmp/capture.apc", nil)
 		assert.Equal(t, []string{
 			"/bin/sl-analyze",
 			"-o",
@@ -257,6 +264,34 @@ func TestSlAnalyzeRendererBuildArgs(t *testing.T) {
 			"--disassemble",
 			"--between",
 			"30000000000-60000000000",
+			"--group-by",
+			"none",
+			"/tmp/capture.apc",
+		}, args)
+	})
+
+	t.Run("core filters", func(t *testing.T) {
+		renderer := &SlAnalyzeRenderer{}
+		err := renderer.Configure(&render.Config{JSON: `{"filter_core_type": "Cortex-A725"}`})
+		require.NoError(t, err)
+
+		args := renderer.buildSlAnalyzeArgs("/bin/sl-analyze", "/tmp/out", "/tmp/capture.apc", []int{0, 1, 3})
+		assert.Equal(t, []string{
+			"/bin/sl-analyze",
+			"-o",
+			"/tmp/out",
+			"--collect-images",
+			"--all-images",
+			"--apap-export",
+			"--include-empty-columns",
+			"--annotate-source",
+			"--disassemble",
+			"--core",
+			"0",
+			"--core",
+			"1",
+			"--core",
+			"3",
 			"--group-by",
 			"none",
 			"/tmp/capture.apc",
@@ -458,9 +493,21 @@ func TestResolveSlAnalyzeBinaryPathWithFS(t *testing.T) {
 }
 
 func TestSlAnalyzeRendererGetInputSpec(t *testing.T) {
-	renderer := &SlAnalyzeRenderer{}
-	spec := renderer.GetInputSpec()
-	assert.Len(t, spec.Ports, 0)
+	t.Run("no core type filter has no inputs", func(t *testing.T) {
+		renderer := &SlAnalyzeRenderer{}
+		spec := renderer.GetInputSpec()
+		assert.Len(t, spec.Ports, 0)
+	})
+
+	t.Run("core type filter requires target CPU information", func(t *testing.T) {
+		renderer := &SlAnalyzeRenderer{}
+		require.NoError(t, renderer.Configure(&render.Config{JSON: `{"filter_core_type": "Cortex-A725"}`}))
+		spec := renderer.GetInputSpec()
+		require.Len(t, spec.Ports, 1)
+		assert.Equal(t, "target_info_cpus", spec.Ports[0].Name)
+		assert.Equal(t, "target-info-cpus", spec.Ports[0].ComponentType.Name)
+		assert.Equal(t, "0.1", spec.Ports[0].ComponentType.SchemaVersion)
+	})
 }
 
 func TestSlAnalyzeRendererGetOutputSpec(t *testing.T) {

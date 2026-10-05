@@ -24,6 +24,7 @@ When adding a new regression test:
 1. Add or reuse a fixture run under `test-data/runs`.
 2. Add a JSON test configuration under `test-data/tests`.
    The configuration can specify:
+   - `importedRuns`: optional logical run aliases that are resolved from a pre-recorded Artifactory run before the test session starts. `prerecordedRun.artifactDir` should point at the stable case directory that contains the exported `latest.zip`. The harness first uses `PERFORMIX_REGRESSIONTEST_PRERECORDED_RUN_CACHE_DIR` when it already contains that artifact, otherwise it downloads from `prerecordedRun.artifactoryRunBase` or `PERFORMIX_REGRESSIONTEST_ARTIFACTORY_RUN_BASE` with `ARTIFACTORY_API_TOKEN`.
    - `renderers`: renderer names, optional renderer IDs, renderer configuration, and the run IDs to render.
    - `visualizations`: optional visualization IDs and configuration.
    - `queries`: optional SQL overrides for generated output tables. If no override is provided for a visible manifest entry, the harness queries all columns from that table in a deterministic order.
@@ -32,6 +33,8 @@ When adding a new regression test:
 4. Review the generated `test-data/truth/<test-name>` files carefully before committing them.
    These files are the contract for the regression test, so only commit changes that are expected from the feature or bug fix being tested.
 5. Run the normal engine test task without `REGEN=1` to make sure the checked-in truth data matches the renderer output.
+
+Tests that declare `importedRuns` are skipped when neither a local prerecorded-run cache nor `ARTIFACTORY_API_TOKEN` is available. That keeps ordinary local unit-test runs usable while still letting CI exercise the imported-run coverage.
 
 From the repository root, use:
 

@@ -124,7 +124,7 @@ func TestListRecipe(t *testing.T) {
 		// Valid recipes returned
 		assert.Contains(t, out, "BrilliantRecipe")
 		// Failed info message
-		assert.Contains(t, out, fmt.Sprintf("[Info]: %v cannot process one or more recipe files:", terminology.GetProductFullName()))
+		assert.Contains(t, out, fmt.Sprintf("[Info]: %v cannot process one or more of these recipe files:", terminology.GetProductFullName()))
 		assert.NotContains(t, out, "cli.cmd.recipe.list.RECIPE_FILES_FAILED")
 		// Per-file errors should be indented, mention the bad path and per-file catalog code
 		assert.Contains(t, out, "BadRecipe")
@@ -162,7 +162,7 @@ func TestListRecipe(t *testing.T) {
 		out := cmdBuf.String()
 		assert.Contains(t, out, "BrilliantRecipe")
 		// Still print the summary as len(recipeFilesFailed)>0
-		assert.Contains(t, out, fmt.Sprintf("[Info]: %v cannot process one or more recipe files:", terminology.GetProductFullName()))
+		assert.Contains(t, out, fmt.Sprintf("[Info]: %v cannot process one or more of these recipe files:", terminology.GetProductFullName()))
 		// Should NOT print an indented per-file [Error] block
 		assert.NotContains(t, out, "  [Error]:")
 	})

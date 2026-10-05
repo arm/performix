@@ -113,9 +113,10 @@ func TestInitConfigSetsDefaults(t *testing.T) {
 	initConfig()
 
 	assert.Equal(t, serverconfig.DefaultEnableExperimentalRecipes, viper.GetBool("enable-experimental-recipes"))
-	assert.Equal(t, serverconfig.DefaultEnableTransferManager, viper.GetBool("enable-transfer-manager"))
 	assert.Equal(t, serverconfig.DefaultEnableAndroidTargets, viper.GetBool(serverconfig.EnableAndroidTargetsConfigKey))
+	assert.Equal(t, serverconfig.DefaultEnableGPURecipe, viper.GetBool(serverconfig.EnableGPURecipeConfigKey))
 	assert.Equal(t, serverconfig.DefaultEnableRenderDBSandbox, viper.GetBool("enable-render-db-sandbox"))
 	assert.Equal(t, serverconfig.DefaultEnableNeoprofTimeline, viper.GetBool("enable-neoprof-timeline"))
+	assert.Equal(t, serverconfig.DefaultEnableJfrCapture, viper.GetBool("enable-jfr-capture"))
 	assert.Equal(t, serverconfig.DefaultDaemonAutostart, viper.GetBool(serverconfig.DaemonAutostartConfigKey))
 }

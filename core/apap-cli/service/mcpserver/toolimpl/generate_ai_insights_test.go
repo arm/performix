@@ -34,6 +34,21 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 			guidanceHeading: "System Utilisation Query Guide",
 		},
 		{
+			name:            "ASCT",
+			recipeName:      insights.ASCTRecipeName,
+			guidanceHeading: "ASCT Query Guide",
+		},
+		{
+			name:            "Cache Sharing",
+			recipeName:      insights.CacheSharingRecipeName,
+			guidanceHeading: "Cache Sharing Query Guide",
+		},
+		{
+			name:            "Memory Access",
+			recipeName:      insights.MemoryAccessRecipeName,
+			guidanceHeading: "Memory Access Query Guide",
+		},
+		{
 			name:            "Syscall Trace",
 			recipeName:      insights.SyscallTraceSummaryRecipeName,
 			guidanceHeading: "Syscall Trace Query Guide",
@@ -51,6 +66,7 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 					Payload: `{"unused":true}`,
 				},
 			), nil).Once()
+			expectAIInsightsRenderSession(engine, "run-123", "session-1")
 			clientSession, serverSession := connectTestServer(
 				t,
 				ctx,
@@ -73,6 +89,10 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 			require.NoError(t, json.Unmarshal([]byte(requireToolText(t, result)), &content))
 			assert.Empty(t, content.BundleID)
 			assert.Equal(t, "run-123", content.RunID)
+			assert.Equal(t, "session-1", content.RenderSession["session_id"])
+			assert.Contains(t, content.RenderSession, "manifest")
+			assert.Contains(t, content.RenderSession, "visualization_resolved_tables")
+			assert.Contains(t, content.RenderSession, "compatibility_warning")
 			assert.Contains(t, content.Guidance, "AI Insights Analysis Guide")
 			assert.Contains(t, content.Guidance, tc.guidanceHeading)
 			assert.Contains(t, content.Guidance, "run_query")
@@ -82,6 +102,10 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 			assert.Nil(t, content.Payloads[0].NextOffset)
 			assert.JSONEq(t, fmt.Sprintf(`{"RunId":"run-123","RecipeName":%q}`, tc.recipeName), content.Payloads[0].Content)
 			assert.NotContains(t, content.Guidance, "SPDX-")
+			engine.AssertCalled(t, "PrepareRender", mock.Anything, mock.MatchedBy(func(req *apapproto.PrepareRenderRequest) bool {
+				return len(req.GetRenderParameters()) == 0
+			}))
+			engine.AssertNotCalled(t, "CloseRender", mock.Anything, mock.Anything)
 		})
 	}
 
@@ -97,6 +121,7 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 				Payload: `{"RunId":"run-123","RecipeName":"instruction_mix","SamplingParameters":{"mode":"static"}}`,
 			},
 		}}, nil).Once()
+		expectAIInsightsRenderSession(engine, "run-123", "session-1")
 		clientSession, serverSession := connectTestServer(
 			t,
 			ctx,
@@ -119,6 +144,7 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(requireToolText(t, result)), &content))
 		assert.Empty(t, content.BundleID)
 		assert.Equal(t, "run-123", content.RunID)
+		assert.Equal(t, "session-1", content.RenderSession["session_id"])
 		assert.Contains(t, content.Guidance, "AI Insights Analysis Guide")
 		assert.Contains(t, content.Guidance, "Instruction Mix Query Guide")
 		assert.Contains(t, content.Guidance, "run_query")
@@ -127,6 +153,224 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 		assert.True(t, content.Payloads[0].Complete)
 		assert.JSONEq(t, `{"RunId":"run-123","RecipeName":"instruction_mix","SamplingParameters":{"mode":"static"}}`, content.Payloads[0].Content)
 		assert.NotContains(t, content.Guidance, "SPDX-")
+		engine.AssertNotCalled(t, "CloseRender", mock.Anything, mock.Anything)
+	})
+
+	t.Run("passes render parameters to SQL-based recipes", func(t *testing.T) {
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		expectRunDescription(engine, "run-123", insights.CPUMicroarchitectureRecipeName)
+		engine.On("GetRunSummaryBundle", mock.Anything, mock.Anything).
+			Return(runSummaryBundle(insights.CPUMicroarchitectureRecipeName), nil).Once()
+		expectAIInsightsRenderSession(engine, "run-123", "session-1")
+		clientSession, serverSession := connectTestServer(
+			t,
+			ctx,
+			ToolDependencies{Engine: engine},
+			GenerateAIInsightsTool{}.Register,
+		)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "generate_ai_insights",
+			Arguments: map[string]any{
+				"run_id": "run-123",
+				"render_parameters": map[string]any{
+					"filter_pid":           42,
+					"filter_tid":           84,
+					"filter_start_time_ns": 1_250,
+					"filter_end_time_ns":   2_500,
+				},
+			},
+		})
+
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+		engine.AssertCalled(t, "PrepareRender", mock.Anything, mock.MatchedBy(func(req *apapproto.PrepareRenderRequest) bool {
+			parameters := req.GetRenderParameters()
+			return len(parameters) == 4 &&
+				parameters["filter_pid"].GetNumberValue() == 42 &&
+				parameters["filter_tid"].GetNumberValue() == 84 &&
+				parameters["filter_start_time_ns"].GetNumberValue() == 1_250 &&
+				parameters["filter_end_time_ns"].GetNumberValue() == 2_500
+		}))
+	})
+
+	t.Run("returns daemon render parameter errors", func(t *testing.T) {
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		expectRunDescription(engine, "run-123", insights.SystemUtilizationRecipeName)
+		engine.On("GetRunSummaryBundle", mock.Anything, mock.Anything).
+			Return(runSummaryBundle(insights.SystemUtilizationRecipeName), nil).Once()
+		engine.On("PrepareRender", mock.Anything, mock.MatchedBy(func(req *apapproto.PrepareRenderRequest) bool {
+			return req.GetRenderParameters()["filter_pid"].GetNumberValue() == 42
+		})).Return(nil, errors.New("unknown render parameter filter_pid")).Once()
+		clientSession, serverSession := connectTestServer(
+			t,
+			ctx,
+			ToolDependencies{Engine: engine},
+			GenerateAIInsightsTool{}.Register,
+		)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "generate_ai_insights",
+			Arguments: map[string]any{
+				"run_id": "run-123",
+				"render_parameters": map[string]any{
+					"filter_pid": 42,
+				},
+			},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		assert.Contains(t, requireToolText(t, result), "unknown render parameter filter_pid")
+		engine.AssertNotCalled(t, "InvokeRender", mock.Anything, mock.Anything)
+	})
+
+	t.Run("rejects render parameters for curated summaries before requesting one", func(t *testing.T) {
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		expectRunDescription(engine, "run-123", insights.CodeHotspotsRecipeName)
+		clientSession, serverSession := connectTestServer(
+			t,
+			ctx,
+			ToolDependencies{Engine: engine},
+			GenerateAIInsightsTool{}.Register,
+		)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "generate_ai_insights",
+			Arguments: map[string]any{
+				"run_id": "run-123",
+				"render_parameters": map[string]any{
+					"filter_pid": 42,
+				},
+			},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		text := requireToolText(t, result)
+		var content generateAIInsightsResult
+		require.NoError(t, json.Unmarshal([]byte(text), &content))
+		require.NotNil(t, content.Error)
+		assert.Equal(t, message.EngineInsightsRenderParametersUnsupported, content.Error.Code)
+		assert.Equal(t, "code_hotspots", content.Error.Metadata["recipeName"])
+		engine.AssertNotCalled(t, "GetRunSummaryBundle", mock.Anything, mock.Anything)
+		engine.AssertNotCalled(t, "PrepareRender", mock.Anything, mock.Anything)
+	})
+
+	t.Run("returns an error when the persistent render cannot be opened", func(t *testing.T) {
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		expectRunDescription(engine, "run-123", insights.SystemUtilizationRecipeName)
+		engine.On("GetRunSummaryBundle", mock.Anything, mock.Anything).
+			Return(runSummaryBundle(insights.SystemUtilizationRecipeName), nil).Once()
+		engine.On("PrepareRender", mock.Anything, mock.Anything).
+			Return((*apapproto.PrepareRenderResponse)(nil), errors.New("prepare failed")).Once()
+		clientSession, serverSession := connectTestServer(
+			t,
+			ctx,
+			ToolDependencies{Engine: engine},
+			GenerateAIInsightsTool{}.Register,
+		)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "generate_ai_insights",
+			Arguments: map[string]any{"run_id": "run-123"},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		assert.Contains(t, requireToolText(t, result), "prepare failed")
+	})
+
+	t.Run("returns diagnostics from a rejected persistent render", func(t *testing.T) {
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		expectRunDescription(engine, "run-123", insights.SystemUtilizationRecipeName)
+		engine.On("GetRunSummaryBundle", mock.Anything, mock.Anything).
+			Return(runSummaryBundle(insights.SystemUtilizationRecipeName), nil).Once()
+		prepared := &apapproto.PrepareRenderResponse{
+			Renderers: []*apapproto.RendererConfig{{Renderer: "system-utilization"}},
+			CompatibilityWarning: message.BuildErrorChain(
+				errors.New("recipe compatibility warning"),
+			),
+		}
+		expectRunQueryPrepare(engine, "run-123", prepared)
+		engine.On("InvokeRender", mock.Anything, mock.Anything).Return(&apapproto.InvokeRenderResponse{
+			SessionId: "rejected-session",
+			InvocationStatuses: []*apapproto.RendererInvocationStatus{{
+				Status: &apapproto.RendererInvocationStatus_Error{
+					Error: &apapproto.Error{Message: "renderer failed"},
+				},
+			}},
+		}, nil).Once()
+		expectRunQueryClose(engine, "rejected-session")
+		clientSession, serverSession := connectTestServer(
+			t,
+			ctx,
+			ToolDependencies{Engine: engine},
+			GenerateAIInsightsTool{}.Register,
+		)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "generate_ai_insights",
+			Arguments: map[string]any{"run_id": "run-123"},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		var content generateAIInsightsResult
+		require.NoError(t, json.Unmarshal([]byte(requireToolText(t, result)), &content))
+		require.NotNil(t, content.Error)
+		require.NotNil(t, content.RenderSession)
+		assert.Contains(t, content.RenderSession, "compatibility_warning")
+		assert.Contains(t, content.RenderSession, "invocation_statuses")
+		assert.Contains(t, content.RenderSession, "error")
+		assert.NotContains(t, content.RenderSession, "session_id")
+	})
+
+	t.Run("closes the persistent render when the response is too large", func(t *testing.T) {
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		expectRunDescription(engine, "run-123", insights.SystemUtilizationRecipeName)
+		engine.On("GetRunSummaryBundle", mock.Anything, mock.Anything).Return(
+			&apapproto.RunSummaryBundleResponse{Payloads: []*apapproto.RunSummaryPayload{{
+				Name:    "run_details",
+				Payload: strings.Repeat("x", aiInsightsMaxResponseBytes),
+			}}},
+			nil,
+		).Once()
+		expectAIInsightsRenderSession(engine, "run-123", "session-1")
+		expectRunQueryClose(engine, "session-1")
+		clientSession, serverSession := connectTestServer(
+			t,
+			ctx,
+			ToolDependencies{Engine: engine},
+			GenerateAIInsightsTool{}.Register,
+		)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "generate_ai_insights",
+			Arguments: map[string]any{"run_id": "run-123"},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		assert.Contains(t, requireToolText(t, result), "maximum response size")
 	})
 
 	t.Run("selects CPU Microarchitecture query guidance from the run recipe", func(t *testing.T) {
@@ -141,6 +385,7 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 				Payload: `{"RunId":"run-123","RecipeName":"cpu_microarchitecture"}`,
 			},
 		}}, nil).Once()
+		expectAIInsightsRenderSession(engine, "run-123", "session-1")
 		clientSession, serverSession := connectTestServer(
 			t,
 			ctx,
@@ -163,6 +408,7 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(requireToolText(t, result)), &content))
 		assert.Empty(t, content.BundleID)
 		assert.Equal(t, "run-123", content.RunID)
+		assert.Equal(t, "session-1", content.RenderSession["session_id"])
 		assert.Contains(t, content.Guidance, "AI Insights Analysis Guide")
 		assert.Contains(t, content.Guidance, "CPU Microarchitecture Query Guide")
 		assert.Contains(t, content.Guidance, "run_query")
@@ -171,9 +417,10 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 		assert.True(t, content.Payloads[0].Complete)
 		assert.JSONEq(t, `{"RunId":"run-123","RecipeName":"cpu_microarchitecture"}`, content.Payloads[0].Content)
 		assert.NotContains(t, content.Guidance, "SPDX-")
+		engine.AssertNotCalled(t, "CloseRender", mock.Anything, mock.Anything)
 	})
 
-	t.Run("advertises read-only hints", func(t *testing.T) {
+	t.Run("advertises schemas and read-only hints", func(t *testing.T) {
 		ctx := context.Background()
 		engine := apapprotomocks.NewApapClient(t)
 		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine}, GenerateAIInsightsTool{}.Register)
@@ -187,10 +434,24 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 
 		require.Equal(t, "generate_ai_insights", tools.Tools[0].Name)
 		require.NotNil(t, tools.Tools[0].Annotations)
-		require.True(t, tools.Tools[0].Annotations.ReadOnlyHint)
+		require.False(t, tools.Tools[0].Annotations.ReadOnlyHint)
+		require.NotNil(t, tools.Tools[0].InputSchema)
 		require.NotNil(t, tools.Tools[0].OutputSchema)
 
-		schemaJSON, err := json.Marshal(tools.Tools[0].OutputSchema)
+		schemaJSON, err := json.Marshal(tools.Tools[0].InputSchema)
+		require.NoError(t, err)
+		inputSchema := map[string]any{}
+		require.NoError(t, json.Unmarshal(schemaJSON, &inputSchema))
+		assert.Equal(t, "object", inputSchema["type"])
+		inputProperties, ok := inputSchema["properties"].(map[string]any)
+		require.True(t, ok)
+		assert.Contains(t, inputProperties, "run_id")
+		renderParametersSchema, ok := inputProperties["render_parameters"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "object", renderParametersSchema["type"])
+		assert.Contains(t, renderParametersSchema, "additionalProperties")
+
+		schemaJSON, err = json.Marshal(tools.Tools[0].OutputSchema)
 		require.NoError(t, err)
 		outputSchema := map[string]any{}
 		require.NoError(t, json.Unmarshal(schemaJSON, &outputSchema))
@@ -201,7 +462,23 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 		assert.Contains(t, properties, "run_id")
 		assert.Contains(t, properties, "guidance")
 		assert.Contains(t, properties, "payloads")
+		assert.Contains(t, properties, "render_session")
 		assert.Contains(t, properties, "error")
+		renderSessionSchema, ok := properties["render_session"].(map[string]any)
+		require.True(t, ok)
+		renderSessionProperties, ok := renderSessionSchema["properties"].(map[string]any)
+		require.True(t, ok)
+		for _, name := range []string{
+			"session_id",
+			"connection_string",
+			"manifest",
+			"invocation_statuses",
+			"visualization_resolved_tables",
+			"compatibility_warning",
+			"error",
+		} {
+			assert.Contains(t, renderSessionProperties, name)
+		}
 
 		require.Equal(t, "read_ai_insights_payload_details", tools.Tools[1].Name)
 		require.NotNil(t, tools.Tools[1].Annotations)
@@ -260,6 +537,7 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(requireToolText(t, result)), &content))
 		assert.Equal(t, "run-123_1", content.BundleID)
 		assert.Equal(t, "run-123", content.RunID)
+		assert.Nil(t, content.RenderSession)
 		assert.Contains(t, content.Guidance, "AI Insights")
 		assert.Contains(t, content.Guidance, "Code Hotspots Evidence Guide")
 		assert.NotContains(t, strings.ToLower(content.Guidance), "curated")
@@ -677,6 +955,50 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 	})
 }
 
+func TestGenerateQueryResultResponseSize(t *testing.T) {
+	invoked := successfulRenderInvocation("session-1")
+	invoked.ConnectionString = "duckdb:session-1"
+	invoked.Manifest = &apapproto.RenderManifest{Entry: []*apapproto.RenderManifestEntry{{
+		ComponentType:          "drilldown",
+		ComponentSchemaVersion: "1.0",
+		TableName:              "drilldown",
+	}}}
+	invoked.VisualizationResolvedTables = &apapproto.VisualizationResolvedTablesList{
+		Entries: []*apapproto.VisualizationResolvedTables{{
+			Id: &apapproto.VisualizationId{Value: "analysis"},
+			Tables: map[string]*apapproto.StringArray{
+				"data": {Values: []string{"flat_table"}},
+			},
+		}},
+	}
+	renderSession, err := renderSessionResultFromProto(&apapproto.PrepareRenderResponse{}, invoked)
+	require.NoError(t, err)
+
+	for _, recipeName := range insights.SupportedRecipeNames() {
+		t.Run(recipeName, func(t *testing.T) {
+			recipe, ok := insights.ForRecipe(recipeName)
+			require.True(t, ok)
+			if recipe.Method != insights.MethodRunQuery {
+				t.Skip("recipe does not return a render session")
+			}
+			result, err := generateQueryResult(
+				&apapproto.RunSummaryPayload{
+					Name:    "run_details",
+					Payload: fmt.Sprintf(`{"RunId":"run-123","RecipeName":%q}`, recipeName),
+				},
+				"run-123",
+				insights.GeneralGuidance()+"\n\n"+recipe.Guidance,
+				renderSession,
+			)
+
+			require.NoError(t, err)
+			encoded, err := json.Marshal(result)
+			require.NoError(t, err)
+			assert.LessOrEqual(t, len(encoded), aiInsightsMaxResponseBytes)
+		})
+	}
+}
+
 func expectRunDescription(engine *apapprotomocks.ApapClient, runID, recipeName string) {
 	engine.On("GetRunDescription", mock.Anything, mock.MatchedBy(func(req *apapproto.GetRunDescriptionRequest) bool {
 		return req.GetId().GetValue() == runID
@@ -693,6 +1015,18 @@ func runSummaryBundle(recipeName string, payloads ...*apapproto.RunSummaryPayloa
 	return &apapproto.RunSummaryBundleResponse{
 		Payloads: append([]*apapproto.RunSummaryPayload{runDetails}, payloads...),
 	}
+}
+
+func expectAIInsightsRenderSession(engine *apapprotomocks.ApapClient, runID, sessionID string) {
+	prepared := successfulRunQueryRender(engine, runID, sessionID, &apapproto.VisualizationResolvedTablesList{
+		Entries: []*apapproto.VisualizationResolvedTables{{
+			Id: &apapproto.VisualizationId{Value: "analysis"},
+			Tables: map[string]*apapproto.StringArray{
+				"data": {Values: []string{"flat_table"}},
+			},
+		}},
+	})
+	prepared.CompatibilityWarning = message.BuildErrorChain(errors.New("recipe compatibility warning"))
 }
 
 func requireToolText(t *testing.T, result *mcp.CallToolResult) string {

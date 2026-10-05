@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
@@ -370,6 +371,56 @@ func TestSQLRendererCreatesViewFromRunPathPlaceholder(t *testing.T) {
 		values = append(values, value)
 	}
 	require.Equal(t, []int{3, 5}, values)
+}
+
+func TestSQLRendererReadsCompressedRunPathWithoutQueryChanges(t *testing.T) {
+	tmpDir := t.TempDir()
+	csvPath := filepath.Join(tmpDir, "inputs", "numbers.csv.zst")
+	require.NoError(t, os.MkdirAll(filepath.Dir(csvPath), 0o755))
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+	require.NoError(t, err)
+	compressed := encoder.EncodeAll([]byte("value\n3\n5\n"), nil)
+	compressedJSON := encoder.EncodeAll([]byte(`[{"value":7}]`), nil)
+	encoder.Close()
+	require.NoError(t, os.WriteFile(csvPath, compressed, 0o644))
+	jsonPath := filepath.Join(tmpDir, "inputs", "numbers.json.zst")
+	require.NoError(t, os.WriteFile(jsonPath, compressedJSON, 0o644))
+
+	model := cdf.NewOnDiskModel(tmpDir, &cdf.Manifest{
+		Entries: []cdf.ManifestEntry{{
+			Path:          "inputs/numbers.csv",
+			ComponentType: cdf.ComponentType{Name: "test_csv", SchemaVersion: "1.0"},
+			Compressed:    true,
+		}, {
+			Path:          "inputs/numbers.json",
+			ComponentType: cdf.ComponentType{Name: "test_json", SchemaVersion: "1.0"},
+			Compressed:    true,
+		}},
+	}, cdf.Metadata{})
+	session := newSQLTestSession(t, model, "run1")
+	renderer := &SQLRenderer{}
+	require.NoError(t, renderer.Configure(&render.Config{
+		Identity: render.RendererIdentity{Name: "SQLRenderer"},
+		JSON: `{
+			"sql": "SELECT value FROM read_csv({{path:inputs/numbers.csv}}, header=true) UNION ALL SELECT value FROM read_json_auto({{path:inputs/numbers.json}}) ORDER BY value",
+			"output": {
+				"name": "result",
+				"component_type": {"name": "flat_table", "schema_version": "1.0"}
+			}
+		}`,
+	}))
+	require.NoError(t, renderer.Initialize(session, nil))
+
+	rows, err := session.Database().Conn.QueryContext(context.Background(), `SELECT value FROM flat_table ORDER BY value`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var values []int
+	for rows.Next() {
+		var value int
+		require.NoError(t, rows.Scan(&value))
+		values = append(values, value)
+	}
+	require.Equal(t, []int{3, 5, 7}, values)
 }
 
 func TestSQLRendererResolvesRunPathPlaceholderAgainstBaseRunPathForOverlayModels(t *testing.T) {

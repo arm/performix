@@ -5,6 +5,8 @@ package run
 
 import (
 	"errors"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,7 +47,7 @@ func TestRunManifestUpdater(t *testing.T) {
 		writer := &recordingRunWriter{}
 		updater := NewRunManifestUpdater(&builder, writer)
 
-		require.NoError(t, updater.AddPendingComponent("entity/output.txt", componentType))
+		require.NoError(t, updater.AddComponentWithFlags("entity/output.txt", componentType, ComponentFlags{Pending: true}))
 		require.NoError(t, updater.ClearPending("\\entity\\output.txt"))
 		require.NoError(t, updater.RemoveComponent("/entity/output.txt/"))
 
@@ -63,6 +65,21 @@ func TestRunManifestUpdater(t *testing.T) {
 
 		assert.Nil(t, writer.manifestWrites[2].buildManifest().Lookup("entity/output.txt"))
 		assert.Equal(t, 0, builder.ComponentCount())
+	})
+
+	t.Run("preserves compression while clearing pending", func(t *testing.T) {
+		builder := newManifestUpdaterTestBuilder()
+		writer := &recordingRunWriter{}
+		updater := NewRunManifestUpdater(&builder, writer)
+
+		require.NoError(t, updater.AddComponentWithFlags("entity/output.csv", componentType, ComponentFlags{Pending: true, Compressed: true}))
+		require.NoError(t, updater.ClearPending("entity/output.csv"))
+
+		entry := builder.buildManifest().Lookup("entity/output.csv")
+		require.NotNil(t, entry)
+		require.False(t, entry.Pending)
+		require.True(t, entry.Compressed)
+		require.Equal(t, filepath.Join(builder.runPath, "entity", "output.csv")+cdf.ZstdSuffix, builder.components[0].AbsolutePath)
 	})
 
 	t.Run("write entity dirs uses current builder without writing manifest", func(t *testing.T) {
@@ -118,10 +135,77 @@ func TestRunManifestUpdater(t *testing.T) {
 		require.NoError(t, updater.RemovePendingComponent("entity/complete.txt"))
 		assert.NotNil(t, builder.buildManifest().Lookup("entity/complete.txt"))
 
-		require.NoError(t, updater.AddPendingComponent("entity/pending.txt", componentType))
+		require.NoError(t, updater.AddComponentWithFlags("entity/pending.txt", componentType, ComponentFlags{Pending: true}))
 		require.NoError(t, updater.RemovePendingComponent("entity/pending.txt"))
 		require.Len(t, writer.manifestWrites, 4)
 		assert.Nil(t, builder.buildManifest().Lookup("entity/pending.txt"))
 		assert.NotNil(t, builder.buildManifest().Lookup("entity/complete.txt"))
 	})
+}
+
+func TestManifestCompressionRegistration(t *testing.T) {
+	componentType := cdf.ComponentType{Name: "data", SchemaVersion: "1.0"}
+	for _, firstCompressed := range []bool{false, true} {
+		t.Run(strconv.FormatBool(firstCompressed), func(t *testing.T) {
+			builder := newManifestUpdaterTestBuilder()
+			writer := &recordingRunWriter{}
+			updater := NewRunManifestUpdater(&builder, writer)
+			require.NoError(t, updater.AddComponentWithFlags("entity/*.csv", componentType, ComponentFlags{Pending: true, Compressed: firstCompressed}))
+			require.Error(t, updater.AddComponentWithFlags("entity/foo.csv", componentType, ComponentFlags{Pending: true, Compressed: !firstCompressed}))
+			require.Len(t, writer.manifestWrites, 1)
+			require.Len(t, builder.buildManifest().Entries, 1)
+			require.True(t, builder.buildManifest().Entries[0].Pending)
+			require.Equal(t, firstCompressed, builder.buildManifest().Entries[0].Compressed)
+			// A failed transfer can leave files, so removing its entry does not release its declaration.
+			require.NoError(t, updater.RemoveComponent("entity/*.csv"))
+			require.Error(t, updater.AddComponentWithFlags("entity/foo.csv", componentType, ComponentFlags{Compressed: !firstCompressed}))
+		})
+	}
+}
+
+func TestManifestCompressionRegistrationConcurrent(t *testing.T) {
+	builder := newManifestUpdaterTestBuilder()
+	updater := NewRunManifestUpdater(&builder, &recordingRunWriter{})
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, compressed := range []bool{false, true} {
+		go func(compressed bool) {
+			<-start
+			results <- updater.AddComponentWithFlags("entity/*", cdf.ComponentType{}, ComponentFlags{Compressed: compressed})
+		}(compressed)
+	}
+	close(start)
+	first, second := <-results, <-results
+	if first == nil {
+		require.Error(t, second)
+	} else {
+		require.NoError(t, second)
+	}
+	require.Len(t, builder.buildManifest().Entries, 1)
+}
+
+func TestManifestFailedWriteDoesNotReserveCompression(t *testing.T) {
+	builder := newManifestUpdaterTestBuilder()
+	writer := &recordingRunWriter{writeManifestErr: errors.New("write failed")}
+	updater := NewRunManifestUpdater(&builder, writer)
+	require.Error(t, updater.AddComponentWithFlags("entity/*", cdf.ComponentType{}, ComponentFlags{Compressed: true}))
+	writer.writeManifestErr = nil
+	require.NoError(t, updater.AddComponent("entity/*", cdf.ComponentType{}))
+	require.Len(t, builder.buildManifest().Entries, 1)
+}
+
+func TestManifestCompressionChecksInitialComponents(t *testing.T) {
+	builder := newManifestUpdaterTestBuilder()
+	builder.AddComponent(cdf.ComponentType{}, "entity/foo.csv.zst")
+	updater := NewRunManifestUpdater(&builder, &recordingRunWriter{})
+	require.Error(t, updater.AddComponentWithFlags("entity/foo.csv", cdf.ComponentType{}, ComponentFlags{Compressed: true}))
+	require.Len(t, builder.buildManifest().Entries, 1)
+}
+
+func TestManifestAllowsDisjointMixedCompressionGlobs(t *testing.T) {
+	builder := newManifestUpdaterTestBuilder()
+	updater := NewRunManifestUpdater(&builder, &recordingRunWriter{})
+	require.NoError(t, updater.AddComponentWithFlags("entity/*.csv", cdf.ComponentType{}, ComponentFlags{Compressed: true}))
+	require.NoError(t, updater.AddComponent("entity/*.parquet", cdf.ComponentType{}))
+	require.Len(t, builder.buildManifest().Entries, 2)
 }

@@ -96,7 +96,8 @@
 
 /**
  * @typedef {Object} RunDescription
- * @property {Object.<string, string>} Parameters
+ * @property {string} WorkloadType - Launch, Attach, or System Wide.
+ * @property {Object.<string, any>} Parameters
  * @property {string[]} ToolsUsed
  * @property {bool} IsRunInProgress
  * @property {bool} IsRunPhaseTwoComplete
@@ -197,6 +198,7 @@
  * Returns the telemetry specification JSON for a supported CPU model name or undefined when unsupported.
  * @property {function(FileArg): void} retrieveFile
  * @property {function(PythonExec|Exec): RunCommandOutput} runCommand
+ * @property {function(): boolean} isJfrCaptureEnabled
  * @property {function(): boolean} isFullCaptureSupportEnabled
  * Returns whether full capture support is enabled for the current run.
  * @description - The run execution context provides access to APIs available to the run stages.
@@ -219,6 +221,7 @@
  * Returns the telemetry specification JSON for a supported CPU model name or undefined when unsupported.
  * @property {function(): TargetInfoDescription} targetInfo
  * @property {function(PythonExec|Exec): RunCommandOutput} runCommand
+ * @property {function(): boolean} isJfrCaptureEnabled
  * @property {function(): boolean} isFullCaptureSupportEnabled
  * Returns whether full capture support is enabled for the current run.
  * @description - The ready execution context provides access to APIs available to the ready stages.
@@ -598,6 +601,7 @@
  * @property {string[]} [exclude=[]]                 An optional list of globbed paths on the target to exclude from this transfer. Escaping of metachars (*) is not supported.
  * @property {boolean} [backgroundTransfer=false]    Set this if the file is not required for phase 1. Background artifacts may transfer immediately if capacity is available, but
  *         waiting background transfers are deprioritized while phase 1 transfers are flushed.
+ * @property {boolean} [compressed=false]            Store the artifact with zstd compression. The logical run path remains unchanged. Destinations with different compression settings must not overlap in logical or stored paths (compared case-insensitively on every OS); mixed-compression destinations must be provably separate using literal segments or filename segments with at most one *. Checks stop at recursive ** or complex patterns.
  */
 
 /**
@@ -854,8 +858,8 @@
  * Result of a tool probe
  * @typedef {Object} ProbeResult
  * @property {boolean} available // The tool is available to use
- * @property {Record<string, any>} [capabilities] // A map of tool capabilities
- * @property {ProbeAdvice[]} [advice] // Advice messages to report back to the user
+ * @property {Record<string, ToolCapability>} capabilities // A map of tool capabilities
+ * @property {ProbeAdvice[]} advice // Advice messages to report back to the user
  */
 
 /**

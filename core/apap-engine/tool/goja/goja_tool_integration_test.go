@@ -890,13 +890,14 @@ let tool = {
 	t.Run("ToolInstance emitOutput is bound correctly", func(t *testing.T) {
 		const suffix = `
 			run: async (engine, ctx) => {
-				engine.emitOutput("out/file", "relPath", {name: "log", version: "0.1"}, {exclude: ["a/b", "c/d"], backgroundTransfer: true})
+				engine.emitOutput("out/file", "relPath", {name: "log", version: "0.1"}, {exclude: ["a/b", "c/d"], backgroundTransfer: true, compressed: true})
 			},
 		`
 		transferOptions := tool.TransferOptions{
 			ImmediateRetrieval: false,
 			Exclude:            []string{"a/b", "c/d"},
 			BackgroundTransfer: true,
+			Compressed:         true,
 		}
 		mockFileCollector := &tool_mocks.MockFileCollector{}
 		mockFileCollector.On("QueueFileRetrieval", "", "out/file", "relPath", cdf.ComponentType{Name: "log", SchemaVersion: "0.1"}, transferOptions).Return(nil)

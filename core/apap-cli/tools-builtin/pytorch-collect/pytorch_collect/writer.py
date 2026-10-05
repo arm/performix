@@ -3,29 +3,35 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import json
-import logging
+import sys
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from uuid import uuid4
-from typing import Any, override
+from typing import Any
+
+try:
+    from typing import override
+except ImportError:
+    def override(method):
+        return method
 
 
 @dataclass
-class Operation:
+class ApiCall:
+    id: int
     name: str
     timestamp_begin: int = 0
     timestamp_end: int = 0
-    dispatch: list[Dispatch] = field(default_factory=list)
+    operator_calls: list[OperatorCall] = field(default_factory=list)
     args: list[Any] = field(default_factory=list)
     kwargs: dict[str, Any] = field(default_factory=dict)
     output: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
-class Dispatch:
+class OperatorCall:
+    id: int
     name: str
     timestamp_begin: int = 0
     timestamp_end: int = 0
@@ -44,13 +50,13 @@ class Writer:
     def __exit__(self, *exception):
         pass
 
-    def write_operation(self, operation: Operation):
+    def write_api_call(self, api_call: ApiCall):
         pass
 
 
 class ParquetWriter(Writer):
     """
-    Output the traced pytorch operations to a parquet file.
+    Output traced PyTorch API and operator calls to Parquet files.
     """
 
     schema_version = "1"  # change this value whenever the schema version changes
@@ -58,133 +64,102 @@ class ParquetWriter(Writer):
     @override
     def __init__(self, output: str, flush_limit: int):
         self.output = Path(output)
-        self.next_op_id = 0
-        self.next_dispatch_id = 0
-        self.operation_rows = []
-        self.dispatch_rows = []
         self.flush_limit = flush_limit
+        self._stack = ExitStack()
 
     @override
     def __enter__(self):
-        operations_path, dispatches_path = self._output_paths()
-        operations_path.parent.mkdir(parents=True, exist_ok=True)
-        dispatches_path.parent.mkdir(parents=True, exist_ok=True)
+        from apx_parquet_writer import ParquetWriter as StreamParquetWriter
+        api_calls_path, operator_calls_path = self._output_paths()
+        api_calls_path.parent.mkdir(parents=True, exist_ok=True)
+        operator_calls_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self.operations_writer = pq.ParquetWriter(
-            operations_path, schema=self._operations_schema(pa).with_metadata({"schema_version": self.schema_version}))
-        self.dispatches_writer = pq.ParquetWriter(
-            dispatches_path, schema=self._dispatches_schema(pa).with_metadata({"schema_version": self.schema_version}))
+        try:
+            self.api_calls_writer = self._stack.enter_context(StreamParquetWriter(
+                api_calls_path,
+                self._api_calls_schema(),
+                self.flush_limit,
+            ))
+            self.operator_calls_writer = self._stack.enter_context(StreamParquetWriter(
+                operator_calls_path,
+                self._operator_calls_schema(),
+                self.flush_limit,
+            ))
+        except BaseException:
+            self._stack.__exit__(*sys.exc_info())
+            raise
 
         return self
 
     @override
     def __exit__(self, *exception):
-        try:
-            self._flush_operations()
-            self._flush_dispatches()
-        finally:
-            self.operations_writer.close()
-            self.dispatches_writer.close()
-
-        return False
+        return self._stack.__exit__(*exception)
 
     @override
-    def write_operation(self, op: Operation):
-        op_id = self.next_op_id
-        self.next_op_id += 1
+    def write_api_call(self, api_call: ApiCall):
+        self.api_calls_writer.write_row(
+            api_call.id,
+            api_call.name,
+            api_call.timestamp_begin,
+            api_call.timestamp_end,
+            len(api_call.operator_calls),
+            self._to_json(api_call.args),
+            self._to_json(api_call.kwargs),
+            self._to_json(api_call.output),
+        )
 
-        self.operation_rows.append({
-            "op_id": op_id,
-            "op_name": op.name,
-            "ts_begin_ns": op.timestamp_begin,
-            "ts_end_ns": op.timestamp_end,
-            "dispatch_count": len(op.dispatch),
-            "args_json": self._to_json(op.args),
-            "kwargs_json": self._to_json(op.kwargs),
-            "output_json": self._to_json(op.output),
-        })
-
-        for dispatch in op.dispatch:
-            dispatch_id = self.next_dispatch_id
-            self.next_dispatch_id += 1
-
-            self.dispatch_rows.append({
-                "op_id": op_id,
-                "dispatch_id": dispatch_id,
-                "dispatch_name": dispatch.name,
-                "ts_begin_ns": dispatch.timestamp_begin,
-                "ts_end_ns": dispatch.timestamp_end,
-                "args_json": self._to_json(dispatch.args),
-                "kwargs_json": self._to_json(dispatch.kwargs),
-                "output_json": self._to_json(dispatch.output),
-            })
-
-        if len(self.operation_rows) > self.flush_limit:
-            self._flush_operations()
-
-        if len(self.dispatch_rows) > self.flush_limit:
-            self._flush_dispatches()
-
-    def _flush_operations(self):
-        if not self.operation_rows:
-            return
-
-        batch = pa.RecordBatch.from_pylist(
-            self.operation_rows, schema=self._operations_schema(pa))
-        self.operations_writer.write_batch(batch)
-
-        logging.debug(f"Flushed {len(self.operation_rows)} operation rows")
-        self.operation_rows.clear()
-
-    def _flush_dispatches(self):
-        if not self.dispatch_rows:
-            return
-
-        batch = pa.RecordBatch.from_pylist(
-            self.dispatch_rows, schema=self._dispatches_schema(pa))
-        self.dispatches_writer.write_batch(batch)
-
-        logging.debug(f"Flushed {len(self.dispatch_rows)} dispatch rows")
-        self.dispatch_rows.clear()
+        for operator_call in api_call.operator_calls:
+            self.operator_calls_writer.write_row(
+                api_call.id,
+                operator_call.id,
+                operator_call.name,
+                operator_call.timestamp_begin,
+                operator_call.timestamp_end,
+                self._to_json(operator_call.args),
+                self._to_json(operator_call.kwargs),
+                self._to_json(operator_call.output),
+            )
 
     def _output_paths(self):
         if self.output.suffix == ".parquet":
             return (
                 self.output.with_name(
-                    f"{self.output.stem}.operations.parquet"),
+                    f"{self.output.stem}.api_calls.parquet"),
                 self.output,
             )
 
         return (
-            self.output / "operations.parquet",
-            self.output / "dispatches.parquet",
+            self.output / "api_calls.parquet",
+            self.output / "operator_calls.parquet",
         )
 
     @staticmethod
-    def _operations_schema(pa):
-        return pa.schema([
-            ("op_id", pa.int64()),
-            ("op_name", pa.string()),
-            ("ts_begin_ns", pa.int64()),
-            ("ts_end_ns", pa.int64()),
-            ("dispatch_count", pa.int32()),
-            ("args_json", pa.string()),
-            ("kwargs_json", pa.string()),
-            ("output_json", pa.string()),
-        ])
+    def _api_calls_schema():
+        from apx_parquet_writer import Column, ColumnType, Schema
+        return Schema([
+            Column("api_call_id", ColumnType.INT64),
+            Column("function_name", ColumnType.STRING),
+            Column("ts_begin_ns", ColumnType.INT64),
+            Column("ts_end_ns", ColumnType.INT64),
+            Column("operator_call_count", ColumnType.INT32),
+            Column("args_json", ColumnType.STRING),
+            Column("kwargs_json", ColumnType.STRING),
+            Column("output_json", ColumnType.STRING),
+        ], metadata={"schema_version": ParquetWriter.schema_version})
 
     @staticmethod
-    def _dispatches_schema(pa):
-        return pa.schema([
-            ("op_id", pa.int64()),
-            ("dispatch_id", pa.int64()),
-            ("dispatch_name", pa.string()),
-            ("ts_begin_ns", pa.int64()),
-            ("ts_end_ns", pa.int64()),
-            ("args_json", pa.string()),
-            ("kwargs_json", pa.string()),
-            ("output_json", pa.string()),
-        ])
+    def _operator_calls_schema():
+        from apx_parquet_writer import Column, ColumnType, Schema
+        return Schema([
+            Column("api_call_id", ColumnType.INT64),
+            Column("operator_call_id", ColumnType.INT64),
+            Column("operator_name", ColumnType.STRING),
+            Column("ts_begin_ns", ColumnType.INT64),
+            Column("ts_end_ns", ColumnType.INT64),
+            Column("args_json", ColumnType.STRING),
+            Column("kwargs_json", ColumnType.STRING),
+            Column("output_json", ColumnType.STRING),
+        ], metadata={"schema_version": ParquetWriter.schema_version})
 
     @staticmethod
     def _to_json(value: Any) -> str:
@@ -193,31 +168,31 @@ class ParquetWriter(Writer):
 
 class PrintWriter(Writer):
     """
-    Output the traced pytorch operations to stdout using print.
+    Output traced PyTorch API and operator calls to stdout using print.
     """
 
     @override
-    def write_operation(self, op: Operation):
+    def write_api_call(self, api_call: ApiCall):
         build = []
         build.append(
-            f"[op] {op.name} @({op.timestamp_begin}, {op.timestamp_end})")
+            f"[api] {api_call.name} @({api_call.timestamp_begin}, {api_call.timestamp_end})")
         build.append(f"     args:")
 
-        for arg in op.args:
+        for arg in api_call.args:
             build.append(f"         - {arg}")
 
-        build.append(f"     kwargs: {op.kwargs}")
-        build.append(f"     output: {op.output}")
+        build.append(f"     kwargs: {api_call.kwargs}")
+        build.append(f"     output: {api_call.output}")
 
-        for disp in op.dispatch:
+        for operator_call in api_call.operator_calls:
             build.append(
-                f"     [dispatch] {disp.name} @({disp.timestamp_begin}, {disp.timestamp_end}")
+                f"     [operator] {operator_call.name} @({operator_call.timestamp_begin}, {operator_call.timestamp_end})")
             build.append(f"                args:")
 
-            for arg in disp.args:
+            for arg in operator_call.args:
                 build.append(f"                    - {arg}")
 
-            build.append(f"                kwargs: {disp.kwargs}")
-            build.append(f"                output: {disp.output}")
+            build.append(f"                kwargs: {operator_call.kwargs}")
+            build.append(f"                output: {operator_call.output}")
 
         print("\n".join(build))

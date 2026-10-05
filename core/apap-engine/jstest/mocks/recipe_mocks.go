@@ -52,6 +52,7 @@ type ReadyExecutionContext interface {
 	TargetInfo() (goja.Value, error)
 	RunCommand(command RunCommandArg) (conductor.RunCommandOutput, error)
 	IsFullCaptureSupportEnabled() (bool, error)
+	IsJfrCaptureEnabled() (bool, error)
 }
 
 type MockReadyExecutionContext struct {
@@ -118,6 +119,11 @@ func (m *MockReadyExecutionContext) IsFullCaptureSupportEnabled() (bool, error) 
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockReadyExecutionContext) IsJfrCaptureEnabled() (bool, error) {
+	args := m.Called()
+	return args.Bool(0), args.Error(1)
+}
+
 // RunExecutionContext defines the recipe API exposed to run stages.
 type RunExecutionContext interface {
 	GetWorkload() (recipeparser.WorkloadArg, error)
@@ -133,6 +139,7 @@ type RunExecutionContext interface {
 	RetrieveFile(file recipeparser.FileArg) error
 	RunCommand(command RunCommandArg) (conductor.RunCommandOutput, error)
 	IsFullCaptureSupportEnabled() (bool, error)
+	IsJfrCaptureEnabled() (bool, error)
 }
 
 type MockRunExecutionContext struct {
@@ -198,6 +205,11 @@ func (m *MockRunExecutionContext) RunCommand(command RunCommandArg) (conductor.R
 }
 
 func (m *MockRunExecutionContext) IsFullCaptureSupportEnabled() (bool, error) {
+	args := m.Called()
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockRunExecutionContext) IsJfrCaptureEnabled() (bool, error) {
 	args := m.Called()
 	return args.Bool(0), args.Error(1)
 }

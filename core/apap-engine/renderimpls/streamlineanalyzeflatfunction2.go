@@ -25,6 +25,7 @@ type ComponentConfigFlat struct {
 	ComputeMetrics []ComputedMetric `json:"compute-metrics"`
 	Component      string           `json:"component"`
 	Entity         string           `json:"entity"`
+	CPUName        string           `json:"cpu_name,omitempty"`
 }
 
 type FlatFunctionMeasurementIDs struct {
@@ -165,8 +166,12 @@ func (renderer *StreamlineAnalyzeFlatFunctionProfileRenderer2) createDrilldownMe
 		return FlatFunctionMeasurementsTable{}, fmt.Errorf("missing required input 'target_info_cpus'")
 	}
 
-	var cpuName string
-	err := session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprint("SELECT name FROM ", targetInfoTable[0].Name, " LIMIT 1")).Scan(&cpuName)
+	cpuName, err := resolveTelemetryCPUName(
+		context.Background(),
+		session.Database().Conn,
+		targetInfoTable[0].Name,
+		renderer.specificConfig.CPUName,
+	)
 	if err != nil {
 		return FlatFunctionMeasurementsTable{}, err
 	}

@@ -6,6 +6,7 @@
 // @ts-check
 let tool_name = 'neoprof';
 let tool_version = '1.1.0';
+const CORE_TYPE_RENDER_PARAMETER = 'filter_core_type';
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
 
 /**
@@ -128,6 +129,12 @@ var recipe = {
       id: 'filter_end_time_ns',
       config: {
         type: 'number',
+      },
+    },
+    {
+      id: CORE_TYPE_RENDER_PARAMETER,
+      config: {
+        type: 'string',
       },
     },
   ],
@@ -320,11 +327,29 @@ function getSoftLockupRiskAdvice(context, workload) {
 /**
  * @param {import("./docs/jsdocs").ReadyExecutionContext | import("./docs/jsdocs").RunExecutionContext} context
  */
-function getPrimaryCPUTelemetrySpecification(context) {
-  const cpuName = context.targetInfo().PrimaryCPUName;
+function getFirstSupportedCPUTelemetry(context) {
+  const targetInfo = context.targetInfo();
+  const cpus = [...targetInfo.CPUs].sort(
+    (left, right) => left.CoreNumber - right.CoreNumber,
+  );
+
+  for (const cpu of cpus) {
+    const telemetrySpecification = context.getTelemetrySpecification(cpu.Name);
+    if (telemetrySpecification) {
+      return {
+        cpuName: cpu.Name,
+        coreNumbers: cpus
+          .filter((candidate) => candidate.Name === cpu.Name)
+          .map((candidate) => candidate.CoreNumber),
+        telemetrySpecification,
+      };
+    }
+  }
+
   return {
-    cpuName,
-    telemetrySpecification: context.getTelemetrySpecification(cpuName),
+    cpuName: targetInfo.PrimaryCPUName,
+    coreNumbers: [],
+    telemetrySpecification: undefined,
   };
 }
 
@@ -332,14 +357,14 @@ function getPrimaryCPUTelemetrySpecification(context) {
  * @param {import("./docs/jsdocs").ReadyExecutionContext | import("./docs/jsdocs").RunExecutionContext} context
  */
 function getPMUSpec(context) {
-  const primaryCPUTelemetry = getPrimaryCPUTelemetrySpecification(context);
-  if (!primaryCPUTelemetry.telemetrySpecification) {
+  const firstSupportedCPUTelemetry = getFirstSupportedCPUTelemetry(context);
+  if (!firstSupportedCPUTelemetry.telemetrySpecification) {
     throw new Error(
-      `Telemetry specification for ${primaryCPUTelemetry.cpuName} is unavailable`,
+      `Telemetry specification for ${firstSupportedCPUTelemetry.cpuName} is unavailable`,
     );
   }
 
-  return JSON.parse(primaryCPUTelemetry.telemetrySpecification);
+  return JSON.parse(firstSupportedCPUTelemetry.telemetrySpecification);
 }
 
 /**
@@ -388,8 +413,8 @@ function generateNeoprofConfig(workload, params) {
  * @param {import("./docs/jsdocs").ReadyExecutionContext} context
  */
 function readyCPUMicroarchitecture(context) {
-  const primaryCPUTelemetry = getPrimaryCPUTelemetrySpecification(context);
-  if (!primaryCPUTelemetry.telemetrySpecification) {
+  const firstSupportedCPUTelemetry = getFirstSupportedCPUTelemetry(context);
+  if (!firstSupportedCPUTelemetry.telemetrySpecification) {
     return {
       status: 'error',
       advice: [
@@ -397,7 +422,7 @@ function readyCPUMicroarchitecture(context) {
           ToolName: tool_name,
           AdviceSeverity: 'error',
           MessageCode: telemetrySpecificationUnavailableMessageCode,
-          Metadata: { cpuName: primaryCPUTelemetry.cpuName },
+          Metadata: { cpuName: firstSupportedCPUTelemetry.cpuName },
           Cause: '',
         },
       ],
@@ -414,6 +439,7 @@ function readyCPUMicroarchitecture(context) {
     collect_java_stacks: context.getParameter('collect_java_stacks'),
     collect_dotnet_stacks: context.getParameter('collect_dotnet_stacks'),
     rich_data_capture: context.getParameter('rich_data_capture'),
+    filter_core_numbers: firstSupportedCPUTelemetry.coreNumbers.join(','),
   };
 
   let tools = generateNeoprofConfig(workload, params);
@@ -435,11 +461,11 @@ function readyCPUMicroarchitecture(context) {
  * @param {import("./docs/jsdocs").ReadyExecutionContext} context
  */
 function computeValidValues(context) {
-  const primaryCPUTelemetry = getPrimaryCPUTelemetrySpecification(context);
-  if (!primaryCPUTelemetry.telemetrySpecification) {
+  const firstSupportedCPUTelemetry = getFirstSupportedCPUTelemetry(context);
+  if (!firstSupportedCPUTelemetry.telemetrySpecification) {
     return [];
   }
-  const pmuSpec = JSON.parse(primaryCPUTelemetry.telemetrySpecification);
+  const pmuSpec = JSON.parse(firstSupportedCPUTelemetry.telemetrySpecification);
 
   const valid_metrics_groups = new Set(
     Object.values(pmuSpec.methodologies.topdown_methodology.metric_grouping)
@@ -478,6 +504,7 @@ function computeValidValues(context) {
 function runCPUMicroarchitecture(context) {
   const sampling_freq = context.getParameter('sampling_freq');
   const workload = context.getWorkload();
+  const firstSupportedCPUTelemetry = getFirstSupportedCPUTelemetry(context);
   let metrics_group = getMetricsGroup(context);
   let params = {
     mode: 'metrics',
@@ -486,6 +513,7 @@ function runCPUMicroarchitecture(context) {
     collect_java_stacks: context.getParameter('collect_java_stacks'),
     collect_dotnet_stacks: context.getParameter('collect_dotnet_stacks'),
     rich_data_capture: context.getParameter('rich_data_capture'),
+    filter_core_numbers: firstSupportedCPUTelemetry.coreNumbers.join(','),
   };
   context.runTools(generateNeoprofConfig(workload, params));
 }
@@ -587,10 +615,42 @@ const threadFilter = {
   },
 };
 
-function enableFilterIfAvailable(filter, runDescription) {
-  // Treat a missing parameter as disabled; only an explicit true enables time-range filtering.
+const coreTypeFilter = {
+  id: 'core_type',
+  type: 'single_selection_list_filter',
+  title: 'Core type',
+  rendererId: 'supported_core_types',
+  description: 'Include data from a selected CPU core type.',
+  parameterBindings: {
+    value: CORE_TYPE_RENDER_PARAMETER,
+  },
+  config: {
+    data_source: {
+      tables: {
+        coreTypes: [
+          {
+            renderer_id: 'supported_core_types',
+            output: 'supported_core_types',
+          },
+        ],
+      },
+    },
+    optionsQuery: {
+      dataSource: 'coreTypes',
+      query:
+        'SELECT name AS value, name AS label FROM __table__ GROUP BY name ORDER BY MIN(core_number), name',
+      tableNamePlaceholder: '__table__',
+    },
+    allowNone: false,
+    emptyMessage: 'No supported core types are available for this run.',
+  },
+};
+
+function enableFilterIfAvailable(filter, runDescription, hasRichCapture) {
+  // Treat missing parameters as disabled; only an explicit true enables global filtering.
   const richDataCaptureEnabled =
-    runDescription.Parameters.rich_data_capture === true;
+    runDescription.Parameters.rich_data_capture === true ||
+    runDescription.Parameters.include_raw_data === true;
 
   if (!richDataCaptureEnabled) {
     return {
@@ -611,7 +671,36 @@ function enableFilterIfAvailable(filter, runDescription) {
       },
     };
   }
+  if (!hasRichCapture) {
+    return {
+      ...filter,
+      disabled: {
+        reason:
+          'Global filtering is unavailable because this run has no retained rich capture data.',
+      },
+    };
+  }
   return filter;
+}
+
+function enableCoreTypeFilterIfAvailable(
+  filter,
+  runDescription,
+  selectedCoreType,
+  hasRichCapture,
+) {
+  if (
+    runDescription.Parameters.rich_data_capture !== true &&
+    runDescription.Parameters.include_raw_data !== true
+  ) {
+    return {
+      ...filter,
+      disabled: {
+        reason: `This run contains data for ${selectedCoreType} only. Re-run the recipe with "Collect rich data" enabled to view other core types.`,
+      },
+    };
+  }
+  return enableFilterIfAvailable(filter, runDescription, hasRichCapture);
 }
 
 /**
@@ -619,6 +708,26 @@ function enableFilterIfAvailable(filter, runDescription) {
  */
 function renderCPUMicroarchitecture(context) {
   const isComparison = context.getRunDescriptions().length === 2;
+  const runDescription = context.getRunDescriptions()[0];
+  const supportsCoreTypeFiltering =
+    context.isRerenderingEnabled() && !isComparison;
+  const hasRichCapture =
+    supportsCoreTypeFiltering &&
+    context
+      .listRunComponents(0, `tool/${tool_name}/0/**`)
+      .some((component) => component.componentType.name === 'capture_apc');
+  const coreTypeFilterIsAvailable =
+    supportsCoreTypeFiltering &&
+    (runDescription.Parameters.rich_data_capture === true ||
+      runDescription.Parameters.include_raw_data === true) &&
+    runDescription.IsRunPhaseTwoComplete &&
+    hasRichCapture;
+  if (supportsCoreTypeFiltering) {
+    context.setDefaultRenderParameter(
+      CORE_TYPE_RENDER_PARAMETER,
+      context.getFirstSupportedCpuName(0),
+    );
+  }
 
   const filterPid = getRenderParameterIfExists(context, 'filter_pid');
   const filterTid = getRenderParameterIfExists(context, 'filter_tid');
@@ -630,6 +739,11 @@ function renderCPUMicroarchitecture(context) {
     context,
     'filter_end_time_ns',
   );
+  let filterCoreType = null;
+  if (supportsCoreTypeFiltering) {
+    filterCoreType =
+      context.getRenderParameter(CORE_TYPE_RENDER_PARAMETER) || null;
+  }
   let noDataMessageConfig = {};
 
   let renderers = [];
@@ -841,7 +955,11 @@ function renderCPUMicroarchitecture(context) {
   };
 
   const filters = [];
-  if (context.isRerenderingEnabled() && !isComparison) {
+  renderers.push({
+    type: 'TargetInfoRenderer',
+    id: 'target_info',
+  });
+  if (supportsCoreTypeFiltering) {
     const slAnalyzeConfig = { entity: `tool/${tool_name}/0/` };
     let isFiltering = false;
     if (filterTid !== null && Number.isFinite(filterTid)) {
@@ -865,6 +983,17 @@ function renderCPUMicroarchitecture(context) {
       filterEndTimeNs >= 0
     ) {
       slAnalyzeConfig.filter_end_time_ns = Math.round(filterEndTimeNs);
+      isFiltering = true;
+    }
+    if (coreTypeFilterIsAvailable && filterCoreType !== null) {
+      slAnalyzeConfig.filter_core_type = filterCoreType;
+      slAnalyzeConfig.data_source = {
+        tables: {
+          target_info_cpus: [
+            { renderer_id: 'target_info', output: 'target_info_cpus' },
+          ],
+        },
+      };
       isFiltering = true;
     }
 
@@ -891,12 +1020,38 @@ function renderCPUMicroarchitecture(context) {
         id: 'time_range',
         config: { entity: `tool/${tool_name}/0/` },
       },
+      {
+        type: 'SupportedCoreTypes',
+        id: 'supported_core_types',
+        config: {
+          data_source: {
+            tables: {
+              target_info_cpus: [
+                { renderer_id: 'target_info', output: 'target_info_cpus' },
+              ],
+            },
+          },
+        },
+      },
     );
     isSlAnalyzeRerendering = true;
-    const runDescription = context.getRunDescriptions()[0];
-    filters.push(enableFilterIfAvailable(timeRangeFilter, runDescription));
-    filters.push(enableFilterIfAvailable(processFilter, runDescription));
-    filters.push(enableFilterIfAvailable(threadFilter, runDescription));
+    filters.push(
+      enableCoreTypeFilterIfAvailable(
+        coreTypeFilter,
+        runDescription,
+        filterCoreType,
+        hasRichCapture,
+      ),
+    );
+    filters.push(
+      enableFilterIfAvailable(timeRangeFilter, runDescription, hasRichCapture),
+    );
+    filters.push(
+      enableFilterIfAvailable(processFilter, runDescription, hasRichCapture),
+    );
+    filters.push(
+      enableFilterIfAvailable(threadFilter, runDescription, hasRichCapture),
+    );
   }
 
   renderers.push(
@@ -907,10 +1062,6 @@ function renderCPUMicroarchitecture(context) {
         entity: `tool/${tool_name}/0/`,
         data_source: withSlAnalyzeRerenderDependency({}),
       },
-    },
-    {
-      type: 'TargetInfoRenderer',
-      id: 'target_info',
     },
     {
       type: 'StreamlineAnalyzeFlatFunctions2',
@@ -926,6 +1077,7 @@ function renderCPUMicroarchitecture(context) {
         ],
         data_source: withSlAnalyzeRerenderDependency(dataSource),
         entity: `tool/${tool_name}/0/`,
+        ...(filterCoreType === null ? {} : { cpu_name: filterCoreType }),
       },
     },
     {
@@ -934,6 +1086,7 @@ function renderCPUMicroarchitecture(context) {
       config: {
         data_source: withSlAnalyzeRerenderDependency(dataSource),
         entity: `tool/${tool_name}/0/`,
+        ...(filterCoreType === null ? {} : { cpu_name: filterCoreType }),
       },
     },
     {

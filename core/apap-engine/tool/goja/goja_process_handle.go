@@ -394,6 +394,7 @@ type TransferOptions struct {
 	ImmediateRetrieval bool     `json:"immediateRetrieval"`
 	Exclude            []string `json:"exclude"`
 	BackgroundTransfer bool     `json:"backgroundTransfer"`
+	Compressed         bool     `json:"compressed"`
 }
 
 func (b *BoundEngineContext) EmitOutput(path, relativePath string, meta goja.Value, transferOptions goja.Value) error {
@@ -408,6 +409,7 @@ func (b *BoundEngineContext) EmitOutput(path, relativePath string, meta goja.Val
 		regexp.MustCompile(`^immediateRetrieval$`),
 		regexp.MustCompile(`^exclude$`),
 		regexp.MustCompile(`^backgroundTransfer$`),
+		regexp.MustCompile(`^compressed$`),
 	}
 	if transferOptions != nil {
 		if err := gojautils.ParseObjectFromJSWithRegex(transferOptions, &to, allowedUnset, []*regexp.Regexp{}); err != nil {
@@ -418,6 +420,7 @@ func (b *BoundEngineContext) EmitOutput(path, relativePath string, meta goja.Val
 		ImmediateRetrieval: to.ImmediateRetrieval,
 		Exclude:            to.Exclude,
 		BackgroundTransfer: to.BackgroundTransfer,
+		Compressed:         to.Compressed,
 	})
 }
 

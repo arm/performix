@@ -1931,11 +1931,11 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 		updater := run.NewRunManifestUpdater(&builder, writer)
 		componentType := cdf.ComponentType{Name: "data", SchemaVersion: "1.0"}
 
-		err = updater.AddPendingComponent("entity/failed.txt", componentType)
+		err = updater.AddComponentWithFlags("entity/failed.txt", componentType, run.ComponentFlags{Pending: true})
 		require.ErrorContains(t, err, "forced manifest write failure")
 		require.Equal(t, 0, builder.ComponentCount())
 
-		err = updater.AddPendingComponent("entity/success.txt", componentType)
+		err = updater.AddComponentWithFlags("entity/success.txt", componentType, run.ComponentFlags{Pending: true})
 		require.NoError(t, err)
 		require.Equal(t, 1, builder.ComponentCount())
 		require.False(t, builder.IsComponentPending("entity/failed.txt"))
@@ -1995,7 +1995,7 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 		transfer := fileTransfer(t, false)
 		transfer.ComponentType = cdf.ComponentType{Name: "data", SchemaVersion: "1.0"}
 		request := TransferRequest{FileTransfer: transfer, AgentSupplier: agentSupplier(client), ManifestRelativePath: "entity/file.txt"}
-		tm.addPendingManifestEntry(request)
+		require.NoError(t, tm.addPendingManifestEntry(request))
 		mockSingleListFiles(client, transfer.RemotePath)
 		mockRetrieveFile(client, transfer.RemotePath)
 
@@ -2014,7 +2014,7 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 		transfer := fileTransfer(t, false)
 		transfer.ComponentType = cdf.ComponentType{Name: "data", SchemaVersion: "1.0"}
 		request := TransferRequest{FileTransfer: transfer, AgentSupplier: agentSupplier(client), ManifestRelativePath: "entity/file.txt"}
-		tm.addPendingManifestEntry(request)
+		require.NoError(t, tm.addPendingManifestEntry(request))
 		mockSingleListFiles(client, transfer.RemotePath)
 		mockRetrieveFileError(client, transfer.RemotePath, context.Canceled)
 
@@ -2031,7 +2031,7 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 		transfer := fileTransfer(t, false)
 		transfer.ComponentType = cdf.ComponentType{Name: "data", SchemaVersion: "1.0"}
 		request := TransferRequest{FileTransfer: transfer, ManifestRelativePath: "entity/file.txt"}
-		tm.addPendingManifestEntry(request)
+		require.NoError(t, tm.addPendingManifestEntry(request))
 
 		require.NotPanics(t, func() {
 			tm.startTransferRequest(request)
@@ -2051,7 +2051,7 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 		transfer.ComponentType = cdf.ComponentType{Name: "data", SchemaVersion: "1.0"}
 		request := TransferRequest{FileTransfer: transfer, AgentSupplier: agentSupplier(client), ManifestRelativePath: "entity/background.txt", BackgroundTransfer: true}
 
-		tm.addPendingManifestEntry(request)
+		require.NoError(t, tm.addPendingManifestEntry(request))
 		entry := requirePersistedManifestEntry(t, runCollection, runID, "entity/background.txt")
 		require.True(t, entry.Pending)
 
@@ -2072,7 +2072,7 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 		transfer.ComponentType = cdf.ComponentType{Name: "data", SchemaVersion: "1.0"}
 		request := TransferRequest{FileTransfer: transfer, AgentSupplier: agentSupplier(client), ManifestRelativePath: "entity/background.txt", BackgroundTransfer: true}
 
-		tm.addPendingManifestEntry(request)
+		require.NoError(t, tm.addPendingManifestEntry(request))
 		mockSingleListFiles(client, transfer.RemotePath)
 		mockRetrieveFileError(client, transfer.RemotePath, context.Canceled)
 
@@ -2090,7 +2090,7 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 		transfer.ComponentType = cdf.ComponentType{Name: "data", SchemaVersion: "1.0"}
 		request := TransferRequest{FileTransfer: transfer, AgentSupplier: agentSupplier(client), ManifestRelativePath: "entity/file.txt"}
 
-		tm.addPendingManifestEntry(request)
+		require.NoError(t, tm.addPendingManifestEntry(request))
 		tm.flushTransfer(FlushTransfersMessage{runSucceeded: false}, request)
 
 		requireNoPersistedManifestEntry(t, runCollection, runID, "entity/file.txt")
@@ -2113,11 +2113,11 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 		tm.deferredPhase1Transfers = []TransferRequest{phase1Request}
 		tm.deferredBackgroundTransfers = []TransferRequest{completedBackgroundRequest, pendingBackgroundRequest}
 
-		tm.addPendingManifestEntry(phase1Request)
+		require.NoError(t, tm.addPendingManifestEntry(phase1Request))
 		tm.finishManifestRequest(phase1Request, true)
-		tm.addPendingManifestEntry(completedBackgroundRequest)
+		require.NoError(t, tm.addPendingManifestEntry(completedBackgroundRequest))
 		tm.finishManifestRequest(completedBackgroundRequest, true)
-		tm.addPendingManifestEntry(pendingBackgroundRequest)
+		require.NoError(t, tm.addPendingManifestEntry(pendingBackgroundRequest))
 
 		tm.removeDeferredPendingManifestEntries()
 
@@ -2166,9 +2166,9 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 		tm, runCollection, runID := newManifestTestTransferManager(t, client)
 		transfer := globFileTransfer(t)
 		transfer.ComponentType = cdf.ComponentType{Name: "data", SchemaVersion: "1.0"}
-		request := TransferRequest{FileTransfer: transfer, AgentSupplier: agentSupplier(client), ManifestRelativePath: "entity/*", BackgroundTransfer: true}
+		request := TransferRequest{FileTransfer: transfer, AgentSupplier: agentSupplier(client), ManifestRelativePath: "entity/*", BackgroundTransfer: true, Compressed: true}
 
-		tm.addPendingManifestEntry(request)
+		require.NoError(t, tm.addPendingManifestEntry(request))
 		mockListFiles(client, transfer.RemotePath, listFilesResponse(
 			&targetagentproto.FileInfo{Path: "/remote/one.txt", Size: int64(len(testFileContents))},
 			&targetagentproto.FileInfo{Path: "/remote/two.txt", Size: int64(len(testFileContents))},
@@ -2182,6 +2182,14 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 
 		entry := requirePersistedManifestEntry(t, runCollection, runID, "entity/*")
 		require.False(t, entry.Pending)
+		require.True(t, entry.Compressed)
+		require.FileExists(t, filepath.Join(filepath.Dir(transfer.LocalPath), "one.txt.zst"))
+		require.FileExists(t, filepath.Join(filepath.Dir(transfer.LocalPath), "two.txt.zst"))
+		require.NoFileExists(t, filepath.Join(filepath.Dir(transfer.LocalPath), "one.txt"))
+		require.ElementsMatch(t, []string{
+			filepath.Join(filepath.Dir(transfer.LocalPath), "one.txt.zst"),
+			filepath.Join(filepath.Dir(transfer.LocalPath), "two.txt.zst"),
+		}, []string{tm.completedTransfers[0].LocalPath, tm.completedTransfers[1].LocalPath})
 		client.AssertExpectations(t)
 	})
 
@@ -2192,7 +2200,7 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 		transfer.ComponentType = cdf.ComponentType{Name: "data", SchemaVersion: "1.0"}
 		request := TransferRequest{FileTransfer: transfer, AgentSupplier: agentSupplier(client), ManifestRelativePath: "entity/*", BackgroundTransfer: true}
 
-		tm.addPendingManifestEntry(request)
+		require.NoError(t, tm.addPendingManifestEntry(request))
 		mockListFiles(client, transfer.RemotePath, listFilesResponse(
 			&targetagentproto.FileInfo{Path: transfer.RemotePath, Error: os.ErrNotExist.Error()},
 		))
@@ -2206,9 +2214,10 @@ func TestTransferManagerManifestUpdates(t *testing.T) {
 }
 
 func TestTransferManagerRollbackTransfer(t *testing.T) {
-	t.Run("removes local file and logs rollback start", func(t *testing.T) {
+	t.Run("removes compressed physical file and logs rollback start", func(t *testing.T) {
 		tm, logBuf := newTransferManagerWithLogBuffer()
 		transfer := fileTransfer(t, false)
+		transfer.LocalPath = cdf.ManifestEntry{Path: transfer.LocalPath, Compressed: true}.StoragePath()
 		assert.NoError(t, os.WriteFile(transfer.LocalPath, []byte("retrieved data"), 0o600))
 
 		tm.rollbackTransfer(transfer)
@@ -2336,4 +2345,27 @@ func TestTransferManagerCopyFromTargetAndWait(t *testing.T) {
 	require.NoError(t, requireMessage(t, done, "CopyFromTargetAndWait did not return"))
 	requireFileContents(t, transfer.LocalPath, testFileContents)
 	client.AssertExpectations(t)
+}
+
+func TestTransferManagerRejectsCompressionConflictBeforeListingFiles(t *testing.T) {
+	client := &targetagentmocks.TargetAgentClient{}
+	setup, collection, runID := newManifestTestTransferManager(t, client)
+	updater := setup.manifestUpdater
+	require.NoError(t, updater.AddComponentWithFlags("entity/*.csv", cdf.ComponentType{}, run.ComponentFlags{Compressed: true}))
+	tm := NewTransferManager(1, updater)
+	done := make(chan struct{})
+	go func() { tm.Listen(logrus.New(), nil, &NullStageNotifier{}); close(done) }()
+	<-tm.ListeningStarted
+	tm.AddTransfer(TransferRequest{
+		FileTransfer:         conductor.FileTransfer{RemotePath: "/remote/foo.csv", LocalPath: updater.ComponentPath("entity/foo.csv")},
+		ManifestRelativePath: "entity/foo.csv", AgentSupplier: agentSupplier(client), ImmediateRetrieval: true,
+	})
+	require.Error(t, tm.FlushTransfers(true))
+	<-done
+	entry := requirePersistedManifestEntry(t, collection, runID, "entity/*.csv")
+	require.True(t, entry.Compressed)
+	require.False(t, entry.Pending)
+	requireNoPersistedManifestEntry(t, collection, runID, "entity/foo.csv")
+	client.AssertNotCalled(t, "ListFiles", mock.Anything, mock.Anything)
+	client.AssertNotCalled(t, "RetrieveFile", mock.Anything, mock.Anything, mock.Anything)
 }

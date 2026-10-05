@@ -121,7 +121,7 @@ func createRawDisassemblyView(db *sql.Conn, disassemblyComponent cdf.Component, 
 
 	createViewStatement := strings.NewReplacer(
 		"__VIEW_NAME__", viewName,
-		"__DISASSEMBLY_PATH__", disassemblyComponent.AbsolutePath,
+		"__DISASSEMBLY_PATH__", disassemblyComponent.GlobPath("-*.csv"),
 	).Replace(createRawViewSQL)
 	_, err = db.ExecContext(context.Background(), createViewStatement)
 	return err

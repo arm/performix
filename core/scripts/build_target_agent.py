@@ -4,11 +4,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
-import json
+from pathlib import Path
 
 GORELEASER_INSTALL_PATH = "github.com/goreleaser/goreleaser/v2@latest"
 REQUIRED_TOOLCHAIN = "go1.27.0+auto"
@@ -129,6 +130,7 @@ def run_goreleaser(executable_path, config_path, snapshot, no_inject, no_sign):
         cmd.append("--snapshot")
 
     env = os.environ.copy()
+    env["PERFORMIX_PYTHON_EXECUTABLE"] = Path(sys.executable).as_posix()
     if no_inject:
         env["NO_INJECT"] = "1"
     if no_sign:

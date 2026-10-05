@@ -277,7 +277,7 @@ func TestRunCreate(t *testing.T) {
 		require.NoError(t, err)
 
 		componentType := cdf.ComponentType{Name: "capture_apc", SchemaVersion: "1.0"}
-		builder.AddPendingComponent(componentType, "capture.apc/**/*")
+		builder.AddComponentWithFlags(componentType, "capture.apc/**/*", ComponentFlags{Pending: true})
 
 		runID, err := runCollection.CreateRun(builder, &cdf.Metadata{})
 		require.NoError(t, err)
@@ -836,7 +836,7 @@ func TestRunManifest(t *testing.T) {
 		completeType := cdf.ComponentType{Name: "complete", SchemaVersion: "1.0"}
 		pendingType := cdf.ComponentType{Name: "pending", SchemaVersion: "1.0"}
 		builder.AddComponent(completeType, "entity/complete.txt")
-		builder.AddPendingComponent(pendingType, "entity/pending.txt")
+		builder.AddComponentWithFlags(pendingType, "entity/pending.txt", ComponentFlags{Pending: true})
 		runID, err := runCollection.CreateRun(builder, &cdf.Metadata{})
 		require.NoError(t, err)
 

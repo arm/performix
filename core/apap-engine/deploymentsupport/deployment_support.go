@@ -183,7 +183,10 @@ func CheckParameterRequirement(ctx context.Context, spec RequirementSpec, params
 	for param, expectedValue := range spec.Parameters {
 		val, exists := params.FindValue(param)
 		if !exists {
-			return false, nil
+			if requireParamToBeSet {
+				return false, nil
+			}
+			continue
 		}
 		if val != expectedValue && requireParamToBeSet {
 			return false, nil

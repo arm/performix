@@ -50,9 +50,10 @@ type GrpcServerConfig struct {
 	EnableRerendering         bool
 	EnableExperimentalRecipes bool
 	EnableSecondaryRunPaths   bool
-	EnableTransferManager     bool
+	EnableGPURecipe           bool
 	EnableRenderDBSandbox     bool
 	EnableNeoprofTimeline     bool
+	EnableJfrCapture          bool
 	ConfigDirectory           string
 	RunContext                func() context.Context
 }
@@ -65,16 +66,6 @@ type GrpcServer struct {
 
 func (s *GrpcServer) deletePidFile() {
 	pidfiles.DeletePid(s.Config.Host, s.Config.Port)
-}
-
-func onInterrupt(ctx context.Context, f func()) {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	select {
-	case <-c:
-	case <-ctx.Done():
-	}
-	f()
 }
 
 func (s *GrpcServer) makePidFile() error {
@@ -156,9 +147,10 @@ func (s *GrpcServer) runServer() error {
 		EnableRerendering:         s.Config.EnableRerendering,
 		EnableExperimentalRecipes: s.Config.EnableExperimentalRecipes,
 		EnableSecondaryRunPaths:   s.Config.EnableSecondaryRunPaths,
-		EnableTransferManager:     s.Config.EnableTransferManager,
+		EnableGPURecipe:           s.Config.EnableGPURecipe,
 		EnableRenderDBSandbox:     s.Config.EnableRenderDBSandbox,
 		EnableNeoprofTimeline:     s.Config.EnableNeoprofTimeline,
+		EnableJfrCapture:          s.Config.EnableJfrCapture,
 		ServerHostname:            s.Config.Host,
 		ServerGRPCPort:            s.Config.Port,
 		ServerAuthPort:            s.Config.AuthPort,
@@ -277,11 +269,35 @@ func (s *GrpcServer) runServer() error {
 	}
 	defer s.deletePidFile()
 
-	serve(ctx, grpcServer, lis, cancel)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	stopWatcher := make(chan struct{})
+	// Register this before the server cleanup below so signal handling remains
+	// active until both deferred GracefulStop calls have completed. Stop signal
+	// delivery before releasing a watcher that has not received a signal.
+	defer func() {
+		signal.Stop(signals)
+		close(stopWatcher)
+	}()
+	go func() {
+		select {
+		case received := <-signals:
+			log.WithFields(log.Fields{
+				"component": "engine",
+				"pid":       os.Getpid(),
+				"ppid":      os.Getppid(),
+				"signal":    received.String(),
+			}).Debug("gRPC server received shutdown signal")
+			cancel()
+		case <-stopWatcher:
+		}
+	}()
+
+	serve(grpcServer, lis, cancel)
 	closeMainListener = false
 	defer grpcServer.GracefulStop()
 
-	serve(ctx, authServer, authLis, cancel)
+	serve(authServer, authLis, cancel)
 	closeAuthListener = false
 	defer authServer.GracefulStop()
 
@@ -293,15 +309,13 @@ func (s *GrpcServer) runServer() error {
 }
 
 // serve runs the gRPC server in a goroutine until the context is cancelled.
-func serve(ctx context.Context, server *grpc.Server, lis net.Listener, cancel context.CancelFunc) {
+func serve(server *grpc.Server, lis net.Listener, cancel context.CancelFunc) {
 	go func() {
 		if err := server.Serve(lis); err != nil {
 			log.WithFields(log.Fields{"error": err}).Error("Failed to serve")
 			cancel()
 		}
 	}()
-
-	go onInterrupt(ctx, cancel)
 }
 
 // RunBlocking runs the gRPC server and blocks until it is shutdown.

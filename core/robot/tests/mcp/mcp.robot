@@ -22,6 +22,12 @@ The MCP Server Starts And Stops Its Engine
   ${result} =  When Run MCP And Verify Engine Lifecycle  ${bin}  tool_name=list_recipes
   Then MCP Result Should Contain Recipe  ${result}  code_hotspots
 
+The MCP Server Stops Its Engine When Client Pipes Close
+  [Documentation]  Verify that a broken stderr pipe cannot stop MCP before stdin EOF triggers engine shutdown.
+  ${bin} =  Given Determine Unix APX Binary Path
+  ${result} =  When Run MCP And Verify Engine Lifecycle  ${bin}  tool_name=list_recipes  broken_stderr_cleanup=${TRUE}
+  Then MCP Result Should Contain Recipe  ${result}  code_hotspots
+
 The MCP Engine Stops When MCP Cannot Run Deferred Cleanup
   [Documentation]  Verify that the engine stops when the client signals MCP's process group and MCP cannot clean it up.
   ${bin} =  Given Determine Unix APX Binary Path

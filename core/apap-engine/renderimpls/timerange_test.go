@@ -36,7 +36,7 @@ func TestGetProfilingTimeRange(t *testing.T) {
 
 		statePath := writeStateXML(t, stateXML)
 
-		endTimeNS, absStartTimeUS, err := getProfilingTimeRange(statePath)
+		endTimeNS, absStartTimeUS, err := getProfilingTimeRange(cdf.Component{AbsolutePath: statePath})
 
 		require.NoError(t, err)
 		assert.Equal(t, int64(191015855589), endTimeNS)
@@ -49,7 +49,7 @@ func TestGetProfilingTimeRange(t *testing.T) {
 
 		statePath := writeStateXML(t, xmlData)
 
-		_, _, err := getProfilingTimeRange(statePath)
+		_, _, err := getProfilingTimeRange(cdf.Component{AbsolutePath: statePath})
 		require.Error(t, err)
 	})
 
@@ -57,7 +57,7 @@ func TestGetProfilingTimeRange(t *testing.T) {
 	t.Run("invalid_int", func(t *testing.T) {
 		xmlData := `<state version="20240819" name="unknown" edition="analyze_capture" created="not_a_number" stop_time="191015855589" application_mode="true" time_unit="nanoseconds"/>`
 		statePath := writeStateXML(t, xmlData)
-		_, _, err := getProfilingTimeRange(statePath)
+		_, _, err := getProfilingTimeRange(cdf.Component{AbsolutePath: statePath})
 		assert.Error(t, err)
 	})
 
@@ -65,9 +65,21 @@ func TestGetProfilingTimeRange(t *testing.T) {
 	t.Run("invalid_unit", func(t *testing.T) {
 		xmlData := `<state version="20240819" name="unknown" edition="analyze_capture" created="1778510768998535" stop_time="191015855589" application_mode="true" time_unit="invalid_unit"/>`
 		statePath := writeStateXML(t, xmlData)
-		_, _, err := getProfilingTimeRange(statePath)
+		_, _, err := getProfilingTimeRange(cdf.Component{AbsolutePath: statePath})
 		assert.Error(t, err)
 	})
+}
+
+func TestGetProfilingTimeRangeReadsCompressedComponent(t *testing.T) {
+	component := writeCompressedComponent(t, "state.xml", []byte(
+		`<state created="1778510768998535" stop_time="191015855589" time_unit="nanoseconds"/>`,
+	))
+
+	endTimeNS, absStartTimeUS, err := getProfilingTimeRange(component)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(191015855589), endTimeNS)
+	assert.Equal(t, int64(1778510768998535), absStartTimeUS)
 }
 
 // TestTimeRangeRendererName ensures the renderer name is stable.

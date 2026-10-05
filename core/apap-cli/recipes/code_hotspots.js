@@ -9,12 +9,14 @@ const {
   buildTimelineSQLRendererBundle,
 } = require('./lib/timeline_sql_renderer');
 const { buildNeoprofTimelineVisualization } = require('./lib/timeline_config');
+const { buildJavaAnalysisRender } = require('./lib/java_analysis_render');
 const {
   NEOPROF_TIMELINE_BIN_DURATIONS_NS,
 } = require('../tool-integrations/neoprof_timeline');
 
 const TOOL_NEOPROF = { name: 'neoprof', version: '1.1.0' };
 const TOOL_WPERF = { name: 'wperf', version: '1.0.1' };
+const CORE_TYPE_RENDER_PARAMETER = 'filter_core_type';
 const NEOPROF_TIMELINE_COUNTER_PARQUET_PATTERN =
   'tool/neoprof/0/output/parquet/timeline/key_type=*/series_id=*/bin_duration=*/counter.parquet';
 const NEOPROF_TIMELINE_CAPTURE_METADATA_PATTERN =
@@ -92,7 +94,7 @@ var recipe = {
       required: false,
       label: 'Collect Java stacks',
       description:
-        'Enable collection of Java stack traces when profiling JVM workloads.',
+        'Collect Java stack traces for JVM workloads. Java Flight Recorder data is also collected when available.',
       config: {
         type: 'checkbox',
         defaultValue: false,
@@ -154,6 +156,12 @@ var recipe = {
       id: 'filter_end_time_ns',
       config: {
         type: 'number',
+      },
+    },
+    {
+      id: CORE_TYPE_RENDER_PARAMETER,
+      config: {
+        type: 'string',
       },
     },
   ],
@@ -249,14 +257,14 @@ function buildNeoprofParams(context, samplingFreq) {
   const params = {
     mode: 'samples',
     sampling_frequency: samplingFreq,
-    rich_data_capture: androidTarget
-      ? false
-      : context.getParameter('rich_data_capture'),
+    rich_data_capture: context.getParameter('rich_data_capture'),
     reformat_on_host: androidTarget || context.getParameter('reformat_on_host'),
   };
 
   if (!androidTarget) {
-    params.collect_java_stacks = context.getParameter('collect_java_stacks');
+    const enableJavaAnalysis = context.getParameter('collect_java_stacks');
+    params.collect_java_stacks = enableJavaAnalysis;
+    params.collect_jfr = enableJavaAnalysis && context.isJfrCaptureEnabled();
     params.collect_dotnet_stacks = context.getParameter(
       'collect_dotnet_stacks',
     );
@@ -322,9 +330,10 @@ function readyHotspots(context) {
   const samplingFreq = context.getParameter('sampling_freq');
   const targetInfo = context.targetInfo();
   const hostReformatEnabled = context.getParameter('reformat_on_host');
+  const collectJavaStacks = context.getParameter('collect_java_stacks');
+  const enableJavaAnalysis = collectJavaStacks && context.isJfrCaptureEnabled();
   const collectJitDumpsEnabled =
-    context.getParameter('collect_java_stacks') ||
-    context.getParameter('collect_dotnet_stacks');
+    collectJavaStacks || context.getParameter('collect_dotnet_stacks');
   const richDataCaptureEnabled = context.getParameter('rich_data_capture');
 
   if (isWindowsTarget(targetInfo)) {
@@ -342,6 +351,9 @@ function readyHotspots(context) {
         },
         Cause: '',
       });
+    }
+    if (enableJavaAnalysis) {
+      allAdvice.push(javaAnalysisUnsupportedAdvice(TOOL_WPERF.name, 'Windows'));
     }
     if (hostReformatEnabled) {
       allAdvice.push({
@@ -375,9 +387,29 @@ function readyHotspots(context) {
   }
 
   const params = buildNeoprofParams(context, samplingFreq);
+  // The GUI probes readiness before a workload has necessarily been selected.
+  // Defer Java-specific tool checks until the workload type is known.
+  if (enableJavaAnalysis && !workload.Type) {
+    params.collect_java_stacks = false;
+    params.collect_jfr = false;
+  }
   const tools = generateNeoprofConfig(workload, params);
   const toolResponses = context.probeTools(tools);
   const allAdvice = collectToolAdvice(tools, toolResponses);
+  if (enableJavaAnalysis) {
+    if (isAndroidTarget(targetInfo)) {
+      allAdvice.push(
+        javaAnalysisUnsupportedAdvice(TOOL_NEOPROF.name, 'Android'),
+      );
+    } else if (hostReformatEnabled) {
+      allAdvice.push(
+        javaAnalysisUnsupportedAdvice(
+          TOOL_NEOPROF.name,
+          'host-side reformatting',
+        ),
+      );
+    }
+  }
   if (collectJitDumpsEnabled) {
     if (isAndroidTarget(targetInfo)) {
       allAdvice.push({
@@ -407,6 +439,18 @@ function readyHotspots(context) {
   return {
     status: toolStatusToRecipeStatus(allAdvice),
     advice: allAdvice,
+  };
+}
+
+function javaAnalysisUnsupportedAdvice(toolName, mode) {
+  return {
+    ToolName: toolName,
+    AdviceSeverity: 'error',
+    MessageCode: readinessMessageCode,
+    Metadata: {
+      message: `Java analysis is not supported with ${mode}. Use a supported Linux target with target-side reformatting.`,
+    },
+    Cause: '',
   };
 }
 
@@ -633,10 +677,42 @@ const threadFilter = {
   },
 };
 
-function enableFilterIfAvailable(filter, runDescription) {
-  // Treat a missing parameter as disabled; only an explicit true enables time-range filtering.
+const coreTypeFilter = {
+  id: 'core_type',
+  type: 'single_selection_list_filter',
+  title: 'Core type',
+  rendererId: 'supported_core_types',
+  description: 'Include data from a selected CPU core type.',
+  parameterBindings: {
+    value: CORE_TYPE_RENDER_PARAMETER,
+  },
+  config: {
+    data_source: {
+      tables: {
+        coreTypes: [
+          {
+            renderer_id: 'supported_core_types',
+            output: 'supported_core_types',
+          },
+        ],
+      },
+    },
+    optionsQuery: {
+      dataSource: 'coreTypes',
+      query:
+        'SELECT name AS value, name AS label FROM __table__ GROUP BY name ORDER BY MIN(core_number), name',
+      tableNamePlaceholder: '__table__',
+    },
+    allowNone: true,
+    emptyMessage: 'No supported core types are available for this run.',
+  },
+};
+
+function enableFilterIfAvailable(filter, runDescription, hasRichCapture) {
+  // Treat missing parameters as disabled; only an explicit true enables global filtering.
   const richDataCaptureEnabled =
-    runDescription.Parameters.rich_data_capture === true;
+    runDescription.Parameters.rich_data_capture === true ||
+    runDescription.Parameters.include_raw_data === true;
 
   if (!richDataCaptureEnabled) {
     return {
@@ -654,6 +730,15 @@ function enableFilterIfAvailable(filter, runDescription) {
         reason: runDescription.IsRunInProgress
           ? 'Unavailable until all capture data has been retrieved from the target.'
           : 'Unavailable because the run ended before all capture data was retrieved from the target.',
+      },
+    };
+  }
+  if (!hasRichCapture) {
+    return {
+      ...filter,
+      disabled: {
+        reason:
+          'Global filtering is unavailable because this run has no retained rich capture data.',
       },
     };
   }
@@ -676,6 +761,24 @@ function renderHotspots(context) {
 
   const tool = runToolInfo.tool;
   const runDescription = context.getRunDescriptions()[0];
+  const supportsFiltering =
+    context.isRerenderingEnabled() &&
+    tool.name === TOOL_NEOPROF.name &&
+    !isComparison;
+  const hasRichCapture =
+    supportsFiltering &&
+    context
+      .listRunComponents(0, `tool/${tool.name}/0/**`)
+      .some((component) => component.componentType.name === 'capture_apc');
+  const coreTypeFilterIsAvailable =
+    supportsFiltering &&
+    (runDescription.Parameters.rich_data_capture === true ||
+      runDescription.Parameters.include_raw_data === true) &&
+    runDescription.IsRunPhaseTwoComplete &&
+    hasRichCapture;
+  const filterCoreType = coreTypeFilterIsAvailable
+    ? (context.getRenderParameter(CORE_TYPE_RENDER_PARAMETER) ?? null)
+    : null;
   const filterPid = getRenderParameterIfExists(context, 'filter_pid');
   const filterTid = getRenderParameterIfExists(context, 'filter_tid');
   const filterStartTimeNs = getRenderParameterIfExists(
@@ -896,12 +999,13 @@ function renderHotspots(context) {
 
   let renderers = [];
   const filters = [];
+  renderers.push({
+    type: 'TargetInfoRenderer',
+    id: 'target_info',
+    config: { entity: `tool/${tool.name}/0/` },
+  });
   // SlAnalyzeRenderer and ProcessesAndThreadsParser are only applicable to neoprof since wperf does not capture an apc dir.
-  if (
-    context.isRerenderingEnabled() &&
-    tool.name === TOOL_NEOPROF.name &&
-    !isComparison
-  ) {
+  if (supportsFiltering) {
     const slAnalyzeConfig = { entity: `tool/${tool.name}/0/` };
     let isFiltering = false;
     if (filterTid !== null && Number.isFinite(filterTid)) {
@@ -925,6 +1029,17 @@ function renderHotspots(context) {
       filterEndTimeNs >= 0
     ) {
       slAnalyzeConfig.filter_end_time_ns = Math.round(filterEndTimeNs);
+      isFiltering = true;
+    }
+    if (filterCoreType !== null) {
+      slAnalyzeConfig.filter_core_type = filterCoreType;
+      slAnalyzeConfig.data_source = {
+        tables: {
+          target_info_cpus: [
+            { renderer_id: 'target_info', output: 'target_info_cpus' },
+          ],
+        },
+      };
       isFiltering = true;
     }
 
@@ -951,10 +1066,32 @@ function renderHotspots(context) {
       id: 'time_range',
       config: { entity: `tool/${tool.name}/0/` },
     });
+    renderers.push({
+      type: 'SupportedCoreTypes',
+      id: 'supported_core_types',
+      config: {
+        data_source: {
+          tables: {
+            target_info_cpus: [
+              { renderer_id: 'target_info', output: 'target_info_cpus' },
+            ],
+          },
+        },
+      },
+    });
 
-    filters.push(enableFilterIfAvailable(timeRangeFilter, runDescription));
-    filters.push(enableFilterIfAvailable(processFilter, runDescription));
-    filters.push(enableFilterIfAvailable(threadFilter, runDescription));
+    filters.push(
+      enableFilterIfAvailable(coreTypeFilter, runDescription, hasRichCapture),
+    );
+    filters.push(
+      enableFilterIfAvailable(timeRangeFilter, runDescription, hasRichCapture),
+    );
+    filters.push(
+      enableFilterIfAvailable(processFilter, runDescription, hasRichCapture),
+    );
+    filters.push(
+      enableFilterIfAvailable(threadFilter, runDescription, hasRichCapture),
+    );
   }
   renderers.push(
     {
@@ -964,11 +1101,6 @@ function renderHotspots(context) {
         entity: `tool/${tool.name}/0/`,
         data_source: withSlAnalyzeRerenderDependency({}),
       },
-    },
-    {
-      type: 'TargetInfoRenderer',
-      id: 'target_info',
-      config: { entity: `tool/${tool.name}/0/` },
     },
     {
       type: 'StreamlineAnalyzeFlatFunctions2',
@@ -985,6 +1117,7 @@ function renderHotspots(context) {
         ],
         data_source: withSlAnalyzeRerenderDependency(dataSource),
         entity: `tool/${tool.name}/0/`,
+        ...(filterCoreType === null ? {} : { cpu_name: filterCoreType }),
       },
     },
     {
@@ -1012,6 +1145,7 @@ function renderHotspots(context) {
           },
         ],
         data_source: withSlAnalyzeRerenderDependency(dataSource),
+        ...(filterCoreType === null ? {} : { cpu_name: filterCoreType }),
       },
     },
     {
@@ -1357,11 +1491,17 @@ function renderHotspots(context) {
     });
   }
 
+  const javaRender = buildJavaAnalysisRender(
+    context,
+    'tool/neoprof/0/java/parquet',
+    visualizations,
+  );
+
   return {
-    renderers,
+    renderers: [...renderers, ...javaRender.renderers],
     ui: {
-      visualizations,
-      side_panel_filters: filters,
+      visualizations: javaRender.ui.visualizations,
+      side_panel_filters: [...filters, ...javaRender.ui.side_panel_filters],
     },
   };
 }

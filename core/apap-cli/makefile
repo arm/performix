@@ -24,10 +24,14 @@ AI_INSIGHTS_EVAL_VENV_STAMP := $(AI_INSIGHTS_EVAL_VENV_DIR)/.deps-installed
 ifeq ($(HOST_OS),windows)
 	TOOLS_VENV_PYTHON := $(TOOLS_VENV_DIR)/Scripts/python.exe
 	AI_INSIGHTS_EVAL_VENV_PYTHON := $(AI_INSIGHTS_EVAL_VENV_DIR)/Scripts/python.exe
+	ROBOT_PYTHON := python
 else
 	TOOLS_VENV_PYTHON := $(TOOLS_VENV_DIR)/bin/python
 	AI_INSIGHTS_EVAL_VENV_PYTHON := $(AI_INSIGHTS_EVAL_VENV_DIR)/bin/python
+	ROBOT_PYTHON := python3
 endif
+
+ROBOT_BASH_RUNNER := $(ROBOT_PYTHON) ../scripts/run-bash.py
 
 # Determine the right extension for the binary based on OS
 ifeq ($(GOOS),windows)
@@ -113,7 +117,7 @@ test:
 # See robot/README.md for more options and further details.
 robot-test:
 	$(if $(TARGET),,$(error TARGET is required. Usage: make robot-test TARGET=<name>))
-	@../scripts/python/run-robot.sh --target $(TARGET) $(ROBOT_ARGS)
+	@$(ROBOT_BASH_RUNNER) ../scripts/python/run-robot.sh --target $(TARGET) $(ROBOT_ARGS)
 
 tools: FORCE $(TOOLS_VENV_STAMP)
 	@echo "Fetching tool bundle"

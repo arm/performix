@@ -8,9 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 
 	log "github.com/sirupsen/logrus"
@@ -18,6 +16,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf/semver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
+	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
 
 type SymbolMapper func(targetFilePath string) (
@@ -226,7 +225,16 @@ func newSourceMapperFromModel(model cdf.ModelView) SymbolMapper {
 		return NewSourceMapper(run.HostSourceCodePath{})
 	}
 
-	hosts, err := run.ReadHostSourceCodePath(sourceComp.AbsolutePath)
+	contents, err := sourceComp.ReadAll()
+	if err != nil {
+		log.Warnf("failed to read %q: %v", run.SourceCodeFilename, err)
+		return NewSourceMapper(run.HostSourceCodePath{})
+	}
+
+	hosts := &run.HostSourceCodePath{}
+	if len(contents) > 0 {
+		hosts, err = util.DecodeJSON[run.HostSourceCodePath](contents)
+	}
 	if err != nil {
 		log.Warnf("failed to read %q: %v", run.SourceCodeFilename, err)
 		return NewSourceMapper(run.HostSourceCodePath{})
@@ -257,7 +265,7 @@ func createRawSamplesView(db *sql.Conn, sourceCodeComponent cdf.Component, viewN
 			"Periodic Samples" AS "periodic_samples",
 			regexp_extract("Functions", '([^(]+)\(', 1) AS "function",
 		FROM read_csv(
-    		'`, sourceCodeComponent.AbsolutePath, `-*.csv',
+			'`, sourceCodeComponent.GlobPath("-*.csv"), `',
     		header        = TRUE,
 			null_padding  = TRUE,
 			union_by_name = TRUE,
@@ -479,29 +487,11 @@ func doesSymbolsFieldExist(db *sql.Conn, symbolsComponent cdf.Component, columnN
 
 // doSamplesFilesExist checks for the presence of any periodic sampling csv files using a regex match
 func doSamplesFilesExist(sourceCodeComponent cdf.Component) (bool, error) {
-	rootDir := filepath.Dir(sourceCodeComponent.AbsolutePath)
-	samplesName := filepath.Base(sourceCodeComponent.AbsolutePath)
-	regex, err := regexp.Compile(fmt.Sprintf(`%s-.*\.csv$`, regexp.QuoteMeta(samplesName)))
+	matches, err := filepath.Glob(sourceCodeComponent.GlobPath("-*.csv"))
 	if err != nil {
 		return false, err
 	}
-
-	// Walk through files
-	found := false
-	err = filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if regex.MatchString(d.Name()) {
-			found = true
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	if err != nil {
-		return false, err
-	}
-	return found, nil
+	return len(matches) > 0, nil
 }
 
 // updateSourceFiles adds any new source file paths found in the samples view to the source files table

@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
+	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
@@ -14,6 +15,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
+	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
 )
 
 func DeployMandatoryTools(context context.Context, tgt target.Target, daemonPaths deployer.BaseToolDeploymentPaths, deployMode deployer.ToolDeploymentMode, packageManager *packages.PackageManager, targetSessions targetsession.TargetSessionProvider) (deployer.ReconcileResult, error) {
@@ -25,7 +27,16 @@ func DeployMandatoryTools(context context.Context, tgt target.Target, daemonPath
 		connectStage.CommandRunnerSupplier,
 		connectStage.TargetFilesystemSupplier,
 		connectStage.TargetSessionSupplier,
-		func() []deploymentsupport.ToolBundleInfo { return nil },
+		func() []deploymentsupport.ToolBundleInfo {
+			if targetArchitectureStage.PlatformConfigurationSupplier().OS != conductor.Android {
+				return nil
+			}
+			return []deploymentsupport.ToolBundleInfo{{
+				Name:     "sl-record",
+				Version:  versions.SlRecordVersion,
+				Locality: deploymentsupport.DeploymentLocalityTarget,
+			}}
+		},
 		deploymentsupport.DeploymentLocalityTarget,
 		deployMode,
 		packageManager,

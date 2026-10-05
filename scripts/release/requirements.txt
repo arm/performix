@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# Python dependencies for the internal open-source staging and publishing tools.
+GitPython==3.1.59

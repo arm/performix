@@ -4,6 +4,7 @@
 package renderimpls
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -34,6 +35,7 @@ type SlAnalyzeRendererConfigJSON struct {
 	FilterTid         *int     `json:"filter_tid,omitempty"`
 	FilterStartTimeNs *int64   `json:"filter_start_time_ns,omitempty"`
 	FilterEndTimeNs   *int64   `json:"filter_end_time_ns,omitempty"`
+	FilterCoreType    *string  `json:"filter_core_type,omitempty"`
 	Grouping          []string `json:"grouping,omitempty"`
 	Entity            string   `json:"entity"`
 }
@@ -67,14 +69,25 @@ func (renderer *SlAnalyzeRenderer) Configure(config *render.Config) error {
 }
 
 func (renderer *SlAnalyzeRenderer) DoRenderParamsExist() bool {
-	if renderer.specificConfig.FilterPid != nil || renderer.specificConfig.FilterTid != nil || renderer.specificConfig.FilterStartTimeNs != nil || renderer.specificConfig.FilterEndTimeNs != nil || len(renderer.specificConfig.Grouping) != 0 {
+	if renderer.specificConfig.FilterPid != nil || renderer.specificConfig.FilterTid != nil || renderer.specificConfig.FilterStartTimeNs != nil || renderer.specificConfig.FilterEndTimeNs != nil || renderer.specificConfig.FilterCoreType != nil || len(renderer.specificConfig.Grouping) != 0 {
 		return true
 	}
 	return false
 }
 
-// GetInputSpec returns an empty input specification.
+// GetInputSpec declares target CPU information only when core-type filtering is configured.
 func (renderer *SlAnalyzeRenderer) GetInputSpec() render.InputSpec {
+	if renderer.specificConfig != nil && renderer.specificConfig.FilterCoreType != nil {
+		return render.InputSpec{
+			PortList: render.PortList{Ports: []render.PortSpec{
+				{
+					Name:          "target_info_cpus",
+					Cardinality:   render.CardinalityPerRun,
+					ComponentType: cdf.ComponentType{Name: "target-info-cpus", SchemaVersion: "0.1"},
+				},
+			}},
+		}
+	}
 	return render.InputSpec{}
 }
 
@@ -84,7 +97,7 @@ func (renderer *SlAnalyzeRenderer) GetOutputSpec() render.OutputSpec {
 }
 
 // Initialize executes sl-analyze (when enabled) and emits output files.
-func (renderer *SlAnalyzeRenderer) Initialize(session render.Session, _ map[string][]render.TableRef) error {
+func (renderer *SlAnalyzeRenderer) Initialize(session render.Session, resolvedData map[string][]render.TableRef) error {
 	if !renderer.DoRenderParamsExist() {
 		return nil
 	}
@@ -109,7 +122,7 @@ func (renderer *SlAnalyzeRenderer) Initialize(session render.Session, _ map[stri
 	}
 
 	pending := false
-	for _, entry := range session.Content().Entries {
+	for entryIndex, entry := range session.Content().Entries {
 		// Resolve capture.apc directory for the run.
 		captureDir, err := renderer.resolveCaptureRoot(entry.Model)
 		if errors.Is(err, cdf.ErrComponentPending) {
@@ -122,6 +135,23 @@ func (renderer *SlAnalyzeRenderer) Initialize(session render.Session, _ map[stri
 			continue
 		} else if err != nil {
 			return err
+		}
+
+		var coreNumbers []int
+		if renderer.specificConfig.FilterCoreType != nil {
+			targetInfoTables := resolvedData["target_info_cpus"]
+			if entryIndex >= len(targetInfoTables) {
+				return fmt.Errorf("missing required input 'target_info_cpus' for content index %d", entryIndex)
+			}
+			coreNumbers, err = resolveCoreNumbers(
+				context.Background(),
+				session.Database().Conn,
+				targetInfoTables[entryIndex].Name,
+				*renderer.specificConfig.FilterCoreType,
+			)
+			if err != nil {
+				return coreTypeUnavailableError(*renderer.specificConfig.FilterCoreType, err)
+			}
 		}
 
 		// Create the temp render directory for sl-analyze output.
@@ -137,7 +167,7 @@ func (renderer *SlAnalyzeRenderer) Initialize(session render.Session, _ map[stri
 		}
 
 		// Run sl-analyze and place outputs in the temp render directory.
-		args := renderer.buildSlAnalyzeArgs(slAnalyzePath, tempDir, captureDir)
+		args := renderer.buildSlAnalyzeArgs(slAnalyzePath, tempDir, captureDir, coreNumbers)
 		if err := runSlAnalyze(args); err != nil {
 			return err
 		}
@@ -174,7 +204,7 @@ func (renderer *SlAnalyzeRenderer) resolveCaptureRoot(model cdf.ModelView) (stri
 }
 
 // buildSlAnalyzeArgs builds the sl-analyze command line arguments.
-func (renderer *SlAnalyzeRenderer) buildSlAnalyzeArgs(slAnalyzePath, tempDir, captureDir string) []string {
+func (renderer *SlAnalyzeRenderer) buildSlAnalyzeArgs(slAnalyzePath, tempDir, captureDir string, coreNumbers []int) []string {
 	args := []string{
 		slAnalyzePath,
 		"-o",
@@ -203,6 +233,11 @@ func (renderer *SlAnalyzeRenderer) buildSlAnalyzeArgs(slAnalyzePath, tempDir, ca
 			endTime = strconv.FormatInt(*renderer.specificConfig.FilterEndTimeNs, 10)
 		}
 		args = append(args, "--between", startTime+"-"+endTime)
+	}
+	// sl-analyze does not support --core yet. This establishes the engine-side
+	// contract while the command-line support is implemented separately.
+	for _, coreNumber := range coreNumbers {
+		args = append(args, "--core", strconv.Itoa(coreNumber))
 	}
 
 	groupingStr := "none"

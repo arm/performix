@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/grouping"
@@ -28,12 +29,24 @@ var errMCPShutdownSignal = errors.New("MCP shutdown signal received")
 // signalCauseContext records when a signal cancels the command. This lets
 // shutdown distinguish a signal from stdin closure or caller cancellation.
 func signalCauseContext(parent context.Context) (context.Context, func()) {
+	// Ignore SIGPIPE so a closed MCP client pipe cannot terminate apx before
+	// the MCP server returns and shuts down its engine daemon. Reads from a
+	// closed pipe still return EOF, while writes return EPIPE instead of
+	// causing the Go process to exit with SIGPIPE.
+	signal.Ignore(syscall.SIGPIPE)
+
 	ctx, cancel := context.WithCancelCause(parent)
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		select {
-		case <-signals:
+		case received := <-signals:
+			log.WithFields(log.Fields{
+				"component": "mcp",
+				"pid":       os.Getpid(),
+				"ppid":      os.Getppid(),
+				"signal":    received.String(),
+			}).Debug("MCP server received shutdown signal")
 			cancel(errMCPShutdownSignal)
 		case <-ctx.Done():
 		}

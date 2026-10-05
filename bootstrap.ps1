@@ -204,6 +204,9 @@ function Add-ManagedBlock($Path, $Name, $Content) {
     }
 
     $existing = Get-Content -Raw -Path $Path
+    if ($null -eq $existing) {
+        $existing = ""
+    }
     if ($existing.Contains($start)) {
         Write-Info "PowerShell profile already contains Performix $Name block: $Path"
         return

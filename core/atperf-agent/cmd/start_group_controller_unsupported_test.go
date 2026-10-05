@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build windows
+//go:build darwin || windows
 
 package cmd
 
@@ -15,7 +15,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 )
 
-func TestStartGroupController_UnsupportedOnWindows(t *testing.T) {
+func TestStartGroupController_UnsupportedPlatform(t *testing.T) {
 	cmd := NewStartGroupControllerCmd()
 
 	err := cmd.Execute()

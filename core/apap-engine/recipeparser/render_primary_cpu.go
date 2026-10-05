@@ -6,7 +6,6 @@ package recipeparser
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
@@ -34,7 +33,7 @@ func collectedTargetCPUsFromModel(model cdf.ModelView) ([]collectedTargetCPU, er
 		return nil, fmt.Errorf("failed to resolve collected target CPU information: %w", err)
 	}
 
-	contents, err := os.ReadFile(component.AbsolutePath)
+	contents, err := component.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read collected target CPU information: %w", err)
 	}

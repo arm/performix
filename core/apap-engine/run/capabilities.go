@@ -63,9 +63,19 @@ func LoadRunCapabilities(entries []cdf.ModelView) ([]RunCapabilities, error) {
 				continue
 			}
 
-			capability, err := util.ReadJSONFile[ToolCapability](comp.AbsolutePath)
+			contents, err := comp.ReadAll()
 			if err != nil {
 				return nil, err
+			}
+
+			var capability *ToolCapability
+			if len(contents) == 0 {
+				capability = &ToolCapability{}
+			} else {
+				capability, err = util.DecodeJSON[ToolCapability](contents)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if capability == nil {
 				return nil, fmt.Errorf("nil capability")

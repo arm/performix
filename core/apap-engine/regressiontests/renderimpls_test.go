@@ -5,6 +5,7 @@ package regressiontests
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,11 +13,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
@@ -29,6 +34,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
+	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
 )
 
 type QueryConfig struct {
@@ -38,6 +44,7 @@ type QueryConfig struct {
 }
 
 type RendererRegressionTestConfigurationList struct {
+	ImportedRuns     []ImportedRunRegressionTestConfiguration     `json:"importedRuns"`
 	Renderers        []RendererRegressionTestConfiguration        `json:"renderers"`
 	Queries          []QueryConfig                                `json:"queries"`
 	Visualizations   []VisualisationRegressionTestConfiguration   `json:"visualizations"`
@@ -86,12 +93,13 @@ const (
 )
 
 type rendererTestResources struct {
-	config        *RendererRegressionTestConfigurationList
-	runCollection *run.RunCollection
-	truthDir      string
+	config             *RendererRegressionTestConfigurationList
+	runCollection      *run.RunCollection
+	truthDir           string
+	importedRunAliases map[string]string
 }
 
-func loadRendererTestResources(path string) (*rendererTestResources, error) {
+func loadRendererTestResources(path string, t *testing.T) (*rendererTestResources, error) {
 	dirTestConfigsRoot, _ := filepath.Split(path)
 	dirTestDataRoot, _ := filepath.Split(filepath.Clean(dirTestConfigsRoot))
 
@@ -103,7 +111,7 @@ func loadRendererTestResources(path string) (*rendererTestResources, error) {
 		return nil, fmt.Errorf("renderer regression test config %q was empty", path)
 	}
 
-	runCollection, err := run.NewRunCollection(filepath.Join(dirTestDataRoot, "runs"))
+	runCollection, importedRunAliases, err := newRunCollectionForRegressionConfig(config, filepath.Join(dirTestDataRoot, "runs"), t)
 	if err != nil {
 		return nil, err
 	}
@@ -112,9 +120,10 @@ func loadRendererTestResources(path string) (*rendererTestResources, error) {
 	truthDir := filepath.Join(dirTestDataRoot, "truth", testName)
 
 	return &rendererTestResources{
-		config:        config,
-		runCollection: runCollection,
-		truthDir:      truthDir,
+		config:             config,
+		runCollection:      runCollection,
+		truthDir:           truthDir,
+		importedRunAliases: reverseImportedRunAliases(importedRunAliases),
 	}, nil
 }
 
@@ -318,35 +327,85 @@ func checkTruth(truthFilePath string, table query.ProtoStructTableAccessor, t *t
 }
 
 // Regenerate the truth file for resolved visualizations
-func regenTruthResolvedVisualizations(path string, session render.Session, t *testing.T) {
-	bytes := grpcserver.MarshalResolvedVisualizationsToJSON(session, true)
+func normalizeRenderedJSON(raw []byte, importedRunAliases map[string]string) []byte {
+	if len(importedRunAliases) == 0 {
+		return raw
+	}
+
+	normalized := append([]byte(nil), raw...)
+	for importedRunID, alias := range importedRunAliases {
+		normalized = bytes.ReplaceAll(normalized, []byte(`"`+importedRunID+`"`), []byte(`"`+alias+`"`))
+	}
+	return normalized
+}
+
+func diffNormalizedResolvedVisualizations(expectedJSON []byte, actualJSON []byte) (string, error) {
+	lhs := new(apapproto.VisualizationResolvedTablesList)
+	if err := protojson.Unmarshal(expectedJSON, lhs); err != nil {
+		return "", err
+	}
+
+	rhs := new(apapproto.VisualizationResolvedTablesList)
+	if err := protojson.Unmarshal(actualJSON, rhs); err != nil {
+		return "", err
+	}
+
+	sort.Slice(lhs.Entries, func(i, j int) bool {
+		return lhs.Entries[i].Id.Value < lhs.Entries[j].Id.Value
+	})
+	sort.Slice(rhs.Entries, func(i, j int) bool {
+		return rhs.Entries[i].Id.Value < rhs.Entries[j].Id.Value
+	})
+
+	return cmp.Diff(lhs, rhs, protocmp.Transform()), nil
+}
+
+func diffNormalizedManifest(expectedJSON []byte, actualJSON []byte) (string, error) {
+	lhs := new(apapproto.RenderManifest)
+	if err := protojson.Unmarshal(expectedJSON, lhs); err != nil {
+		return "", err
+	}
+
+	rhs := new(apapproto.RenderManifest)
+	if err := protojson.Unmarshal(actualJSON, rhs); err != nil {
+		return "", err
+	}
+
+	sort.Slice(lhs.Entry, func(i, j int) bool { return lhs.Entry[i].TableName < lhs.Entry[j].TableName })
+	sort.Slice(rhs.Entry, func(i, j int) bool { return rhs.Entry[i].TableName < rhs.Entry[j].TableName })
+
+	return cmp.Diff(lhs, rhs, protocmp.Transform()), nil
+}
+
+func regenTruthResolvedVisualizations(path string, session render.Session, importedRunAliases map[string]string, t *testing.T) {
+	bytes := normalizeRenderedJSON(grpcserver.MarshalResolvedVisualizationsToJSON(session, true), importedRunAliases)
 	err := os.WriteFile(path, bytes, perms.LocalFilePerm)
 	assert.NoError(t, err)
 }
 
 // Check the truth file for resolved visualizations
-func checkTruthResolvedVisualizations(path string, session render.Session, t *testing.T) {
+func checkTruthResolvedVisualizations(path string, session render.Session, importedRunAliases map[string]string, t *testing.T) {
 	expectedJSON, err := os.ReadFile(path)
 	assert.NoError(t, err)
 
-	diff, err := grpcserver.JSONToResolvedVisualizationsDiff(expectedJSON, session)
+	diff, err := diffNormalizedResolvedVisualizations(expectedJSON, normalizeRenderedJSON(grpcserver.MarshalResolvedVisualizationsToJSON(session, true), importedRunAliases))
 	assert.NoError(t, err)
 	if diff != "" {
 		t.Errorf("Resolved visualizations mismatch (-want +got):\n%s", diff)
 	}
 }
 
-func regenTruthManifest(truthManifestFilePath string, session render.Session, t *testing.T) {
-	bytes := grpcserver.MarshalRenderManifestToJSON(session, true)
+func regenTruthManifest(truthManifestFilePath string, session render.Session, importedRunAliases map[string]string, t *testing.T) {
+	bytes := normalizeRenderedJSON(grpcserver.MarshalRenderManifestToJSON(session, true), importedRunAliases)
 	err := os.WriteFile(truthManifestFilePath, bytes, perms.LocalFilePerm)
 	assert.NoError(t, err)
 }
 
-func checkTruthManifest(truthManifestFilePath string, session render.Session, t *testing.T) {
+func checkTruthManifest(truthManifestFilePath string, session render.Session, importedRunAliases map[string]string, t *testing.T) {
 	expectedJSON, err := os.ReadFile(truthManifestFilePath)
 	assert.NoError(t, err)
 
-	diff, err := grpcserver.JSONToManifestDiff(expectedJSON, session)
+	diff, err := diffNormalizedManifest(expectedJSON, normalizeRenderedJSON(grpcserver.MarshalRenderManifestToJSON(session, true), importedRunAliases))
 	assert.NoError(t, err)
 	if diff != "" {
 		t.Errorf("mismatch (-want +got):\n%s", diff)
@@ -437,11 +496,11 @@ func RunRendererTest(resources *rendererTestResources, regen bool, t *testing.T)
 	truthManifestFile := filepath.Join(dirCurrentTruth, "manifest.json")
 	truthResolvedVisualizationsFile := filepath.Join(dirCurrentTruth, "resolved_visualizations.json")
 	if regen {
-		regenTruthManifest(truthManifestFile, session, t)
-		regenTruthResolvedVisualizations(truthResolvedVisualizationsFile, session, t)
+		regenTruthManifest(truthManifestFile, session, resources.importedRunAliases, t)
+		regenTruthResolvedVisualizations(truthResolvedVisualizationsFile, session, resources.importedRunAliases, t)
 	} else {
-		checkTruthManifest(truthManifestFile, session, t)
-		checkTruthResolvedVisualizations(truthResolvedVisualizationsFile, session, t)
+		checkTruthManifest(truthManifestFile, session, resources.importedRunAliases, t)
+		checkTruthResolvedVisualizations(truthResolvedVisualizationsFile, session, resources.importedRunAliases, t)
 	}
 
 	for i := range session.Manifest().Entries() {
@@ -491,7 +550,11 @@ func TestRendererRegression(t *testing.T) {
 
 		fullPath := filepath.Join(dirTestConfigs, entry.Name())
 		t.Run(fmt.Sprintf("Regression test '%s' should pass", entry.Name()), func(t *testing.T) {
-			resources, err := loadRendererTestResources(fullPath)
+			resources, err := loadRendererTestResources(fullPath, t)
+			var skipErr *regressionTestSkipError
+			if errors.As(err, &skipErr) {
+				t.Skip(skipErr.reason)
+			}
 			if !assert.NoError(t, err) {
 				return
 			}

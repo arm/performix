@@ -3,7 +3,11 @@
 
 // @ts-check
 
-const { probePython, probeWhl, normalizeRootOutputAccess } = require('./utils');
+const {
+  probePythonVenv,
+  probeWhl,
+  normalizeRootOutputAccess,
+} = require('./utils');
 
 const TOOL_NAME = 'asct';
 const TOOL_DISPLAY_NAME = 'ASCT';
@@ -990,7 +994,7 @@ let tool = {
     /** @type {import("../recipes/docs/jsdocs").ProbeAdvice[]} */
     let advice = [];
 
-    let py = await probePython(
+    let py = await probePythonVenv(
       engine,
       PYTHON_VER_MAJOR,
       PYTHON_VER_MINOR,

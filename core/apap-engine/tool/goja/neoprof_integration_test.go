@@ -72,23 +72,9 @@ func TestNeoprofAndroidProbe(t *testing.T) {
 			Type: deploymentsupport.RequirementTypeAlways,
 		},
 	})
-	var parquetToJSONVersion string
 	for _, dependency := range androidDependencies {
-		if dependency.Name == "parquet-to-json" {
-			parquetToJSONVersion = dependency.Version
-			break
-		}
+		require.NotEqual(t, "parquet-to-json", dependency.Name)
 	}
-	require.NotEmpty(t, parquetToJSONVersion)
-	require.Contains(t, androidDependencies, deploymentsupport.Dependency{
-		Type:     deploymentsupport.DependencyTypeToolBundle,
-		Name:     "parquet-to-json",
-		Version:  parquetToJSONVersion,
-		Locality: deploymentsupport.DeploymentLocalityHost,
-		RequiredWhen: deploymentsupport.RequirementSpec{
-			Type: deploymentsupport.RequirementTypeAlways,
-		},
-	})
 
 	newIntegration := func(t *testing.T, targetEngine, hostEngine *tool_mocks.MockEngineContext) tool.ToolIntegration {
 		t.Helper()
@@ -181,8 +167,17 @@ func TestNeoprofAndroidProbe(t *testing.T) {
 		assert.Equal(t, tool.ProbeResult{
 			Available: true,
 			Capabilities: map[string]any{
-				"supports_event_inherit": false,
-				"supports_strobing":      true,
+				"platform": map[string]any{
+					"componentType": map[string]any{
+						"name":    "tool_capabilities/neoprof_platform",
+						"version": "1.0",
+					},
+					"state": "available",
+					"payload": map[string]any{
+						"supports_event_inherit": false,
+						"supports_strobing":      true,
+					},
+				},
 			},
 			Advice: []tool.ProbeAdvice{{
 				Level:       "warning",
@@ -326,6 +321,173 @@ func TestNeoprofAndroidWorkloadUsesSeparateSlRecordArguments(t *testing.T) {
 	}, args.Export())
 }
 
+func TestNeoprofBuildRecordArgsUsesExplicitWorkflow(t *testing.T) {
+	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+
+	sts, err := LoadFromSource(string(data), toolPath)
+	require.NoError(t, err)
+
+	ti, err := sts.NewIntegration(integrationContext(&tool_mocks.MockEngineContext{}, nil))
+	require.NoError(t, err)
+
+	vm := ti.(*GojaToolInstance).asyncHelper.Vm
+	buildRecordArgs, ok := goja.AssertFunction(vm.Get("buildRecordArgs"))
+	require.True(t, ok)
+
+	ctx := vm.NewObject()
+	params := vm.NewObject()
+	require.NoError(t, params.Set("mode", "samples"))
+	require.NoError(t, params.Set("sampling_frequency", "normal"))
+	require.NoError(t, params.Set("workflow", "sys_util"))
+	require.NoError(t, ctx.Set("params", params))
+
+	args, err := buildRecordArgs(goja.Undefined(), ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []any{"-r", "normal", "--workflow", "sys_util"}, args.Export())
+}
+
+func TestNeoprofBuildAnalyzeArgsForSysUtilWorkflow(t *testing.T) {
+	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+
+	sts, err := LoadFromSource(string(data), toolPath)
+	require.NoError(t, err)
+
+	ti, err := sts.NewIntegration(integrationContext(&tool_mocks.MockEngineContext{}, nil))
+	require.NoError(t, err)
+
+	vm := ti.(*GojaToolInstance).asyncHelper.Vm
+	buildAnalyzeArgs, ok := goja.AssertFunction(vm.Get("buildAnalyzeArgs"))
+	require.True(t, ok)
+
+	engine := vm.NewObject()
+	require.NoError(t, engine.Set("isNeoprofTimelineEnabled", func() bool { return false }))
+	ctx := vm.NewObject()
+	require.NoError(t, ctx.Set("params", map[string]any{"workflow": "sys_util"}))
+	require.NoError(t, ctx.Set("workload", map[string]any{"type": "androidLaunch"}))
+	options := map[string]any{
+		"slAnalyzePath":    "/tools/sl-analyze",
+		"outputDirectory":  "/output",
+		"captureDirectory": "/capture.apc",
+		"collectImages":    true,
+	}
+
+	args, err := buildAnalyzeArgs(
+		goja.Undefined(),
+		engine,
+		ctx,
+		vm.ToValue(options),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []any{
+		"/tools/sl-analyze",
+		"-o",
+		"/output",
+		"--apap-export",
+		"--group-by",
+		"none",
+		"--include-empty-columns",
+		"--verbose",
+		"--bin-durations",
+		"10000000000,5000000000,1000000000,500000000,100000000,50000000,10000000",
+		"/capture.apc",
+	}, args.Export())
+}
+
+func TestNeoprofBuildAnalyzeArgsRetainsCodeAnalysisForOtherWorkflows(t *testing.T) {
+	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+
+	sts, err := LoadFromSource(string(data), toolPath)
+	require.NoError(t, err)
+
+	ti, err := sts.NewIntegration(integrationContext(&tool_mocks.MockEngineContext{}, nil))
+	require.NoError(t, err)
+
+	vm := ti.(*GojaToolInstance).asyncHelper.Vm
+	buildAnalyzeArgs, ok := goja.AssertFunction(vm.Get("buildAnalyzeArgs"))
+	require.True(t, ok)
+
+	engine := vm.NewObject()
+	require.NoError(t, engine.Set("isNeoprofTimelineEnabled", func() bool { return false }))
+	ctx := vm.NewObject()
+	require.NoError(t, ctx.Set("params", map[string]any{}))
+	require.NoError(t, ctx.Set("workload", map[string]any{"type": "launch"}))
+	options := map[string]any{
+		"slAnalyzePath":    "/tools/sl-analyze",
+		"outputDirectory":  "/output",
+		"captureDirectory": "/capture.apc",
+		"collectImages":    true,
+	}
+
+	args, err := buildAnalyzeArgs(
+		goja.Undefined(),
+		engine,
+		ctx,
+		vm.ToValue(options),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []any{
+		"/tools/sl-analyze",
+		"-o",
+		"/output",
+		"--apap-export",
+		"--group-by",
+		"none",
+		"--include-empty-columns",
+		"--verbose",
+		"--all-images",
+		"--annotate-source",
+		"--disassemble",
+		"--all-jitdumps",
+		"--collect-images",
+		"--collect-jitdumps",
+		"/capture.apc",
+	}, args.Export())
+}
+
+func TestNeoprofEmitsTimelineCountersFromPartitionedLayouts(t *testing.T) {
+	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+
+	sts, err := LoadFromSource(string(data), toolPath)
+	require.NoError(t, err)
+
+	ti, err := sts.NewIntegration(integrationContext(&tool_mocks.MockEngineContext{}, nil))
+	require.NoError(t, err)
+
+	vm := ti.(*GojaToolInstance).asyncHelper.Vm
+	emitTimelineFiles, ok := goja.AssertFunction(vm.Get("emitNeoprofTimelineFiles"))
+	require.True(t, ok)
+
+	var emittedPaths [][2]string
+	engine := vm.NewObject()
+	require.NoError(t, engine.Set("emitOutput", func(call goja.FunctionCall) goja.Value {
+		emittedPaths = append(emittedPaths, [2]string{
+			call.Argument(0).String(),
+			call.Argument(1).String(),
+		})
+		return goja.Undefined()
+	}))
+
+	_, err = emitTimelineFiles(
+		goja.Undefined(),
+		engine,
+		vm.ToValue("/capture.apc"),
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, emittedPaths)
+	assert.Equal(t, [2]string{
+		"/capture.apc/report-new/apx/timeline/**/counter.parquet",
+		"output/parquet/timeline/**/counter.parquet",
+	}, emittedPaths[len(emittedPaths)-1])
+}
+
 func TestNeoprofTimelineCapabilityIDsDistinguishSameNamedSeries(t *testing.T) {
 	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
 	data, err := os.ReadFile(toolPath)
@@ -355,102 +517,6 @@ func TestNeoprofTimelineCapabilityIDsDistinguishSameNamedSeries(t *testing.T) {
 	assert.Equal(t, "counter.key_type_8.cycles.cpu_cycles.series_1080", first.String())
 	assert.Equal(t, "counter.key_type_8.cycles.cpu_cycles.series_1081", second.String())
 	assert.NotEqual(t, first.String(), second.String())
-}
-
-func TestNeoprofTimelineMetadataIsReadableAfterPrivilegedConversion(t *testing.T) {
-	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
-	data, err := os.ReadFile(toolPath)
-	require.NoError(t, err)
-	data = append(data, []byte(`
-tool.run = async (engine, ctx) => {
-	await convertNeoprofTimelineCaptureMetadata(engine, "/capture.apc", true);
-};
-`)...)
-
-	sts, err := LoadFromSource(string(data), toolPath)
-	require.NoError(t, err)
-	var converterVersion string
-	for _, dependency := range sts.ToolDeployments[0].Dependencies {
-		if dependency.Name == "parquet-to-json" {
-			converterVersion = dependency.Version
-			break
-		}
-	}
-	require.NotEmpty(t, converterVersion)
-	converterPath := "/target/tools/parquet-to-json/" + converterVersion + "/parquet-to-json"
-	parquetPath := "/capture.apc/report-new/apx/metadata/capture_metadata.parquet"
-	jsonPath := "/capture.apc/report-new/apx/metadata/capture_metadata.json"
-
-	engine := &tool_mocks.MockEngineContext{}
-	engine.On("GetPlatform").Return(conductor.PlatformConfiguration{OS: conductor.Linux}).Twice()
-	engine.On("ExecCommand", &process.LaunchCommand{
-		Command: []string{"stat", converterPath},
-	}).Return(&process.CommandResult{}, nil).Once()
-	engine.On("ExecCommand", &process.LaunchCommand{
-		Command:      []string{converterPath, parquetPath},
-		AsPrivileged: true,
-	}).Return(&process.CommandResult{}, nil).Once()
-	engine.On("ExecCommand", &process.LaunchCommand{
-		Command:      []string{"chmod", "644", jsonPath},
-		AsPrivileged: true,
-	}).Return(&process.CommandResult{}, nil).Once()
-
-	ic := integrationContext(engine, nil)
-	ic.IsNeoprofTimelineEnabled = true
-	ti, err := sts.NewIntegration(ic)
-	require.NoError(t, err)
-	ti.(*GojaToolInstance).asyncHelper.StartLoop()
-	require.NoError(t, ti.Run())
-	ti.(*GojaToolInstance).asyncHelper.StopLoop()
-	engine.AssertExpectations(t)
-}
-
-func TestNeoprofTimelineMetadataConversionUsesWindowsExecutable(t *testing.T) {
-	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
-	data, err := os.ReadFile(toolPath)
-	require.NoError(t, err)
-	data = append(data, []byte(`
-tool.run = async (engine, ctx) => {
-	await convertNeoprofTimelineCaptureMetadata(engine, "/capture.apc", false);
-};
-`)...)
-
-	sts, err := LoadFromSource(string(data), toolPath)
-	require.NoError(t, err)
-	var converterVersion string
-	for _, dependency := range sts.ToolDeployments[0].Dependencies {
-		if dependency.Name == "parquet-to-json" {
-			converterVersion = dependency.Version
-			break
-		}
-	}
-	require.NotEmpty(t, converterVersion)
-	converterPath := "/target/tools/parquet-to-json/" + converterVersion + "/parquet-to-json.exe"
-	parquetPath := "/capture.apc/report-new/apx/metadata/capture_metadata.parquet"
-
-	engine := &tool_mocks.MockEngineContext{}
-	engine.On("GetPlatform").Return(conductor.PlatformConfiguration{OS: conductor.Win}).Twice()
-	engine.On("ExecCommand", &process.LaunchCommand{
-		Command: []string{
-			"powershell",
-			"-NoProfile",
-			"-Command",
-			"if (Test-Path -LiteralPath $env:APX_TEST_PATH) { exit 0 } else { exit 1 }",
-		},
-		Environment: map[string]string{"APX_TEST_PATH": converterPath},
-	}).Return(&process.CommandResult{}, nil).Once()
-	engine.On("ExecCommand", &process.LaunchCommand{
-		Command: []string{converterPath, parquetPath},
-	}).Return(&process.CommandResult{}, nil).Once()
-
-	ic := integrationContext(engine, nil)
-	ic.IsNeoprofTimelineEnabled = true
-	ti, err := sts.NewIntegration(ic)
-	require.NoError(t, err)
-	ti.(*GojaToolInstance).asyncHelper.StartLoop()
-	require.NoError(t, ti.Run())
-	ti.(*GojaToolInstance).asyncHelper.StopLoop()
-	engine.AssertExpectations(t)
 }
 
 func TestNeoprofIdentifiesAndroidLaunchFromWorkloadType(t *testing.T) {
@@ -608,6 +674,297 @@ tool.run = async (engine, ctx) => {
 	default:
 		require.Fail(t, "Gator ending-capture message did not notify the runner")
 	}
+}
+
+// Exercise capture ordering and helper selection through the production run hook.
+func TestNeoprofJfrCaptureWiring(t *testing.T) {
+	for _, scenario := range []struct {
+		name, workload string
+		jfr, jvm       bool
+	}{
+		{"launch JFR", "launch", true, true},
+		{"launch stacks only", "launch", false, true},
+		{"attach JVM", "attach", true, true},
+		{"attach dotnet", "attach", true, false},
+		{"system wide without recording", "systemWide", true, false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			toolPath := filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js")
+			data, err := os.ReadFile(toolPath)
+			require.NoError(t, err)
+			data = append(data, []byte(fmt.Sprintf(`
+const capture = tool.run;
+isPrivilegeRequired = async () => false;
+prepareWritableTargetFile = async () => {};
+assertJitdumpJvm = async () => {};
+assertDotnetAgent = async () => {};
+resolveSessionOwner = async () => 'tester';
+createRunFile = async () => ({path: () => '/capture/error.log'});
+startGatorLogMonitor = async () => {};
+stopGatorLogMonitor = async () => {};
+drainStreamToFileAndClose = async () => {};
+checkToolFailureFromRun = async () => {};
+stopJitdumpAgents = async () => {};
+tool.run = async () => {
+  const type = %q, jfr = %t, jvm = %t;
+  const started = [], outputs = [];
+  const engine = {
+    toolsRoot: () => '/tools', getPlatform: () => ({OS: 'Linux'}),
+    createTempDir: async () => '/capture', mkDir: async () => {},
+    makeWritable: async () => {}, chown: async () => {},
+    createRunFile: async () => ({append: async () => {}, close: async () => {}}),
+    log: () => {}, startProgressTracker: () => {}, endProgress: () => {},
+    isNeoprofTimelineEnabled: () => false, isFullCaptureSupportEnabled: () => false,
+    emitOutput: (path) => outputs.push(path),
+    execCommand: async (args) => {
+      if (args[0] === 'find' && args.includes('/tmp/hsperfdata_*/42'))
+        return {rc: 0, stdout: jvm ? '/tmp/hsperfdata_tester/42' : '', stderr: ''};
+      if (args[0] === 'find' && args.includes('/tmp/dotnet-diagnostic-42*'))
+        return {rc: 0, stdout: jvm ? '' : '/tmp/dotnet-diagnostic-42', stderr: ''};
+      return {rc: 0, stdout: '', stderr: ''};
+    },
+    startProcess: async (args, options) => {
+      started.push({args, options});
+      return {pid: () => 123, wait: async () => ({exitCode: 0})};
+    },
+  };
+  const ctx = {timeout: 20, env: {}, metadata: {},
+    workload: {type, pid: 42, command: ['java', '-jar', 'workload.jar'],
+      environment: {JDK_JAVA_OPTIONS: '-Dexisting=yes'}},
+    params: {mode: 'samples', sampling_frequency: 'normal', collect_java_stacks: true,
+      collect_dotnet_stacks: true, collect_jfr: jfr, reformat_on_host: false}};
+  await capture(engine, ctx);
+  const helper = started.find(p => p.args[0].endsWith('/jitdump-jvm'));
+  const record = started.find(p => p.args[0].endsWith('/sl-record'));
+  if (!record) throw new Error('CPU capture was not started');
+  const expectedHelper = type !== 'attach' || jvm;
+  if (!!helper !== expectedHelper) throw new Error('Wrong JVM helper selection');
+  const dotnetHelper = started.find(p => p.args[0].endsWith('/jitdump-dotnet'));
+  if (!!dotnetHelper !== (type !== 'attach' || !jvm)) throw new Error('Wrong .NET helper selection');
+  if (!!ctx.metadata.jfrCaptureEnabled !== (jfr && expectedHelper)) throw new Error('Wrong JFR capture state');
+  if (helper) {
+    if (started.indexOf(helper) >= started.indexOf(record)) throw new Error('JVM helper must precede CPU capture');
+    if (helper.args.includes('--jfr-output-dir') !== jfr) throw new Error('Wrong JFR helper arguments');
+    if (jfr && helper.args[helper.args.indexOf('--jfr-output-dir') + 1] !== '/capture/java/jfr') throw new Error('Wrong JFR output directory');
+  }
+  if (type === 'attach' && ctx.metadata.isJvmPid !== jvm) throw new Error('PID identity was not retained');
+  if (!outputs.some(p => p.includes('/analysis/'))) throw new Error('Ordinary analysis outputs missing');
+};
+`, scenario.workload, scenario.jfr, scenario.jvm))...)
+			sts, err := LoadFromSource(string(data), toolPath)
+			require.NoError(t, err)
+			ti, err := sts.NewIntegration(integrationContext(&tool.AgentEngine{}, nil))
+			require.NoError(t, err)
+			cleanup, err := ti.StartRuntime()
+			require.NoError(t, err)
+			defer cleanup()
+			require.NoError(t, ti.Run())
+		})
+	}
+}
+
+// Exercise the production reformat hook independently of capture setup.
+func TestNeoprofJfrReformatWiring(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("JFR=%t", enabled), func(t *testing.T) {
+			toolPath := filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js")
+			data, err := os.ReadFile(toolPath)
+			require.NoError(t, err)
+			data = append(data, []byte(fmt.Sprintf(`
+const reformat = tool.reformat;
+let analyzed = false;
+runSlAnalyze = async () => { analyzed = true; };
+tool.run = async () => {
+  const enabled = %t, warnings = [];
+  let conversions = 0;
+  const engine = {
+    toolsRoot: () => '/tools', getPlatform: () => ({OS: 'Linux'}),
+    mkDir: async () => {}, log: () => {},
+    startProgressTracker: () => {}, endProgress: () => {},
+    isNeoprofTimelineEnabled: () => false, isFullCaptureSupportEnabled: () => false,
+    emitOutput: () => {},
+    writeUserMessage: (level, text) => {
+    if (level !== "warn" || !text.includes("Java")) throw new Error("Expected Java warning");
+    warnings.push(text);
+  },
+    execCommand: async () => ({rc: 0, stdout: '', stderr: ''}),
+    startProcess: async (args) => {
+      if (!args.includes('--jfr-input-dir')) throw new Error('Unexpected process: ' + args);
+      conversions++;
+      return {wait: async () => ({exitCode: 1})};
+    },
+  };
+  const ctx = {workload: {type: 'attach', pid: 42}, params: {mode: 'samples', reformat_on_host: false}, metadata: {
+    outputDirectory: '/capture', captureDirectory: '/capture/capture.apc',
+    analysisDirectory: '/capture/analysis', jfrCaptureEnabled: enabled, isJvmPid: true,
+    jfrInputDir: '/capture/java/jfr', jfrParquetDir: '/capture/java/parquet',
+    jfrConversionStdoutPath: '/capture/java/convert.log',
+    jfrConversionStderrPath: '/capture/java/convert.err',
+  }};
+  await reformat(engine, ctx);
+  if (!analyzed) throw new Error('JFR failure prevented ordinary analysis');
+  if (conversions !== (enabled ? 1 : 0)) throw new Error('Wrong conversion count: ' + conversions);
+  if (warnings.length !== (enabled ? 1 : 0)) throw new Error('Wrong warning count: ' + warnings.length);
+};
+`, enabled))...)
+			sts, err := LoadFromSource(string(data), toolPath)
+			require.NoError(t, err)
+			ti, err := sts.NewIntegration(integrationContext(&tool.AgentEngine{}, nil))
+			require.NoError(t, err)
+			cleanup, err := ti.StartRuntime()
+			require.NoError(t, err)
+			defer cleanup()
+			require.NoError(t, ti.Run())
+		})
+	}
+}
+
+func TestNeoprofJavaLaunchEnvironment(t *testing.T) {
+	toolPath := filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js")
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+	data = append(data, []byte(`
+tool.run = async () => {
+  for (const type of ['launch', 'attach', 'systemWide']) {
+    for (const enabled of [true, false]) {
+      const original = { JDK_JAVA_OPTIONS: '-Dexisting=yes', JAVA_TOOL_OPTIONS: '-Dother=yes' };
+      const ctx = { workload: { type }, params: { collect_java_stacks: enabled }, metadata: {} };
+      const env = javaLaunchEnvironment(ctx, original);
+      if (env.JAVA_TOOL_OPTIONS !== original.JAVA_TOOL_OPTIONS) throw new Error('Lost user options');
+      if (original.JDK_JAVA_OPTIONS !== '-Dexisting=yes') throw new Error('Mutated input');
+      const expected = type === 'launch' && enabled;
+      for (const flag of ['-XX:+PreserveFramePointer', '-XX:+EnableDynamicAgentLoading']) {
+        if (env.JDK_JAVA_OPTIONS.includes(flag) !== expected) throw new Error(type + ': ' + flag);
+      }
+      if (!env.JDK_JAVA_OPTIONS.includes('-Dexisting=yes')) throw new Error('Lost JDK options');
+    }
+  }
+  const ctx = { workload: { type: 'launch' }, params: { collect_java_stacks: true },
+    metadata: { jfrCaptureEnabled: true, jfrRecordingName: 'test', jfrInputDir: '/tmp/jfr' } };
+  const env = javaLaunchEnvironment(ctx, {});
+  if (!env.JDK_JAVA_OPTIONS.includes('-XX:StartFlightRecording=name=test')) throw new Error('Missing JFR');
+};
+`)...)
+	sts, err := LoadFromSource(string(data), toolPath)
+	require.NoError(t, err)
+	ti, err := sts.NewIntegration(integrationContext(&tool.AgentEngine{}, nil))
+	require.NoError(t, err)
+	cleanup, err := ti.StartRuntime()
+	require.NoError(t, err)
+	defer cleanup()
+	require.NoError(t, ti.Run())
+}
+
+func TestNeoprofJfrReformatFailureIsOptional(t *testing.T) {
+	for _, isJvm := range []string{"false", "true", "undefined"} {
+		for _, failure := range []string{"none", "conversion", "conversion exception", "components", "index", "permissions"} {
+			t.Run(fmt.Sprintf("jvm=%s/%s", isJvm, failure), func(t *testing.T) {
+				toolPath := filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js")
+				data, err := os.ReadFile(toolPath)
+				require.NoError(t, err)
+				data = append(data, []byte(fmt.Sprintf(`
+tool.run = async (engine, ctx) => {
+	ctx.metadata.isJvmPid = %s;
+	ctx.metadata.jfrInputDir = "/capture/java/jfr";
+	ctx.metadata.jfrParquetDir = "/capture/java/parquet";
+	ctx.metadata.neoprofAsPrivileged = true;
+	const failure = %q;
+	let conversions = 0;
+	let warnings = 0;
+	let parquetOutputs = 0;
+	let conversionLogs = 0;
+	let indexConversions = 0;
+	let indexOutputs = 0;
+	let indexPermissions = 0;
+	const jfrEngine = {
+		toolsRoot: () => "/tools",
+		getPlatform: () => ({OS: 'Linux'}),
+		mkDir: async () => {},
+		startProgressTracker: () => {},
+		endProgress: () => {},
+		startProcess: async () => {
+			conversions++;
+			return { wait: async () => {
+				if (failure === "conversion exception") throw new Error("Cannot wait for conversion");
+				return { exitCode: failure === "conversion" ? 1 : 0 };
+			} };
+		},
+		execCommand: async (args, options) => {
+			if (args[0] === 'stat') return { rc: failure === "components" ? 1 : 0 };
+			if (args[0] === 'cat') return { rc: 0, stdout: '<schema><event name="jdk.GCHeapSummary"/></schema>' };
+			if (args[0].endsWith('/parquet-to-json')) {
+				indexConversions++;
+				if (args[1] !== '/capture/java/parquet/metadata/jfr_recordings.parquet' || !options.asPrivileged) throw new Error('Wrong recording index conversion');
+				return {rc: failure === 'index' ? 1 : 0};
+			}
+			if (args[0] === 'chmod') {
+				indexPermissions++;
+				if (args.join(' ') !== 'chmod 644 /capture/java/parquet/metadata/jfr_recordings.json' || !options.asPrivileged) throw new Error('Wrong index permissions');
+				return {rc: failure === 'permissions' ? 1 : 0};
+			}
+			throw new Error('Unexpected command: ' + args);
+		},
+		emitOutput: (path, destination, metadata) => {
+			if (metadata.name === "jfr-parquet") parquetOutputs++;
+			if (metadata.name === "jfr-recordings-json") indexOutputs++;
+			if (metadata.name === "log-text") conversionLogs++;
+		},
+		log: () => {},
+		writeUserMessage: (level, text) => {
+			if (level !== "warn" || !text.includes("Java")) throw new Error("Expected Java warning");
+			warnings++;
+		},
+	};
+	await reformatJfr(jfrEngine, ctx);
+	if (conversions !== 1) throw new Error("Must attempt conversion without recording detection");
+	if (conversionLogs !== 2) throw new Error("Must preserve conversion logs");
+	const expectedWarnings = ctx.metadata.isJvmPid === true && failure !== "none" ? 1 : 0;
+	if (warnings !== expectedWarnings) throw new Error("Unexpected warnings: " + warnings);
+	if (parquetOutputs !== (failure === "none" ? 1 : 0)) throw new Error("Invalid Parquet publication");
+	if (failure === 'none' && (indexConversions !== 1 || indexPermissions !== 1 || indexOutputs !== 1)) throw new Error('Missing readable recording index');
+	if (failure !== 'none' && indexOutputs !== 0) throw new Error('Invalid index publication');
+};
+`, isJvm, failure))...)
+				sts, err := LoadFromSource(string(data), toolPath)
+				require.NoError(t, err)
+				ti, err := sts.NewIntegration(integrationContext(&tool.AgentEngine{}, nil))
+				require.NoError(t, err)
+				cleanup, err := ti.StartRuntime()
+				require.NoError(t, err)
+				defer cleanup()
+				require.NoError(t, ti.Run())
+			})
+		}
+	}
+}
+
+func TestNeoprofPreparesJfrParentBeforeInputDirectory(t *testing.T) {
+	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+
+	data = append(data, []byte(`
+tool.run = async (engine) => {
+	await prepareJfrDirectories(engine, "/tmp/output/java", "/tmp/output/java/jfr");
+};
+`)...)
+	sts, err := LoadFromSource(string(data), toolPath)
+	require.NoError(t, err)
+
+	engine := &tool_mocks.MockEngineContext{}
+	mock.InOrder(
+		engine.On("Mkdir", "/tmp/output/java").Return(nil).Once(),
+		engine.On("Mkdir", "/tmp/output/java/jfr").Return(nil).Once(),
+	)
+
+	ti, err := sts.NewIntegration(integrationContext(engine, nil))
+	require.NoError(t, err)
+	cleanup, err := ti.StartRuntime()
+	require.NoError(t, err)
+	defer cleanup()
+
+	require.NoError(t, ti.Run())
+	engine.AssertExpectations(t)
 }
 
 func TestNeoprofMonitorsGatorLogForCollectionFinish(t *testing.T) {

@@ -4,10 +4,12 @@
 package run
 
 import (
+	"path"
 	"path/filepath"
 	"sync"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 )
 
 // RunManifestUpdater serializes manifest mutations.
@@ -16,30 +18,55 @@ type RunManifestUpdater struct {
 	mu      sync.Mutex
 	builder *RunBuilder
 	writer  RunWriter
+	// Retain declarations after removal: failed transfers may leave files behind.
+	declarations []cdf.ManifestEntry
 }
 
 func NewRunManifestUpdater(builder *RunBuilder, writer RunWriter) *RunManifestUpdater {
-	return &RunManifestUpdater{builder: builder, writer: writer}
-}
-
-// AddPendingComponent adds a pending manifest entry. Duplicate paths are still added to the manifest.
-func (u *RunManifestUpdater) AddPendingComponent(relativePath string, componentType cdf.ComponentType) error {
-	if relativePath == "" {
-		return nil
+	return &RunManifestUpdater{
+		builder:      builder,
+		writer:       writer,
+		declarations: builder.buildManifest().Entries,
 	}
-	return u.update(func(builder *RunBuilder) {
-		builder.AddPendingComponent(componentType, relativePath)
-	})
 }
 
-// AddComponent adds a complete component and writes the updated manifest. Duplicate paths are still added to the manifest.
+// AddComponent adds a complete component and writes the updated manifest.
 func (u *RunManifestUpdater) AddComponent(relativePath string, componentType cdf.ComponentType) error {
+	return u.AddComponentWithFlags(relativePath, componentType, ComponentFlags{})
+}
+
+// AddComponentWithFlags adds a component with the supplied state and storage flags and writes the updated manifest.
+func (u *RunManifestUpdater) AddComponentWithFlags(relativePath string, componentType cdf.ComponentType, flags ComponentFlags) error {
 	if relativePath == "" {
 		return nil
 	}
-	return u.update(func(builder *RunBuilder) {
-		builder.AddComponent(componentType, relativePath)
-	})
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	entry := cdf.ManifestEntry{Path: path.Clean(cdf.NormalizePath(relativePath)), Compressed: flags.Compressed}
+	if err := u.validateComponentCompression(entry); err != nil {
+		return err
+	}
+	if err := u.updateLocked(func(builder *RunBuilder) {
+		builder.AddComponentWithFlags(componentType, relativePath, flags)
+	}); err != nil {
+		return err
+	}
+	u.declarations = append(u.declarations, entry)
+	return nil
+}
+
+// validateComponentCompression rejects incompatible destinations before manifest insertion.
+// It includes removed declarations because failed transfers may have left files behind.
+// The caller must hold u.mu through validation, persistence, and declaration registration.
+func (u *RunManifestUpdater) validateComponentCompression(entry cdf.ManifestEntry) error {
+	for _, existing := range u.declarations {
+		existing.Path = path.Clean(cdf.NormalizePath(existing.Path))
+		if componentCompressionConflict(existing, entry) {
+			return message.New(message.EngineRunComponentCompressionConflict).
+				WithMetadata(map[string]string{"first": existing.Path, "second": entry.Path})
+		}
+	}
+	return nil
 }
 
 func (u *RunManifestUpdater) AddToolOutput(toolName, version string, invocation int) error {
@@ -97,6 +124,11 @@ func (u *RunManifestUpdater) update(mutate func(*RunBuilder)) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
+	return u.updateLocked(mutate)
+}
+
+// updateLocked commits a mutation only after its manifest has been persisted.
+func (u *RunManifestUpdater) updateLocked(mutate func(*RunBuilder)) error {
 	updatedBuilder := u.builder.Clone()
 	mutate(&updatedBuilder)
 	if err := u.writer.WriteManifest(updatedBuilder); err != nil {

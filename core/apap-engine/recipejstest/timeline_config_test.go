@@ -298,12 +298,12 @@ func TestNeoprofTimelineConfigUsesCaptureDurationAndZeroBinOrigin(t *testing.T) 
 			"rendererId":   "renderer_101_1000000",
 			"output":       "output_101_1000000",
 		}},
-		"captureMetadata": []map[string]any{{
+		"captureMetadata": map[string]any{
 			"duration":                          10_413_342_255,
 			"schema_version":                    20_240_819,
 			"start_capture_clock_monotonic_raw": 126_414_419_994,
 			"time_unit":                         "nanoseconds",
-		}},
+		},
 	})
 
 	output, err := executeRenderStage(
@@ -334,10 +334,10 @@ func TestNeoprofTimelineConfigAcceptsZeroCaptureDuration(t *testing.T) {
 			"rendererId":   "renderer_101_1000000",
 			"output":       "output_101_1000000",
 		}},
-		"captureMetadata": []map[string]any{{
+		"captureMetadata": map[string]any{
 			"duration":  0,
 			"time_unit": "nanoseconds",
-		}},
+		},
 	})
 
 	output, err := executeRenderStage(
@@ -374,59 +374,56 @@ func TestNeoprofTimelineConfigRejectsInvalidCaptureMetadata(t *testing.T) {
 		expectedError   string
 	}{
 		{
-			name:            "missing capture row",
-			captureMetadata: []map[string]any{},
-			expectedError:   "Timeline capture metadata must contain exactly one capture row",
+			name:            "missing capture metadata",
+			captureMetadata: nil,
+			expectedError:   "Timeline capture metadata must be an object",
 		},
 		{
-			name:            "invalid capture row",
-			captureMetadata: []any{nil},
-			expectedError:   "Timeline capture metadata row must be an object",
+			name:            "invalid capture metadata",
+			captureMetadata: "invalid",
+			expectedError:   "Timeline capture metadata must be an object",
 		},
 		{
-			name: "multiple capture rows",
-			captureMetadata: []map[string]any{
-				{"duration": 1_000_000},
-				{"duration": 2_000_000},
-			},
-			expectedError: "Timeline capture metadata must contain exactly one capture row",
+			name:            "array capture metadata",
+			captureMetadata: []map[string]any{{"duration": 1_000_000, "time_unit": "nanoseconds"}},
+			expectedError:   "Timeline capture metadata must be an object",
 		},
 		{
 			name: "missing duration",
-			captureMetadata: []map[string]any{{
+			captureMetadata: map[string]any{
 				"time_unit": "nanoseconds",
-			}},
+			},
 			expectedError: "Timeline capture duration must be a safe integer",
 		},
 		{
 			name: "negative duration",
-			captureMetadata: []map[string]any{{
+			captureMetadata: map[string]any{
 				"duration":  -1,
 				"time_unit": "nanoseconds",
-			}},
+			},
 			expectedError: "Timeline capture duration must not be negative",
 		},
 		{
 			name: "unsafe duration",
-			captureMetadata: []map[string]any{{
+			captureMetadata: map[string]any{
 				"duration":  9_007_199_254_740_992,
 				"time_unit": "nanoseconds",
-			}},
+			},
 			expectedError: "Timeline capture duration must be a safe integer",
 		},
 		{
 			name: "missing time unit",
-			captureMetadata: []map[string]any{{
+			captureMetadata: map[string]any{
 				"duration": 1_000_000,
-			}},
+			},
 			expectedError: "Timeline capture time_unit must be nanoseconds",
 		},
 		{
 			name: "unsupported time unit",
-			captureMetadata: []map[string]any{{
+			captureMetadata: map[string]any{
 				"duration":  1_000_000,
 				"time_unit": "microseconds",
-			}},
+			},
 			expectedError: "Timeline capture time_unit must be nanoseconds",
 		},
 	}

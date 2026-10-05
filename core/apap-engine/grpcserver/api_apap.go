@@ -65,9 +65,10 @@ type ApapServerConfig struct {
 	EnableFullCaptureSupport  bool   `json:"enable-full-capture-support"`
 	EnableExperimentalRecipes bool   `json:"enable-experimental-recipes"`
 	EnableSecondaryRunPaths   bool   `json:"enable-secondary-run-paths"`
-	EnableTransferManager     bool   `json:"enable-transfer-manager"`
+	EnableGPURecipe           bool   `json:"enable-gpu-recipe"`
 	EnableRenderDBSandbox     bool   `json:"enable-render-db-sandbox"`
 	EnableNeoprofTimeline     bool   `json:"enable-neoprof-timeline"`
+	EnableJfrCapture          bool   `json:"enable-jfr-capture"`
 	ServerHostname            string `json:"server-hostname"`
 	ServerGRPCPort            int    `json:"server-port"`
 	ServerAuthPort            int    `json:"auth-port"`
@@ -111,6 +112,8 @@ type MCPClientInstaller interface {
 	Install(context.Context, string) (*mcpclientinstaller.InstallResult, error)
 	Uninstall(context.Context, string) (*mcpclientinstaller.UninstallResult, error)
 }
+
+const gpuRecipeName = "gpu"
 
 func NewApapServer(ctx context.Context, config ApapServerConfig, deploymentPaths deployer.BaseToolDeploymentPaths, shutdownCb func()) (*ApapServer, error) {
 	runDir := filepath.Join(config.DataDirectory, run.RunDirName)
@@ -213,6 +216,9 @@ func (s *ApapServer) SetAdbPath(ctx context.Context, in *apapproto.SetAdbPathReq
 }
 
 func (s *ApapServer) recipeAllowed(recipeInfo recipe.Recipe) bool {
+	if recipeInfo.Name == gpuRecipeName && !s.config.EnableGPURecipe {
+		return false
+	}
 	if recipeInfo.Status == recipe.RecipeStatusExperimental {
 		return s.config.EnableExperimentalRecipes
 	}
@@ -239,8 +245,8 @@ func (s *ApapServer) newBaseStageConfiguration() *runtime.StageConfiguration {
 		IsRootWorkerEnabled:    s.config.IsRootWorkerEnabled,
 		IsFullCaptureEnabled:   s.getFullCaptureSupport(),
 		RerenderingEnabled:     s.config.EnableRerendering,
-		TransferManagerEnabled: s.config.EnableTransferManager,
 		NeoprofTimelineEnabled: s.config.EnableNeoprofTimeline,
+		JfrCaptureEnabled:      s.config.EnableJfrCapture,
 		PackageManager:         s.packageManager,
 	}
 }
@@ -575,7 +581,13 @@ func (s *ApapServer) InvokeRender(ctx context.Context, in *apapproto.InvokeRende
 }
 
 func (s *ApapServer) ListRenders(ctx context.Context, in *emptypb.Empty) (*apapproto.RenderListing, error) {
-	sessionIds := s.sessions.GetAllSessionIds()
+	return s.listRendersFromSnapshot(s.sessions.GetAllSessionIds())
+}
+
+// listRendersFromSnapshot builds a listing from session IDs captured when the
+// request started. A concurrent CloseRender can remove an ID before it is
+// looked up, so missing sessions are skipped.
+func (s *ApapServer) listRendersFromSnapshot(sessionIds []string) (*apapproto.RenderListing, error) {
 	renderListing := apapproto.RenderListing{}
 	sqlStr := "SELECT (SUM(MEMORY_USAGE_BYTES)/(1024^3)) AS 'total memory usage' FROM duckdb_memory()"
 	dbUsageByKey := make(map[string]float64)
@@ -583,7 +595,7 @@ func (s *ApapServer) ListRenders(ctx context.Context, in *emptypb.Empty) (*apapp
 	for _, id := range sessionIds {
 		session, err := s.sessions.GetSessionByID(id)
 		if err != nil {
-			return &apapproto.RenderListing{}, fmt.Errorf("session with id '%s' does not exist", id)
+			continue
 		}
 		defer session.Done()
 
@@ -765,7 +777,7 @@ func (s *ApapServer) RecipeIssueCommand(in *apapproto.RecipeCommand, out apappro
 	var err error
 	switch command := in.SpecificCommand.(type) {
 	case *apapproto.RecipeCommand_StartCommand:
-		detachBackgroundTransfers := command.StartCommand.GetDetachBackgroundTransfers() && s.config.EnableTransferManager
+		detachBackgroundTransfers := command.StartCommand.GetDetachBackgroundTransfers()
 		grpcNotifier := &progress.GRPCRecipeStageNotifier{Out: out}
 
 		parsedRecipe, err := s.getRecipe(command.StartCommand.GetName())

@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/klauspost/compress/zstd"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/encoding/gzip"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
@@ -22,6 +24,26 @@ import (
 
 // ReportProgress is a callback function to report progress of file transfer.
 type ReportProgress func(received int64)
+
+// TransferDestination identifies where a retrieved file is written and how it is stored locally.
+type TransferDestination struct {
+	localPath  string
+	compressed bool
+}
+
+// NewTransferDestination creates a local destination from the manifest entry's storage mapping.
+func NewTransferDestination(entry cdf.ManifestEntry) TransferDestination {
+	return TransferDestination{
+		localPath:  entry.StoragePath(),
+		compressed: entry.Compressed,
+	}
+}
+
+// LocalPath returns the physical on-disk path of the destination.
+func (d TransferDestination) LocalPath() string { return d.localPath }
+
+// Compressed reports whether the destination is zstd-compressed while written.
+func (d TransferDestination) Compressed() bool { return d.compressed }
 
 // ReportProgressRequest is an io.Writer that reports progress via a callback.
 type ReportProgressRequest struct {
@@ -66,21 +88,16 @@ func sendStreamToWriter(ctx context.Context, stream targetagentproto.TargetAgent
 	return nil
 }
 
-// ReceiveFile retrieves a single file from the agent and writes it to local disk, requesting a
-// compressed transfer. The received file is first written to a temp file, then atomically
-// renamed to the final location.
+// ReceiveFile retrieves a single file from the agent and writes it to the destination. If the
+// destination is compressed, it zstd-compresses the file while writing. The received file is
+// first written to a temp file, then atomically renamed to the final location.
 //
 // If prog is non-nil, progress updates are emitted.
-func ReceiveFile(
-	ctx context.Context,
-	localPath string,
-	remotePath string,
-	agent targetagentproto.TargetAgentClient,
-	prog ReportProgress,
-) (err error) {
+func ReceiveFile(ctx context.Context, remotePath string, destination TransferDestination, agent targetagentproto.TargetAgentClient, prog ReportProgress) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	localPath := destination.LocalPath()
 
 	dir := filepath.Dir(localPath)
 	if err := os.MkdirAll(dir, perms.LocalDirPerm); err != nil {
@@ -113,6 +130,21 @@ func ReceiveFile(
 	}()
 
 	bw := bufio.NewWriterSize(out, 256*1024)
+	var destinationWriter io.Writer = bw
+	var encoder *zstd.Encoder
+	encoderClosed := false
+	if destination.Compressed() {
+		encoder, err = zstd.NewWriter(bw, zstd.WithEncoderConcurrency(1))
+		if err != nil {
+			return fmt.Errorf("create zstd encoder: %w", err)
+		}
+		destinationWriter = encoder
+		defer func() {
+			if !encoderClosed {
+				encoder.Close()
+			}
+		}()
+	}
 
 	stream, err := agent.RetrieveFile(
 		ctx,
@@ -123,8 +155,15 @@ func ReceiveFile(
 		return fmt.Errorf("start retrieve %q: %w", dir, err)
 	}
 
-	if err = sendStreamToWriter(ctx, stream, bw, prog); err != nil {
+	if err = sendStreamToWriter(ctx, stream, destinationWriter, prog); err != nil {
 		return err
+	}
+
+	if encoder != nil {
+		if cerr := encoder.Close(); cerr != nil {
+			return fmt.Errorf("close zstd encoder for %q: %w", tmpFileName, cerr)
+		}
+		encoderClosed = true
 	}
 
 	if ferr := bw.Flush(); ferr != nil {

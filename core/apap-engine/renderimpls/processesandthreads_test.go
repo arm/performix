@@ -105,6 +105,24 @@ func TestParseApplications(t *testing.T) {
 	})
 }
 
+func TestLoadApplicationsReadsCompressedComponent(t *testing.T) {
+	component := writeCompressedComponent(t, "applications.xml", []byte(`
+		<applications version="1">
+			<process uid="1" pid="10" vmUID="0" name="proc1">
+				<thread uid="2" tid="20" kernel="yes" idle="no" name="th1"/>
+			</process>
+		</applications>
+	`))
+
+	processes, threads, err := loadApplications(component)
+
+	require.NoError(t, err)
+	require.Len(t, processes, 1)
+	require.Len(t, threads, 1)
+	assert.Equal(t, int64(10), processes[0].pid)
+	assert.Equal(t, int64(20), threads[0].tid)
+}
+
 // TestProcessesAndThreadsRendererName ensures the renderer name is stable.
 func TestProcessesAndThreadsRendererName(t *testing.T) {
 	var renderer ProcessesAndThreadsRenderer

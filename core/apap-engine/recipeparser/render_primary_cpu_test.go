@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dop251/goja"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,18 +17,28 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 )
 
-func newPrimaryCPUNameRunModel(t *testing.T, cpusJSON string) cdf.ModelView {
+func newPrimaryCPUNameRunModel(t *testing.T, cpusJSON string, compressed ...bool) cdf.ModelView {
 	t.Helper()
 
 	runDir := t.TempDir()
 	componentPath := filepath.Join(runDir, filepath.FromSlash(collectedTargetCPUsComponentPath))
 	require.NoError(t, os.MkdirAll(filepath.Dir(componentPath), 0o755))
-	require.NoError(t, os.WriteFile(componentPath, []byte(cpusJSON), 0o600))
+	isCompressed := len(compressed) > 0 && compressed[0]
+	contents := []byte(cpusJSON)
+	if isCompressed {
+		componentPath += cdf.ZstdSuffix
+		encoder, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+		require.NoError(t, err)
+		contents = encoder.EncodeAll(contents, nil)
+		encoder.Close()
+	}
+	require.NoError(t, os.WriteFile(componentPath, contents, 0o600))
 
 	return cdf.NewOnDiskModel(runDir, &cdf.Manifest{Entries: []cdf.ManifestEntry{
 		{
 			Path:          collectedTargetCPUsComponentPath,
 			ComponentType: collectedTargetCPUsComponentType,
+			Compressed:    isCompressed,
 		},
 	}}, cdf.Metadata{})
 }
@@ -44,6 +55,15 @@ func TestRenderPrimaryCPUNameFromModel(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, "Cortex-X4", name)
+	})
+
+	t.Run("reads compressed CPU information", func(t *testing.T) {
+		model := newPrimaryCPUNameRunModel(t, `[{"core_number": 0, "name": "Neoverse-V2"}]`, true)
+
+		name, err := renderPrimaryCPUNameFromModel(model)
+
+		require.NoError(t, err)
+		assert.Equal(t, "Neoverse-V2", name)
 	})
 
 	t.Run("fails when no CPUs were persisted", func(t *testing.T) {

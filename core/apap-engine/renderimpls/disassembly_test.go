@@ -212,8 +212,13 @@ func execDisassemblyTestStatement(t *testing.T, db *render.Database, stmt string
 	assert.NoError(t, err)
 }
 
-func setUpPopulateDisassemblyTables(t *testing.T, db *render.Database, imageRows string, symbolRows string) {
+func setUpPopulateDisassemblyTables(t *testing.T, db *render.Database, imageRows string, symbolRows string, filenameSuffix ...string) {
 	t.Helper()
+
+	suffix := ".csv"
+	if len(filenameSuffix) > 0 {
+		suffix = filenameSuffix[0]
+	}
 
 	execDisassemblyTestStatement(t, db, `CREATE TABLE raw_disassembly (
 		filename VARCHAR,
@@ -226,9 +231,9 @@ func setUpPopulateDisassemblyTables(t *testing.T, db *render.Database, imageRows
 		"Line No" INTEGER
 	)`)
 
-	execDisassemblyTestStatement(t, db, `INSERT INTO raw_disassembly VALUES
-		('/tmp/disassembly-capture-periodic_sampling-libc.so.6.csv', '00000000000f', 'sym_main', NULL, NULL, NULL, NULL, NULL),
-		('/tmp/disassembly-capture-periodic_sampling-libc.so.6.csv', '000000000010', 'aa', 'ldr', 'x0, [x1]', 123, '/src/main.c', 12)`)
+	execDisassemblyTestStatement(t, db, fmt.Sprintf(`INSERT INTO raw_disassembly VALUES
+		('/tmp/disassembly-capture-periodic_sampling-libc.so.6%s', '00000000000f', 'sym_main', NULL, NULL, NULL, NULL, NULL),
+		('/tmp/disassembly-capture-periodic_sampling-libc.so.6%s', '000000000010', 'aa', 'ldr', 'x0, [x1]', 123, '/src/main.c', 12)`, suffix, suffix))
 
 	execDisassemblyTestStatement(t, db, `CREATE TABLE source_files (
 		source_file_id INTEGER,
@@ -358,6 +363,25 @@ func TestPopulateDisassemblyTable(t *testing.T) {
 			`INSERT INTO symbols VALUES
 		(101, 'sym_main', 42, 7, 10, 12),
 		(202, 'sym_main', 43, 7, 10, 12)`,
+		)
+
+		got := queryDisassemblyTableRows(t, db)
+		assertSingleDisassemblyTableRow(t, got, 101)
+	})
+
+	t.Run("selects symbol matching image for compressed input", func(t *testing.T) {
+		db := newTestDatabase(t)
+
+		setUpPopulateDisassemblyTables(
+			t,
+			db,
+			`INSERT INTO images VALUES
+		(42, 'libc.so.6'),
+		(43, 'libc.so.6.csv')`,
+			`INSERT INTO symbols VALUES
+		(101, 'sym_main', 42, 7, 10, 12),
+		(202, 'sym_main', 43, 7, 10, 12)`,
+			".csv.zst",
 		)
 
 		got := queryDisassemblyTableRows(t, db)

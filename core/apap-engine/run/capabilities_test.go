@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bmatcuk/doublestar"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
@@ -56,6 +57,28 @@ func writeCapabilityTestFile(t *testing.T, dir string, name string, contents str
 }
 
 func TestLoadRunCapabilities(t *testing.T) {
+	t.Run("loads a compressed capability component", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "one.json.zst")
+		encoder, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+		require.NoError(t, err)
+		compressed := encoder.EncodeAll([]byte(`{"state":"available","payload":{"enabled":true}}`), nil)
+		encoder.Close()
+		require.NoError(t, os.WriteFile(path, compressed, perms.LocalFilePerm))
+
+		model := &capabilitiesModelView{components: []cdf.Component{{
+			Type:         cdf.ComponentType{Name: "one-data", SchemaVersion: "1.0"},
+			RelativePath: "tool/a/0/capabilities/one.json",
+			AbsolutePath: path,
+			Compressed:   true,
+		}}}
+
+		capabilities, err := LoadRunCapabilities([]cdf.ModelView{model})
+
+		require.NoError(t, err)
+		require.Equal(t, true, capabilities[0].CapabilitiesPerTool["tool/a/0"]["one"].Payload["enabled"])
+	})
+
 	t.Run("loads and groups capabilities for each run", func(t *testing.T) {
 		dir := t.TempDir()
 		oneType := cdf.ComponentType{Name: "one-data", SchemaVersion: "1.0"}

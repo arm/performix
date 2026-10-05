@@ -9,7 +9,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -132,8 +131,8 @@ func (renderer *ProcessesAndThreadsRenderer) manifestEntry(
 }
 
 // loadApplications opens and parses applications.xml into process and thread rows.
-func loadApplications(path string) ([]processRow, []threadRow, error) {
-	file, err := os.Open(path)
+func loadApplications(component cdf.Component) ([]processRow, []threadRow, error) {
+	file, err := component.Open()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open applications xml: %w", err)
 	}
@@ -407,7 +406,7 @@ func (renderer *ProcessesAndThreadsRenderer) Initialize(
 			continue
 		}
 
-		processes, threads, err := loadApplications(component.AbsolutePath)
+		processes, threads, err := loadApplications(component)
 		if err != nil {
 			return fmt.Errorf("failed to parse %s: %w", component.AbsolutePath, err)
 		}

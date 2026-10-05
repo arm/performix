@@ -21,6 +21,48 @@ import (
 
 // This file contains a few demonstrative JS unit tests
 
+func TestDecodeXMLAttribute(t *testing.T) {
+	h := jstest.LoadJSModule(t, "tool-integrations/utils.js")
+
+	tests := []struct {
+		name    string
+		encoded string
+		decoded string
+	}{
+		{name: "plain text", encoded: "JVMInformation", decoded: "JVMInformation"},
+		{name: "predefined entities", encoded: "&amp;&apos;&gt;&lt;&quot;", decoded: `&'><"`},
+		{name: "decimal entities", encoded: "&#9;&#10;&#13;&#32;&#57344;&#65536;", decoded: "\t\n\r \ue000\U00010000"},
+		{name: "hexadecimal entities", encoded: "&#x2e;&#X4A;", decoded: ".J"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := h.Call[string](t, "decodeXmlAttribute", test.encoded)
+
+			require.NoError(t, err)
+			require.Equal(t, test.decoded, result)
+		})
+	}
+
+	t.Run("rejects an unknown entity", func(t *testing.T) {
+		_, err := h.Call[string](t, "decodeXmlAttribute", "jdk&unknown;Event")
+
+		require.ErrorContains(t, err, "Invalid XML entity '&unknown;'")
+	})
+
+	t.Run("rejects an invalid XML code point", func(t *testing.T) {
+		_, err := h.Call[string](t, "decodeXmlAttribute", "jdk&#0;Event")
+
+		require.ErrorContains(t, err, "Invalid XML entity '&#0;'")
+	})
+
+	t.Run("rejects an unterminated entity", func(t *testing.T) {
+		_, err := h.Call[string](t, "decodeXmlAttribute", "jdk&amp")
+
+		require.ErrorContains(t, err, "Malformed XML entity in attribute value")
+	})
+}
+
 func TestEnsureDeployed(t *testing.T) {
 	t.Run("errors if path does not exist", func(t *testing.T) {
 		h := jstest.LoadJSModule(t, "tool-integrations/utils.js")

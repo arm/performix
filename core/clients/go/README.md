@@ -11,23 +11,14 @@ for releases as the generated Go code is committed back to GitHub into a dedicat
 
 ## Setup
 
-Since this is a private repository inside `Arm-Debug` you will need to configure Go/Git to treat repos hosted on
-`Arm-Debug` as private and provide a Personal Access Token (PAT) to authorise access.
+Since this is a private repository inside `Arm-Debug`, configure Go and Git to
+treat Arm-Debug repositories as private. Follow the shared
+[private package access setup](../../../DEVELOPMENT.md#package-access) first.
 
 1. Add `Arm-Debug` to `GOPRIVATE` with the following command 
    - `go env -w GOPRIVATE=github.com/Arm-Debug`
 
-Then you can either log into yor Github account or create a personal access token and configure the url.
-
-#### Setting up Private access token
-
-2. Follow the instructions here:
-   - [Creating a personal access token](https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token)
-   - The token only needs the `repo` permission to read private repos.
-   - Save the token, you will need it later.
-3. Enable SSO for the GitHub PAT.
-
-4. Configure git appropriately to use private repositories:
+2. Configure git appropriately to use private repositories:
    - `git config --global url."https://<GitHub Username>:<GitHub PAT>@github.com".insteadOf "https://github.com"`
 
 

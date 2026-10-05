@@ -127,95 +127,6 @@ func TestConfigureRunCreatorRunBuilder_AddsComponents(t *testing.T) {
 	}
 }
 
-func TestQueueFileRetrieval_Success(t *testing.T) {
-	tempDir := t.TempDir()
-	rc, err := run.NewRunCollection(tempDir)
-	require.NoError(t, err)
-
-	builder, err := rc.RunBuilder()
-	require.NoError(t, err)
-
-	retriever := RetrieveAgentFilesStageRetriever{}
-	collectionState := &CollectionState{RunBuilder: builder}
-
-	platform := &conductor.TargetPlatform{Path: fakePathUtils{}}
-
-	outputDir := "/remote/workdir"
-
-	writer := &fakeRunWriter{}
-	collectionState.RunManifestUpdater = run.NewRunManifestUpdater(&collectionState.RunBuilder, writer)
-	col := &Collector{CollectionState: collectionState, FileRetriever: &retriever}
-
-	relativeDest := filepath.Join("entity", "file.txt")
-	err = col.QueueFileRetrieval(platform, nil, outputDir, "file.txt", relativeDest, cdf.ComponentType{Name: "data", SchemaVersion: "1.0"}, tool.TransferOptions{})
-	require.NoError(t, err)
-	require.True(t, writer.called)
-
-	if assert.Len(t, retriever.FileTransfers, 1) {
-		ft := retriever.FileTransfers[0]
-		// Remote path should be absolute on target
-		assert.Equal(t, "/remote/workdir/file.txt", filepath.ToSlash(ft.RemotePath))
-		// Local path must lie within the run collection directory and end with the relative path we provided
-		assert.True(t, strings.HasPrefix(ft.LocalPath, tempDir))
-		assert.True(t, strings.HasSuffix(ft.LocalPath, relativeDest))
-	}
-}
-
-func TestQueueFileRetrieval_LogComponentGoesToLogTransfers(t *testing.T) {
-	tempDir := t.TempDir()
-	rc, err := run.NewRunCollection(tempDir)
-	require.NoError(t, err)
-
-	builder, err := rc.RunBuilder()
-	require.NoError(t, err)
-
-	retriever := RetrieveAgentFilesStageRetriever{}
-	collectionState := &CollectionState{RunBuilder: builder}
-
-	platform := &conductor.TargetPlatform{Path: fakePathUtils{}}
-	outputDir := "/remote/workdir"
-	writer := &fakeRunWriter{}
-	collectionState.RunManifestUpdater = run.NewRunManifestUpdater(&collectionState.RunBuilder, writer)
-	col := &Collector{CollectionState: collectionState, FileRetriever: &retriever}
-
-	relativeDest := filepath.Join("entity", "log.txt")
-
-	err = col.QueueFileRetrieval(platform, nil, outputDir, "log.txt", relativeDest, cdf.ComponentType{Name: "log-text"}, tool.TransferOptions{})
-	require.NoError(t, err)
-	require.True(t, writer.called)
-
-	// Desired behaviour: log component should be tracked in LogTransfers, NOT FileTransfers
-	assert.Len(t, retriever.FileTransfers, 0)
-	if assert.Len(t, retriever.LogTransfers, 1) {
-		lt := retriever.LogTransfers[0]
-		assert.Equal(t, "/remote/workdir/log.txt", filepath.ToSlash(lt.RemotePath))
-		assert.True(t, strings.HasPrefix(lt.LocalPath, tempDir))
-		assert.True(t, strings.HasSuffix(lt.LocalPath, relativeDest))
-	}
-}
-
-func TestQueueFileRetrieval_RunWriterErrorPropagates(t *testing.T) {
-	tempDir := t.TempDir()
-	rc, err := run.NewRunCollection(tempDir)
-	require.NoError(t, err)
-
-	builder, err := rc.RunBuilder()
-	require.NoError(t, err)
-
-	retriever := RetrieveAgentFilesStageRetriever{}
-	collectionState := &CollectionState{RunBuilder: builder}
-	platform := &conductor.TargetPlatform{Path: fakePathUtils{}}
-	outputDir := "/remote/workdir"
-	writer := &fakeRunWriter{wantErr: true}
-	collectionState.RunManifestUpdater = run.NewRunManifestUpdater(&collectionState.RunBuilder, writer)
-	col := &Collector{CollectionState: collectionState, FileRetriever: &retriever}
-
-	err = col.QueueFileRetrieval(platform, nil, outputDir, "file.txt", "entity/file.txt", cdf.ComponentType{Name: "data"}, tool.TransferOptions{})
-	require.ErrorContains(t, err, "forced failure")
-	assert.Empty(t, retriever.FileTransfers)
-	assert.Equal(t, 0, col.CollectionState.RunBuilder.ComponentCount())
-}
-
 func TestQueueFileRetrieval_OptionsReachTransferManager(t *testing.T) {
 	tempDir := t.TempDir()
 	rc, err := run.NewRunCollection(tempDir)
@@ -230,10 +141,7 @@ func TestQueueFileRetrieval_OptionsReachTransferManager(t *testing.T) {
 	tm.listeningDone = make(chan struct{})
 	collectionState := &CollectionState{RunBuilder: builder}
 	collectionState.RunManifestUpdater = run.NewRunManifestUpdater(&collectionState.RunBuilder, &fakeRunWriter{})
-	col := &Collector{
-		CollectionState: collectionState,
-		FileRetriever:   &TransferManagerRetriever{TransferManager: tm},
-	}
+	col := NewCollector(collectionState, tm)
 
 	platform := &conductor.TargetPlatform{Path: fakePathUtils{}}
 
@@ -241,6 +149,7 @@ func TestQueueFileRetrieval_OptionsReachTransferManager(t *testing.T) {
 		ImmediateRetrieval: true,
 		Exclude:            []string{"a/b/c"},
 		BackgroundTransfer: true,
+		Compressed:         true,
 	}
 	go func() {
 		err = col.QueueFileRetrieval(platform, nil, "/remote/workdir", "file.txt", "entity/file.txt", cdf.ComponentType{Name: "data"}, options)
@@ -256,8 +165,11 @@ func TestQueueFileRetrieval_OptionsReachTransferManager(t *testing.T) {
 	}
 	require.True(t, got.t.ImmediateRetrieval)
 	require.True(t, got.t.BackgroundTransfer)
+	require.True(t, got.t.Compressed)
 	require.Equal(t, options.Exclude, got.t.Exclude)
 	require.Equal(t, "/remote/workdir/file.txt", filepath.ToSlash(got.t.RemotePath))
+	require.True(t, strings.HasPrefix(got.t.LocalPath, tempDir))
+	require.True(t, strings.HasSuffix(got.t.LocalPath, filepath.Join("entity", "file.txt")))
 	require.Equal(t, "entity/file.txt", filepath.ToSlash(got.t.ManifestRelativePath))
 }
 
@@ -273,16 +185,12 @@ func TestQueueFileRetrieval_TransferManagerSkipsCollectorStorage(t *testing.T) {
 	close(tm.ListeningStarted)
 	tm.transferRequestChannel = make(chan AddTransferMessage, 1)
 	tm.listeningDone = make(chan struct{})
+	writer := &fakeRunWriter{}
 	collectionState := &CollectionState{RunBuilder: builder}
-	collectionState.RunManifestUpdater = run.NewRunManifestUpdater(&collectionState.RunBuilder, &fakeRunWriter{})
-	col := &Collector{
-		CollectionState: collectionState,
-		FileRetriever:   &TransferManagerRetriever{TransferManager: tm},
-	}
+	collectionState.RunManifestUpdater = run.NewRunManifestUpdater(&collectionState.RunBuilder, writer)
+	col := NewCollector(collectionState, tm)
 
 	platform := &conductor.TargetPlatform{Path: fakePathUtils{}}
-	writer := &fakeRunWriter{}
-
 	go func() {
 		err = col.QueueFileRetrieval(platform, nil, "/remote/workdir", "file.txt", "entity/file.txt", cdf.ComponentType{Name: "data"}, tool.TransferOptions{})
 		require.NoError(t, err)

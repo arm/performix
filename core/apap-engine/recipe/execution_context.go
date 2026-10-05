@@ -51,6 +51,7 @@ type ExecutionContext interface {
 	ProbeToolsFromIntegrations(context context.Context, cmdStateCh *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext) ([]tool.ProbeResult, []error)
 	IsFullCaptureSupportEnabled() bool
 	IsRerenderingEnabled() bool
+	IsJfrCaptureEnabled() bool
 	IsNeoprofTimelineEnabled() bool
 	ToolVersions() map[string]string
 }
@@ -77,6 +78,7 @@ type RunExecutionContext struct {
 	FullCaptureSupport            bool
 	RerenderingEnabled            bool
 	NeoprofTimelineEnabled        bool
+	JfrCaptureEnabled             bool
 	UsrMessageWriter              run.UserMessageWriter
 }
 
@@ -300,6 +302,10 @@ func (c *RunExecutionContext) IsNeoprofTimelineEnabled() bool {
 	return c.NeoprofTimelineEnabled
 }
 
+func (c *RunExecutionContext) IsJfrCaptureEnabled() bool {
+	return c.JfrCaptureEnabled
+}
+
 func (c *RunExecutionContext) ToolVersions() map[string]string {
 	return c.RecipeCtx.ToolVersions
 }
@@ -455,13 +461,8 @@ func (c *RunExecutionContext) copyFile(sourceLocality string, destinationLocalit
 		})
 	}
 
-	retriever, ok := c.Collector.FileRetriever.(*TransferManagerRetriever)
-	if !ok {
-		return message.New(message.EngineToolCopyFromTransferManagerDisabled)
-	}
-
 	sourcePath = c.TargetPlatform().Path.GetFullPath(sourcePath, "")
-	return retriever.TransferManager.CopyFromTargetAndWait(conductor.FileTransfer{
+	return c.Collector.TransferManager.CopyFromTargetAndWait(conductor.FileTransfer{
 		RemotePath: sourcePath,
 		LocalPath:  destinationPath,
 	}, c.AgentSupplier)

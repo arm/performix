@@ -4,7 +4,9 @@
 package daemon
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/config"
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
@@ -165,4 +168,35 @@ func setTestPorts(t *testing.T) {
 		viper.Set("server-port", serverconfig.DefaultServerPort)
 		viper.Set("auth-port", serverconfig.DefaultAuthPort)
 	})
+}
+
+func TestDaemonStartJfrCaptureFlag(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			t.Cleanup(func() { block = false })
+			// Explicit false must override a true inherited environment value too.
+			t.Setenv("APXD_ENABLE_JFR_CAPTURE", "true")
+			require.NoError(t, viper.BindEnv("enable-jfr-capture", "APXD_ENABLE_JFR_CAPTURE"))
+			setTestPorts(t)
+			cmd := newDaemonStartCmd(&mockServerBgRunner{}, &mockServerFgRunner{}, &mocks.MockClientConnector{})
+			flag := cmd.Flags().Lookup("enable-jfr-capture")
+			require.NotNil(t, flag)
+			assert.Equal(t, "false", flag.DefValue)
+			require.NoError(t, cmd.ParseFlags([]string{fmt.Sprintf("--enable-jfr-capture=%t", enabled)}))
+			assert.Equal(t, enabled, serverconfig.FromViperForBackground().EnableJfrCapture)
+		})
+	}
+}
+
+func TestJfrCaptureAppearsInConfigPrint(t *testing.T) {
+	newDaemonStartCmd(&mockServerBgRunner{}, &mockServerFgRunner{}, &mocks.MockClientConnector{})
+	cmd := config.NewPrintCmd()
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"--list"})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, output.String(), "Config File Variable: enable-jfr-capture")
+	assert.Contains(t, output.String(), "Environment Variable: APXD_ENABLE_JFR_CAPTURE")
 }

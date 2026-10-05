@@ -657,7 +657,7 @@ func TestRenderCompatibilityWarningHandling(t *testing.T) {
 
 		// should print warning message **as an error** below
 		assert.Contains(t, output, "[Error]:")
-		assert.Contains(t, output, fmt.Sprintf("cannot be rendered in your current version of %v", terminology.GetProductFullName()))
+		assert.Contains(t, output, fmt.Sprintf("Your current version of %v cannot render run", terminology.GetProductFullName()))
 		assert.Contains(t, output, "[Code]: engine.render.compatibility.incompatible.TOO_OLD")
 	})
 	t.Run("doesn't show indeterminability warning if rendering succeeds", func(t *testing.T) {

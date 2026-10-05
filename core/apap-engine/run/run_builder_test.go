@@ -245,7 +245,7 @@ func TestRunBuilderManifest(t *testing.T) {
 		}
 
 		componentType := cdf.ComponentType{Name: "pending", SchemaVersion: "v1"}
-		builder.AddPendingComponent(componentType, "some/foo.something")
+		builder.AddComponentWithFlags(componentType, "some/foo.something", ComponentFlags{Pending: true})
 
 		assert.Equal(t, &cdf.ManifestEntry{
 			Path:          "some/foo.something",
@@ -266,7 +266,7 @@ func TestRunBuilderComponentUpdates(t *testing.T) {
 		}
 
 		componentType := cdf.ComponentType{Name: "test", SchemaVersion: "v1"}
-		builder.AddPendingComponent(componentType, "a/b/foo.something")
+		builder.AddComponentWithFlags(componentType, "a/b/foo.something", ComponentFlags{Pending: true})
 		builder.ClearPending("\\a\\b\\foo.something")
 		assert.False(t, builder.buildManifest().Lookup("a/b/foo.something").Pending)
 
@@ -288,7 +288,7 @@ func TestRunBuilderComponentUpdates(t *testing.T) {
 		}
 
 		componentType := cdf.ComponentType{Name: "test", SchemaVersion: "v1"}
-		builder.AddPendingComponent(componentType, "pending/foo.something")
+		builder.AddComponentWithFlags(componentType, "pending/foo.something", ComponentFlags{Pending: true})
 		builder.AddComponent(componentType, "complete/foo.something")
 
 		assert.True(t, builder.IsComponentPending("\\pending\\foo.something"))

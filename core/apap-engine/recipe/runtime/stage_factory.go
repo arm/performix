@@ -29,8 +29,8 @@ type StageConfiguration struct {
 	IsRootWorkerEnabled      bool
 	IsFullCaptureEnabled     bool
 	RerenderingEnabled       bool
-	TransferManagerEnabled   bool
 	NeoprofTimelineEnabled   bool
+	JfrCaptureEnabled        bool
 	PackageManager           *packages.PackageManager
 	DeferredActions          notifiers.DeferredActions
 	UsrMessageWriter         *run.ConcreteUserMessageWriter
@@ -54,6 +54,7 @@ func (c *StageConfiguration) NewRunExecutionContext(hostFs afero.Fs) *recipe.Run
 		FullCaptureSupport:     c.IsFullCaptureEnabled,
 		RerenderingEnabled:     c.RerenderingEnabled,
 		NeoprofTimelineEnabled: c.NeoprofTimelineEnabled,
+		JfrCaptureEnabled:      c.JfrCaptureEnabled,
 		UsrMessageWriter:       c.UsrMessageWriter,
 		RunModels:              c.RunModels,
 	}

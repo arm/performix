@@ -16,6 +16,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/gojautils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/jstest/mocks"
+	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	tool_goja "github.com/Arm-Debug/apap-cli/apap-engine/tool/goja"
 )
@@ -47,6 +48,19 @@ func (th *ToolIntegrationJSHarness) ToolProperties() tool.IntegrationProperties 
 		Deployments:            th.binding.Deployments,
 		Migrations:             th.binding.Migrations,
 	}
+}
+
+// ToolParameters returns the parameters declared by the tool integration.
+func (th *ToolIntegrationJSHarness) ToolParameters(t *testing.T) parameters.Parameters {
+	t.Helper()
+
+	params, optionCallbacks, err := parameters.ExtractToolIntegrationParameters(
+		th.binding.Parameters,
+		th.binding.Name,
+	)
+	require.NoError(t, err)
+	require.Empty(t, optionCallbacks)
+	return params
 }
 
 // ToolProbe calls the tool's probe method, supplying the provided tool engine
@@ -204,6 +218,7 @@ func LoadToolIntegration(t *testing.T, toolIntegrationName string) *ToolIntegrat
 		return nil
 	})
 	require.NoError(t, err, "failed to load requested tool integration")
+	registerCoverageExport(t, genericHarness)
 
 	return harness
 }

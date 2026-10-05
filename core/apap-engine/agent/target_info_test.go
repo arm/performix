@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent/mocks"
+	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
 	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
 	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
@@ -23,7 +24,7 @@ import (
 
 // --- Tests ---
 
-func TestRetrieveAgentFilesStage_Execute(t *testing.T) {
+func TestReceiveFile(t *testing.T) {
 	t.Run("RetrieveFile start error surfaces", func(t *testing.T) {
 		tmp := t.TempDir()
 		local := filepath.Join(tmp, "x", "a.txt")
@@ -35,7 +36,7 @@ func TestRetrieveAgentFilesStage_Execute(t *testing.T) {
 			Return((targetagentproto.TargetAgent_RetrieveFileClient)(nil), errors.New("boom")).
 			Once()
 
-		err := ReceiveFile(context.Background(), local, remote, agent, nil)
+		err := ReceiveFile(context.Background(), remote, NewTransferDestination(cdf.ManifestEntry{Path: local}), agent, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "start retrieve")
 		agent.AssertExpectations(t)
@@ -48,7 +49,7 @@ func TestRetrieveAgentFilesStage_Execute(t *testing.T) {
 		local := filepath.Join(parent, "child.txt")
 		remote := "/ok/stream"
 
-		err := ReceiveFile(context.Background(), local, remote, &targetagentmocks.TargetAgentClient{}, nil)
+		err := ReceiveFile(context.Background(), remote, NewTransferDestination(cdf.ManifestEntry{Path: local}), &targetagentmocks.TargetAgentClient{}, nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "mkdir")
@@ -69,7 +70,7 @@ func TestRetrieveAgentFilesStage_Execute(t *testing.T) {
 			Return(stream, nil).
 			Once()
 
-		err := ReceiveFile(context.Background(), local, remote, agent, nil)
+		err := ReceiveFile(context.Background(), remote, NewTransferDestination(cdf.ManifestEntry{Path: local}), agent, nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "create")
@@ -80,7 +81,7 @@ func TestRetrieveAgentFilesStage_Execute(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := ReceiveFile(ctx, "", "", &targetagentmocks.TargetAgentClient{}, nil)
+		err := ReceiveFile(ctx, "", NewTransferDestination(cdf.ManifestEntry{}), &targetagentmocks.TargetAgentClient{}, nil)
 
 		require.ErrorContains(t, err, "canceled")
 	})
@@ -109,7 +110,7 @@ func TestRetrieveAgentFilesStage_Execute(t *testing.T) {
 			Return(stream, nil).
 			Once()
 
-		err := ReceiveFile(context.Background(), local, remote, agent, nil)
+		err := ReceiveFile(context.Background(), remote, NewTransferDestination(cdf.ManifestEntry{Path: local}), agent, nil)
 		require.NoError(t, err)
 
 		data, readErr := os.ReadFile(local)

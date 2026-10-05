@@ -501,6 +501,9 @@ message QueryRequest {
 
   // The format of the output
   TableFormat table_format = 3;
+
+  // Whether to restrict execution to exactly one read-only SELECT statement
+  bool read_only = 4;
 }
 
 // A table chunk in the format of protobuf structs

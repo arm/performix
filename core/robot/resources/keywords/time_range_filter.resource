@@ -14,7 +14,7 @@ Query Periodic Sample Count
   ...  "select coalesce(sum(d.measurement_value), 0) as sample_count
   ...  from ${table} d
   ...  join ${measurements_table} m on d.measurement_id = m.measurement_id
-  ...  where m.name in ('Periodic Samples (self)', 'Sample Count (self)')"
+  ...  where m.name in ('Periodic Samples (self)', 'Sample Count (self)', 'SPE Sample Count')"
   ${drilldown_count} =  Query Single Value From Render Session
   ...  ${session_id}
   ...  ${query}

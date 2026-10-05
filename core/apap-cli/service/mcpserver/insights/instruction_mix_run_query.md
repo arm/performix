@@ -36,8 +36,9 @@ used. Do not characterize a mix solely by its largest category when other
 categories materially affect its interpretation. If both streams are used,
 distinguish dynamic operation mix from static binary composition.
 
-If a listed table or column is missing, inspect the catalogue once before
-retrying.
+If a listed table is missing, inspect
+`render_session.visualization_resolved_tables`. If a column is missing, inspect
+the catalogue once before retrying.
 
 If composition and function attribution support the conclusion, do not query
 source or disassembly. If a specific unresolved question remains, use source

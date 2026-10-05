@@ -13,6 +13,12 @@ import (
 // Execute is the single entry point for creating a table in the desired format.
 // It dispatches to the appropriate constructor logic based on "format."
 func Execute(ctx context.Context, database *render.Database, sql string, opts ExecuteOptions) (TableAccessorCloser, error) {
+	if opts.ReadOnly {
+		if err := validateReadOnlySQL(ctx, database, sql); err != nil {
+			return nil, err
+		}
+	}
+
 	switch opts.Format {
 
 	case TableFormatNativeRow:

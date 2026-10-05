@@ -26,10 +26,11 @@ type ReadinessCollector struct {
 func (c *ReadinessCollector) OnReadinessProbed(r recipe.ReadyOutput) {
 	// Escalate the overall status if any advice has a higher severity
 	severityRanking := map[string]int{
-		recipe.ReadyStatusUnknown: 3,
-		recipe.ReadyStatusError:   2,
-		recipe.ReadyStatusWarning: 1,
-		recipe.ReadyStatusReady:   0,
+		recipe.ReadyStatusUnknown:    3,
+		recipe.ReadyStatusError:      2,
+		recipe.ReadyStatusWarning:    1,
+		recipe.ReadyStatusReady:      0,
+		recipe.AdviceSeverityMessage: 0,
 	}
 	for _, adv := range r.Advice {
 		advRank, advExists := severityRanking[adv.AdviceSeverity]

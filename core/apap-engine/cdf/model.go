@@ -129,10 +129,10 @@ func (m *OnDiskModel) ResolveComponent(componentPath string) (Component, error) 
 	}
 	if info, err := m.fs().Stat(absolute); err == nil && !info.IsDir() {
 		log.Warnf("Component %q missing manifest entry but exists on disk", absolute)
-		return Component{unknownComponentType, normalized, absolute}, nil
+		return Component{Type: unknownComponentType, RelativePath: normalized, AbsolutePath: absolute}, nil
 	}
 
-	return Component{unknownComponentType, normalized, ""}, fmt.Errorf("%w: %q", ErrComponentNotFound, normalized)
+	return Component{Type: unknownComponentType, RelativePath: normalized}, fmt.Errorf("%w: %q", ErrComponentNotFound, normalized)
 
 FOUND:
 	if entry.Pending {
@@ -150,11 +150,11 @@ FOUND:
 			}
 		}
 	}
-	absolute, err = m.resolveModelPath(entry.Path)
+	absolute, err = m.resolveManifestEntry(*entry)
 	if err != nil {
 		return Component{}, err
 	}
-	return Component{entry.ComponentType, entry.Path, absolute}, nil
+	return Component{Type: entry.ComponentType, RelativePath: entry.Path, AbsolutePath: absolute, Compressed: entry.Compressed}, nil
 }
 
 // ResolveComponentExpectType looks up a component using ResolveComponent, but fails if the component type doesn't
@@ -224,15 +224,13 @@ func (m *OnDiskModel) ResolveComponentByManifestPattern(componentPath string) (C
 			}
 			// entry.Path may contain wildcards; we return that as RelativePath,
 			// but the actual file lives at `want`.
-			abs, err := m.resolveModelPath(want)
+			storedEntry := e
+			storedEntry.Path = want
+			abs, err := m.resolveManifestEntry(storedEntry)
 			if err != nil {
 				return Component{}, err
 			}
-			return Component{
-				e.ComponentType,
-				e.Path,
-				abs,
-			}, nil
+			return Component{Type: e.ComponentType, RelativePath: e.Path, AbsolutePath: abs, Compressed: e.Compressed}, nil
 		}
 	}
 
@@ -253,15 +251,13 @@ func (m *OnDiskModel) ResolveComponentByManifestPattern(componentPath string) (C
 				if e.Pending {
 					return Component{}, ErrComponentPending
 				}
-				abs, err := m.resolveModelPath(rewrote)
+				storedEntry := e
+				storedEntry.Path = rewrote
+				abs, err := m.resolveManifestEntry(storedEntry)
 				if err != nil {
 					return Component{}, err
 				}
-				return Component{
-					e.ComponentType,
-					e.Path,
-					abs,
-				}, nil
+				return Component{Type: e.ComponentType, RelativePath: e.Path, AbsolutePath: abs, Compressed: e.Compressed}, nil
 			}
 		}
 	}
@@ -270,11 +266,31 @@ func (m *OnDiskModel) ResolveComponentByManifestPattern(componentPath string) (C
 	}
 
 	// 3) still nothing?
-	return Component{
-		unknownComponentType,
-		want,
-		"",
-	}, fmt.Errorf("%w in manifest (pattern match): '%s'", ErrComponentNotFound, componentPath)
+	return Component{Type: unknownComponentType, RelativePath: want}, fmt.Errorf("%w in manifest (pattern match): '%s'", ErrComponentNotFound, componentPath)
+}
+
+// logicalPathFromStoredPath maps a compressed physical filename back to its logical manifest path.
+// A plain .zst file is left unchanged unless the manifest explicitly marks it as compressed.
+func (m *OnDiskModel) logicalPathFromStoredPath(storedPath string) string {
+	if !strings.HasSuffix(storedPath, ZstdSuffix) {
+		return storedPath
+	}
+	if entry := m.manifest.Lookup(storedPath); entry != nil && !entry.Compressed {
+		return storedPath
+	}
+	logicalPath := strings.TrimSuffix(storedPath, ZstdSuffix)
+	for _, entry := range m.manifest.Entries {
+		if !entry.Compressed {
+			continue
+		}
+		if entry.Path == logicalPath {
+			return logicalPath
+		}
+		if ok, err := doublestar.Match(entry.Path, logicalPath); err == nil && ok {
+			return logicalPath
+		}
+	}
+	return storedPath
 }
 
 func (m *OnDiskModel) fs() afero.Fs {
@@ -297,6 +313,10 @@ func (m *OnDiskModel) resolveModelPath(path string) (string, error) {
 	}
 
 	return resolvedPath, nil
+}
+
+func (m *OnDiskModel) resolveManifestEntry(entry ManifestEntry) (string, error) {
+	return m.resolveModelPath(entry.StoragePath())
 }
 
 func normalizeGlob(glob string) string {
@@ -406,8 +426,9 @@ func (m *OnDiskModel) FindComponents(glob string) ([]Component, error) {
 			return nil
 		}
 
-		subpath := path[min(len(path), len(m.basePath)+1):]
-		subpath = strings.ReplaceAll(subpath, "\\", "/")
+		storedSubpath := path[min(len(path), len(m.basePath)+1):]
+		storedSubpath = strings.ReplaceAll(storedSubpath, "\\", "/")
+		subpath := m.logicalPathFromStoredPath(storedSubpath)
 		isMatch, err := doublestar.Match(glob, subpath)
 		if err != nil {
 			return fmt.Errorf("failure during pattern match: %w", err)
@@ -417,6 +438,12 @@ func (m *OnDiskModel) FindComponents(glob string) ([]Component, error) {
 		}
 
 		component, err := m.ResolveComponent(subpath)
+		if err != nil && subpath != storedSubpath && errors.Is(err, ErrComponentNotFound) {
+			// Compressed wildcard entries have no exact manifest path for the discovered logical filename.
+			// Resolve them through the manifest pattern, then retain the concrete path found on disk.
+			component, err = m.ResolveComponentByManifestPattern(subpath)
+			component.RelativePath = subpath
+		}
 		if err != nil {
 			return fmt.Errorf("failed to resolve component %q: %w", subpath, err)
 		}
@@ -449,8 +476,15 @@ func (m *OnDiskModel) ListEntityComponents(entity Entity) ([]Component, error) {
 			continue
 		}
 
-		componentPath := filepath.Join(entity.RelativePath, entry.Name())
+		storedPath := NormalizePath(filepath.Join(entity.RelativePath, entry.Name()))
+		componentPath := m.logicalPathFromStoredPath(storedPath)
 		component, err := m.ResolveComponent(componentPath)
+		if err != nil && componentPath != storedPath && errors.Is(err, ErrComponentNotFound) {
+			// Compressed wildcard entries have no exact manifest path for the discovered logical filename.
+			// Resolve them through the manifest pattern, then retain the concrete path found on disk.
+			component, err = m.ResolveComponentByManifestPattern(componentPath)
+			component.RelativePath = componentPath
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to list components in entity '%s': %w", entity.RelativePath, err)
 		}
@@ -600,7 +634,9 @@ func (m *OnDiskModel) findManifestPatternComponentByType(originalPath string, ma
 				if e.Pending {
 					return &Component{}, ErrComponentPending
 				}
-				absolutePath, err := m.resolveModelPath(matchPath)
+				storedEntry := e
+				storedEntry.Path = matchPath
+				absolutePath, err := m.resolveManifestEntry(storedEntry)
 				if err != nil {
 					return nil, err
 				}
@@ -608,6 +644,7 @@ func (m *OnDiskModel) findManifestPatternComponentByType(originalPath string, ma
 					Type:         e.ComponentType,
 					RelativePath: e.Path,
 					AbsolutePath: absolutePath,
+					Compressed:   e.Compressed,
 				}, nil
 			}
 			if firstMatch == nil {

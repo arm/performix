@@ -10,6 +10,7 @@ This package replaces the shared Bash plumbing under ``core/scripts`` so the
 - :mod:`lib.constants` - shared Artifactory URLs (replaces ``constants.sh``) and the ``core/``
   root locator ``get_core_root`` (replaces ``get-project-root.sh``).
 - :mod:`lib.goflags` - the mandatory ``duckdb_arrow`` build-tag handling.
+- :mod:`lib.msys2` - discovery and child-environment setup for MSYS2 UCRT64 on Windows.
 
 # Entrypoints & Imports
 ## Ensure scripts are on ``sys.path``

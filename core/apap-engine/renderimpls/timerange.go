@@ -74,9 +74,9 @@ func (renderer *TimeRangeRenderer) manifestEntry(
 	)
 }
 
-// getProfilingTimeRange reads the profiling state file and returns the profiling duration in nanoseconds and the absolute start time in microseconds.
-func getProfilingTimeRange(stateFile string) (int64, int64, error) {
-	profilingState, err := util.ReadXMLFile[ProfilingState](stateFile)
+// getProfilingTimeRange reads the profiling state component and returns the profiling duration in nanoseconds and the absolute start time in microseconds.
+func getProfilingTimeRange(stateComponent cdf.Component) (int64, int64, error) {
+	profilingState, err := readProfilingState(stateComponent)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -141,7 +141,7 @@ func (renderer *TimeRangeRenderer) Initialize(
 			return err
 		}
 
-		endTimeNS, absStartTimeUS, err := getProfilingTimeRange(component.AbsolutePath)
+		endTimeNS, absStartTimeUS, err := getProfilingTimeRange(component)
 		if err != nil {
 			return err
 		}

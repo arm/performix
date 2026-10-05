@@ -55,7 +55,7 @@ func TestCodeHotspotsTimelineVisibilityRules(t *testing.T) {
 					Name:          "timeline-capture-metadata-json",
 					SchemaVersion: "1.0",
 				},
-				Content: []byte(`[{"duration":60000000000,"time_unit":"nanoseconds"}]`),
+				Content: []byte(`{"duration":60000000000,"time_unit":"nanoseconds"}`),
 			},
 			{
 				RelativePath: "tool/neoprof/0/output/parquet/timeline/counter_series_files.parquet",
@@ -162,7 +162,7 @@ func TestCodeHotspotsTimelineVisibilityRules(t *testing.T) {
 					Name:          "timeline-capture-metadata-json",
 					SchemaVersion: "1.0",
 				},
-				Content: []byte(`[{"duration":60000000000,"time_unit":"nanoseconds"}]`),
+				Content: []byte(`{"duration":60000000000,"time_unit":"nanoseconds"}`),
 			},
 		}
 		components = append(components, counterParquetCatalogueFixtures(8, 4)...)
@@ -241,6 +241,55 @@ func TestCodeHotspotsTimelineVisibilityRules(t *testing.T) {
 
 		requireNoTimelineWidget(t, output)
 	})
+}
+
+func TestCodeHotspotsTimelineCombinesJfrHeapAndNeoprofCounters(t *testing.T) {
+	runRoot := t.TempDir()
+	components := []timelineComponentFixture{
+		captureMetadataComponentFixture(),
+		counterCapabilityFixture(t, "counter.cpu_cycles", map[string]any{
+			"title":       "Cycles: CPU Cycles",
+			"description": "CPU cycle count.",
+			"units":       "cycles",
+			"key_type":    8,
+			"series_id":   10,
+		}),
+		{RelativePath: "tool/neoprof/0/java/parquet/metadata/jfr_recordings.parquet"},
+		{RelativePath: "tool/neoprof/0/java/parquet/metadata/jfr_recordings.json", Content: []byte(`[{"recording_id":0,"jvm_pid":42}]`)},
+		{RelativePath: "tool/neoprof/0/java/parquet/events/jfr_jvm_information.parquet"},
+		{RelativePath: "tool/neoprof/0/java/parquet/events/jfr_initial_system_property.parquet"},
+		{RelativePath: "tool/neoprof/0/java/parquet/events/jfr_gc_heap_summary.parquet"},
+		{RelativePath: "tool/neoprof/0/java/parquet/events/jfr_garbage_collection.parquet"},
+	}
+	components = append(components, counterParquetCatalogueFixtures(8, 10)...)
+	model := newRunComponentPresenceModel(t, runRoot, components)
+
+	output, err := executeCodeHotspotsRenderStage(
+		t,
+		[]*run.RunDescription{{WorkloadType: "Launch", ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
+		[]cdf.ModelView{model},
+	)
+	require.NoError(t, err)
+
+	timeline := requireTimelineWidget(t, output)
+	groups := requireTimelineGroups(t, timeline)
+	heapGroup := requireTimelineGroup(t, groups, "heap_summary")
+	cpuGroup := requireTimelineGroup(t, groups, "key_8_series_10")
+	require.Equal(t, "Cycles: CPU Cycles", cpuGroup["title"])
+	require.Greater(t, heapGroup["index"], cpuGroup["index"], "JFR heap must follow CPU timelines")
+
+	heapLods, ok := heapGroup["lods"].([]any)
+	require.True(t, ok)
+	cpuLods := cpuGroup["lods"].([]any)
+	require.Len(t, heapLods, len(cpuLods))
+
+	tables := timeline.Config["data_source"].(map[string]any)["tables"].(map[string]any)
+	for index, cpuLod := range cpuLods {
+		heapLod := heapLods[index].(map[string]any)
+		require.Equal(t, cpuLod.(map[string]any)["binDuration"], heapLod["binDuration"])
+		require.Contains(t, tables, heapLod["sourceKey"])
+	}
+	require.Contains(t, heapGroup["config"].(map[string]any), "customQuery")
 }
 
 func TestCodeHotspotsTimelineUsesCounterCapabilityMetadata(t *testing.T) {
@@ -691,7 +740,7 @@ func captureMetadataComponentFixture() timelineComponentFixture {
 			Name:          "timeline-capture-metadata-json",
 			SchemaVersion: "1.0",
 		},
-		Content: []byte(`[{"duration":60000000000,"time_unit":"nanoseconds"}]`),
+		Content: []byte(`{"duration":60000000000,"time_unit":"nanoseconds"}`),
 	}
 }
 

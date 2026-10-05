@@ -5,8 +5,8 @@ package versions
 
 // sl-analyze comes from standalone sl-analyze assets.
 // Consider scripts/get-tools.py before changing the name of these variables.
-const SlAnalyzeVersion = "2.2.0"
-const SlAnalyzeBuildNumber = "build-4"
+const SlAnalyzeVersion = "2.3.3"
+const SlAnalyzeReleaseCandidate = "RC0"
 
 // sl-record comes from standalone gatord archives.
-const SlRecordVersion = "2.2.0.v20260729_1543-neoprof"
+const SlRecordVersion = "2.3.3.v20260929_0928-neoprof"

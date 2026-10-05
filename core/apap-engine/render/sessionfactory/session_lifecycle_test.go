@@ -1026,12 +1026,43 @@ func TestSessionSchemaLifecycle(t *testing.T) {
 	// Verify CREATE TABLE uses the session schema in the compressed catalog.
 	_, err = session.Database().Conn.ExecContext(context.Background(), "CREATE TABLE session_schema_lifecycle (val INT)")
 	require.NoError(t, err)
+	_, err = session.Database().Conn.ExecContext(context.Background(), "CREATE SEQUENCE session_sequence START 1")
+	require.NoError(t, err)
 	require.True(t, tableExists(t, session, "session_schema_lifecycle"))
 	require.True(t, schemaTableExists(t, holdDb, render.DuckDBCompressedCatalogName, session.ID(), "session_schema_lifecycle"))
+
+	table, err := query.Execute(
+		context.Background(),
+		session.Database(),
+		"SELECT nextval('session_sequence') AS value",
+		query.ExecuteOptions{
+			Format:   query.TableFormatNativeRow,
+			Settings: &query.NativeRowSettings{},
+			ReadOnly: true,
+		},
+	)
+	require.NoError(t, err)
+	nativeRowTable, ok := table.(query.NativeRowTableAccessor)
+	require.True(t, ok)
+	rows, err := nativeRowTable.NextChunk()
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NoError(t, table.Close())
 
 	session.Close()
 	require.False(t, schemaExists(t, holdDb, schemaName))
 	require.False(t, schemaTableExists(t, holdDb, render.DuckDBCompressedCatalogName, session.ID(), "session_schema_lifecycle"))
+
+	replacement, err := sessionFactory.NewSession(content, nil, &dbFactory, nil, nil)
+	require.NoError(t, err)
+	defer replacement.Close()
+
+	var sequenceCount int
+	require.NoError(t, replacement.Database().Conn.QueryRowContext(
+		context.Background(),
+		"SELECT count(*) FROM duckdb_sequences() WHERE sequence_name = 'session_sequence'",
+	).Scan(&sequenceCount))
+	require.Zero(t, sequenceCount)
 }
 
 func TestNewSessionRestrictsDuckDBExternalAccessToRunRoots(t *testing.T) {

@@ -117,6 +117,9 @@ func TestDeployMandatoryTools_ReturnsDeployWhenMissing(t *testing.T) {
 			mandatoryTools := []tool.ToolInfo{
 				{Name: terminology.GetAgentBinaryName(), Version: versions.GetVersion()},
 			}
+			if testCase.platform.OS == conductor.Android {
+				mandatoryTools = append(mandatoryTools, tool.ToolInfo{Name: "sl-record", Version: versions.SlRecordVersion})
+			}
 			toolsDir := filepath.Join(tmpDir, "tools")
 			for _, ti := range mandatoryTools {
 				writeToolBundle(t, toolsDir, ti, testCase.platform)

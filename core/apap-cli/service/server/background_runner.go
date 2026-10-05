@@ -135,6 +135,7 @@ func serverConfigToArgs(config grpcserver.GrpcServerConfig) []string {
 		"--deployment-tools-dir", fmt.Sprint(config.DeploymentToolsDir),
 		"--adb-path", fmt.Sprint(config.ADBPath),
 		fmt.Sprintf("--enable-render-db-sandbox=%t", config.EnableRenderDBSandbox),
+		fmt.Sprintf("--enable-jfr-capture=%t", config.EnableJfrCapture),
 	}
 	return args
 }

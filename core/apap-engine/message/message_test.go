@@ -422,7 +422,7 @@ func TestLookupMessage(t *testing.T) {
 			Code:        "engine.ssh.KEY_FILE_NOT_FOUND",
 			Severity:    SeverityError,
 			Message:     fmt.Sprintf("%v cannot find the SSH key file.", terminology.GetProductFullName()),
-			Explanation: "The SSH key file at `path/to/keyfile` cannot be found on the system.",
+			Explanation: "The system cannot find the SSH key file at `path/to/keyfile`.",
 			Advice:      fmt.Sprintf("Check that the SSH key file exists. If %v still cannot find the file, contact Arm support.", terminology.GetProductFullName()),
 		}
 		assert.Equal(t, catalogMsg, expectedMsg)

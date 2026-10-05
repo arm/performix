@@ -20,6 +20,10 @@ import psutil
 from robot.api import SkipExecution
 from robot.api.deco import keyword, library
 
+from mcp_test_clients import (
+    isolated_environment,
+    wait_for_pid_file_count,
+)
 
 SUPPORTED_MCP_CLIENTS = (
     "antigravity",
@@ -29,6 +33,21 @@ SUPPORTED_MCP_CLIENTS = (
     "cursor",
     "vscode",
 )
+
+
+class _MCPStderr:
+    """Own the client side of the MCP process's stderr destination."""
+
+    def __init__(self, stream, read_fd: int | None = None):
+        self.stream = stream
+        self.read_fd = read_fd
+        self.is_pipe = read_fd is not None
+
+    def close_reader(self):
+        """Close the pipe reader once, leaving subsequent calls harmless."""
+        if self.read_fd is not None:
+            os.close(self.read_fd)
+            self.read_fd = None
 
 
 @library(scope="TEST", auto_keywords=False)
@@ -44,28 +63,52 @@ class MCPClient:
         apx_binary: str,
         tool_name: str | None = None,
         interrupt_cleanup: bool = False,
+        broken_stderr_cleanup: bool = False,
     ):
-        """Run MCP and verify that its engine stops with the session."""
+        """Run MCP and verify that its engine stops with the session.
+
+        ``broken_stderr_cleanup`` closes the client's stderr read end before
+        its stdin writer. This reproduces clients such as Codex.app closing
+        all MCP pipes together and verifies that a resulting broken-pipe write
+        cannot terminate MCP before it shuts down the engine.
+        """
         with tempfile.TemporaryDirectory(prefix="apx-mcp-robot-") as directory:
             test_root = Path(directory)
-            environment, state_directory = self._isolated_environment(test_root)
+            environment, state_directory = isolated_environment(test_root)
             stderr_path = test_root / "mcp-stderr.log"
+            stderr_target = None
 
             try:
-                with stderr_path.open("w", encoding="utf-8") as stderr:
+                if broken_stderr_cleanup:
+                    stderr_read_fd, stderr_write_fd = os.pipe()
+                    stderr_target = _MCPStderr(
+                        os.fdopen(stderr_write_fd, "w", encoding="utf-8"),
+                        stderr_read_fd,
+                    )
+                else:
+                    stderr_target = _MCPStderr(
+                        stderr_path.open("w", encoding="utf-8")
+                    )
+
+                with stderr_target.stream:
                     return asyncio.run(
                         self._run_mcp(
                             apx_binary,
                             tool_name,
                             environment,
                             state_directory,
-                            stderr,
-                            interrupt_cleanup,
+                            stderr_target=stderr_target,
+                            interrupt_cleanup=interrupt_cleanup,
                         )
                     )
             except Exception as error:
-                stderr = stderr_path.read_text(encoding="utf-8")
-                raise AssertionError(f"{error}\nMCP stderr:\n{stderr}") from error
+                if stderr_path.exists():
+                    stderr = stderr_path.read_text(encoding="utf-8")
+                    raise AssertionError(f"{error}\nMCP stderr:\n{stderr}") from error
+                raise
+            finally:
+                if stderr_target is not None:
+                    stderr_target.close_reader()
 
     async def _run_mcp(
         self,
@@ -73,7 +116,8 @@ class MCPClient:
         tool_name: str | None,
         environment: dict,
         state_directory: Path,
-        stderr,
+        *,
+        stderr_target: _MCPStderr,
         interrupt_cleanup: bool,
     ):
         parameters = StdioServerParameters(
@@ -83,10 +127,13 @@ class MCPClient:
         )
         engine_process = None
         try:
-            async with stdio_client(parameters, errlog=stderr) as (read, write):
+            async with stdio_client(parameters, errlog=stderr_target.stream) as (
+                read,
+                write,
+            ):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
-                    pid_files = await self._wait_for_pid_file_count(
+                    pid_files = await wait_for_pid_file_count(
                         state_directory, 1
                     )
                     if pid_files[0].name.endswith("_9000.pid"):
@@ -112,8 +159,16 @@ class MCPClient:
                                 f"MCP tool {tool_name} returned an error"
                             )
 
+                    if stderr_target.read_fd is not None:
+                        # Close the stderr reader before stdio_client closes
+                        # stdin. This reproduces clients which close all MCP
+                        # pipes while the SDK is processing stdin EOF.
+                        stderr_target.close_reader()
+
             await self._wait_for_process_exit(engine_process)
-            await self._wait_for_pid_file_count(state_directory, 0)
+            await wait_for_pid_file_count(state_directory, 0)
+            if stderr_target.is_pipe:
+                self._verify_broken_pipe_shutdown_log(environment["APXD_LOG_FILE"])
             if interrupt_cleanup:
                 return result
             return result.structuredContent
@@ -157,7 +212,7 @@ class MCPClient:
         )
         test_root = self._registration_directory
         try:
-            environment, _ = self._isolated_environment(test_root)
+            environment, _ = isolated_environment(test_root)
             environment["XDG_CONFIG_HOME"] = str(test_root / ".config")
             if mode == "mock":
                 environment.update(
@@ -523,33 +578,16 @@ class MCPClient:
         return Path(f"{prefix}-{command}.json")
 
     @staticmethod
-    def _isolated_environment(test_root: Path):
-        state_home = test_root / "state"
-        config_home = test_root / "config"
-        data_home = test_root / "data"
-        for directory in (state_home, config_home, data_home):
-            directory.mkdir(parents=True)
-
-        environment = os.environ.copy()
-        # Robot assertions inspect plain text, so launched CLI processes must not
-        # insert ANSI styling inside the expected messages.
-        environment.update(
-            {
-                "HOME": str(test_root),
-                "USERPROFILE": str(test_root),
-                "XDG_STATE_HOME": str(state_home),
-                "APXD_CONFIG_DIR": str(config_home),
-                "APXD_DATA_DIR": str(data_home),
-                "APXD_LOG_FILE": str(state_home / "apxd.log"),
-                "NO_COLOR": "1",
-            }
-        )
-
-        if platform.system() == "Windows":
-            state_directory = test_root / "AppData" / "Local" / "apxd"
-        else:
-            state_directory = state_home / "apxd"
-        return environment, state_directory
+    def _verify_broken_pipe_shutdown_log(log_path: str):
+        log_contents = Path(log_path).read_text(encoding="utf-8")
+        for expected in (
+            "MCP protocol complete",
+            "Engine daemon shutdown complete",
+        ):
+            if expected not in log_contents:
+                raise AssertionError(
+                    f"MCP log does not contain {expected!r}:\n{log_contents}"
+                )
 
     @staticmethod
     def _running_engine_process(pid_file: Path):
@@ -578,16 +616,3 @@ class MCPClient:
                 return
             await asyncio.sleep(0.05)
         raise AssertionError(f"MCP engine process {process.pid} is still running")
-
-    @staticmethod
-    async def _wait_for_pid_file_count(state_directory: Path, expected: int):
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            pid_files = sorted(state_directory.glob("*.pid"))
-            if len(pid_files) == expected:
-                return pid_files
-            await asyncio.sleep(0.05)
-        pid_files = sorted(state_directory.glob("*.pid"))
-        raise AssertionError(
-            f"Expected {expected} MCP engine PID files, found {pid_files}"
-        )

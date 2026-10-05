@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
 	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
 )
@@ -45,16 +46,32 @@ func TestRunQueryTool(t *testing.T) {
 		require.NotNil(t, tool.Annotations)
 		assert.True(t, tool.Annotations.ReadOnlyHint)
 		var inputSchema struct {
-			Required   []string `json:"required"`
-			Properties map[string]struct {
+			Required []string `json:"required"`
+			OneOf    []struct {
+				Required   []string `json:"required"`
+				Properties map[string]struct {
+					Type string `json:"type"`
+				} `json:"properties"`
+			} `json:"oneOf"`
+			AdditionalProperties json.RawMessage `json:"additionalProperties"`
+			Properties           map[string]struct {
 				Type string `json:"type"`
 			} `json:"properties"`
 		}
 		encodedInputSchema, err := json.Marshal(tool.InputSchema)
 		require.NoError(t, err)
 		require.NoError(t, json.Unmarshal(encodedInputSchema, &inputSchema))
-		assert.Equal(t, []string{"run_id", "sql"}, inputSchema.Required)
-		assert.Equal(t, "boolean", inputSchema.Properties["include_resolved_tables"].Type)
+		assert.Equal(t, []string{"sql"}, inputSchema.Required)
+		require.Len(t, inputSchema.OneOf, 2)
+		assert.JSONEq(t, "false", string(inputSchema.AdditionalProperties))
+		assert.ElementsMatch(t, []string{"sql", "run_id"}, inputSchema.OneOf[0].Required)
+		assert.ElementsMatch(t, []string{"sql", "session_id"}, inputSchema.OneOf[1].Required)
+		for _, variant := range inputSchema.OneOf {
+			assert.Equal(t, inputSchema.Properties, variant.Properties)
+		}
+		assert.Equal(t, "string", inputSchema.Properties["run_id"].Type)
+		assert.Equal(t, "string", inputSchema.Properties["session_id"].Type)
+		assert.NotContains(t, inputSchema.Properties, "include_resolved_tables")
 		var outputSchema struct {
 			Required   []string `json:"required"`
 			Properties map[string]struct {
@@ -69,8 +86,40 @@ func TestRunQueryTool(t *testing.T) {
 		assert.Equal(t, []string{"columns", "rows", "returned_row_count"}, outputSchema.Required)
 		require.NotNil(t, outputSchema.Properties["rows"].Items)
 		assert.Equal(t, "array", outputSchema.Properties["rows"].Items.Type)
-		assert.Contains(t, outputSchema.Properties, "resolved_tables")
+		assert.NotContains(t, outputSchema.Properties, "resolved_tables")
+		assert.Contains(t, outputSchema.Properties, "compatibility_warning")
 	})
+
+	for name, arguments := range map[string]map[string]any{
+		"no data source": {
+			"sql": "SELECT 1",
+		},
+		"both data sources": {
+			"run_id":     "run-1",
+			"session_id": "session-1",
+			"sql":        "SELECT 1",
+		},
+		"removed resolved tables option": {
+			"run_id":                  "run-1",
+			"sql":                     "SELECT 1",
+			"include_resolved_tables": true,
+		},
+	} {
+		t.Run("schema rejects "+name, func(t *testing.T) {
+			ctx := context.Background()
+			engine := apapprotomocks.NewApapClient(t)
+			clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine}, RunQueryTool{}.Register)
+			defer clientSession.Close()
+			defer serverSession.Close()
+
+			result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "run_query", Arguments: arguments})
+
+			require.NoError(t, err)
+			assert.True(t, result.IsError)
+			engine.AssertNotCalled(t, "PrepareRender", mock.Anything, mock.Anything)
+			engine.AssertNotCalled(t, "Query", mock.Anything, mock.Anything)
+		})
+	}
 
 	t.Run("returns columns and rows", func(t *testing.T) {
 		ctx := context.Background()
@@ -79,7 +128,8 @@ func TestRunQueryTool(t *testing.T) {
 		engine.On("Query", mock.Anything, mock.MatchedBy(func(req *apapproto.QueryRequest) bool {
 			return req.GetSessionId() == "session-1" &&
 				req.GetQuerySql() == "SELECT name, samples FROM hot_functions" &&
-				req.GetTableFormat() == apapproto.TableFormat_ARROW_IPC_STREAM
+				req.GetTableFormat() == apapproto.TableFormat_ARROW_IPC_STREAM &&
+				req.GetReadOnly()
 		})).Return(newRunQueryStream(
 			runQueryDescription("name", "samples"),
 			runQueryArrowRows(t, arrow.NewSchema([]arrow.Field{
@@ -111,39 +161,21 @@ func TestRunQueryTool(t *testing.T) {
 		assert.Equal(t, []runQueryColumn{{Name: "name"}, {Name: "samples"}}, content.Columns)
 		assert.Equal(t, [][]any{{"hot", 42.0}}, content.Rows)
 		assert.Equal(t, 1, content.ReturnedRowCount)
-		assert.Nil(t, content.ResolvedTables)
 	})
 
-	t.Run("returns resolved tables when requested", func(t *testing.T) {
+	t.Run("queries an existing session without closing it", func(t *testing.T) {
 		ctx := context.Background()
 		engine := apapprotomocks.NewApapClient(t)
-		resolved := &apapproto.VisualizationResolvedTablesList{
-			Entries: []*apapproto.VisualizationResolvedTables{
-				{
-					Id: &apapproto.VisualizationId{Value: "asct_analysis"},
-					Tables: map[string]*apapproto.StringArray{
-						"numaLatencyMatrix":   {Values: []string{"flat_table"}},
-						"numaBandwidthMatrix": {Values: []string{"flat_table_1"}},
-					},
-				},
-				{
-					Id: &apapproto.VisualizationId{Value: "asct_system_info_table"},
-					Tables: map[string]*apapproto.StringArray{
-						"systemInformation": {Values: []string{"flat_table_8"}},
-					},
-				},
-			},
-		}
-		successfulRunQueryRender(engine, "run-asct", "session-asct", resolved)
-		engine.On("Query", mock.Anything, mock.Anything).Return(newRunQueryStream(
-			runQueryDescription("table_name"),
+		engine.On("Query", mock.Anything, mock.MatchedBy(func(req *apapproto.QueryRequest) bool {
+			return req.GetSessionId() == "session-existing" && req.GetQuerySql() == "SELECT count(*) FROM samples"
+		})).Return(newRunQueryStream(
+			runQueryDescription("count"),
 			runQueryArrowRows(
 				t,
-				arrow.NewSchema([]arrow.Field{{Name: "table_name", Type: arrow.BinaryTypes.String}}, nil),
-				map[string]any{"table_name": "flat_table"},
+				arrow.NewSchema([]arrow.Field{{Name: "count", Type: arrow.PrimitiveTypes.Int64}}, nil),
+				map[string]any{"count": int64(42)},
 			),
 		), nil).Once()
-		expectRunQueryClose(engine, "session-asct")
 		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine}, RunQueryTool{}.Register)
 		defer clientSession.Close()
 		defer serverSession.Close()
@@ -151,9 +183,8 @@ func TestRunQueryTool(t *testing.T) {
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name: "run_query",
 			Arguments: map[string]any{
-				"run_id":                  "run-asct",
-				"sql":                     "SELECT table_name FROM information_schema.tables",
-				"include_resolved_tables": true,
+				"session_id": " session-existing ",
+				"sql":        " SELECT count(*) FROM samples ",
 			},
 		})
 
@@ -164,16 +195,10 @@ func TestRunQueryTool(t *testing.T) {
 		text, ok := result.Content[0].(*mcp.TextContent)
 		require.True(t, ok)
 		require.NoError(t, json.Unmarshal([]byte(text.Text), &content))
-		require.NotNil(t, content.ResolvedTables)
-		assert.Equal(t, runQueryResolvedTables{
-			"asct_analysis": {
-				"numaLatencyMatrix":   {"flat_table"},
-				"numaBandwidthMatrix": {"flat_table_1"},
-			},
-			"asct_system_info_table": {
-				"systemInformation": {"flat_table_8"},
-			},
-		}, *content.ResolvedTables)
+		assert.Equal(t, [][]any{{float64(42)}}, content.Rows)
+		engine.AssertNotCalled(t, "PrepareRender", mock.Anything, mock.Anything)
+		engine.AssertNotCalled(t, "InvokeRender", mock.Anything, mock.Anything)
+		engine.AssertNotCalled(t, "CloseRender", mock.Anything, mock.Anything)
 	})
 
 	t.Run("returns columns for an empty result", func(t *testing.T) {
@@ -212,8 +237,11 @@ func TestRunQueryTool(t *testing.T) {
 	})
 
 	for name, input := range map[string]runQueryInput{
-		"empty run ID": {RunID: "  ", SQL: "SELECT 1"},
-		"empty SQL":    {RunID: "run-1", SQL: "\n\t"},
+		"no data source":           {SQL: "SELECT 1"},
+		"empty run ID":             {RunID: "  ", SQL: "SELECT 1"},
+		"empty session ID":         {SessionID: "  ", SQL: "SELECT 1"},
+		"both run and session IDs": {RunID: "run-1", SessionID: "session-1", SQL: "SELECT 1"},
+		"empty SQL":                {RunID: "run-1", SQL: "\n\t"},
 	} {
 		t.Run("rejects "+name, func(t *testing.T) {
 			engine := apapprotomocks.NewApapClient(t)
@@ -388,33 +416,6 @@ func TestRunQueryTool(t *testing.T) {
 		require.ErrorContains(t, err, "serialized response")
 	})
 
-	t.Run("counts resolved tables toward the JSON size limit", func(t *testing.T) {
-		engine := apapprotomocks.NewApapClient(t)
-		resolved := &apapproto.VisualizationResolvedTablesList{
-			Entries: []*apapproto.VisualizationResolvedTables{{
-				Id: &apapproto.VisualizationId{Value: "large_visualization"},
-				Tables: map[string]*apapproto.StringArray{
-					"data": {Values: []string{strings.Repeat("t", runQueryMaxResultBytes)}},
-				},
-			}},
-		}
-		successfulRunQueryRender(engine, "run-1", "session-large-metadata", resolved)
-		engine.On("Query", mock.Anything, mock.Anything).Return(newRunQueryStream(
-			runQueryDescription("value"),
-			runQueryArrowRows(t, arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.BinaryTypes.String}}, nil)),
-		), nil).Once()
-		expectRunQueryClose(engine, "session-large-metadata")
-
-		_, err := executeRunQuery(context.Background(), engine, runQueryInput{
-			RunID:                 "run-1",
-			SQL:                   "SELECT value FROM data WHERE false",
-			IncludeResolvedTables: true,
-		})
-
-		require.ErrorContains(t, err, fmt.Sprintf("query limit (%d MiB)", runQueryMaxResultMiB))
-		require.ErrorContains(t, err, "serialized response")
-	})
-
 	t.Run("returns unsigned integer results", func(t *testing.T) {
 		engine := apapprotomocks.NewApapClient(t)
 		successfulRunQueryRender(engine, "run-1", "session-unsigned")
@@ -448,6 +449,47 @@ func TestRunQueryTool(t *testing.T) {
 		_, err := executeRunQuery(context.Background(), engine, runQueryInput{RunID: "run-1", SQL: "SELECT 1"})
 
 		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("returns the compatibility warning for a run ID query", func(t *testing.T) {
+		engine := apapprotomocks.NewApapClient(t)
+		prepared := successfulRunQueryRender(engine, "run-1", "session-warning")
+		prepared.CompatibilityWarning = message.BuildErrorChain(errors.New("recipe compatibility warning"))
+		engine.On("Query", mock.Anything, mock.Anything).Return(newRunQueryStream(
+			runQueryDescription("value"),
+			runQueryArrowRows(t, arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)),
+		), nil).Once()
+		expectRunQueryClose(engine, "session-warning")
+
+		result, err := executeRunQuery(context.Background(), engine, runQueryInput{RunID: "run-1", SQL: "SELECT 1"})
+
+		require.NoError(t, err)
+		require.NotNil(t, result.CompatibilityWarning)
+		assert.Equal(t, "recipe compatibility warning", result.CompatibilityWarning.Message)
+	})
+
+	t.Run("leaves an existing session open after a query error", func(t *testing.T) {
+		engine := apapprotomocks.NewApapClient(t)
+		engine.On("Query", mock.Anything, mock.Anything).Return(nil, errors.New("query unavailable")).Once()
+
+		_, err := executeRunQuery(context.Background(), engine, runQueryInput{SessionID: "session-1", SQL: "SELECT 1"})
+
+		require.ErrorContains(t, err, "query unavailable")
+		engine.AssertNotCalled(t, "CloseRender", mock.Anything, mock.Anything)
+	})
+
+	t.Run("leaves an existing session open after a size error", func(t *testing.T) {
+		engine := apapprotomocks.NewApapClient(t)
+		engine.On("Query", mock.Anything, mock.Anything).Return(newRunQueryStream(
+			runQueryDescription("value"),
+			runQueryArrowChunk(make([]byte, runQueryMaxResultBytes)),
+			runQueryArrowChunk([]byte{0}),
+		), nil).Once()
+
+		_, err := executeRunQuery(context.Background(), engine, runQueryInput{SessionID: "session-1", SQL: "SELECT 1"})
+
+		require.ErrorContains(t, err, fmt.Sprintf("query limit (%d MiB)", runQueryMaxResultMiB))
+		engine.AssertNotCalled(t, "CloseRender", mock.Anything, mock.Anything)
 	})
 }
 

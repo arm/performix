@@ -6,6 +6,7 @@ package run
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/clijson"
 	"github.com/Arm-Debug/apap-cli/apap-cli/utils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
 	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
 )
@@ -155,7 +157,7 @@ func TestRunUpdateCommand_UpdateRunsStatusError(t *testing.T) {
 	assert.Contains(t, out.String(), "first_run:")
 	assert.Contains(t, out.String(), "The run with the ID `first_run` does not exist.")
 	assert.Contains(t, out.String(), "second_run:")
-	assert.Contains(t, out.String(), "The run with ID `second_run` is currently busy and cannot be modified.")
+	assert.Contains(t, out.String(), fmt.Sprintf("Another operation is using run `second_run`, so %v cannot modify it.", terminology.GetProductFullName()))
 }
 
 func TestRunUpdateCommand_UpdateRunsJSONStatusError(t *testing.T) {

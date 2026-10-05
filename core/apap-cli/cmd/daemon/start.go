@@ -101,6 +101,9 @@ func newDaemonStartCmd(bgRunner serverBgRunner, fgRunner serverFgRunner, cc clie
 	daemonStartCmd.Flags().Bool("enable-render-db-sandbox", serverconfig.DefaultEnableRenderDBSandbox, "Enable DuckDB sandbox mode for render sessions. Disable this only for local development workflows such as DuckDB web UI access.")
 	config.ViperBindPFlag(daemonStartCmd, "enable-render-db-sandbox", false)
 
+	daemonStartCmd.Flags().Bool("enable-jfr-capture", serverconfig.DefaultEnableJfrCapture, "Enable Java Flight Recorder capture in recipes that support it.")
+	config.ViperBindPFlag(daemonStartCmd, "enable-jfr-capture", false)
+
 	daemonStartCmd.Flags().Int("http-port", serverconfig.DefaultHTTPPort, "The HTTP listen port for query requests. Use 0 to disable. If enabled, this starts an HTTP server in addition to the gRPC server. The HTTP server provides access to /query endpoint serving Arrow IPC responses for query requests.")
 	config.ViperBindPFlag(daemonStartCmd, "http-port", false)
 

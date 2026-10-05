@@ -4,7 +4,7 @@
 CREATE OR REPLACE VIEW __VIEW_NAME__ AS (
     SELECT *
     FROM read_csv(
-        '__DISASSEMBLY_PATH__-*.csv',
+        '__DISASSEMBLY_PATH__',
         auto_detect   = FALSE,
         filename      = TRUE,
         header        = TRUE,

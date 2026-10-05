@@ -47,6 +47,7 @@ dist/
 
 # Python env
 env/
+env-*/
 venv/
 .venv/
 
@@ -162,6 +163,10 @@ AGENTS.override.md
 
 # Don't check in auto-generated Go code
 core/apap-engine/message/codes.go
+
+# Temporary mockery generation files
+/core/clients/go/.mockery.boilerplate.*
+/core/clients/go/.mockery.generated.yaml.*
 
 # License terms
 # They are generated during CI, but we don't want to check them in to avoid

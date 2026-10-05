@@ -17,6 +17,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/mcpserver/insights"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
@@ -40,7 +41,8 @@ const (
 type GenerateAIInsightsTool struct{}
 
 type generateAIInsightsInput struct {
-	RunID string `json:"run_id"`
+	RunID            string         `json:"run_id"`
+	RenderParameters map[string]any `json:"render_parameters,omitempty"`
 }
 
 var generateAIInsightsInputSchema = &jsonschema.Schema{
@@ -51,6 +53,7 @@ var generateAIInsightsInputSchema = &jsonschema.Schema{
 			Type:        "string",
 			Description: generateAIInsightsRunIDDescription(),
 		},
+		"render_parameters": renderParametersInputSchema,
 	},
 }
 
@@ -95,11 +98,12 @@ var readAIInsightsPayloadDetailsInputSchema = &jsonschema.Schema{
 }
 
 type generateAIInsightsResult struct {
-	BundleID string                            `json:"bundle_id,omitempty"`
-	RunID    string                            `json:"run_id,omitempty"`
-	Guidance string                            `json:"guidance,omitempty"`
-	Payloads []aiInsightsInitialPayloadDetails `json:"payloads"`
-	Error    *toolError                        `json:"error,omitempty"`
+	BundleID      string                            `json:"bundle_id,omitempty"`
+	RunID         string                            `json:"run_id,omitempty"`
+	Guidance      string                            `json:"guidance,omitempty"`
+	Payloads      []aiInsightsInitialPayloadDetails `json:"payloads"`
+	RenderSession renderSessionResult               `json:"render_session,omitempty"`
+	Error         *toolError                        `json:"error,omitempty"`
 }
 
 type aiInsightsInitialPayloadDetails struct {
@@ -200,7 +204,8 @@ var generateAIInsightsOutputSchema = &jsonschema.Schema{
 				Properties: aiInsightsInitialPayloadDetailsOutputSchemaProperties(),
 			},
 		},
-		"error": toolErrorSchemaWithID(generateAIInsightsErrorSchemaID),
+		"render_session": renderSessionOutputSchema,
+		"error":          toolErrorSchemaWithID(generateAIInsightsErrorSchemaID),
 	},
 }
 
@@ -220,14 +225,18 @@ func (GenerateAIInsightsTool) Register(server *mcp.Server, toolDeps ToolDependen
 	registerReadAIInsightsPayloadDetailsTool(server, cache)
 }
 
+// registerGenerateAIInsightsTool registers the recipe-aware entry point. SQL
+// recipes pass render parameters to their persistent session; summary-based
+// recipes reject them because GetRunSummaryBundle cannot apply them.
 func registerGenerateAIInsightsTool(server *mcp.Server, toolDeps ToolDependencies, cache *aiInsightsBundleCache) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "generate_ai_insights",
 		Description: "Prepares an existing successful " + terminology.GetProductFullName() + " run for AI Insights. " +
 			"The result contains the evidence or recipe guidance needed to analyse the run. Follow the returned guidance. " +
+			"When recipe_info lists render parameters, optional render_parameters can limit the evidence by PID, TID, time range, or another recipe filter. They are accepted for every supported recipe except code_hotspots. " +
 			"If a payload is incomplete, call read_ai_insights_payload_details with the returned bundle_id, payload name, and next_offset to continue reading it.",
 		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint: true,
+			ReadOnlyHint: false,
 		},
 		InputSchema:  generateAIInsightsInputSchema,
 		OutputSchema: generateAIInsightsOutputSchema,
@@ -258,6 +267,22 @@ func registerGenerateAIInsightsTool(server *mcp.Server, toolDeps ToolDependencie
 			)
 		}
 
+		var renderParameters map[string]*structpb.Value
+		if len(input.RenderParameters) > 0 {
+			if recipe.Method == insights.MethodCuratedSummary {
+				return generateAIInsightsErrorResult(
+					message.New(message.EngineInsightsRenderParametersUnsupported).WithMetadata(map[string]string{
+						"recipeName": recipeName,
+					}),
+				)
+			}
+
+			renderParameters, err = renderParameterValues(input.RenderParameters)
+			if err != nil {
+				return generateAIInsightsErrorResult(err)
+			}
+		}
+
 		resp, err := toolDeps.Engine.GetRunSummaryBundle(ctx, &apapproto.RunSummaryBundleRequest{
 			RunId: &apapproto.RunId{Value: runID},
 		})
@@ -272,8 +297,15 @@ func registerGenerateAIInsightsTool(server *mcp.Server, toolDeps ToolDependencie
 		guidanceText := insights.GeneralGuidance() + "\n\n" + recipe.Guidance
 		switch recipe.Method {
 		case insights.MethodRunQuery:
-			result, err := generateQueryResult(runDetails, runID, guidanceText)
+			session, renderSession, err := openRenderSessionResult(ctx, toolDeps.Engine, runID, renderParameters)
 			if err != nil {
+				return generateAIInsightsRenderSessionErrorResult(session, err)
+			}
+
+			result, err := generateQueryResult(runDetails, runID, guidanceText, renderSession)
+			if err != nil {
+				sessionID := strings.TrimSpace(session.Invocation.GetSessionId())
+				err = joinRenderSessionCleanupError(ctx, toolDeps.Engine, sessionID, err)
 				return generateAIInsightsErrorResult(err)
 			}
 			return nil, result, nil
@@ -300,18 +332,39 @@ func generateAIInsightsErrorResult(err error) (*mcp.CallToolResult, generateAIIn
 	}, nil
 }
 
-// RunDetailsSummarizer produces basic run context shared by both analysis
-// methods. Run-query recipes return that section with their query guidance.
-// The section is returned in full and does not need a pagination cache entry.
-func generateQueryResult(runDetails *apapproto.RunSummaryPayload, runID, guidanceText string) (generateAIInsightsResult, error) {
+// generateAIInsightsRenderSessionErrorResult returns diagnostics from a
+// rejected render session with the AI Insights error. This lets callers see
+// renderer statuses and compatibility warnings without receiving a usable
+// session ID.
+func generateAIInsightsRenderSessionErrorResult(
+	session openedRenderSession,
+	err error,
+) (*mcp.CallToolResult, generateAIInsightsResult, error) {
+	return &mcp.CallToolResult{IsError: true}, generateAIInsightsResult{
+		Payloads:      []aiInsightsInitialPayloadDetails{},
+		RenderSession: renderSessionErrorResult(session, err),
+		Error:         newToolError(err),
+	}, nil
+}
+
+// generateQueryResult returns the run context, query guidance, and persistent
+// render session used by SQL-based recipes. The run context is returned in full
+// and does not need a pagination cache entry.
+func generateQueryResult(
+	runDetails *apapproto.RunSummaryPayload,
+	runID string,
+	guidanceText string,
+	renderSession renderSessionResult,
+) (generateAIInsightsResult, error) {
 	payloads, err := newAIInsightsPayloads([]*apapproto.RunSummaryPayload{runDetails})
 	if err != nil {
 		return generateAIInsightsResult{}, err
 	}
 
 	result := generateAIInsightsResult{
-		RunID:    runID,
-		Guidance: guidanceText,
+		RunID:         runID,
+		Guidance:      guidanceText,
+		RenderSession: renderSession,
 		Payloads: []aiInsightsInitialPayloadDetails{
 			newAIInsightsInitialPayloadDetails(payloads[0], 0, payloads[0].payload),
 		},

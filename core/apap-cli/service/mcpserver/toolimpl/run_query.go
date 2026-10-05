@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: Apache-2.0
 
-// run_query.go implements the run_query MCP tool. Each request creates a
-// render session for one existing run, executes one DuckDB SELECT statement,
-// returns the result as columns and positional rows, then closes the session.
+// run_query.go implements the run_query MCP tool. A request can create a
+// temporary render for a run or reuse a session opened by open_render_session.
 // Arrow and JSON size limits prevent unbounded results from being retained.
 
 package toolimpl
@@ -16,18 +15,15 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Arm-Debug/apap-cli/apap-cli/service/run"
 	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
 )
 
 const (
-	runQueryCleanupTimeout = 5 * time.Second
 	runQueryMaxResultMiB   = 1
 	runQueryMaxResultBytes = runQueryMaxResultMiB * 1024 * 1024
 )
@@ -37,43 +33,62 @@ var errRunQueryRowsTooLarge = errors.New("serialized response exceeds the size l
 type RunQueryTool struct{}
 
 type runQueryInput struct {
-	RunID                 string `json:"run_id"`
-	SQL                   string `json:"sql"`
-	IncludeResolvedTables bool   `json:"include_resolved_tables,omitempty"`
+	RunID     string `json:"run_id"`
+	SessionID string `json:"session_id"`
+	SQL       string `json:"sql"`
 }
 
-var runQueryInputSchema = &jsonschema.Schema{
-	Type:     "object",
-	Required: []string{"run_id", "sql"},
-	Properties: map[string]*jsonschema.Schema{
+// runQueryInputProperties returns the complete input property set. Codex reads
+// each oneOf branch independently, so the root and both branches must include
+// these properties.
+func runQueryInputProperties() map[string]*jsonschema.Schema {
+	return map[string]*jsonschema.Schema{
 		"run_id": {
 			Type:        "string",
-			Description: "Unique identifier of the Performix run whose rendered data will be queried.",
+			Description: "Unique identifier of a Performix run. The tool opens a temporary render session and closes it after this query.",
+		},
+		"session_id": {
+			Type:        "string",
+			Description: "session_id from open_render_session or from generate_ai_insights.render_session. The existing session remains open after this query.",
 		},
 		"sql": {
 			Type:        "string",
 			Description: "One DuckDB SELECT statement to execute against the run's rendered data.",
 		},
-		"include_resolved_tables": {
-			Type:        "boolean",
-			Default:     json.RawMessage("false"),
-			Description: "Whether to include resolved_tables, which maps visualization IDs and named data sources to rendered table names. Leave it disabled when that mapping is not needed to reduce response size.",
+	}
+}
+
+var runQueryInputSchema = &jsonschema.Schema{
+	Type:                 "object",
+	Required:             []string{"sql"},
+	AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}},
+	OneOf: []*jsonschema.Schema{
+		{
+			Type:       "object",
+			Required:   []string{"sql", "run_id"},
+			Properties: runQueryInputProperties(),
+			Not:        &jsonschema.Schema{Required: []string{"session_id"}},
+		},
+		{
+			Type:       "object",
+			Required:   []string{"sql", "session_id"},
+			Properties: runQueryInputProperties(),
+			Not:        &jsonschema.Schema{Required: []string{"run_id"}},
 		},
 	},
+	Properties: runQueryInputProperties(),
 }
 
 type runQueryColumn struct {
 	Name string `json:"name"`
 }
 
-type runQueryResolvedTables map[string]map[string][]string
-
 type runQueryResult struct {
-	Columns          []runQueryColumn        `json:"columns"`
-	Rows             [][]any                 `json:"rows"`
-	ReturnedRowCount int                     `json:"returned_row_count"`
-	ResolvedTables   *runQueryResolvedTables `json:"resolved_tables,omitempty"`
-	Error            *toolError              `json:"error,omitempty"`
+	Columns              []runQueryColumn `json:"columns"`
+	Rows                 [][]any          `json:"rows"`
+	ReturnedRowCount     int              `json:"returned_row_count"`
+	CompatibilityWarning *toolError       `json:"compatibility_warning,omitempty"`
+	Error                *toolError       `json:"error,omitempty"`
 }
 
 var runQueryOutputSchema = &jsonschema.Schema{
@@ -95,37 +110,34 @@ var runQueryOutputSchema = &jsonschema.Schema{
 			Type:        "array",
 			Description: "Each row is an array of JSON values in the same order as columns.",
 			Items: &jsonschema.Schema{
-				Type:  "array",
-				Items: &jsonschema.Schema{},
+				Type: "array",
+				Items: &jsonschema.Schema{
+					AnyOf: []*jsonschema.Schema{
+						{Type: "null"},
+						{Type: "boolean"},
+						{Type: "number"},
+						{Type: "string"},
+						{Type: "array"},
+						{Type: "object"},
+					},
+				},
 			},
 		},
 		"returned_row_count": {
 			Type:        "integer",
 			Description: "Number of rows returned by the query.",
 		},
-		"resolved_tables": {
-			Type:        "object",
-			Description: "Mapping from visualization IDs and named data sources to rendered table names. Present only when include_resolved_tables is true.",
-			AdditionalProperties: &jsonschema.Schema{
-				Type: "object",
-				AdditionalProperties: &jsonschema.Schema{
-					Type:  "array",
-					Items: &jsonschema.Schema{Type: "string"},
-				},
-			},
-		},
-		"error": toolErrorSchema(),
+		"compatibility_warning": toolErrorSchema(),
+		"error":                 toolErrorSchema(),
 	},
 }
 
 func (RunQueryTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "run_query",
-		Description: "Runs one DuckDB SELECT statement against an existing Performix run. " +
-			"Use this advanced tool when recipe guidance calls for raw run analysis. Each call creates and closes a render, " +
-			"so prefer a small number of selective aggregate queries and use predicates or LIMIT to control result size. " +
-			"Set include_resolved_tables to true to return resolved_tables, which maps visualization IDs and named data sources to rendered table names; " +
-			"leave it disabled when that mapping is not needed to reduce response size. " +
+		Description: "Runs one DuckDB SELECT statement against rendered Performix data. Pass exactly one of run_id or session_id. " +
+			"run_id creates and closes a temporary render; session_id reuses a session from open_render_session or generate_ai_insights.render_session and leaves it open. " +
+			"Use selective aggregate queries, predicates, or LIMIT to control result size. " +
 			fmt.Sprintf("Query results larger than %d MiB are rejected.", runQueryMaxResultMiB),
 		Annotations:  &mcp.ToolAnnotations{ReadOnlyHint: true},
 		InputSchema:  runQueryInputSchema,
@@ -134,82 +146,76 @@ func (RunQueryTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 		result, err := executeRunQuery(ctx, toolDeps.Engine, input)
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true}, runQueryResult{
-				Columns: []runQueryColumn{},
-				Rows:    [][]any{},
-				Error:   newToolError(err),
+				Columns:              []runQueryColumn{},
+				Rows:                 [][]any{},
+				CompatibilityWarning: result.CompatibilityWarning,
+				Error:                newToolError(err),
 			}, nil
 		}
 		return nil, result, nil
 	})
 }
 
+// executeRunQuery runs SQL in either a temporary session for run_id or an
+// existing session_id. It always closes temporary sessions and never closes a
+// session supplied by the caller.
 func executeRunQuery(ctx context.Context, engine apapproto.ApapClient, input runQueryInput) (result runQueryResult, err error) {
 	result.Columns = []runQueryColumn{}
 	result.Rows = [][]any{}
 
 	runID := strings.TrimSpace(input.RunID)
-	if runID == "" {
-		return result, errors.New("run_id is required")
+	sessionID := strings.TrimSpace(input.SessionID)
+	if (runID == "") == (sessionID == "") {
+		return result, errors.New("exactly one of run_id or session_id is required")
 	}
 	querySQL := strings.TrimSpace(input.SQL)
 	if querySQL == "" {
 		return result, errors.New("sql is required")
 	}
 
-	content := &apapproto.ContentSelection{Runs: []*apapproto.RunId{{Value: runID}}}
-	prepared, err := engine.PrepareRender(ctx, &apapproto.PrepareRenderRequest{Content: content})
-	if err != nil {
-		return result, fmt.Errorf("prepare render: %w", err)
-	}
-	if prepared == nil {
-		return result, errors.New("prepare render returned no configuration")
-	}
-
-	invoked, err := engine.InvokeRender(ctx, &apapproto.InvokeRenderRequest{
-		Content:             content,
-		RendererConfig:      prepared.GetRenderers(),
-		VisualizationConfig: prepared.GetVisualizations(),
-	})
-	if err != nil {
-		return result, fmt.Errorf("invoke render: %w", err)
-	}
-	if invoked == nil {
-		return result, errors.New("invoke render returned no response")
-	}
-
-	sessionID := strings.TrimSpace(invoked.GetSessionId())
-	if sessionID == "" {
-		return result, errors.New("invoke render returned no session ID")
-	}
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runQueryCleanupTimeout)
-		defer cancel()
-		_, closeErr := engine.CloseRender(cleanupCtx, &apapproto.CloseRenderRequest{SessionId: sessionID})
-		if closeErr == nil {
-			return
+	if runID != "" {
+		session, openErr := openRenderSession(ctx, engine, runID, nil)
+		result.CompatibilityWarning = compatibilityWarningFromProto(session.Preparation)
+		if openErr != nil {
+			return result, openErr
 		}
-		closeErr = fmt.Errorf("close render %q: %w", sessionID, closeErr)
-		if err != nil {
-			err = errors.Join(err, closeErr)
-		} else {
-			err = closeErr
-		}
-	}()
+		sessionID = strings.TrimSpace(session.Invocation.GetSessionId())
+		defer func() {
+			closeErr := cleanupRenderSession(ctx, engine, sessionID)
+			if closeErr == nil {
+				return
+			}
+			if err != nil {
+				err = errors.Join(err, closeErr)
+			} else {
+				err = closeErr
+			}
+		}()
+	}
+	queryResult, err := queryRenderSession(ctx, engine, sessionID, querySQL)
+	result.Columns = queryResult.Columns
+	result.Rows = queryResult.Rows
+	result.ReturnedRowCount = queryResult.ReturnedRowCount
+	if err != nil {
+		return result, err
+	}
+	if err := ensureJSONSizeAtMost(result, runQueryMaxResultBytes); err != nil {
+		return result, runQueryResultTooLargeError(err)
+	}
+	return result, nil
+}
 
-	params := &run.RenderInvocationParams{
-		RendererConfig:      prepared.GetRenderers(),
-		VisualizationConfig: prepared.GetVisualizations(),
-	}
-	if run.AnyRenderError(invoked) {
-		return result, fmt.Errorf("render failed: %s", strings.Join(run.ListFailedRenderersForDisplay(params, invoked), "; "))
-	}
-	if run.AnyRendererPending(invoked) {
-		return result, fmt.Errorf("render remained pending: %s", strings.Join(run.ListPendingRenderersForDisplay(params, invoked), "; "))
-	}
-	if input.IncludeResolvedTables {
-		resolvedTables := runQueryResolvedTablesFromProto(invoked.GetVisualizationResolvedTables())
-		result.ResolvedTables = &resolvedTables
-	}
+// queryRenderSession runs SQL in an existing session and decodes the Arrow
+// response. The caller owns the session lifetime and checks the size of the
+// complete result.
+func queryRenderSession(
+	ctx context.Context,
+	engine apapproto.ApapClient,
+	sessionID string,
+	querySQL string,
+) (result runQueryResult, err error) {
+	result.Columns = []runQueryColumn{}
+	result.Rows = [][]any{}
 
 	queryCtx, cancelQuery := context.WithCancel(ctx)
 	defer cancelQuery()
@@ -217,6 +223,7 @@ func executeRunQuery(ctx context.Context, engine apapproto.ApapClient, input run
 		SessionId:   sessionID,
 		QuerySql:    querySQL,
 		TableFormat: apapproto.TableFormat_ARROW_IPC_STREAM,
+		ReadOnly:    true,
 	})
 	if err != nil {
 		return result, fmt.Errorf("query render: %w", err)
@@ -260,22 +267,7 @@ func executeRunQuery(ctx context.Context, engine apapproto.ApapClient, input run
 		return result, fmt.Errorf("decode Arrow query result: %w", err)
 	}
 	result.ReturnedRowCount = len(result.Rows)
-	if err := ensureJSONSizeAtMost(result, runQueryMaxResultBytes); err != nil {
-		return result, runQueryResultTooLargeError(err)
-	}
 	return result, nil
-}
-
-func runQueryResolvedTablesFromProto(list *apapproto.VisualizationResolvedTablesList) runQueryResolvedTables {
-	resolved := runQueryResolvedTables{}
-	for _, entry := range list.GetEntries() {
-		dataSources := map[string][]string{}
-		for name, tables := range entry.GetTables() {
-			dataSources[name] = append([]string{}, tables.GetValues()...)
-		}
-		resolved[entry.GetId().GetValue()] = dataSources
-	}
-	return resolved
 }
 
 func runQueryResultTooLargeError(cause error) error {

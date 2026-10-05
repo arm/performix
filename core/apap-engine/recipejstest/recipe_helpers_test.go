@@ -57,11 +57,56 @@ func executeRenderStage(
 	options renderStageOptions,
 ) (recipe.RenderOutput, error) {
 	t.Helper()
-	require.NotEmpty(t, parsedRecipe.RenderStages, "recipe %q must declare at least one render stage", parsedRecipe.Name)
 	runCapabilities, err := run.LoadRunCapabilities(runModels)
 	if err != nil {
 		return recipe.RenderOutput{}, err
 	}
+
+	return executeRenderStageWithResolvedCapabilities(
+		t,
+		parsedRecipe,
+		runDescriptions,
+		runModels,
+		renderParams,
+		runCapabilities,
+		options,
+	)
+}
+
+func executeRenderStageWithCapabilities(
+	t *testing.T,
+	parsedRecipe recipe.Recipe,
+	runDescriptions []*run.RunDescription,
+	runModels []cdf.ModelView,
+	renderParams map[string]any,
+	runCapabilities []run.RunCapabilities,
+	neoprofTimelineEnabled bool,
+) recipe.RenderOutput {
+	t.Helper()
+	output, err := executeRenderStageWithResolvedCapabilities(
+		t,
+		parsedRecipe,
+		runDescriptions,
+		runModels,
+		renderParams,
+		runCapabilities,
+		renderStageOptions{neoprofTimelineEnabled: neoprofTimelineEnabled},
+	)
+	require.NoError(t, err)
+	return output
+}
+
+func executeRenderStageWithResolvedCapabilities(
+	t *testing.T,
+	parsedRecipe recipe.Recipe,
+	runDescriptions []*run.RunDescription,
+	runModels []cdf.ModelView,
+	renderParams map[string]any,
+	runCapabilities []run.RunCapabilities,
+	options renderStageOptions,
+) (recipe.RenderOutput, error) {
+	t.Helper()
+	require.NotEmpty(t, parsedRecipe.RenderStages, "recipe %q must declare at least one render stage", parsedRecipe.Name)
 
 	renderNotifier := &runtime.RendererStageCollector{}
 	stageContext := &recipe.StageContext{RendererNotifier: renderNotifier}
@@ -78,7 +123,7 @@ func executeRenderStage(
 		},
 	}
 
-	_, err = recipeStage.Execute(stageContext)
+	_, err := recipeStage.Execute(stageContext)
 	return renderNotifier.Output, err
 }
 

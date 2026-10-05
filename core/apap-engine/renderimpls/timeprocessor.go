@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/render"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
@@ -115,8 +116,16 @@ func (p *CPUTimeProcessor) convertSamplesToCPUTime(metric string, totalSamples f
 const nanoSecondsToMiliSeconds = 1e6
 
 // getProfilingDurationInMS reads the profiling duration from the state.xml and returns the value in ms
-func (p *CPUTimeProcessor) getProfilingDurationInMS(stateFile string) (float64, error) {
-	profilingState, err := util.ReadXMLFile[ProfilingState](stateFile)
+func readProfilingState(component cdf.Component) (*ProfilingState, error) {
+	contents, err := component.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	return util.DecodeXML[ProfilingState](contents)
+}
+
+func (p *CPUTimeProcessor) getProfilingDurationInMS(stateComponent cdf.Component) (float64, error) {
+	profilingState, err := readProfilingState(stateComponent)
 	if err != nil {
 		return 0, err
 	}
@@ -135,7 +144,7 @@ func (p *CPUTimeProcessor) Compute(ctx render.DrilldownProcessorContext) error {
 	if len(ctx.ProfilingState.AbsolutePath) == 0 {
 		return fmt.Errorf("no profiling state data available")
 	}
-	totalDuration, err := p.getProfilingDurationInMS(ctx.ProfilingState.AbsolutePath)
+	totalDuration, err := p.getProfilingDurationInMS(ctx.ProfilingState)
 	if err != nil {
 		return err
 	}

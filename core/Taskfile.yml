@@ -8,6 +8,7 @@ vars:
   PYTHON_SYSTEM: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
   PYTHON_VENV: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
   TOOLS_PYTHON: '{{.PYTHON_SYSTEM}}'
+  BASH_RUNNER: '{{.PYTHON_SYSTEM}} "{{.TASKFILE_DIR}}/scripts/run-bash.py"'
   DEFAULT_APX_BUILD_TAGS: duckdb_arrow
 
 includes:
@@ -42,8 +43,8 @@ tasks:
   generate:
     desc: Generate all sources (Go, Protobuf, Messages, etc.)
     cmds:
-      - ./scripts/go/generate-all.sh
-      - ./scripts/protobuf/generate.sh
+      - '{{.BASH_RUNNER}} ./scripts/go/generate-all.sh'
+      - '{{.BASH_RUNNER}} ./scripts/protobuf/generate.sh'
 
   deps:tools:
     desc: Package the tools available in the current checkout

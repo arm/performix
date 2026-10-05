@@ -49,6 +49,7 @@ func (s *ProtobufStructSettings) isFormatSettings() {}
 type ExecuteOptions struct {
 	Format   TableFormat
 	Settings FormatSettings // Must not be nil. Type must match the expected type for the particular table format.
+	ReadOnly bool
 }
 
 // Row is the Go native row type constructed by TableFormatNativeRow

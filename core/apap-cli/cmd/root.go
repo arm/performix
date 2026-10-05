@@ -162,10 +162,11 @@ func initConfig() {
 		viper.SetDefault("enable-rerendering", serverconfig.DefaultEnableRerendering)
 		viper.SetDefault("enable-experimental-recipes", serverconfig.DefaultEnableExperimentalRecipes)
 		viper.SetDefault("enable-secondary-run-paths", serverconfig.DefaultEnableSecondaryRunPaths)
-		viper.SetDefault("enable-transfer-manager", serverconfig.DefaultEnableTransferManager)
 		viper.SetDefault(serverconfig.EnableAndroidTargetsConfigKey, serverconfig.DefaultEnableAndroidTargets)
+		viper.SetDefault(serverconfig.EnableGPURecipeConfigKey, serverconfig.DefaultEnableGPURecipe)
 		viper.SetDefault("enable-render-db-sandbox", serverconfig.DefaultEnableRenderDBSandbox)
 		viper.SetDefault("enable-neoprof-timeline", serverconfig.DefaultEnableNeoprofTimeline)
+		viper.SetDefault("enable-jfr-capture", serverconfig.DefaultEnableJfrCapture)
 		viper.SetDefault(serverconfig.DaemonAutostartConfigKey, serverconfig.DefaultDaemonAutostart)
 		viper.SetDefault("adb-path", serverconfig.DefaultADBPath)
 

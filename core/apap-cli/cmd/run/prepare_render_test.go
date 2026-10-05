@@ -372,7 +372,7 @@ func TestPrepareRenderCompatibilityWarning(t *testing.T) {
 
 		// should contain the error message output as plaintext
 		assert.Contains(t, output, "[Warning]:")
-		assert.Contains(t, output, fmt.Sprintf("cannot be rendered in your current version of %v", terminology.GetProductFullName()))
+		assert.Contains(t, output, fmt.Sprintf("Your current version of %v cannot render run", terminology.GetProductFullName()))
 	})
 	t.Run("if a compatibility warning is returned, it is shown to the user in JSON", func(t *testing.T) {
 		test.SetViperJSON(t, true)

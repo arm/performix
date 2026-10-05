@@ -1,30 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: Apache-2.0
 
-const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
-
-const TOOL_JITDUMP_JVM = {
-  name: 'jitdump-jvm',
-  version: '1.0.0',
-};
-
-const JFR_PARQUET_DIR = 'tool/jitdump-jvm/0/parquet';
-const PARQUET_METADATA_PATH = `${JFR_PARQUET_DIR}/metadata`;
-const PARQUET_EVENTS_PATH = `${JFR_PARQUET_DIR}/events`;
-const JFR_COMPONENTS = {
-  recordings: `${PARQUET_METADATA_PATH}/jfr_recordings.parquet`,
-  jvmInfo: `${PARQUET_EVENTS_PATH}/jfr_jvm_information.parquet`,
-  systemProperties: `${PARQUET_EVENTS_PATH}/jfr_initial_system_property.parquet`,
-  heapSummary: `${PARQUET_EVENTS_PATH}/jfr_gc_heap_summary.parquet`,
-  garbageCollection: `${PARQUET_EVENTS_PATH}/jfr_garbage_collection.parquet`,
-};
+// Shared Java presentation for owner-integrated recipes.
 
 const SQL_RENDERER_OUTPUT = {
   name: 'table',
   component_type: { name: 'flat_table', schema_version: '1.0' },
 };
-
-const RECORDING_FILTER_PARAMETER = 'recording_id';
 
 function makeSQLRenderer(id, sql) {
   return {
@@ -38,89 +20,139 @@ function makeSQLRenderer(id, sql) {
 }
 
 /**
- * Returns a validated recording ID from the render parameters. A missing
- * parameter intentionally selects the first recording so the initial render
- * matches the filter's implicit first option.
+ * Returns the explicitly selected process. None uses workload-specific defaults.
  *
- * @param {import("./docs/jsdocs").RenderExecutionContext} context
+ * @param {import("../docs/jsdocs").RenderExecutionContext} context
  * @returns {string|null}
  */
-function getSelectedRecordingId(context) {
-  const value = context.getRenderParameter(RECORDING_FILTER_PARAMETER);
+function getSelectedProcessId(context) {
+  const value = context.getRenderParameter('filter_pid');
   if (value === null || value === undefined) {
     return null;
   }
 
-  const recordingId = String(value);
-  if (!/^\d+$/.test(recordingId)) {
-    throw new Error(`Invalid Java recording ID: ${recordingId}`);
+  const pid = String(value);
+  if (!/^-?\d+$/.test(pid)) {
+    throw new Error(`Invalid Java process ID: ${pid}`);
   }
-  return recordingId;
+  return pid;
 }
 
 /**
- * Builds a predicate that selects either the requested recording or the first
- * recording captured in the run.
  *
- * @param {string|null} selectedRecordingId
- * @returns {string}
+ * @param {import("../docs/jsdocs").RenderExecutionContext} context
+ * @param {string} ownerParquetRoot
+ * @param {any[]} existingVisualizations
+ * @returns {import("../docs/jsdocs").RecipeRenderOutput} Includes the existing visualizations with Java data composed in, without modifying the inputs.
  */
-function makeRecordingPredicate(selectedRecordingId) {
-  const recordingId =
-    selectedRecordingId ??
-    `(SELECT MIN(recording_id) FROM read_parquet({{path:${JFR_COMPONENTS.recordings}}}))`;
-  return `recording_id = ${recordingId}`;
-}
+function buildJavaAnalysisRender(
+  context,
+  ownerParquetRoot,
+  existingVisualizations = [],
+) {
+  if (context.getRunDescriptions().length !== 1) {
+    return emptyJavaRender(existingVisualizations);
+  }
 
-/**
- * @param {import("./docs/jsdocs").Workload} workload
- * @returns {import("./docs/jsdocs").ToolConfigurationsArg}
- */
-function buildJavaAnalysisTools(workload) {
+  const selectedProcessId = getSelectedProcessId(context);
+  const components = discoverJfrComponents(context, ownerParquetRoot);
+  if (!components) return emptyJavaRender(existingVisualizations);
+  const predicate = selectRecordingPredicate(
+    context,
+    components,
+    selectedProcessId,
+  );
+  if (predicate === null) return emptyJavaRender(existingVisualizations);
+
+  const visible = predicate !== 'FALSE';
+  const summary = buildJavaSummary(components, predicate, visible);
+  const heap = buildHeapTimeline(components, predicate, visible);
+  const hasTimeline = existingVisualizations.some(
+    ({ id }) => id === 'timeline',
+  );
+  const visualizations = existingVisualizations.map((visualization) =>
+    visualization.id === 'timeline'
+      ? mergeHeapSummaryIntoTimeline(visualization, heap.visualization)
+      : visualization,
+  );
+  visualizations.push(summary.visualization);
+  if (!hasTimeline) visualizations.push(heap.visualization);
+
   return {
-    toolConfigs: [
-      {
-        name: TOOL_JITDUMP_JVM.name,
-        params: {},
-        workload,
-        env: {},
-      },
+    renderers: [
+      ...buildRawJavaRenderers(components),
+      summary.renderer,
+      heap.renderer,
     ],
+    ui: { visualizations, side_panel_filters: [] },
   };
 }
 
-/**
- * Performs readiness checks for the Java Analysis recipe.
- *
- * @param {import("./docs/jsdocs").ReadyExecutionContext} context
- * @returns {import("./docs/jsdocs").RecipeReadyOutput}
- */
-
-function readyJavaAnalysis(context) {
-  const tools = buildJavaAnalysisTools(context.getWorkload());
-  const toolResponses = context.probeTools(tools);
-  const advice = collectToolAdvice(tools, toolResponses);
-
-  return {
-    status: toolStatusToRecipeStatus(advice),
-    advice,
+function discoverJfrComponents(context, ownerParquetRoot) {
+  const metadataPath = `${ownerParquetRoot}/metadata`;
+  const eventsPath = `${ownerParquetRoot}/events`;
+  const JFR_COMPONENTS = {
+    recordingIndex: `${metadataPath}/jfr_recordings.json`,
+    recordings: `${metadataPath}/jfr_recordings.parquet`,
+    jvmInfo: `${eventsPath}/jfr_jvm_information.parquet`,
+    systemProperties: `${eventsPath}/jfr_initial_system_property.parquet`,
+    heapSummary: `${eventsPath}/jfr_gc_heap_summary.parquet`,
+    garbageCollection: `${eventsPath}/jfr_garbage_collection.parquet`,
   };
-}
-/**
- * Runs the Java Analysis recipe.
- * @param {import("./docs/jsdocs").RunExecutionContext} context
- */
-function runJavaAnalysis(context) {
-  const tools = buildJavaAnalysisTools(context.getWorkload());
-  context.runTools(tools);
+  if (
+    !Object.values(JFR_COMPONENTS).every(
+      (component) => context.listRunComponents(0, component).length === 1,
+    )
+  ) {
+    return null;
+  }
+
+  return JFR_COMPONENTS;
 }
 
-/**
- *
- * @param {import("./docs/jsdocs").RenderExecutionContext} context
- * @returns {import("./docs/jsdocs").RecipeRenderOutput}
- */
-function renderJavaAnalysis(context) {
+function selectRecordingPredicate(context, JFR_COMPONENTS, selectedProcessId) {
+  const selectDefaultRecording = ['Launch', 'Attach'].includes(
+    context.getRunDescriptions()[0].WorkloadType,
+  );
+
+  let recordings;
+  try {
+    recordings = JSON.parse(
+      context.readRunComponent(0, JFR_COMPONENTS.recordingIndex),
+    );
+    if (
+      !Array.isArray(recordings) ||
+      !recordings.every(
+        (recording) =>
+          recording !== null && /^\d+$/.test(String(recording.recording_id)),
+      )
+    )
+      throw new Error('Invalid JFR recording index');
+    recordings.sort((a, b) => a.recording_id - b.recording_id);
+  } catch (error) {
+    context.logWarn(`JFR recording index unavailable: ${error}`);
+    return null;
+  }
+  const selectedRecordings =
+    selectedProcessId === null
+      ? selectDefaultRecording
+        ? recordings.slice(0, 1)
+        : []
+      : recordings.filter(
+          (recording) => String(recording.jvm_pid) === selectedProcessId,
+        );
+  const recordingIds = selectedRecordings.map((recording) => {
+    const id = String(recording.recording_id);
+    return id;
+  });
+  // Keep renderer and widget IDs stable when the Process filter has no JVM.
+  // Visibility hides Java views; empty queries preserve the render topology.
+  return recordingIds.length
+    ? `recording_id IN (${recordingIds.join(', ')})`
+    : 'FALSE';
+}
+
+function buildRawJavaRenderers(JFR_COMPONENTS) {
   const recordingsRenderer = makeSQLRenderer(
     'jfr_recordings',
     `SELECT
@@ -137,7 +169,7 @@ function renderJavaAnalysis(context) {
   );
 
   const jvmInfoRenderer = makeSQLRenderer(
-    'jvm_info',
+    'jvm_info_raw',
     `SELECT
       CAST(recording_id AS HUGEINT) AS "Recording",
       CAST(jvm_pid AS BIGINT) AS "PID",
@@ -247,30 +279,29 @@ function renderJavaAnalysis(context) {
     ORDER BY recording_id, event_start_epoch_ns, gc_id`,
   );
 
-  const selectedRecordingId = getSelectedRecordingId(context);
-  const recordingOptionsRenderer = makeSQLRenderer(
-    'jfr_recording_options',
-    `SELECT
-      CAST(recording_id AS VARCHAR) AS value,
-      'PID ' || COALESCE(CAST(jvm_pid AS VARCHAR), 'unknown') ||
-        ' — Recording ' ||
-        CAST(recording_id AS VARCHAR) AS label
-    FROM read_parquet({{path:${JFR_COMPONENTS.recordings}}})
-    ORDER BY recording_id`,
-  );
+  // Retain raw tables for CLI and MCP queries.
+  return [
+    recordingsRenderer,
+    jvmInfoRenderer,
+    systemPropertiesRenderer,
+    heapSummaryRenderer,
+    garbageCollectionRenderer,
+  ];
+}
 
+function buildJavaSummary(JFR_COMPONENTS, recordingPredicate, visible) {
   const summaryRenderer = makeSQLRenderer(
     'java_summary',
     `WITH selected_recording AS (
       SELECT
         *
       FROM read_parquet({{path:${JFR_COMPONENTS.recordings}}})
-      WHERE ${makeRecordingPredicate(selectedRecordingId)}
+      WHERE ${recordingPredicate}
     ), selected_jvm AS (
       SELECT
         *
       FROM read_parquet({{path:${JFR_COMPONENTS.jvmInfo}}})
-      WHERE ${makeRecordingPredicate(selectedRecordingId)}
+      WHERE ${recordingPredicate}
     ), summary_rows AS (
       SELECT 10 AS sort_order, 'Recording' AS section, 'Recording ID' AS property,
         CAST(recording_id AS VARCHAR) AS value
@@ -301,7 +332,7 @@ function renderJavaAnalysis(context) {
       UNION ALL
       SELECT 200, 'Initial System Properties', property_key, property_value
       FROM read_parquet({{path:${JFR_COMPONENTS.systemProperties}}})
-      WHERE ${makeRecordingPredicate(selectedRecordingId)}
+      WHERE ${recordingPredicate}
     )
     SELECT
       sort_order,
@@ -313,6 +344,27 @@ function renderJavaAnalysis(context) {
     ORDER BY sort_order, property`,
   );
 
+  const summaryVisualization = {
+    type: 'java_analysis_summary',
+    id: 'jvm_info',
+    rendererId: 'java_summary',
+    title: 'JVM Info',
+    description:
+      'JVM information, initial system properties, and recording constants.',
+    config: {
+      visible,
+      data_source: {
+        tables: {
+          table: [{ renderer_id: 'java_summary', output: 'table' }],
+        },
+      },
+    },
+  };
+
+  return { renderer: summaryRenderer, visualization: summaryVisualization };
+}
+
+function buildHeapTimeline(JFR_COMPONENTS, recordingPredicate, visible) {
   const heapTimelineRenderer = makeSQLRenderer(
     'jvm_heap_timeline',
     `WITH selected_recording AS (
@@ -320,11 +372,10 @@ function renderJavaAnalysis(context) {
         recording_id,
         recording_start_epoch_ns
       FROM read_parquet({{path:${JFR_COMPONENTS.recordings}}})
-      WHERE ${makeRecordingPredicate(selectedRecordingId)}
+      WHERE ${recordingPredicate}
     )
     SELECT
-      CAST(heap.after_event_start_epoch_ns - recording.recording_start_epoch_ns AS DOUBLE) /
-        1000000000.0 AS time_s,
+      CAST(heap.after_event_start_epoch_ns - recording.recording_start_epoch_ns AS BIGINT) AS time_ns,
       CAST(heap.after_used_bytes AS DOUBLE) / 1048576.0 AS used_after_gc_mib,
       CAST(heap.after_heap_space_committed_size_bytes AS DOUBLE) /
         1048576.0 AS committed_mib,
@@ -336,60 +387,17 @@ function renderJavaAnalysis(context) {
     ORDER BY heap.after_event_start_epoch_ns, heap.gc_id`,
   );
 
-  const recordingFilter = {
-    type: 'single_selection_list_filter',
-    id: 'jfr_recording',
-    rendererId: 'jfr_recording_options',
-    title: 'Recording',
-    description: 'Select the JVM recording shown in the analysis views.',
-    parameterBindings: {
-      value: RECORDING_FILTER_PARAMETER,
-    },
-    config: {
-      allowNone: false,
-      search: false,
-      data_source: {
-        tables: {
-          recordings: [
-            { renderer_id: 'jfr_recording_options', output: 'table' },
-          ],
-        },
-      },
-      optionsQuery: {
-        dataSource: 'recordings',
-        query:
-          'SELECT value, label FROM __RECORDINGS__ ORDER BY CAST(value AS HUGEINT)',
-        tableNamePlaceholder: '__RECORDINGS__',
-      },
-      emptyMessage: 'No JFR recordings were captured.',
-    },
-  };
-
-  const summaryVisualization = {
-    type: 'java_analysis_summary',
-    id: 'java_analysis_summary',
-    rendererId: 'java_summary',
-    title: 'Summary',
-    description:
-      'JVM information, initial system properties, and recording constants.',
-    config: {
-      data_source: {
-        tables: {
-          table: [{ renderer_id: 'java_summary', output: 'table' }],
-        },
-      },
-    },
-  };
-
-  const garbageCollectionVisualization = {
+  const timelineVisualization = {
     type: 'timeline',
-    id: 'java_analysis_garbage_collection',
+    id: 'timeline',
     rendererId: 'jvm_heap_timeline',
-    title: 'Garbage Collection',
+    title: 'Timeline',
     description:
-      'Heap occupancy and capacity snapshots captured around garbage collection events.',
+      'Performance counters and JVM heap usage over the capture period.',
     config: {
+      visible,
       xAxisUnit: 's',
+      xAxisDisplayScale: 1e-9,
       data_source: {
         tables: {
           heap_summary: [{ renderer_id: 'jvm_heap_timeline', output: 'table' }],
@@ -397,6 +405,7 @@ function renderJavaAnalysis(context) {
       },
       groups: {
         heap_summary: {
+          visible,
           title: 'Heap Summary',
           type: 'line',
           index: 0,
@@ -411,19 +420,19 @@ function renderJavaAnalysis(context) {
               {
                 type: 'single',
                 name: 'Used heap after GC',
-                xColumn: 'time_s',
+                xColumn: 'time_ns',
                 yColumn: 'used_after_gc_mib',
               },
               {
                 type: 'single',
                 name: 'Committed heap',
-                xColumn: 'time_s',
+                xColumn: 'time_ns',
                 yColumn: 'committed_mib',
               },
               {
                 type: 'single',
                 name: 'Reserved heap',
-                xColumn: 'time_s',
+                xColumn: 'time_ns',
                 yColumn: 'reserved_mib',
               },
             ],
@@ -434,87 +443,63 @@ function renderJavaAnalysis(context) {
   };
 
   return {
-    renderers: [
-      { type: 'TargetInfoRenderer', id: 'target_info' },
-      // These raw tables are intentionally retained for CLI and MCP queries,
-      // even though the GUI now presents the dedicated summary visualization.
-      recordingsRenderer,
-      jvmInfoRenderer,
-      systemPropertiesRenderer,
-      heapSummaryRenderer,
-      garbageCollectionRenderer,
-      recordingOptionsRenderer,
-      summaryRenderer,
-      heapTimelineRenderer,
-    ],
-    ui: {
-      visualizations: [summaryVisualization, garbageCollectionVisualization],
-      side_panel_filters: [recordingFilter],
+    renderer: heapTimelineRenderer,
+    visualization: timelineVisualization,
+  };
+}
+
+function mergeHeapSummaryIntoTimeline(timeline, javaTimeline) {
+  const tables = { ...timeline.config.data_source.tables };
+  const javaTables = javaTimeline.config.data_source.tables;
+  const heapSource = javaTables.heap_summary;
+  const heapGroup = {
+    ...javaTimeline.config.groups.heap_summary,
+    config: { ...javaTimeline.config.groups.heap_summary.config },
+  };
+  const referenceGroup = Object.values(timeline.config.groups).find((group) =>
+    Array.isArray(group.lods),
+  );
+
+  if (referenceGroup) {
+    heapGroup.lods = referenceGroup.lods.map(({ binDuration }) => {
+      const sourceKey = `heap_summary_${binDuration}`;
+      tables[sourceKey] = heapSource;
+      return { binDuration, sourceKey };
+    });
+    heapGroup.config.customQuery = {
+      query: `SELECT *
+        FROM {table}
+        WHERE time_ns >= {rangeStart}
+          AND time_ns < {rangeEnd}
+        ORDER BY time_ns`,
+      tableNamePlaceholder: '{table}',
+      rangeStartPlaceholder: '{rangeStart}',
+      rangeEndPlaceholder: '{rangeEnd}',
+    };
+  } else {
+    tables.heap_summary = heapSource;
+  }
+
+  heapGroup.index =
+    Math.max(
+      ...Object.values(timeline.config.groups).map((group) => group.index),
+    ) + 1;
+  return {
+    ...timeline,
+    description: javaTimeline.description,
+    config: {
+      ...timeline.config,
+      data_source: { ...timeline.config.data_source, tables },
+      groups: { ...timeline.config.groups, heap_summary: heapGroup },
     },
   };
 }
 
-const recipe = {
-  name: 'java_analysis',
-  title: 'Java Analysis',
-  version: '1.0.0',
-  api_version: '1.0.0',
-  status: 'experimental',
-  description:
-    'Collects Java Flight Recorder (JFR) data and presents JVM information.',
-  mcp_guidance:
-    'Supports Java workloads (launch/attach/system-wide). Attach mode captures activity only after attachment and cannot recover earlier JVM activity.',
-  deployments: [
-    {
-      appliesTo: [
-        { architecture: 'x86_64', os: 'Linux' },
-        { architecture: 'aarch64', os: 'Linux' },
-      ],
-      dependencies: [
-        {
-          type: 'tool',
-          name: TOOL_JITDUMP_JVM.name,
-          version: TOOL_JITDUMP_JVM.version,
-          requiredWhen: { type: 'always' },
-        },
-      ],
-    },
-  ],
+function emptyJavaRender(visualizations = []) {
+  return {
+    renderers: [],
+    ui: { visualizations, side_panel_filters: [] },
+  };
+}
 
-  // java_analysis phase one fixes JFR settings to "profile"
-  parameters: [],
-
-  renderParameters: [
-    {
-      id: RECORDING_FILTER_PARAMETER,
-      config: {
-        type: 'string',
-      },
-    },
-  ],
-
-  readyStages: [
-    {
-      name: 'Check Java Analysis readiness',
-      description:
-        'Check that Java Flight Recorder (JFR) collection is available on the target system.',
-      exec: readyJavaAnalysis,
-    },
-  ],
-
-  runStages: [
-    {
-      name: 'Collect Java runtime data',
-      description: 'Collect and convert JFR data for the selected workload.',
-      exec: runJavaAnalysis,
-    },
-  ],
-
-  renderStages: [
-    {
-      name: 'Render Java analysis results',
-      description: 'Render the collected JFR data into a human-readable format',
-      exec: renderJavaAnalysis,
-    },
-  ],
-};
+module.exports = { buildJavaAnalysisRender };

@@ -64,7 +64,7 @@ func (nopWriteCloser) Close() error {
 func newServer(errOut io.Writer, toolDeps toolimpl.ToolDependencies, registry ToolRegistry) *mcp.Server {
 	server := mcp.NewServer(
 		&mcp.Implementation{
-			Name:    terminology.GetProductBinaryName() + "-mcp-server",
+			Name:    terminology.GetMCPServerName() + "-mcp-server",
 			Version: versions.GetVersion(),
 		},
 		&mcp.ServerOptions{

@@ -7,6 +7,7 @@ Documentation   A test suite to exercise Java stack collection in Arm Total Perf
 Resource        ../../resources/keywords/common.resource
 Resource        ../../resources/keywords/target.resource
 Resource        ../../resources/keywords/render.resource
+Resource        ../../resources/keywords/process.resource
 
 Suite Setup     Java Recipe Suite Setup
 Suite Teardown  Java Recipe Suite Teardown
@@ -27,7 +28,7 @@ ${CPU_MICROARCH_JAVA_ENABLED_RUN_ID}  ${EMPTY}
 ${CPU_MICROARCH_JAVA_DISABLED_RUN_ID}  ${EMPTY}
 ${HOTSPOTS_JAVA_ENABLED_RUN_ID}  ${EMPTY}
 ${HOTSPOTS_JAVA_DISABLED_RUN_ID}  ${EMPTY}
-${HOTSPOTS_JAVA_MISSING_FLAGS_RUN_ID}  ${EMPTY}
+${HOTSPOTS_JAVA_AUTO_FLAGS_RUN_ID}  ${EMPTY}
 
 
 *** Test Cases ***
@@ -59,12 +60,31 @@ Code Hotspots Recipe Does Not Produce Java Symbols When Stack Collection Disable
   When Runs Are Rendered Successfully  ${HOTSPOTS_JAVA_DISABLED_RUN_ID}
   Then The Render Did Not Produce Java Symbols
 
-Java Workload Missing Flags Emit User Messages
-  [Documentation]  Verify that omitting recommended JVM flags emits user messages.
+Java Workload Launched Without Explicit Flags Produces Java Symbols
+  [Documentation]  Verify that automatically supplied JVM flags enable Java symbols.
+  [Tags]  code-hotspots
+  Given The Run Exists  ${HOTSPOTS_JAVA_AUTO_FLAGS_RUN_ID}
+  When Runs Are Rendered Successfully  ${HOTSPOTS_JAVA_AUTO_FLAGS_RUN_ID}
+  Then The Render Produced Java Symbols
+
+Java Workload Launched Without Explicit Flags Emits No User Messages
+  [Documentation]  Verify that automatically supplied JVM flags prevent missing-flag warnings.
   [Tags]  code-hotspots  user-messages
-  Given The Run Exists  ${HOTSPOTS_JAVA_MISSING_FLAGS_RUN_ID}
-  When Render User Messages  ${HOTSPOTS_JAVA_MISSING_FLAGS_RUN_ID}
+  Given The Run Exists  ${HOTSPOTS_JAVA_AUTO_FLAGS_RUN_ID}
+  When Render User Messages  ${HOTSPOTS_JAVA_AUTO_FLAGS_RUN_ID}
+  Then The Render Produced No JVM User Messages
+
+Java Workload Attached Without Required Flags Emits User Messages
+  [Documentation]  Verify missing-flag warnings for an existing JVM whose options cannot be supplied by the recipe.
+  [Tags]  code-hotspots  user-messages  attach
+  Given Java Workload Without Required Flags Is Running
+  And Run Code Hotspots Recipe
+  ...  --timeout 5 --pid ${JAVA_PID} --param collect_java_stacks=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  And The Last Command Succeeded
+  ${run_id} =  And Extract The Run ID
+  When Render User Messages  ${run_id}
   Then The Render Produced JVM User Messages
+  [Teardown]  Stop Java Workload
 
 Java Workload With Required Flags Emits No User Message
   [Documentation]  Verify that no user messages are emitted when the recommended flags are used.
@@ -161,8 +181,8 @@ Generate Code Hotspots Java Runs
   VAR  ${HOTSPOTS_JAVA_ENABLED_RUN_ID} =  ${hotspots_enabled}  scope=SUITE
   ${hotspots_disabled} =  Run Java Hotspots Recipe  collect=false
   VAR  ${HOTSPOTS_JAVA_DISABLED_RUN_ID} =  ${hotspots_disabled}  scope=SUITE
-  ${hotspots_missing_flags} =  Run Java Hotspots Recipe With Flags  collect=true  flags=${EMPTY}
-  VAR  ${HOTSPOTS_JAVA_MISSING_FLAGS_RUN_ID} =  ${hotspots_missing_flags}  scope=SUITE
+  ${hotspots_auto_flags} =  Run Java Hotspots Recipe With Flags  collect=true  flags=${EMPTY}
+  VAR  ${HOTSPOTS_JAVA_AUTO_FLAGS_RUN_ID} =  ${hotspots_auto_flags}  scope=SUITE
 
 Run Java CPU Microarchitecture Recipe
   [Documentation]  Run the cpu_microarchitecture recipe with the Java workload, specifying whether to collect Java stacks.
@@ -190,6 +210,17 @@ Run Java Hotspots Recipe With Flags
   ${run_id} =  Extract The Run ID
   The Run Exists  ${run_id}
   RETURN  ${run_id}
+
+Java Workload Without Required Flags Is Running
+  [Documentation]  Start a JVM independently so recipe launch options cannot supply its missing flags.
+  ${pid} =  Start Process On Target And Capture PID
+  ...  "java -DdurationSec=100 ${JAVA_WORKLOAD_PATH}"  ${JAVA_WORKLOAD_PATH}
+  VAR  ${JAVA_PID} =  ${pid}  scope=TEST
+
+Stop Java Workload
+  [Documentation]  Stop the independently launched JVM, including after a failed attach or assertion.
+  ${pid} =  Get Variable Value  ${JAVA_PID}  ${EMPTY}
+  Stop Process On Target  ${pid}
 
 The Render Produced Java Symbols
   [Documentation]  Verify that the most recently rendered Java workload produced Java symbols.

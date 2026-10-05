@@ -13,6 +13,70 @@ function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+/**
+ * Decodes the predefined and numeric character references supported in XML
+ * attributes. Unknown, malformed, and XML-invalid references are rejected.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+function decodeXmlAttribute(value) {
+  const decodeEntity = (reference) => {
+    switch (reference) {
+      case 'amp':
+        return '&';
+      case 'apos':
+        return "'";
+      case 'gt':
+        return '>';
+      case 'lt':
+        return '<';
+      case 'quot':
+        return '"';
+    }
+
+    const decimal = /^#([0-9]+)$/.exec(reference);
+    const hexadecimal = /^#x([0-9a-f]+)$/i.exec(reference);
+    const codePoint = decimal
+      ? parseInt(decimal[1], 10)
+      : hexadecimal
+        ? parseInt(hexadecimal[1], 16)
+        : NaN;
+    const validXmlCodePoint =
+      codePoint === 0x9 ||
+      codePoint === 0xa ||
+      codePoint === 0xd ||
+      (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+      (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+      (codePoint >= 0x10000 && codePoint <= 0x10ffff);
+    if (!validXmlCodePoint) {
+      throw new Error(`Invalid XML entity '&${reference};'`);
+    }
+
+    return String.fromCodePoint(codePoint);
+  };
+
+  const decoded = [];
+  const entityPattern = /&([^;]*);/g;
+  let offset = 0;
+  let match;
+  while ((match = entityPattern.exec(value)) !== null) {
+    const literal = value.slice(offset, match.index);
+    if (literal.includes('&')) {
+      throw new Error('Malformed XML entity in attribute value');
+    }
+    decoded.push(literal, decodeEntity(match[1]));
+    offset = match.index + match[0].length;
+  }
+
+  const remainder = value.slice(offset);
+  if (remainder.includes('&')) {
+    throw new Error('Malformed XML entity in attribute value');
+  }
+  decoded.push(remainder);
+  return decoded.join('');
+}
+
 // Stable Linux process capabilities
 // See: https://github.com/torvalds/linux/blob/master/include/uapi/linux/capability.h
 const LINUX_PROC_CAPABILITY_MAP = {
@@ -26,36 +90,96 @@ const LINUX_PROC_CAPABILITY_MAP = {
  * @param {number} versionMajor major value of the minimum supported version
  * @param {number} versionMinor minor value of the minimum supported version
  * @param {string} toolName name of the tool requiring python, for error messages
+ * @param {string} [pythonExecutable='python3'] Python interpreter to probe
+ * @param {import("../recipes/docs/jsdocs").ExecOptions} [execOptions={}] Options passed to execCommand
  * @returns {Promise<import("../recipes/docs/jsdocs").ProbeAdvice>}
  */
-async function probePython(engine, versionMajor, versionMinor, toolName) {
+async function probePython(
+  engine,
+  versionMajor,
+  versionMinor,
+  toolName,
+  pythonExecutable = 'python3',
+  execOptions = {},
+) {
   // Check Python is present.
-  const pyCheck = await engine.execCommand(['python3', '--version'], {});
+  const pyCheck = await engine.execCommand(
+    [pythonExecutable, '--version'],
+    execOptions,
+  );
   if (pyCheck.rc !== 0) {
+    const message =
+      pythonExecutable === 'python3'
+        ? `Python3 is not available on the target machine. Install the python3 system package in order to run ${toolName}.`
+        : `${pythonExecutable} is not available on the target machine. Select an existing Python environment in order to run ${toolName}.`;
     return {
       level: 'error',
       messageCode: readinessMessageCode,
-      metadata: {
-        message: `Python3 is not available on the target machine. Install the python3 system package in order to run ${toolName}.`,
-      },
+      metadata: { message },
     };
   }
 
   // check python version is compatible
   const verCheck = await engine.execCommand(
     [
-      'python3',
+      pythonExecutable,
       '-c',
       `import sys; sys.exit(sys.version_info < (${versionMajor}, ${versionMinor}))`,
     ],
-    {},
+    execOptions,
   );
   if (verCheck.rc !== 0) {
+    const message =
+      pythonExecutable === 'python3'
+        ? `Python3 version is incompatible on the target machine. ${toolName} requires Python ${versionMajor}.${versionMinor}+.`
+        : `${pythonExecutable} has an incompatible Python version. ${toolName} requires Python ${versionMajor}.${versionMinor}+.`;
     return {
       level: 'error',
       messageCode: readinessMessageCode,
+      metadata: { message },
+    };
+  }
+
+  return {
+    level: 'ready',
+    messageCode: '',
+  };
+}
+
+/**
+ * Checks that a module can be imported by the target's python3 interpreter.
+ * Importing the module, rather than only locating it, also detects broken
+ * native extensions and missing transitive dependencies.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {string} moduleName Python module to import
+ * @param {string} toolName tool requiring the module
+ * @param {string} [pythonExecutable='python3'] Python interpreter to probe
+ * @param {import("../recipes/docs/jsdocs").ExecOptions} [execOptions={}] Options passed to execCommand
+ * @returns {Promise<import("../recipes/docs/jsdocs").ProbeAdvice>}
+ */
+async function probePythonModule(
+  engine,
+  moduleName,
+  toolName,
+  pythonExecutable = 'python3',
+  execOptions = {},
+) {
+  const result = await engine.execCommand(
+    [
+      pythonExecutable,
+      '-c',
+      'import importlib, sys; importlib.import_module(sys.argv[1])',
+      moduleName,
+    ],
+    execOptions,
+  );
+  if (result.rc !== 0) {
+    return {
+      level: 'error',
+      messageCode: 'tool_integrations.common.PYTHON_MODULE_NOT_FOUND',
       metadata: {
-        message: `Python3 version is incompatible on the target machine. ${toolName} requires Python ${versionMajor}.${versionMinor}+.`,
+        module: moduleName,
+        tool: toolName,
       },
     };
   }
@@ -545,6 +669,7 @@ function buildToolBundlePath(toolsRoot, bundleName, bundleVersion) {
 
 module.exports = {
   probePython,
+  probePythonModule,
   probePythonVenv,
   probeDeployment,
   probeWhl,
@@ -558,4 +683,5 @@ module.exports = {
   resolveWorkloadPath,
   buildToolBundlePath,
   delay,
+  decodeXmlAttribute,
 };

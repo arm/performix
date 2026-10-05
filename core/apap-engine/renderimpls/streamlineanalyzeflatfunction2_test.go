@@ -481,7 +481,8 @@ func TestCreateDrilldownMeasurementsTable(t *testing.T) {
 		session.On("Reference").Return(hubStub{measurements: stubMeasurements})
 
 		renderer := &StreamlineAnalyzeFlatFunctionProfileRenderer2{
-			config: &render.Config{Identity: render.RendererIdentity{}},
+			config:         &render.Config{Identity: render.RendererIdentity{}},
+			specificConfig: &ComponentConfigFlat{},
 		}
 		_, err = renderer.createDrilldownMeasurementsTable(ffTables, &session, []run.RunID{}, resolved)
 		require.Error(t, err)

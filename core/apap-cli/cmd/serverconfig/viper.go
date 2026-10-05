@@ -57,9 +57,10 @@ func FromViper() grpcserver.GrpcServerConfig {
 		EnableRerendering:         viper.GetBool("enable-rerendering"),
 		EnableExperimentalRecipes: viper.GetBool("enable-experimental-recipes"),
 		EnableSecondaryRunPaths:   viper.GetBool("enable-secondary-run-paths"),
-		EnableTransferManager:     viper.GetBool("enable-transfer-manager"),
+		EnableGPURecipe:           viper.GetBool(EnableGPURecipeConfigKey),
 		EnableRenderDBSandbox:     viper.GetBool("enable-render-db-sandbox"),
 		EnableNeoprofTimeline:     viper.GetBool("enable-neoprof-timeline"),
+		EnableJfrCapture:          viper.GetBool("enable-jfr-capture"),
 		ConfigDirectory:           DefaultConfigDir,
 	}
 }

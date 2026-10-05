@@ -61,7 +61,11 @@ file_images AS (
             FROM (
                 SELECT DISTINCT
                     filename,
-                    regexp_extract(filename, '([^/\\]+)$', 1) AS base_filename
+                    regexp_replace(
+                        regexp_extract(filename, '([^/\\]+)$', 1),
+                        '\.zst$',
+                        ''
+                    ) AS base_filename
                 FROM raw_rows
                 WHERE is_symbol_marker
             )

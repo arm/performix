@@ -76,8 +76,8 @@ var recipeInfoOutputSchema = &jsonschema.Schema{
 func (RecipeInfoTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "recipe_info",
-		Description: "Returns detailed " + terminology.GetProductFullName() + " recipe metadata, including recipe-specific parameters, defaults, options and platform support. " +
-			"Call this before run_recipe to look up recipe-specific parameters, or to check target compatibility.",
+		Description: "Returns detailed " + terminology.GetProductFullName() + " recipe metadata, including run and render parameters, defaults, options and platform support. " +
+			"Call this before run_recipe or open_render_session to look up recipe-specific parameters, or to check target compatibility.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint: true,
 		},
@@ -141,6 +141,9 @@ func recipeStatusString(status apapproto.RecipeStatus) string {
 func recipeInfoParameters(parameters []recipejson.ParameterJSON) []recipejson.ParameterJSON {
 	for i := range parameters {
 		parameters[i].Config.Options = nil
+		if defaultValue, ok := parameters[i].Config.DefaultValue.([]string); ok && defaultValue == nil {
+			parameters[i].Config.DefaultValue = nil
+		}
 	}
 	return parameters
 }
@@ -161,9 +164,16 @@ func recipeInfoParametersSchema() *jsonschema.Schema {
 					Type:        "object",
 					Description: "Parameter type, options and default value.",
 					Properties: map[string]*jsonschema.Schema{
-						"type":         {Type: "string", Enum: []any{"single_select", "multi_select", "radio", "checkbox", "input"}},
-						"optionItems":  recipeInfoOptionItemsSchema(),
-						"defaultValue": {Description: "Default parameter value."},
+						"type":        {Type: "string", Enum: []any{"single_select", "multi_select", "radio", "checkbox", "input"}},
+						"optionItems": recipeInfoOptionItemsSchema(),
+						"defaultValue": {
+							AnyOf: []*jsonschema.Schema{
+								{Type: "string"},
+								{Type: "boolean"},
+								{Type: "array", Items: &jsonschema.Schema{Type: "string"}},
+							},
+							Description: "Default parameter value.",
+						},
 					},
 				},
 			},

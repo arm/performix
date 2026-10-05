@@ -41,13 +41,15 @@ const DefaultEnableFullCaptureSupport = true
 const DefaultEnableRerendering = true
 const DefaultEnableExperimentalRecipes = false
 const DefaultEnableSecondaryRunPaths = true
-const DefaultEnableTransferManager = true
 const DefaultEnableAndroidTargets = false
+const DefaultEnableGPURecipe = false
 const DefaultEnableRenderDBSandbox = true
 const DefaultEnableNeoprofTimeline = false
+const DefaultEnableJfrCapture = false
 const DefaultDaemonAutostart = true
 
 const EnableAndroidTargetsConfigKey = "enable-android-targets"
+const EnableGPURecipeConfigKey = "enable-gpu-recipe"
 const DaemonAutostartConfigKey = "daemon-autostart"
 
 const minPort = 1

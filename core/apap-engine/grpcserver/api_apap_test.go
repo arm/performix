@@ -1796,6 +1796,46 @@ func TestRecipeList(t *testing.T) {
 		}
 	})
 
+	t.Run("filters GPU recipe when disabled", func(t *testing.T) {
+		reader := MockRecipeReader{}
+		recipes := map[string]recipe.Recipe{
+			gpuRecipeName:     {Name: gpuRecipeName, Status: recipe.RecipeStatusExperimental},
+			"BrilliantRecipe": {Name: "BrilliantRecipe"},
+		}
+		reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
+		server := ApapServer{
+			config:       ApapServerConfig{EnableExperimentalRecipes: true, EnableGPURecipe: false},
+			recipeReader: &reader,
+		}
+
+		response, err := server.ListRecipes(context.Background(), &emptypb.Empty{})
+		require.NoError(t, err)
+		assert.NotContains(t, response.RecipeNames, &apapproto.RecipeNameEntry{
+			Identifier: &apapproto.RecipeNameEntry_Name{Name: gpuRecipeName},
+		})
+		assert.Contains(t, response.RecipeNames, &apapproto.RecipeNameEntry{
+			Identifier: &apapproto.RecipeNameEntry_Name{Name: "BrilliantRecipe"},
+		})
+	})
+
+	t.Run("includes GPU recipe when enabled", func(t *testing.T) {
+		reader := MockRecipeReader{}
+		recipes := map[string]recipe.Recipe{
+			gpuRecipeName: {Name: gpuRecipeName, Status: recipe.RecipeStatusExperimental},
+		}
+		reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
+		server := ApapServer{
+			config:       ApapServerConfig{EnableExperimentalRecipes: true, EnableGPURecipe: true},
+			recipeReader: &reader,
+		}
+
+		response, err := server.ListRecipes(context.Background(), &emptypb.Empty{})
+		require.NoError(t, err)
+		assert.Contains(t, response.RecipeNames, &apapproto.RecipeNameEntry{
+			Identifier: &apapproto.RecipeNameEntry_Name{Name: gpuRecipeName},
+		})
+	})
+
 	t.Run("includes experimental recipe when enabled", func(t *testing.T) {
 		reader := MockRecipeReader{}
 		recipes := map[string]recipe.Recipe{
@@ -1951,6 +1991,12 @@ func TestListRenders(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(result.Sessions))
 		assert.Equal(t, 0, len(result.DbInstances))
+	})
+	t.Run("ignores sessions closed after the ID snapshot", func(t *testing.T) {
+		result, err := s.listRendersFromSnapshot([]string{"closed-session"})
+		require.NoError(t, err)
+		assert.Empty(t, result.Sessions)
+		assert.Empty(t, result.DbInstances)
 	})
 }
 
@@ -3126,9 +3172,9 @@ func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
 			EnableRerendering:         true,
 			EnableExperimentalRecipes: true,
 			EnableSecondaryRunPaths:   true,
-			EnableTransferManager:     true,
 			EnableRenderDBSandbox:     false,
 			EnableNeoprofTimeline:     true,
+			EnableJfrCapture:          true,
 			ServerHostname:            "127.0.0.1",
 			ServerGRPCPort:            9000,
 			ServerAuthPort:            9001,
@@ -3162,9 +3208,10 @@ func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
 		"enable-rerendering":          true,
 		"enable-experimental-recipes": true,
 		"enable-secondary-run-paths":  true,
-		"enable-transfer-manager":     true,
+		"enable-gpu-recipe":           false,
 		"enable-render-db-sandbox":    false,
 		"enable-neoprof-timeline":     true,
+		"enable-jfr-capture":          true,
 		"deployment-tools-dir":        "/opt/apap/tools/deployed",
 		"source-tools-dir":            "/opt/apap/tools/src",
 		"config-dir":                  "/etc/apap",

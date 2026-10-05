@@ -3,12 +3,23 @@
 
 package cdf
 
+const ZstdSuffix = ".zst"
+
 // ManifestEntry describes an entry in the Manifest of a run
 type ManifestEntry struct {
 	Path          string        `json:"path"`
 	ComponentType ComponentType `json:"component_type"`
 	// Pending marks artifacts that are expected in the run but are still transferring in the background.
-	Pending bool `json:"pending,omitempty"`
+	Pending    bool `json:"pending,omitempty"`
+	Compressed bool `json:"compressed,omitempty"`
+}
+
+// StoragePath returns the on-disk path for this manifest entry.
+func (e ManifestEntry) StoragePath() string {
+	if e.Compressed {
+		return e.Path + ZstdSuffix
+	}
+	return e.Path
 }
 
 type ToolUsed struct {

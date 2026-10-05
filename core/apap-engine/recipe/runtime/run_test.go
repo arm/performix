@@ -484,7 +484,7 @@ func TestBuildStages(t *testing.T) {
 		}
 		ss, _ := factory.BuildStages(cfg, nil)
 
-		require.Len(t, ss, 10)
+		require.Len(t, ss, 11)
 		assert.IsType(t, &stages.TargetConnectStage{}, ss[0])
 		assert.IsType(t, &stages.TargetArchitectureStage{}, ss[1])
 		assert.IsType(t, &stages.TargetPlatformSupportStage{}, ss[2])
@@ -493,17 +493,17 @@ func TestBuildStages(t *testing.T) {
 		assert.IsType(t, &stages.TargetLockStage{}, ss[5])
 		assert.IsType(t, &stages.CollectTargetInfoStage{}, ss[6])
 		assert.IsType(t, &stages.CollectTargetPIDStage{}, ss[7])
-		assert.IsType(t, &stages.ReleaseTargetLockStage{}, ss[8])
-		assert.IsType(t, &stages.RetrieveAgentFilesStage{}, ss[9])
+		assert.IsType(t, &stages.StartTransferManagerStage{}, ss[8])
+		assert.IsType(t, &stages.ReleaseTargetLockStage{}, ss[9])
+		assert.IsType(t, &stages.WaitForTransfersStage{}, ss[10])
 	})
 
-	t.Run("includes transfer manager stages if feature flag is enabled", func(t *testing.T) {
+	t.Run("transfer manager stages call the phase one callback", func(t *testing.T) {
 		phase1CallbackCalled := false
 		cfg := &StageConfiguration{
-			Ctx:                    &recipe.RecipeCtx{},
-			Recipe:                 &recipe.Recipe{},
-			TransferManagerEnabled: true,
-			CollectionState:        &recipe.CollectionState{},
+			Ctx:             &recipe.RecipeCtx{},
+			Recipe:          &recipe.Recipe{},
+			CollectionState: &recipe.CollectionState{},
 			OnPhase1TransferComplete: func(bool) {
 				phase1CallbackCalled = true
 			},

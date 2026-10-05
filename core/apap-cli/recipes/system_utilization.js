@@ -7,6 +7,151 @@ const TOOL_SYSUTIL_TIMELINE = {
   name: 'sysutil-timeline',
   version: '1.0.0',
 };
+const TOOL_NEOPROF = { name: 'neoprof', version: '1.1.0' };
+
+const NEOPROF_SYSUTIL_WORKFLOW = 'sys_util';
+const NANOSECONDS_PER_SECOND = 1_000_000_000;
+const NEOPROF_TIMELINE_BIN_DURATION_NS = 100_000_000;
+const NEOPROF_TIMELINE_METADATA_COMPONENT =
+  'tool/neoprof/0/output/parquet/metadata/counter_series_metadata.json';
+const NEOPROF_TIMELINE_COUNTER_COMPONENT =
+  'tool/neoprof/0/output/parquet/timeline/**/counter.parquet';
+
+/**
+ * Fixed NeoProf counters that map one-to-one onto the sysutil timeline schema.
+ * @type {Array<{title: string, name: string, columnName: string}>}
+ */
+const NEOPROF_FIXED_TIMELINE_COLUMN_MAPPINGS = [
+  { title: 'Load Average', name: '1 minute', columnName: 'load1' },
+  { title: 'Load Average', name: '5 minutes', columnName: 'load5' },
+  { title: 'Load Average', name: '15 minutes', columnName: 'load15' },
+  {
+    title: 'Proc Stat CPU Total',
+    name: 'Utilization',
+    columnName: 'cpu_total_percent',
+  },
+  {
+    title: 'Proc Stat I/O Wait Total',
+    name: 'Wait',
+    columnName: 'iowait_percent',
+  },
+  { title: 'Memory', name: 'Total', columnName: 'mem_total_kb' },
+  { title: 'Memory', name: 'Available', columnName: 'mem_available_kb' },
+  { title: 'Memory', name: 'Used', columnName: 'mem_used_kb' },
+  { title: 'Swap', name: 'Total', columnName: 'swap_total_kb' },
+  { title: 'Swap', name: 'Used', columnName: 'swap_used_kb' },
+  {
+    title: 'Proc Stat Scheduler',
+    name: 'Run Queue',
+    columnName: 'procs_running',
+  },
+  {
+    title: 'Proc Stat Scheduler',
+    name: 'Blocked',
+    columnName: 'procs_blocked',
+  },
+  {
+    title: 'Proc Stat Scheduler',
+    name: 'Context Switches',
+    columnName: 'ctxt_per_s',
+  },
+  {
+    title: 'Proc Stat Interrupts',
+    name: 'Total',
+    columnName: 'intr_per_s',
+  },
+  { title: 'Page Faults', name: 'Faults', columnName: 'page_faults_per_s' },
+  {
+    title: 'Page Faults',
+    name: 'Major Faults',
+    columnName: 'pgmajfaults_per_s',
+  },
+  { title: 'Tasks', name: 'Processes', columnName: 'procs_total' },
+  { title: 'Tasks', name: 'Threads', columnName: 'threads_total' },
+];
+
+// NeoProf does not currently collect these sysutil columns. Include them in the
+// pivot schema so existing visualizations can still bind and return null data.
+const SYSUTIL_TIMELINE_COMPATIBILITY_COLUMNS = [
+  'numa_hit_per_s',
+  'numa_miss_per_s',
+  'numa_interleave_hit_per_s',
+  'numa_local_node_per_s',
+  'numa_other_node_per_s',
+  'numa_local_percent',
+  'numa_remote_percent',
+  'numa_node0_allocations_per_s',
+];
+
+/**
+ * @type {Array<{
+ *   title: string,
+ *   name: string,
+ *   columnName: (deviceNumber: number) => string,
+ * }>}
+ */
+const NEOPROF_PER_DEVICE_TIMELINE_COLUMN_MAPPINGS = [
+  {
+    title: 'Proc Stat CPU Per-core',
+    name: 'Utilization',
+    columnName: (deviceNumber) => `cpu${deviceNumber}_percent`,
+  },
+  {
+    title: 'Interrupts',
+    name: 'Total',
+    columnName: (deviceNumber) => `irq_cpu${deviceNumber}_per_s`,
+  },
+];
+
+/**
+ * @type {Array<{
+ *   matchesTitle: (title: string) => boolean,
+ *   counters: Array<{nameIncludes: string, columnPrefix: string}>,
+ * }>}
+ */
+const NEOPROF_PER_SERIES_TIMELINE_COLUMN_MAPPINGS = [
+  {
+    matchesTitle: (title) => title.toLowerCase() === 'disk iops',
+    counters: [
+      { nameIncludes: 'read', columnPrefix: 'read_iops' },
+      { nameIncludes: 'write', columnPrefix: 'write_iops' },
+    ],
+  },
+  {
+    matchesTitle: (title) => {
+      const normalizedTitle = title.toLowerCase();
+      return (
+        (normalizedTitle.startsWith('disk') &&
+          normalizedTitle.includes('bandwidth')) ||
+        title === 'Disk I/O'
+      );
+    },
+    counters: [
+      { nameIncludes: 'read', columnPrefix: 'read_bps' },
+      { nameIncludes: 'write', columnPrefix: 'write_bps' },
+    ],
+  },
+  {
+    matchesTitle: (title) => title === 'Network',
+    counters: [
+      { nameIncludes: 'receive', columnPrefix: 'rx_bps' },
+      { nameIncludes: 'transmit', columnPrefix: 'tx_bps' },
+    ],
+  },
+];
+
+/**
+ * @param {string} value
+ * @returns {string}
+ */
+const quoteSqlStringLiteral = (value) => `'${value.replaceAll("'", "''")}'`;
+
+/** @returns {string} */
+const makeNeoprofFixedTimelineColumnCasesSql = () =>
+  NEOPROF_FIXED_TIMELINE_COLUMN_MAPPINGS.map(
+    ({ title, name, columnName }) =>
+      `WHEN metadata.title = ${quoteSqlStringLiteral(title)} AND metadata.name = ${quoteSqlStringLiteral(name)} THEN ${quoteSqlStringLiteral(columnName)}`,
+  ).join('\n              ');
 
 const CPU_SATURATION_THRESHOLD_PERCENT = 80;
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
@@ -996,6 +1141,17 @@ const recipe = {
     'The System Utilization recipe shows how CPU, memory, disk, and network resources are used while your workload runs. It helps you spot saturated system resources, understand utilization trends over time, and correlate workload behavior with broader system activity.',
   deployments: [
     {
+      appliesTo: [{ architecture: 'aarch64', os: 'Android' }],
+      dependencies: [
+        {
+          type: 'tool',
+          name: TOOL_NEOPROF.name,
+          version: TOOL_NEOPROF.version,
+          requiredWhen: { type: 'always' },
+        },
+      ],
+    },
+    {
       appliesTo: [{ architecture: 'aarch64', os: 'Linux' }],
       dependencies: [
         {
@@ -1087,10 +1243,65 @@ function generateSysutilTimelineConfig(workload, params) {
 }
 
 /**
+ * Generates the NeoProf configuration used to collect system-utilization
+ * counters and analyze them on the host.
+ * @param {import("./docs/jsdocs").Workload} workload
+ * @param {import("./docs/jsdocs").TargetInfoDescription} targetInfo
+ * @return {import("./docs/jsdocs").ToolConfigurationsArg}
+ */
+function generateNeoprofSysutilConfig(workload, targetInfo) {
+  const timelineDeviceNumbers = (targetInfo?.CPUs ?? [])
+    .filter(
+      ({ CoreNumber }) => Number.isSafeInteger(CoreNumber) && CoreNumber >= 0,
+    )
+    .sort((left, right) => left.CoreNumber - right.CoreNumber)
+    .map(({ CoreNumber }) => CoreNumber);
+
+  return {
+    toolConfigs: [
+      {
+        name: TOOL_NEOPROF.name,
+        params: {
+          mode: 'samples',
+          sampling_frequency: 'normal',
+          workflow: NEOPROF_SYSUTIL_WORKFLOW,
+          reformat_on_host: true,
+          timeline_device_numbers: JSON.stringify(timelineDeviceNumbers),
+          rich_data_capture: false,
+        },
+        workload: workload,
+        env: {},
+      },
+    ],
+  };
+}
+
+/**
+ * @param {import("./docs/jsdocs").TargetInfoDescription} targetInfo
+ * @returns {boolean}
+ */
+function isAndroidTarget(targetInfo) {
+  const family = targetInfo?.Os?.OSFamily ?? '';
+  return family.toLowerCase() === 'android';
+}
+
+/**
  * @param {import("./docs/jsdocs").ReadyExecutionContext} context
  */
 function readySystemUtilization(context) {
   const workload = context.getWorkload();
+  const targetInfo = context.targetInfo();
+  if (isAndroidTarget(targetInfo)) {
+    const tools = generateNeoprofSysutilConfig(workload, targetInfo);
+    const toolResponses = context.probeTools(tools);
+    const allAdvice = collectToolAdvice(tools, toolResponses);
+
+    return {
+      status: toolStatusToRecipeStatus(allAdvice),
+      advice: allAdvice,
+    };
+  }
+
   const params = {
     interval: context.getParameter('interval'),
     thread_scan_interval: context.getParameter('thread_scan_interval'),
@@ -1112,6 +1323,12 @@ function readySystemUtilization(context) {
  */
 function runSystemUtilization(context) {
   const workload = context.getWorkload();
+  const targetInfo = context.targetInfo();
+  if (isAndroidTarget(targetInfo)) {
+    context.runTools(generateNeoprofSysutilConfig(workload, targetInfo));
+    return;
+  }
+
   const params = {
     interval: context.getParameter('interval'),
     thread_scan_interval: context.getParameter('thread_scan_interval'),
@@ -2010,19 +2227,326 @@ const systemUtilizationSummaryConfig = {
 };
 
 /**
+ * Determines the complete set of columns that the NeoProf timeline renderer
+ * must expose. Fixed columns preserve the sysutil-timeline contract, while
+ * capabilities add the per-core and per-series columns present in this run.
+ *
+ * At least one column from each regex-selected family is always included so
+ * downstream DuckDB `COLUMNS(...)` expressions still bind when the target did
+ * not collect that family.
+ *
+ * @param {import("./docs/jsdocs").RenderExecutionContext} context
+ * @returns {string[]}
+ */
+function getNeoprofTimelineColumns(context) {
+  const requiredColumns = [
+    ...NEOPROF_FIXED_TIMELINE_COLUMN_MAPPINGS.map(
+      ({ columnName }) => columnName,
+    ),
+    ...SYSUTIL_TIMELINE_COMPATIBILITY_COLUMNS,
+  ];
+  const capabilities = context
+    .getToolCapabilities(0, {
+      toolName: TOOL_NEOPROF.name,
+      invocationIndex: 0,
+    })
+    .list();
+
+  for (const capability of Object.values(capabilities)) {
+    const payload = capability?.payload ?? {};
+    const title = String(payload.counter_title ?? '');
+    const name = String(payload.counter_name ?? '');
+    const seriesId = Number(payload.series_id);
+    const deviceNumbers = Array.isArray(payload.device_numbers)
+      ? payload.device_numbers
+          .map(Number)
+          .filter(
+            (deviceNumber) =>
+              Number.isSafeInteger(deviceNumber) && deviceNumber >= 0,
+          )
+      : [];
+
+    const deviceMapping = NEOPROF_PER_DEVICE_TIMELINE_COLUMN_MAPPINGS.find(
+      (mapping) => mapping.title === title && mapping.name === name,
+    );
+    if (deviceMapping) {
+      if (deviceNumbers.length === 0) {
+        throw {
+          code: 'recipes.system_utilization.TIMELINE_DEVICE_NUMBERS_MISSING',
+        };
+      }
+      requiredColumns.push(...deviceNumbers.map(deviceMapping.columnName));
+      continue;
+    }
+
+    if (!Number.isSafeInteger(seriesId)) {
+      continue;
+    }
+
+    const seriesMapping = NEOPROF_PER_SERIES_TIMELINE_COLUMN_MAPPINGS.find(
+      (mapping) => mapping.matchesTitle(title),
+    )?.counters.find((counter) =>
+      name.toLowerCase().includes(counter.nameIncludes),
+    );
+    if (seriesMapping) {
+      requiredColumns.push(`${seriesMapping.columnPrefix}_series_${seriesId}`);
+    }
+  }
+
+  /** @type {Array<[RegExp, string]>} */
+  const fallbackPatternColumns = [
+    [/^cpu[0-9]+_percent$/, 'cpu0_percent'],
+    [/^irq_cpu[0-9]+_per_s$/, 'irq_cpu0_per_s'],
+    [/^read_iops_/, 'read_iops_total'],
+    [/^write_iops_/, 'write_iops_total'],
+    [/^read_bps_/, 'read_bps_total'],
+    [/^write_bps_/, 'write_bps_total'],
+    [/^rx_bps_/, 'rx_bps_total'],
+    [/^tx_bps_/, 'tx_bps_total'],
+  ];
+  for (const [pattern, fallbackColumn] of fallbackPatternColumns) {
+    if (!requiredColumns.some((columnName) => pattern.test(columnName))) {
+      requiredColumns.push(fallbackColumn);
+    }
+  }
+
+  return [...new Set(requiredColumns)];
+}
+
+/**
+ * Builds a SQL renderer which converts the counter-series timeline emitted by
+ * sl-analyze for NeoProf's `sys_util` workflow into the wide timeline schema
+ * already consumed by this recipe's visualizations.
+ *
+ * sl-analyze stores one Parquet series per counter. Counter metadata identifies
+ * the metric while device numbers distinguish per-core series. The query maps
+ * those identities to the sysutil-timeline column contract, expands compressed
+ * 100-millisecond bins, and pivots them into one row per sample. The explicit
+ * pivot column list preserves optional output columns even when NeoProf does
+ * not expose the corresponding counter (for example NUMA data).
+ *
+ * @param {import("./docs/jsdocs").RenderExecutionContext} context
+ * @returns {any}
+ */
+function buildNeoprofTimelineRenderer(context) {
+  const counterComponents = context.listRunComponents(
+    0,
+    NEOPROF_TIMELINE_COUNTER_COMPONENT,
+  );
+  if (counterComponents.length === 0) {
+    throw new Error(
+      'The NeoProf system-utilization run does not contain timeline counters.',
+    );
+  }
+  const counterPathPlaceholders = counterComponents
+    .map((component) => `{{path:${component.relativePath}}}`)
+    .join(', ');
+  const metadataQuery = `SELECT counter_group.key_type, counter.id AS series_id, counter.title, counter.name
+       FROM (
+         SELECT unnest(counter_groups) AS counter_group
+         FROM read_json({{path:${NEOPROF_TIMELINE_METADATA_COMPONENT}}},
+           columns = {counter_groups: 'STRUCT(key_type BIGINT, counters STRUCT(id BIGINT, title VARCHAR, name VARCHAR)[])[]'})
+       ), UNNEST(counter_group.counters) AS entries(counter)`;
+  const timelineColumns = getNeoprofTimelineColumns(context);
+  const fixedTimelineColumnCasesSql = makeNeoprofFixedTimelineColumnCasesSql();
+  const pivotColumnValues = timelineColumns
+    .map((columnName) => `'${columnName}'`)
+    .join(', ');
+
+  return {
+    type: 'SQL',
+    id: 'timeline_csv',
+    config: {
+      sql: sql`
+        WITH
+        -- Combine every counter file into one relation. Counter files may
+        -- contain either a direct value or aggregate fields, so union_by_name
+        -- aligns those variants by column name.
+        raw_binned_counters AS (
+          SELECT *
+          FROM read_parquet(
+            [${counterPathPlaceholders}],
+            hive_partitioning = true,
+            union_by_name = true
+          )
+          UNION ALL BY NAME
+          -- Declare fields that can be absent from every input file so the
+          -- normalization query below can bind for either counter variant.
+          SELECT
+            CAST(NULL AS DOUBLE) AS value,
+            CAST(NULL AS DOUBLE) AS sum_value,
+            CAST(NULL AS UBIGINT) AS count
+          WHERE FALSE
+        ),
+        -- Select the 100-millisecond timeline level and normalize direct-value
+        -- rows and sum/count aggregate rows to one sample_value.
+        binned_counters AS (
+          SELECT
+            start_timestamp,
+            end_timestamp,
+            device_no,
+            COALESCE(value, sum_value / NULLIF(count, 0)) AS sample_value,
+            key_type,
+            series_id
+          FROM raw_binned_counters
+          WHERE bin_duration = ${NEOPROF_TIMELINE_BIN_DURATION_NS}
+        ),
+        -- A stored row can cover several consecutive bins. Repeat its value at
+        -- every bin start, keeping the end timestamp exclusive.
+        expanded_counters AS (
+          SELECT
+            generated.x_start,
+            counters.device_no,
+            counters.sample_value,
+            counters.key_type,
+            counters.series_id
+          FROM binned_counters AS counters
+          CROSS JOIN generate_series(
+            counters.start_timestamp,
+            counters.end_timestamp - ${NEOPROF_TIMELINE_BIN_DURATION_NS},
+            ${NEOPROF_TIMELINE_BIN_DURATION_NS}
+          ) AS generated(x_start)
+        ),
+        -- Translate NeoProf counter identities into the column names and units
+        -- expected by the existing sysutil visualizations.
+        mapped_counters AS (
+          SELECT
+            counters.x_start,
+            CASE
+              -- Fixed one-to-one mappings share the timeline schema catalogue
+              -- used to build the explicit pivot columns.
+              ${fixedTimelineColumnCasesSql}
+              -- CPU and interrupt counters also include per-device forms.
+              WHEN metadata.title = 'Proc Stat CPU Per-core' AND metadata.name = 'Utilization' THEN concat('cpu', counters.device_no, '_percent')
+              WHEN metadata.title = 'Interrupts' AND metadata.name = 'Total' THEN concat('irq_cpu', counters.device_no, '_per_s')
+              -- Disk and network devices do not have stable names in the
+              -- exported rows. Keep each series distinct using its series ID;
+              -- downstream queries aggregate columns by these prefixes.
+              WHEN lower(metadata.title) = 'disk iops' AND lower(metadata.name) LIKE '%read%' THEN concat('read_iops_series_', metadata.series_id)
+              WHEN lower(metadata.title) = 'disk iops' AND lower(metadata.name) LIKE '%write%' THEN concat('write_iops_series_', metadata.series_id)
+              WHEN lower(metadata.title) LIKE 'disk%bandwidth%' AND lower(metadata.name) LIKE '%read%' THEN concat('read_bps_series_', metadata.series_id)
+              WHEN lower(metadata.title) LIKE 'disk%bandwidth%' AND lower(metadata.name) LIKE '%write%' THEN concat('write_bps_series_', metadata.series_id)
+              WHEN metadata.title = 'Disk I/O' AND lower(metadata.name) LIKE '%read%' THEN concat('read_bps_series_', metadata.series_id)
+              WHEN metadata.title = 'Disk I/O' AND lower(metadata.name) LIKE '%write%' THEN concat('write_bps_series_', metadata.series_id)
+              WHEN metadata.title = 'Network' AND lower(metadata.name) LIKE '%receive%' THEN concat('rx_bps_series_', metadata.series_id)
+              WHEN metadata.title = 'Network' AND lower(metadata.name) LIKE '%transmit%' THEN concat('tx_bps_series_', metadata.series_id)
+              ELSE NULL
+            END AS column_name,
+            CASE
+              -- NeoProf encodes CPU/I/O percentages and load averages as
+              -- fixed-point values scaled by 100; sysutil uses their base units.
+              WHEN metadata.title IN (
+                'Load Average',
+                'Proc Stat CPU Total',
+                'Proc Stat CPU Per-core',
+                'Proc Stat I/O Wait Total',
+                'Proc Stat I/O Wait Per-core'
+              ) THEN counters.sample_value / 100.0
+              -- NeoProf emits memory sizes in bytes; the sysutil contract is KiB.
+              WHEN metadata.title IN ('Memory', 'Swap') THEN counters.sample_value / 1024.0
+              ELSE counters.sample_value
+            END AS value
+          FROM expanded_counters AS counters
+          INNER JOIN (${metadataQuery}) AS metadata
+            ON counters.key_type = metadata.key_type
+              AND counters.series_id = metadata.series_id
+        ),
+        -- Convert the normalized long-form points into the wide, one-row-per-
+        -- sample shape consumed by all existing recipe queries. SUM collapses
+        -- source series that map onto the same output column and timestamp.
+        wide_timeline AS (
+          PIVOT mapped_counters
+          ON column_name IN (${pivotColumnValues})
+          USING SUM(value)
+          GROUP BY x_start
+        )
+        -- Match the final sysutil-timeline contract: timestamps are seconds
+        -- since boot, wall-clock time is unavailable, and memory utilization is
+        -- derived from the normalized KiB columns.
+        SELECT
+          CAST(NULL AS VARCHAR) AS ts_utc,
+          x_start / ${NANOSECONDS_PER_SECOND} AS uptime_s,
+          wide_timeline.* EXCLUDE (x_start),
+          CASE
+            WHEN mem_total_kb > 0 THEN mem_used_kb * 100.0 / mem_total_kb
+            ELSE NULL
+          END AS mem_used_percent
+        FROM wide_timeline
+        ORDER BY x_start
+      `,
+      output: {
+        name: 'csv',
+        description:
+          'NeoProf system-utilization counters normalized to the sysutil timeline schema.',
+        cardinality: 'one',
+        component_type: {
+          name: 'flat_table',
+          schema_version: '1.0',
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Determines which collector produced the runs being rendered. Runs created
+ * before ToolsUsed was recorded are treated as sysutil-timeline runs.
+ * @param {import("./docs/jsdocs").RenderExecutionContext} context
+ * @returns {'sysutil-timeline'|'neoprof'}
+ */
+function getRunCollector(context) {
+  let selectedCollector = null;
+
+  for (const runDescription of context.getRunDescriptions()) {
+    const toolsUsed = runDescription.ToolsUsed ?? [];
+    const collector =
+      toolsUsed.length === 0 ? TOOL_SYSUTIL_TIMELINE.name : null;
+    let runCollector = collector;
+
+    for (const toolName of toolsUsed) {
+      if (
+        toolName !== TOOL_SYSUTIL_TIMELINE.name &&
+        toolName !== TOOL_NEOPROF.name
+      ) {
+        throw new Error(
+          `Unsupported tool "${toolName}" used in system_utilization run.`,
+        );
+      }
+      if (runCollector && runCollector !== toolName) {
+        throw new Error(
+          'A system_utilization run cannot contain multiple collector tools.',
+        );
+      }
+      runCollector = toolName;
+    }
+
+    if (selectedCollector && selectedCollector !== runCollector) {
+      throw new Error(
+        'System utilization comparisons must use the same collector tool.',
+      );
+    }
+    selectedCollector = runCollector;
+  }
+
+  return selectedCollector ?? TOOL_SYSUTIL_TIMELINE.name;
+}
+
+/**
  * @param {import("./docs/jsdocs").RenderExecutionContext} context
  */
 function renderSystemUtilization(context) {
   const TIMELINE_CSV_COMPONENT = 'tool/sysutil-timeline/0/timeline.csv';
-
+  const runCollector = getRunCollector(context);
   const renderers = [
-    {
-      type: 'CSV',
-      id: 'timeline_csv',
-      config: {
-        component: TIMELINE_CSV_COMPONENT,
-      },
-    },
+    runCollector === TOOL_NEOPROF.name
+      ? buildNeoprofTimelineRenderer(context)
+      : {
+          type: 'CSV',
+          id: 'timeline_csv',
+          config: {
+            component: TIMELINE_CSV_COMPONENT,
+          },
+        },
   ];
 
   const visualizations = [
