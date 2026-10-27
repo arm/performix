@@ -4,22 +4,32 @@
 package daemon
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/grouping"
+	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
+	"github.com/Arm-Debug/apap-cli/apap-cli/service"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/client"
+	"github.com/Arm-Debug/apap-cli/apap-cli/service/daemonstate"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/server"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
-const defaultForce = false
+const (
+	defaultForce            = false
+	daemonDiscoveryTimeout  = 20 * time.Second
+	forceStopCleanupTimeout = 5 * time.Second
+)
 
 var force bool
 
@@ -54,6 +64,25 @@ func newDaemonStopCmd(cc clientConnector, ss serverShutter) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			host := viper.GetString("server-hostname")
 			port := viper.GetInt("server-port")
+			var discoveredDaemon *daemonstate.Daemon
+
+			if port == serverconfig.AutomaticPort {
+				ctx, cancel := context.WithTimeout(cmd.Context(), daemonDiscoveryTimeout)
+				daemon, err := daemonstate.FindRunningDaemon(ctx)
+				cancel()
+				if errors.Is(err, daemonstate.ErrNoRunningDaemon) {
+					if !viper.GetBool("json") {
+						fmt.Fprintf(cmd.OutOrStdout(), "No running %v daemon was found.\n", terminology.GetProductFullName())
+					}
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				host = daemon.Host
+				port = daemon.ServerPort
+				discoveredDaemon = daemon
+			}
 
 			var err error
 			if force {
@@ -73,6 +102,21 @@ func newDaemonStopCmd(cc clientConnector, ss serverShutter) *cobra.Command {
 					})
 				}
 				return err
+			}
+
+			if discoveredDaemon != nil {
+				var cleanupCtx context.Context
+				var cancel context.CancelFunc
+				if force {
+					cleanupCtx, cancel = context.WithTimeout(cmd.Context(), forceStopCleanupTimeout)
+				} else {
+					cleanupCtx, cancel = service.ContextWithInterrupt(cmd.Context())
+				}
+				cleanupErr := daemonstate.RemoveIfStopped(cleanupCtx, *discoveredDaemon)
+				cancel()
+				if cleanupErr != nil {
+					return cleanupErr
+				}
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Shutdown of %v gRPC daemon complete.\n", terminology.GetProductFullName())

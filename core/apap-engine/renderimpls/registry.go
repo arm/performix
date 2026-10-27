@@ -40,6 +40,7 @@ func NewRegistry() *RendererRegistry {
 		"SysutilTimelineCanonicalRenderer":          func() render.Renderer { return &SysutilTimelineCanonicalRenderer{} },
 		"DisassemblyRenderer":                       func() render.Renderer { return &DisassemblyRenderer{} },
 		"TimeRangeParser":                           func() render.Renderer { return &TimeRangeRenderer{} },
+		"TraceDataRenderer":                         func() render.Renderer { return &TraceDataRenderer{} },
 		"DummyRenderer":                             func() render.Renderer { return &DummyRenderer{} },
 	}}
 }

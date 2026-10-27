@@ -5,7 +5,7 @@ syntax = "proto3";
 
 package errors;
 
-option go_package = "github.com/Arm-Debug/apap-cli/clients/go/errorsproto";
+option go_package = "github.com/Arm-Debug/apap-cli/api/errorsproto";
 
 import "google/protobuf/any.proto";
 

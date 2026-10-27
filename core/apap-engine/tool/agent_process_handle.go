@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
@@ -16,8 +18,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/privilege"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 // AgentProcessHandle manages a remote process via the target agent.
@@ -91,62 +93,61 @@ func NewAgentProcessHandle(
 	asPrivileged bool,
 	privilegeSession privilege.PrivilegeSession) (*AgentProcessHandle, error) {
 
-	var stdoutPipeReader, stderrPipeReader *io.PipeReader
-	var stdoutPipeWriter, stderrPipeWriter *io.PipeWriter
-
+	streamCtx, cancelStreams := context.WithCancel(ctx)
+	var stdoutStream targetagentproto.TargetAgent_StreamStdoutClient
+	var stderrStream targetagentproto.TargetAgent_StreamStderrClient
+	openStream := func(name string) error {
+		invoke := func(callCtx context.Context) error {
+			request := &targetagentproto.ProcessStreamRequest{Pid: pid}
+			var err error
+			if name == "StreamStdout" {
+				stdoutStream, err = client.StreamStdout(callCtx, request)
+			} else {
+				stderrStream, err = client.StreamStderr(callCtx, request)
+			}
+			return err
+		}
+		if asPrivileged {
+			return privilegeSession.Invoke(streamCtx, name, invoke)
+		}
+		return invoke(streamCtx)
+	}
 	if process.IsStreamModeEnabled(stdout.Mode) {
-		var stdOutStream targetagentproto.TargetAgent_StreamStdoutClient
-		req := &targetagentproto.ProcessStreamRequest{Pid: pid}
-		stdoutPipeReader, stdoutPipeWriter = io.Pipe()
-
-		if asPrivileged {
-			// Privilege path
-			err := privilegeSession.Invoke(ctx, "StreamStdout", func(privCtx context.Context) error {
-				var err error
-				stdOutStream, err = client.StreamStdout(privCtx, req)
-				return err
-			})
-
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			// Non-privilege path
-			var err error
-			stdOutStream, err = client.StreamStdout(ctx, req)
-			if err != nil {
-				return nil, err
-			}
+		if err := openStream("StreamStdout"); err != nil {
+			cancelStreams()
+			return nil, err
 		}
-		go pipeStream(ctx, "stdout", stdOutStream, stdoutPipeWriter)
 	}
-
 	if process.IsStreamModeEnabled(stderr.Mode) {
-		var stdErrStream targetagentproto.TargetAgent_StreamStderrClient
-		req := &targetagentproto.ProcessStreamRequest{Pid: pid}
-		stderrPipeReader, stderrPipeWriter = io.Pipe()
-
-		if asPrivileged {
-			// Privilege path
-			err := privilegeSession.Invoke(ctx, "StreamStderr", func(privCtx context.Context) error {
-				var err error
-				stdErrStream, err = client.StreamStderr(privCtx, req)
-				return err
-			})
-
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			// Non-privilege path
-			var err error
-			stdErrStream, err = client.StreamStderr(ctx, req)
-			if err != nil {
-				return nil, err
-			}
+		if err := openStream("StreamStderr"); err != nil {
+			cancelStreams()
+			return nil, err
 		}
-		go pipeStream(ctx, "stderr", stdErrStream, stderrPipeWriter)
 	}
+
+	// Do not start pipe writers until every stream is established. On setup
+	// failure there is no handle whose caller could drain those pipes.
+	var stdoutPipeReader, stderrPipeReader *io.PipeReader
+	var drains sync.WaitGroup
+	startDrain := func(name string, stream targetagentproto.TargetAgent_StreamStdoutClient) *io.PipeReader {
+		reader, writer := io.Pipe()
+		drains.Add(1)
+		go func() {
+			defer drains.Done()
+			pipeStream(streamCtx, name, stream, writer)
+		}()
+		return reader
+	}
+	if process.IsStreamModeEnabled(stdout.Mode) {
+		stdoutPipeReader = startDrain("stdout", stdoutStream)
+	}
+	if process.IsStreamModeEnabled(stderr.Mode) {
+		stderrPipeReader = startDrain("stderr", stderrStream)
+	}
+	go func() {
+		drains.Wait()
+		cancelStreams()
+	}()
 
 	return &AgentProcessHandle{
 		ctx:              ctx,
@@ -164,22 +165,30 @@ func (p *AgentProcessHandle) PID() int {
 	return int(p.pid)
 }
 
-// Kill sends a process kill request to the target process
+const processCleanupTimeout = 5 * time.Second
+
+// Kill sends a process kill request even after the operation has been canceled.
 func (p *AgentProcessHandle) Kill() error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), processCleanupTimeout)
+	defer cancel()
+	return killAgentProcess(ctx, p.pid, p.client, p.asPrivileged, p.privilegeSession)
+}
+
+func killAgentProcess(ctx context.Context, pid int32, client targetagentproto.TargetAgentClient, asPrivileged bool, session privilege.PrivilegeSession) error {
 	var err error
 
-	if p.asPrivileged {
+	if asPrivileged {
 		// Privilege path
-		err = p.privilegeSession.Invoke(p.ctx, "KillProcess", func(ctx context.Context) error {
-			_, err = p.client.KillProcess(ctx, &targetagentproto.KillProcessRequest{
-				Pid: p.pid,
+		err = session.Invoke(ctx, "KillProcess", func(ctx context.Context) error {
+			_, err = client.KillProcess(ctx, &targetagentproto.KillProcessRequest{
+				Pid: pid,
 			})
 			return err
 		})
 	} else {
 		// Non-privilege path
-		_, err = p.client.KillProcess(p.ctx, &targetagentproto.KillProcessRequest{
-			Pid: p.pid,
+		_, err = client.KillProcess(ctx, &targetagentproto.KillProcessRequest{
+			Pid: pid,
 		})
 	}
 	return err

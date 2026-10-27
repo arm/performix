@@ -5,7 +5,7 @@
 
 // @ts-check
 
-const ASCT_VERSION = '0.6.1';
+const ASCT_VERSION = '0.7.0';
 const TOOL_ASCT_NAME = 'asct';
 const TOOL_ASCT_VERSION = ASCT_VERSION;
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
@@ -76,7 +76,7 @@ var recipe = {
   api_version: '1.0.0',
   status: 'stable',
   description:
-    'This recipe runs the Arm System Characterization Tool (ASCT) to collect system information and microbenchmark results. It measures memory latency/bandwidth behavior to help with platform bring-up, tuning, and architectural comparisons.',
+    'Collect system information and benchmark memory and core-to-core performance to characterize your target.',
   mcp_guidance:
     'ASCT runs can take several minutes, especially with Loaded latency. Select System information only for a quick hardware check, or select individual benchmarks for a shorter run.',
   parameters: [

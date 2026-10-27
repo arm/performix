@@ -14,8 +14,8 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
-	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	targetagentproto "github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/api/mocks"
+	targetagentproto "github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 func TestFetchHostFile(t *testing.T) {

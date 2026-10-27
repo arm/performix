@@ -21,12 +21,31 @@ prerecord = importlib.util.module_from_spec(MODULE_SPEC)
 MODULE_SPEC.loader.exec_module(prerecord)
 
 
+def test_prerecord_jfr_flag_is_boolean_and_defaults_off() -> None:
+    assert prerecord.parse_prerecord_config('{"mode":"launch"}')["enable_jfr_capture"] is False
+    assert prerecord.parse_prerecord_config('{"mode":"launch","enable_jfr_capture":true}')["enable_jfr_capture"] is True
+    with pytest.raises(ValueError, match="enable_jfr_capture"):
+        prerecord.parse_prerecord_config('{"mode":"launch","enable_jfr_capture":"true"}')
+
+
+def test_jfr_capture_setting_is_written_to_metadata(tmp_path: Path, monkeypatch) -> None:
+    output_dir, _ = configure_run(
+        tmp_path, monkeypatch, "system_utilization", enable_jfr_capture=True
+    )
+    assert prerecord.main() == 0
+    metadata = json.loads(
+        (output_dir / "test_case_32" / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert metadata["enable_jfr_capture"] is True
+
+
 def configure_run(
     tmp_path: Path,
     monkeypatch,
     recipe: str,
     recipe_params: list[str] | None = None,
     profile_mode: str = "launch",
+    enable_jfr_capture: bool = False,
 ):
     cli = tmp_path / "apx"
     cli.write_text("", encoding="utf-8")
@@ -39,11 +58,12 @@ def configure_run(
         workload_cmd=None if profile_mode == "system-wide" else "/remote/test_case_32",
         pid=None,
         timeout=None,
-        prerecord=json.dumps({"mode": profile_mode}),
+        prerecord=json.dumps({"mode": profile_mode, "enable_jfr_capture": enable_jfr_capture}),
         params_json=json.dumps(recipe_params or []),
         ssh_target=None,
         ssh_key=None,
         target_workload_root=None,
+        source_root=None,
         output_dir=output_dir,
         artifactory_run_base=None,
         param=[],
@@ -372,7 +392,7 @@ def test_collect_sampled_sources_preserves_instruction_mix_weights(
             "host_location": "",
             "periodic_samples": 200,
             "relative_path": "src/main.cpp",
-            "size_bytes": 25,
+            "size_bytes": (case_dir / "test_src/src/main.cpp").stat().st_size,
         }
     ]
 

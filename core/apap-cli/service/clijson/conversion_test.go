@@ -15,7 +15,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type unknownJSONTarget struct{}
@@ -31,6 +31,7 @@ func TestCLIRunDescriptionFromProto(t *testing.T) {
 		Metadata: &apapproto.RunMetadata{
 			Name:       "abcd1234",
 			TargetName: "named_target",
+			Group:      "compiler-runs",
 			SizeBytes:  func() *uint64 { value := uint64(1536); return &value }(),
 			Target: &apapproto.Target{
 				Connection: &apapproto.Target_SshConfig{
@@ -53,6 +54,7 @@ func TestCLIRunDescriptionFromProto(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, desc.Name, mockDesc.Metadata.Name)
 		assert.Equal(t, "named_target", desc.TargetName)
+		assert.Equal(t, "compiler-runs", desc.Group)
 		assert.Equal(t, mockDesc.Metadata.SizeBytes, desc.SizeBytes)
 		assert.Empty(t, desc.RendererOutput)
 
@@ -144,6 +146,7 @@ func TestCLIRunSummaryFromRunDescription(t *testing.T) {
 			RecipeName: "cpu_hotspots",
 			Cmdline:    "/path/to/test_case_03 --iterations 10",
 			RunResult:  "success",
+			Group:      "compiler-runs",
 			Target: CLITarget{
 				JSONTarget: engine_target.JSONTarget{
 					Value: &engine_target.JSONSSHTarget{
@@ -165,6 +168,7 @@ func TestCLIRunSummaryFromRunDescription(t *testing.T) {
 			Cmdline:    "/path/to/test_case_03 --iterations 10",
 			RunResult:  "success",
 			Target:     "final_target@5.6.7.8:2222",
+			Group:      "compiler-runs",
 		}, summary)
 	})
 
@@ -233,6 +237,7 @@ func TestCLIRunSummaryListingFromRunListing(t *testing.T) {
 				ID:      "first-run",
 				Name:    "first run",
 				Cmdline: "/path/to/first_workload",
+				Group:   "compiler-runs",
 			},
 			{
 				ID:   "second-run",
@@ -243,7 +248,7 @@ func TestCLIRunSummaryListingFromRunListing(t *testing.T) {
 
 	assert.Equal(t, CLIRunSummaryListing{
 		Runs: []CLIRunSummary{
-			{ID: "first-run", Name: "first run", Cmdline: "/path/to/first_workload"},
+			{ID: "first-run", Name: "first run", Cmdline: "/path/to/first_workload", Group: "compiler-runs"},
 			{ID: "second-run", Name: "second run"},
 		},
 	}, listing)

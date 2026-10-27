@@ -32,10 +32,10 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/api/mocks"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/tetherproto"
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
-	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/tetherproto"
 )
 
 func TestGetAgentPath(t *testing.T) {
@@ -212,43 +212,22 @@ func TestCheckAgentClientConn_FailureGRPC(t *testing.T) {
 }
 
 func TestLaunchAgent_Succeeds(t *testing.T) {
-	t.Run("root mode (launch as admin)", func(t *testing.T) {
-		actions := &conductormocks.MockTargetActions{}
-		tp := conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}, Actions: actions}
+	actions := &conductormocks.MockTargetActions{}
+	tp := conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}, Actions: actions}
 
-		agentPath := "/tmp/tools/agent"
-		expectedCmd := tp.Path.GenerateRunScriptCommand(GetAgentLaunchScript(tp), agentPath)
+	agentPath := "/tmp/tools/agent"
+	expectedCmd := tp.Path.GenerateRunScriptCommand(GetAgentLaunchScript(tp), agentPath)
 
-		actions.On("RunCommandAsAdmin", expectedCmd).Return(conductor.RunCommandOutput{
-			Stdout:     "  4242 \n",
-			Stderr:     "",
-			ReturnCode: 0,
-		}, nil).Once()
+	actions.On("RunCommand", expectedCmd).Return(conductor.RunCommandOutput{
+		Stdout:     "  4242 \n",
+		Stderr:     "",
+		ReturnCode: 0,
+	}, nil).Once()
 
-		port, err := launchAgent(tp, agentPath, false, locality.Target)
-		require.NoError(t, err)
-		assert.Equal(t, 4242, port)
-		actions.AssertExpectations(t)
-	})
-
-	t.Run("non-root mode (launch as user)", func(t *testing.T) {
-		actions := &conductormocks.MockTargetActions{}
-		tp := conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}, Actions: actions}
-
-		agentPath := "/tmp/tools/agent"
-		expectedCmd := tp.Path.GenerateRunScriptCommand(GetAgentLaunchScript(tp), agentPath)
-
-		actions.On("RunCommand", expectedCmd).Return(conductor.RunCommandOutput{
-			Stdout:     "  4242 \n",
-			Stderr:     "",
-			ReturnCode: 0,
-		}, nil).Once()
-
-		port, err := launchAgent(tp, agentPath, true, locality.Target)
-		require.NoError(t, err)
-		assert.Equal(t, 4242, port)
-		actions.AssertExpectations(t)
-	})
+	port, err := launchAgent(tp, agentPath, locality.Target)
+	require.NoError(t, err)
+	assert.Equal(t, 4242, port)
+	actions.AssertExpectations(t)
 }
 
 func TestLaunchAgent_FailsRunCommandError(t *testing.T) {
@@ -258,38 +237,11 @@ func TestLaunchAgent_FailsRunCommandError(t *testing.T) {
 	agentPath := "/tmp/tools/agent"
 	expectedCmd := tp.Path.GenerateRunScriptCommand(GetAgentLaunchScript(tp), agentPath)
 
-	scriptErr := errors.New("script error")
-	actions.On("RunCommandAsAdmin", expectedCmd).Return(conductor.RunCommandOutput{}, scriptErr).Once()
-	actions.On("HasAdminPerms").Return(true, nil).Once()
-	actions.On("Stat", filepath.Join(agentPath, GetAgentLaunchScript(tp))).Return(nil, nil).Once()
-
-	_, err := launchAgent(tp, agentPath, false, locality.Target)
-	expectedMetadata := map[string]string{
-		"cmd":        GetAgentLaunchScript(tp),
-		"workingDir": filepath.ToSlash(agentPath),
-		"locality":   locality.Target,
-	}
-	expectedErr := message.New(message.EngineAgentConnectionCreatorRunLaunchCommand).WithCause(scriptErr).WithMetadata(expectedMetadata)
-	assert.Equal(t, expectedErr, err)
-	assert.NoError(t, message.ValidateMetadataPlaceholders(err))
-	actions.AssertExpectations(t)
-}
-
-func TestLaunchAgent_FailsRunCommandError_NonRoot(t *testing.T) {
-	actions := &conductormocks.MockTargetActions{}
-	tp := conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}, Actions: actions}
-
-	agentPath := "/tmp/tools/agent"
-	expectedCmd := tp.Path.GenerateRunScriptCommand(GetAgentLaunchScript(tp), agentPath)
-
-	// Fail with some random error
-	// classifyLaunchFailure() then should correctly handle the non-root mode
-	// and return the appropriate error
 	someErr := errors.New("some error")
 	actions.On("RunCommand", expectedCmd).Return(conductor.RunCommandOutput{}, someErr).Once()
 	actions.On("Stat", filepath.Join(agentPath, GetAgentLaunchScript(tp))).Return(nil, nil).Once()
 
-	_, err := launchAgent(tp, agentPath, true, locality.Target)
+	_, err := launchAgent(tp, agentPath, locality.Target)
 	expectedMetadata := map[string]string{
 		"cmd":        GetAgentLaunchScript(tp),
 		"workingDir": filepath.ToSlash(agentPath),
@@ -299,9 +251,7 @@ func TestLaunchAgent_FailsRunCommandError_NonRoot(t *testing.T) {
 	require.Equal(t, expectedErr, err)
 	require.NoError(t, message.ValidateMetadataPlaceholders(err))
 
-	// HasAdminPerms should NOT be called in non-root mode
 	actions.AssertExpectations(t)
-	actions.AssertNotCalled(t, "HasAdminPerms")
 }
 
 func TestLaunchAgent_FailsBadReturnCode(t *testing.T) {
@@ -311,16 +261,15 @@ func TestLaunchAgent_FailsBadReturnCode(t *testing.T) {
 	agentPath := "/tmp/tools/agent"
 	expectedCmd := tp.Path.GenerateRunScriptCommand(GetAgentLaunchScript(tp), agentPath)
 
-	actions.On("RunCommandAsAdmin", expectedCmd).Return(conductor.RunCommandOutput{
+	actions.On("RunCommand", expectedCmd).Return(conductor.RunCommandOutput{
 		Stdout:     "",
 		Stderr:     "script failed",
 		ReturnCode: 1,
 	}, nil).Once()
 
-	actions.On("HasAdminPerms").Return(true, nil).Once()
 	actions.On("Stat", filepath.Join(agentPath, GetAgentLaunchScript(tp))).Return(nil, nil).Once()
 
-	_, err := launchAgent(tp, agentPath, false, locality.Target)
+	_, err := launchAgent(tp, agentPath, locality.Target)
 	expectedMetadata := map[string]string{
 		"cmd":        GetAgentLaunchScript(tp),
 		"workingDir": filepath.ToSlash(agentPath),
@@ -328,42 +277,6 @@ func TestLaunchAgent_FailsBadReturnCode(t *testing.T) {
 		"locality":   locality.Target,
 	}
 	expectedErr := message.New(message.EngineAgentConnectionCreatorLaunchErrorCode).WithMetadata(expectedMetadata)
-	assert.Equal(t, expectedErr, err)
-	assert.NoError(t, message.ValidateMetadataPlaceholders(err))
-	actions.AssertExpectations(t)
-}
-
-func TestLaunchAgent_FailsNoAdminPerms(t *testing.T) {
-	actions := &conductormocks.MockTargetActions{}
-	tp := conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}, Actions: actions}
-
-	agentPath := "/tmp/tools/agent"
-	expectedCmd := tp.Path.GenerateRunScriptCommand(GetAgentLaunchScript(tp), agentPath)
-
-	actions.On("RunCommandAsAdmin", expectedCmd).Return(conductor.RunCommandOutput{}, errors.New("run error")).Once()
-	actions.On("HasAdminPerms").Return(false, nil).Once()
-
-	_, err := launchAgent(tp, agentPath, false, locality.Target)
-	expectedErr := message.New(message.EngineAgentConnectionCreatorInsufficientPrivileges).WithMetadata(map[string]string{"locality": locality.Target})
-	assert.Equal(t, expectedErr, err)
-	assert.NoError(t, message.ValidateMetadataPlaceholders(err))
-	actions.AssertExpectations(t)
-}
-
-func TestLaunchAgent_FailsAdminCheckError(t *testing.T) {
-	actions := &conductormocks.MockTargetActions{}
-	tp := conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}, Actions: actions}
-
-	agentPath := "/tmp/tools/agent"
-	expectedCmd := tp.Path.GenerateRunScriptCommand(GetAgentLaunchScript(tp), agentPath)
-
-	adminErr := errors.New("could not determine administrator or root privileges")
-
-	actions.On("RunCommandAsAdmin", expectedCmd).Return(conductor.RunCommandOutput{}, errors.New("run error")).Once()
-	actions.On("HasAdminPerms").Return(false, adminErr).Once()
-
-	_, err := launchAgent(tp, agentPath, false, locality.Target)
-	expectedErr := message.New(message.EngineAgentConnectionCreatorInsufficientPrivileges).WithMetadata(map[string]string{"locality": locality.Target}).WithCause(adminErr)
 	assert.Equal(t, expectedErr, err)
 	assert.NoError(t, message.ValidateMetadataPlaceholders(err))
 	actions.AssertExpectations(t)
@@ -378,16 +291,15 @@ func TestLaunchAgent_FailsScriptMissing(t *testing.T) {
 
 	statErr := errors.New("file does not exist")
 
-	actions.On("RunCommandAsAdmin", expectedCmd).Return(conductor.RunCommandOutput{
+	actions.On("RunCommand", expectedCmd).Return(conductor.RunCommandOutput{
 		Stdout:     "",
 		Stderr:     "not found",
 		ReturnCode: 1,
 	}, nil).Once()
 
-	actions.On("HasAdminPerms").Return(true, nil).Once()
 	actions.On("Stat", filepath.Join(agentPath, GetAgentLaunchScript(tp))).Return(nil, statErr).Once()
 
-	_, err := launchAgent(tp, agentPath, false, locality.Target)
+	_, err := launchAgent(tp, agentPath, locality.Target)
 	expectedMetadata := map[string]string{
 		"cmd":        GetAgentLaunchScript(tp),
 		"workingDir": filepath.ToSlash(agentPath),
@@ -411,16 +323,15 @@ func TestLaunchAgent_FailsHostScriptMissing(t *testing.T) {
 
 	statErr := errors.New("file does not exist")
 
-	actions.On("RunCommandAsAdmin", expectedCmd).Return(conductor.RunCommandOutput{
+	actions.On("RunCommand", expectedCmd).Return(conductor.RunCommandOutput{
 		Stdout:     "",
 		Stderr:     "not found",
 		ReturnCode: 1,
 	}, nil).Once()
 
-	actions.On("HasAdminPerms").Return(true, nil).Once()
 	actions.On("Stat", filepath.Join(agentPath, GetAgentLaunchScript(tp))).Return(nil, statErr).Once()
 
-	_, err := launchAgent(tp, agentPath, false, locality.Host)
+	_, err := launchAgent(tp, agentPath, locality.Host)
 	expectedMetadata := map[string]string{
 		"cmd":        GetAgentLaunchScript(tp),
 		"workingDir": filepath.ToSlash(agentPath),
@@ -457,13 +368,13 @@ func TestLaunchAgent_FailsInvalidPort(t *testing.T) {
 			agentPath := "/tmp/tools/agent"
 			expectedCmd := tp.Path.GenerateRunScriptCommand(GetAgentLaunchScript(tp), agentPath)
 
-			actions.On("RunCommandAsAdmin", expectedCmd).Return(conductor.RunCommandOutput{
+			actions.On("RunCommand", expectedCmd).Return(conductor.RunCommandOutput{
 				Stdout:     tc.stdout,
 				Stderr:     "",
 				ReturnCode: 0,
 			}, nil).Once()
 
-			port, err := launchAgent(tp, agentPath, false, locality.Target)
+			port, err := launchAgent(tp, agentPath, locality.Target)
 			assert.Zero(t, port)
 
 			var msgErr message.Message
@@ -491,7 +402,7 @@ func TestNewConnection_Success(t *testing.T) {
 
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp",
-		launch:   func(_ conductor.TargetPlatform, _ string, _ bool, _ string) (int, error) { return 4242, nil },
+		launch:   func(_ conductor.TargetPlatform, _ string, _ string) (int, error) { return 4242, nil },
 		connect: func(_ grpcconnection.GRPCConnector, _ int, _ string) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
 			return client, nil, nil
 		},
@@ -531,7 +442,7 @@ func TestNewConnection_RoutesDataAndControlTrafficSeparately(t *testing.T) {
 	var connectCalls int32
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp",
-		launch:   func(_ conductor.TargetPlatform, _ string, _ bool, _ string) (int, error) { return 4242, nil },
+		launch:   func(_ conductor.TargetPlatform, _ string, _ string) (int, error) { return 4242, nil },
 		connect: func(_ grpcconnection.GRPCConnector, _ int, _ string) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
 			switch atomic.AddInt32(&connectCalls, 1) {
 			case 1:
@@ -656,7 +567,7 @@ func TestNewConnection_TetherError(t *testing.T) {
 
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp",
-		launch:   func(_ conductor.TargetPlatform, _ string, _ bool, _ string) (int, error) { return 4242, nil },
+		launch:   func(_ conductor.TargetPlatform, _ string, _ string) (int, error) { return 4242, nil },
 		connect: func(_ grpcconnection.GRPCConnector, _ int, _ string) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
 			return client, nil, nil
 		},
@@ -687,7 +598,7 @@ func TestNewConnection_LoggerError(t *testing.T) {
 
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp",
-		launch:   func(_ conductor.TargetPlatform, _ string, _ bool, _ string) (int, error) { return 4242, nil },
+		launch:   func(_ conductor.TargetPlatform, _ string, _ string) (int, error) { return 4242, nil },
 		connect: func(_ grpcconnection.GRPCConnector, _ int, _ string) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error) {
 			return client, nil, nil
 		},
@@ -909,7 +820,7 @@ func TestNewConnection_FailsWhenToolsPathDeletedAfterPrepare(t *testing.T) {
 
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp/tools",
-		launch: func(_ conductor.TargetPlatform, agentPath string, _ bool, _ string) (int, error) {
+		launch: func(_ conductor.TargetPlatform, agentPath string, _ string) (int, error) {
 			assert.Empty(t, agentPath)
 			return 0, assert.AnError
 		},
@@ -941,7 +852,7 @@ func TestNewConnection_FailsWhenToolsPathBecomesUnwritableAfterPrepare(t *testin
 
 	p := &agentConnectionCreator{
 		toolsDir: "/tmp/tools",
-		launch: func(_ conductor.TargetPlatform, agentPath string, _ bool, _ string) (int, error) {
+		launch: func(_ conductor.TargetPlatform, agentPath string, _ string) (int, error) {
 			assert.Empty(t, agentPath)
 			return 0, assert.AnError
 		},

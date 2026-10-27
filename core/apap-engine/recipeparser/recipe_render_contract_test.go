@@ -19,6 +19,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe/runtime"
@@ -71,10 +72,11 @@ func TestCodeHotspotsResolvesAndroidToolBundles(t *testing.T) {
 	assert.ElementsMatch(t, []toolBundleIdentity{
 		{Name: "sl-record", Locality: deploymentsupport.DeploymentLocalityTarget},
 		{Name: "sl-analyze", Locality: deploymentsupport.DeploymentLocalityHost},
+		{Name: "parquet-to-json", Locality: deploymentsupport.DeploymentLocalityHost},
 	}, identities)
 }
 
-func TestCodeHotspotsResolvesJavaConverterBundle(t *testing.T) {
+func TestCodeHotspotsResolvesCounterConverterWithOrWithoutJava(t *testing.T) {
 	recipePath := filepath.Join("..", "..", "..", "core", "apap-cli", "recipes", "code_hotspots.js")
 	recipeData, err := os.ReadFile(recipePath)
 	require.NoError(t, err)
@@ -117,17 +119,18 @@ func TestCodeHotspotsResolvesJavaConverterBundle(t *testing.T) {
 					assert.Equal(t, deploymentsupport.DeploymentLocalityTarget, bundle.Locality)
 				}
 			}
-			assert.Equal(t, enabled, found, "Java collection must deploy the recording-index converter")
+			assert.True(t, found, "Counter verification requires the converter even without Java collection")
 		})
 	}
 }
 
 func TestCPUMicroarchitectureOptionsAreEmptyWithoutTelemetry(t *testing.T) {
-	recipeData, err := os.ReadFile(filepath.Join("..", "..", "..", "core/apap-cli/recipes/cpu_microarchitecture.js"))
+	recipePath := filepath.Join("..", "..", "..", "core/apap-cli/recipes/cpu_microarchitecture.js")
+	recipeData, err := os.ReadFile(recipePath)
 	require.NoError(t, err)
 
 	parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
-	recipeDefinition, err := parser.ParseRecipe("core/apap-cli/recipes/cpu_microarchitecture.js", string(recipeData))
+	recipeDefinition, err := parser.ParseRecipe(recipePath, string(recipeData))
 	require.NoError(t, err)
 	require.Len(t, recipeDefinition.ParameterOptionsStages, 1)
 
@@ -192,9 +195,8 @@ func TestCodeHotspotsParamsInToolConfigs(t *testing.T) {
 			})
 			execCtx.On("ToolVersions").Return(recipeCtx.ToolVersions)
 			execCtx.On("ToolsDir").Return("/data/local/tmp/ArmPerformix/tools")
-			execCtx.On("IsFullCaptureSupportEnabled").Return(false)
-			execCtx.On("IsNeoprofTimelineEnabled").Return(false)
-			execCtx.On("IsJfrCaptureEnabled").Return(true)
+
+			execCtx.featureFlags.JfrCapture = true
 			hasExpectedParams := mock.MatchedBy(func(contexts []tool.IntegrationContext) bool {
 				if len(contexts) != 1 {
 					return false
@@ -336,6 +338,7 @@ func TestCodeHotspotsIncludesJavaFlightRecorderVisualisations(t *testing.T) {
 		{Path: javaParquetRoot + "/metadata/jfr_recordings.parquet"},
 		{Path: javaParquetRoot + "/events/jfr_jvm_information.parquet"},
 		{Path: javaParquetRoot + "/events/jfr_initial_system_property.parquet"},
+		{Path: javaParquetRoot + "/events/jvm_flags.parquet"},
 		{Path: javaParquetRoot + "/events/jfr_gc_heap_summary.parquet"},
 		{Path: javaParquetRoot + "/events/jfr_garbage_collection.parquet"},
 	}}
@@ -396,7 +399,7 @@ func TestCodeHotspotsIncludesJavaFlightRecorderVisualisations(t *testing.T) {
 
 	jvmInfo := widgetsByID["jvm_info"]
 	assert.Equal(t, "java_analysis_summary", jvmInfo.Type)
-	assert.Equal(t, "JVM Info", jvmInfo.Title)
+	assert.Equal(t, "JVM Internals", jvmInfo.Title)
 
 	timeline := widgetsByID["timeline"]
 	assert.Equal(t, "timeline", timeline.Type)
@@ -414,11 +417,12 @@ func TestCodeHotspotsIncludesJavaFlightRecorderVisualisations(t *testing.T) {
 }
 
 func TestCPUMicroarchitectureReadinessFailsWithoutTelemetry(t *testing.T) {
-	recipeData, err := os.ReadFile(filepath.Join("..", "..", "..", "core/apap-cli/recipes/cpu_microarchitecture.js"))
+	recipePath := filepath.Join("..", "..", "..", "core/apap-cli/recipes/cpu_microarchitecture.js")
+	recipeData, err := os.ReadFile(recipePath)
 	require.NoError(t, err)
 
 	parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
-	recipeDefinition, err := parser.ParseRecipe("core/apap-cli/recipes/cpu_microarchitecture.js", string(recipeData))
+	recipeDefinition, err := parser.ParseRecipe(recipePath, string(recipeData))
 	require.NoError(t, err)
 	require.Len(t, recipeDefinition.ReadyStages, 1)
 
@@ -488,8 +492,7 @@ func TestCPUMicroarchitectureFiltersInitialAnalysisToFirstSupportedCoreType(t *t
 	})
 	executionContext.On("ToolVersions").Return(parsedRecipe.ToolVersions)
 	executionContext.On("ToolsDir").Return(t.TempDir())
-	executionContext.On("IsFullCaptureSupportEnabled").Return(false)
-	executionContext.On("IsNeoprofTimelineEnabled").Return(false)
+
 	executionContext.On("LogInfo", mock.Anything, mock.Anything).Return()
 
 	var configuredCoreNumbers []string
@@ -570,8 +573,6 @@ func TestInstructionMixFiltersInitialAnalysisToFirstSupportedCoreType(t *testing
 	})
 	executionContext.On("ToolVersions").Return(parsedRecipe.ToolVersions)
 	executionContext.On("ToolsDir").Return(t.TempDir())
-	executionContext.On("IsFullCaptureSupportEnabled").Return(false)
-	executionContext.On("IsNeoprofTimelineEnabled").Return(false)
 
 	var configuredCoreNumbers []string
 	captureCoreNumbers := func(arguments mock.Arguments) {
@@ -890,8 +891,7 @@ func executeCPUMicroarchitectureReadiness(t *testing.T, opts cpuMicroarchitectur
 	executionContext := newMockExecutionContext(t, recipeContext, targetInfo)
 	executionContext.On("ToolVersions").Return(recipeDefinition.ToolVersions)
 	executionContext.On("ToolsDir").Return(t.TempDir())
-	executionContext.On("IsFullCaptureSupportEnabled").Return(false)
-	executionContext.On("IsNeoprofTimelineEnabled").Return(false)
+
 	executionContext.On("LogInfo", mock.Anything, mock.Anything).Return()
 	executionContext.
 		On("ProbeToolsFromIntegrations", mock.Anything, mock.Anything, mock.Anything).
@@ -963,7 +963,7 @@ func commandMatching(fragment string, runAsAdmin bool) interface{} {
 	})
 }
 
-func TestRenderingTelemetryReadinessWarnings(t *testing.T) {
+func TestRenderingTelemetryReadinessAdvice(t *testing.T) {
 	tests := []struct {
 		name                string
 		recipeFile          string
@@ -977,7 +977,7 @@ func TestRenderingTelemetryReadinessWarnings(t *testing.T) {
 			name:                "code hotspots warns for unsupported Linux CPU",
 			recipeFile:          "core/apap-cli/recipes/code_hotspots.js",
 			osFamily:            "Linux",
-			cpuName:             "Cortex-A76",
+			cpuName:             "Unsupported-CPU",
 			expectedStatus:      recipe.ReadyStatusWarning,
 			expectedMessageCode: "recipes.code_hotspots.TELEMETRY_SPECIFICATION_UNAVAILABLE",
 		},
@@ -985,7 +985,7 @@ func TestRenderingTelemetryReadinessWarnings(t *testing.T) {
 			name:                "code hotspots warns for unsupported Windows CPU",
 			recipeFile:          "core/apap-cli/recipes/code_hotspots.js",
 			osFamily:            "Windows",
-			cpuName:             "Cortex-A76",
+			cpuName:             "Unsupported-CPU",
 			expectedStatus:      recipe.ReadyStatusWarning,
 			expectedMessageCode: "recipes.code_hotspots.TELEMETRY_SPECIFICATION_UNAVAILABLE",
 		},
@@ -997,21 +997,21 @@ func TestRenderingTelemetryReadinessWarnings(t *testing.T) {
 			expectedStatus: recipe.ReadyStatusReady,
 		},
 		{
-			name:                "dynamic instruction mix warns for unsupported CPU",
+			name:                "dynamic instruction mix fails for unsupported CPU",
 			recipeFile:          "core/apap-cli/recipes/instruction_mix.js",
 			parameters:          map[string]any{"mode": "dynamic"},
 			osFamily:            "Linux",
-			cpuName:             "Cortex-A76",
-			expectedStatus:      recipe.ReadyStatusWarning,
+			cpuName:             "Unsupported-CPU",
+			expectedStatus:      recipe.ReadyStatusError,
 			expectedMessageCode: "recipes.instruction_mix.TELEMETRY_SPECIFICATION_UNAVAILABLE",
 		},
 		{
-			name:                "combined instruction mix warns for unsupported CPU",
+			name:                "combined instruction mix fails for unsupported CPU",
 			recipeFile:          "core/apap-cli/recipes/instruction_mix.js",
 			parameters:          map[string]any{"mode": "both"},
 			osFamily:            "Linux",
-			cpuName:             "Cortex-A76",
-			expectedStatus:      recipe.ReadyStatusWarning,
+			cpuName:             "Unsupported-CPU",
+			expectedStatus:      recipe.ReadyStatusError,
 			expectedMessageCode: "recipes.instruction_mix.TELEMETRY_SPECIFICATION_UNAVAILABLE",
 		},
 		{
@@ -1019,7 +1019,7 @@ func TestRenderingTelemetryReadinessWarnings(t *testing.T) {
 			recipeFile:     "core/apap-cli/recipes/instruction_mix.js",
 			parameters:     map[string]any{"mode": "static"},
 			osFamily:       "Linux",
-			cpuName:        "Cortex-A76",
+			cpuName:        "Unsupported-CPU",
 			expectedStatus: recipe.ReadyStatusReady,
 		},
 		{
@@ -1037,7 +1037,7 @@ func TestRenderingTelemetryReadinessWarnings(t *testing.T) {
 			readiness := executeRecipeReadiness(t, tt.recipeFile, tt.parameters, &target.Description{
 				Os:             target.OsInfo{OSFamily: tt.osFamily},
 				PrimaryCPUName: tt.cpuName,
-			})
+			}, true)
 
 			assert.Equal(t, tt.expectedStatus, readiness.Status)
 			if tt.expectedMessageCode == "" {
@@ -1047,7 +1047,7 @@ func TestRenderingTelemetryReadinessWarnings(t *testing.T) {
 
 			require.Len(t, readiness.Advice, 1)
 			assert.Empty(t, readiness.Advice[0].ToolName)
-			assert.Equal(t, recipe.AdviceSeverityWarning, readiness.Advice[0].AdviceSeverity)
+			assert.Equal(t, tt.expectedStatus, readiness.Advice[0].AdviceSeverity)
 			assert.Equal(t, tt.expectedMessageCode, readiness.Advice[0].AdviceMessage.Code())
 			assert.Equal(t, map[string]string{"cpuName": tt.cpuName}, readiness.Advice[0].AdviceMessage.Metadata())
 		})
@@ -1059,6 +1059,8 @@ func executeRecipeReadiness(
 	recipeFile string,
 	parameterInputs map[string]any,
 	targetInfo *target.Description,
+	probeTools bool,
+	probeAdvice ...tool.ProbeAdvice,
 ) recipe.ReadyOutput {
 	t.Helper()
 
@@ -1086,22 +1088,27 @@ func executeRecipeReadiness(
 		ToolVersions:     recipeDefinition.ToolVersions,
 	}
 	executionContext := newMockExecutionContext(t, recipeContext, targetInfo)
-	executionContext.On("ToolVersions").Return(recipeDefinition.ToolVersions)
-	executionContext.On("ToolsDir").Return(t.TempDir())
-	executionContext.On("IsFullCaptureSupportEnabled").Return(false)
-	executionContext.On("IsNeoprofTimelineEnabled").Return(false)
+	if probeTools {
+		executionContext.On("ToolVersions").Return(recipeDefinition.ToolVersions)
+		executionContext.On("ToolsDir").Return(t.TempDir())
 
-	probeResultCount := 1
-	if mode, exists := boundParameters.FindValue("mode"); exists && mode == "both" {
-		probeResultCount = 2
+		probeResultCount := 1
+		if mode, exists := boundParameters.FindValue("mode"); exists && mode == "both" {
+			probeResultCount = 2
+		}
+		probeResults := make([]tool.ProbeResult, probeResultCount)
+		for i := range probeResults {
+			probeResults[i] = tool.ProbeResult{Available: true, Capabilities: map[string]any{}}
+		}
+		probeResults[0].Advice = probeAdvice
+		executionContext.
+			On("ProbeToolsFromIntegrations", mock.Anything, mock.Anything, mock.Anything).
+			Return(probeResults, []error(nil))
+
+		if recipeDefinition.Name == "cpu_microarchitecture" {
+			executionContext.On("LogInfo", mock.Anything, mock.Anything).Return()
+		}
 	}
-	probeResults := make([]tool.ProbeResult, probeResultCount)
-	for i := range probeResults {
-		probeResults[i] = tool.ProbeResult{Available: true, Capabilities: map[string]any{}}
-	}
-	executionContext.
-		On("ProbeToolsFromIntegrations", mock.Anything, mock.Anything, mock.Anything).
-		Return(probeResults, []error(nil))
 
 	readinessCollector := &runtime.ReadinessCollector{}
 	stageContext := &recipe.StageContext{
@@ -1699,9 +1706,9 @@ func executeFilteredRenderStageWithModel(
 				BoundRenderParams: &boundRenderParams,
 				RecipeMetadata:    recipe.RecipeMetadata{Name: recipeProp.Name},
 			},
-			RunDescriptions:    []*run.RunDescription{description},
-			RunModels:          []cdf.ModelView{runModel},
-			RerenderingEnabled: rerenderingEnabled,
+			RunDescriptions: []*run.RunDescription{description},
+			RunModels:       []cdf.ModelView{runModel},
+			FeatureFlags:    featureflags.Flags{Rerendering: rerenderingEnabled},
 		},
 	}
 
@@ -1742,8 +1749,8 @@ func executeCPUMicroarchitectureCoreTypeRenderStage(
 				Parameters: map[string]any{"mode": "dynamic", "rich_data_capture": richDataCapture},
 				RunResult:  string(run.RecipeSuccess),
 			}},
-			RunModels:          []cdf.ModelView{runModel},
-			RerenderingEnabled: true,
+			RunModels:    []cdf.ModelView{runModel},
+			FeatureFlags: featureflags.Flags{Rerendering: true},
 		},
 	}
 
@@ -1784,8 +1791,8 @@ func executeInstructionMixCoreTypeRenderStage(
 				Parameters: map[string]any{"mode": "dynamic", "rich_data_capture": richDataCapture},
 				RunResult:  string(run.RecipeSuccess),
 			}},
-			RunModels:          []cdf.ModelView{runModel},
-			RerenderingEnabled: true,
+			RunModels:    []cdf.ModelView{runModel},
+			FeatureFlags: featureflags.Flags{Rerendering: true},
 		},
 	}
 

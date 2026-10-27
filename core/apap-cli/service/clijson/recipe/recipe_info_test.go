@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 func TestConvertRecipeStruct(t *testing.T) {

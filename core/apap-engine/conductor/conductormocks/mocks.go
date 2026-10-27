@@ -78,8 +78,3 @@ func (m *MockTargetActions) RunCommandAsAdmin(cmd string) (conductor.RunCommandO
 	mockArgs := m.Called(cmd)
 	return mockArgs.Get(0).(conductor.RunCommandOutput), mockArgs.Error(1)
 }
-
-func (m *MockTargetActions) HasAdminPerms() (bool, error) {
-	mockArgs := m.Called()
-	return mockArgs.Bool(0), mockArgs.Error(1)
-}

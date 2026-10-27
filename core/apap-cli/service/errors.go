@@ -9,7 +9,7 @@ import (
 
 	"google.golang.org/grpc/status"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/errorsproto"
+	"github.com/Arm-Debug/apap-cli/api/errorsproto"
 )
 
 type GRPCErrors struct{}

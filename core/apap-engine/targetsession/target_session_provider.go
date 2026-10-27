@@ -17,11 +17,11 @@ import (
 )
 
 // NewTargetSessionProvider creates a new default TargetSessionProvider.
-func NewTargetSessionProvider(toolsDir string, rootWorkerEnabled bool, adbRunner conductor.ADBRunner) TargetSessionProvider {
+func NewTargetSessionProvider(toolsDir string, adbRunner conductor.ADBRunner) TargetSessionProvider {
 	return &targetSessionProvider{
 		toolsDir:               toolsDir,
 		adbRunner:              adbRunner,
-		agentConnectionCreator: agent.NewConnectionCreator(toolsDir, rootWorkerEnabled),
+		agentConnectionCreator: agent.NewConnectionCreator(toolsDir),
 	}
 }
 

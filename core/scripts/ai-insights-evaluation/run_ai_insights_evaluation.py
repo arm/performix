@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -25,7 +26,7 @@ DASHBOARD_REPORT_NAME = "ai-insights-performance-dashboard.json"
 def reporting_dir_from_pytest_args(pytest_args: list[str]) -> Path:
     """Return the reporting directory associated with the pytest results directory."""
     parser = ArgumentParser(add_help=False, allow_abbrev=False)
-    parser.add_argument("--ai-results-dir")
+    parser.add_argument("--ai-results-dir", default=os.environ.get("AI_INSIGHTS_RESULTS_DIR"))
     options, _ = parser.parse_known_args(pytest_args)
     if options.ai_results_dir is None:
         return LOCAL_REPORTING_DIR
@@ -55,15 +56,6 @@ def run_evaluation(
     """Run pytest, generate reports when JUnit XML exists, and preserve failure status."""
     python = python_executable or sys.executable
     reporting_dir = reporting_dir.resolve()
-    junit_xml = reporting_dir / JUNIT_XML_NAME
-    payload_dir = reporting_dir / "payload"
-    dashboard_report = reporting_dir / DASHBOARD_REPORT_NAME
-
-    # Remove previous outputs so an early pytest failure cannot produce a report
-    # from stale JUnit XML. Keep the root directory to support reruns on filesystems
-    # where removing a recently used directory can fail, such as Windows via WSL.
-    clear_reporting_dir(reporting_dir)
-
     pytest_command = [
         python,
         "-m",
@@ -71,18 +63,28 @@ def run_evaluation(
         TEST_MODULE.name,
         "--verbose",
         *pytest_args,
-        f"--junitxml={junit_xml}",
-        "-o",
-        "junit_family=legacy",
     ]
-    pytest_result = subprocess.run(pytest_command, cwd=HARNESS_DIR)
+    # A requested collection/help run is read-only and does not generate evaluation reports.
+    if any(arg in ("--collect-only", "--co", "--help", "-h", "--version") for arg in pytest_args):
+        return subprocess.run([*pytest_command, "-n", "0"], cwd=HARNESS_DIR).returncode
+    # Remove previous outputs so an early pytest failure cannot produce a report
+    # from stale JUnit XML. Keep the directory itself to avoid removal failures
+    # when rerunning on filesystems such as Windows via WSL.
+    clear_reporting_dir(reporting_dir)
+    junit_xml = reporting_dir / JUNIT_XML_NAME
+    payload_dir = reporting_dir / "payload"
+    dashboard_report = reporting_dir / DASHBOARD_REPORT_NAME
+    pytest_status = subprocess.run(
+        [*pytest_command, f"--junitxml={junit_xml}", "-o", "junit_family=legacy"],
+        cwd=HARNESS_DIR,
+    ).returncode
 
     if not junit_xml.is_file():
         print(
             f"AI Insights performance report not generated: pytest did not create {junit_xml}",
             file=sys.stderr,
         )
-        return pytest_result.returncode or 1
+        return pytest_status or 1
 
     report_result = subprocess.run(
         [
@@ -102,8 +104,8 @@ def run_evaluation(
         print(f"  Dashboard data: {dashboard_report}")
 
     # A report-generation result must not hide the more important pytest result.
-    if pytest_result.returncode != 0:
-        return pytest_result.returncode
+    if pytest_status != 0:
+        return pytest_status
     return report_result.returncode
 
 

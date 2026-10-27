@@ -49,6 +49,8 @@ func (r *ReadyStageAPIExposer) ExposeAPI(api RecipeAPI, jsContext *goja.Object) 
 		{jsName: "runCommand", fn: api.runCommand},
 		{jsName: "isFullCaptureSupportEnabled", fn: api.isFullCaptureSupportEnabled},
 		{jsName: "isJfrCaptureEnabled", fn: api.isJfrCaptureEnabled},
+		{jsName: "isNeoprofSystemUtilizationEnabled", fn: api.isNeoprofSystemUtilizationEnabled},
+		{jsName: "isNeoprofTimelineEnabled", fn: api.isNeoprofTimelineEnabled},
 		// UPDATE jsdocs (recipes/docs/jsdocs.js) when adding or changing any API functions
 	}
 	for _, f := range funcList {
@@ -69,6 +71,7 @@ func (r *RunStageAPIExposer) ExposeAPI(api RecipeAPI, jsContext *goja.Object) er
 		{jsName: "getParameter", fn: api.getParameter},
 		{jsName: "getTool", fn: api.getTool},
 		{jsName: "runTools", fn: api.runTools},
+		{jsName: "probeTools", fn: api.probeTools},
 		{jsName: "logInfo", fn: api.logInfo},
 		{jsName: "logWarn", fn: api.logWarn},
 		{jsName: "writeUserMessage", fn: api.writeUserMessage},
@@ -79,6 +82,8 @@ func (r *RunStageAPIExposer) ExposeAPI(api RecipeAPI, jsContext *goja.Object) er
 		{jsName: "runCommand", fn: api.runCommand},
 		{jsName: "isFullCaptureSupportEnabled", fn: api.isFullCaptureSupportEnabled},
 		{jsName: "isJfrCaptureEnabled", fn: api.isJfrCaptureEnabled},
+		{jsName: "isNeoprofSystemUtilizationEnabled", fn: api.isNeoprofSystemUtilizationEnabled},
+		{jsName: "isNeoprofTimelineEnabled", fn: api.isNeoprofTimelineEnabled},
 		// UPDATE jsdocs (recipes/docs/jsdocs.js) when adding or changing any API functions
 	}
 	for _, f := range funcList {

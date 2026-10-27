@@ -17,10 +17,10 @@ ${CLI_BIN_DIR}  ${CURDIR}${/}..${/}..${/}..${/}apap-cli
 
 
 *** Test Cases ***
-This Robot Test Suite Covers All Registered MCP Tools
-  [Documentation]  Verify that every registered Performix MCP tool has smoke coverage.
+This Robot Test Suite Accounts For All Registered MCP Tools
+  [Documentation]  Verify that every registered Performix MCP tool has smoke coverage or an explicit exemption.
   Given MCP Client Smoke Tests Are Prepared
-  ${succeeded} =  When Registered MCP Tools Have Smoke Coverage
+  ${succeeded} =  When Registered MCP Tools Are Accounted For
   Then Should Be True  ${succeeded}
 
 Codex Can Call Add Target
@@ -63,6 +63,18 @@ Codex Can Call List Runs
   [Documentation]  Verify that Codex can call list_runs and consume its result.
   Given MCP Client Smoke Tests Are Prepared
   ${succeeded} =  When Codex Can Call List Runs
+  Then Should Be True  ${succeeded}
+
+Codex Can Update Runs
+  [Documentation]  Set and clear a run's group and host source paths, and verify their stored values.
+  Given MCP Client Smoke Tests Are Prepared
+  ${succeeded} =  When Codex Can Update Runs
+  Then Should Be True  ${succeeded}
+
+Codex Can Export And Import A Run
+  [Documentation]  Export a captured run, import its archive, and verify that both runs are listed.
+  Given MCP Client Smoke Tests Are Prepared
+  ${succeeded} =  When Codex Can Export And Import A Run
   Then Should Be True  ${succeeded}
 
 Codex Can Manage A Render Session

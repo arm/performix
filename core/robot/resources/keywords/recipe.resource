@@ -231,11 +231,11 @@ Check Advice Messages Contain When Target Is Aarch64
 Apply Default Recipe Timeout
   [Documentation]  Append the default recipe timeout unless the supplied args already specify one.
   [Arguments]  ${args}
-  ${has_timeout} =  Evaluate  '--timeout' in '''${args}'''
+  ${has_timeout} =  Evaluate  '--timeout' in $args
   IF  ${has_timeout}  RETURN  ${args}
   ${default_timeout} =  Get Default Recipe Timeout
   ${normalized_args} =  Strip String  ${args}
-  IF  '${normalized_args}' == ''  RETURN  --timeout ${default_timeout}
+  IF  $normalized_args == ''  RETURN  --timeout ${default_timeout}
   ${args_with_timeout} =  Catenate  SEPARATOR=${SPACE}  ${normalized_args}  --timeout ${default_timeout}
   RETURN  ${args_with_timeout}
 
@@ -286,11 +286,10 @@ Start Code Hotspots Recipe
   Start ATPerf CLI Command  recipe run code_hotspots ${timed_args}
 
 Stop Run
-  [Documentation]  Stop a run by writing "s" to the given process's stdin
+  [Documentation]  Stop a run by writing "s" to the given process's stdin and wait for it to finish.
   [Arguments]  ${process}
   Write To Process Stdin  ${process}  "s"
   Wait For Process And Log  ${process}
-  The Last Command Succeeded
 
 Cancel Run
   [Documentation]  Cancel a run by writing "q" to the given process's stdin

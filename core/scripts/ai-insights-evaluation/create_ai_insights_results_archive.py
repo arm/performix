@@ -6,14 +6,32 @@
 """
 Create the persistent AI Insights evaluation results archive.
 CI archive destination on Artifactory: its.performix-ai-insights/test-artifacts/
+
+The manifest identifies Pathways test cases and only Pathways evidence
+files accepted by is_pathways_artifact are retained.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+from itertools import chain
 from pathlib import Path
 from typing import NamedTuple
 from zipfile import ZIP_DEFLATED, ZipFile
+
+from pathways_artifacts import (
+    is_pathways_artifact,
+    pathways_attempt_directory_index,
+    pathways_test_ids,
+    result_path_contains_symlink,
+)
+
+
+EVIDENCE_FILE_PATTERNS = (
+    "*/*/attempts/*/*",
+    "invocations/*/*/*/attempts/*/*",
+)
 
 
 class ArchiveEntry(NamedTuple):
@@ -27,6 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--junit-xml", required=True, type=Path)
     parser.add_argument("--dashboard-report", required=True, type=Path)
     parser.add_argument("--results-dir", required=True, type=Path)
+    parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--run-artifact-base", required=True, type=Path)
     return parser.parse_args()
 
@@ -40,18 +59,24 @@ def report_entries(junit_xml: Path, dashboard_report: Path) -> list[ArchiveEntry
     return entries
 
 
-def attempt_result_entries(results_dir: Path) -> list[ArchiveEntry]:
-    """Collect files written directly into each test attempt directory."""
-    entries = []
+def attempt_result_entries(results_dir: Path, manifest: dict) -> list[ArchiveEntry]:
+    """Collect retained direct evidence for every selected test attempt and invocation."""
     if not results_dir.is_dir():
-        return entries
+        return []
 
     # Selecting only direct children of an attempt excludes generated directories
     # such as codex_home and codex_workspace, as well as imported source inputs.
-    for result_file in results_dir.glob("*/*/attempts/*/*"):
-        if not result_file.is_file():
-            continue
+    pathways_ids = pathways_test_ids(manifest)
+    entries = []
+    for result_file in chain.from_iterable(
+        results_dir.glob(pattern) for pattern in EVIDENCE_FILE_PATTERNS
+    ):
         relative_path = result_file.relative_to(results_dir)
+        if not result_file.is_file() or result_path_contains_symlink(results_dir, relative_path):
+            continue
+        if (pathways_attempt_directory_index(relative_path, pathways_ids) is not None
+                and not is_pathways_artifact(result_file.name)):
+            continue
         entries.append(ArchiveEntry(result_file, Path("results") / relative_path))
     return entries
 
@@ -73,7 +98,8 @@ def prerecorded_metadata_entries(run_artifact_base: Path) -> list[ArchiveEntry]:
 def collect_archive_entries(args: argparse.Namespace) -> list[ArchiveEntry]:
     """Collect and sort every file to store in the persistent archive."""
     entries = report_entries(args.junit_xml, args.dashboard_report)
-    entries.extend(attempt_result_entries(args.results_dir))
+    manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+    entries.extend(attempt_result_entries(args.results_dir, manifest))
     entries.extend(prerecorded_metadata_entries(args.run_artifact_base))
     entries.sort(key=lambda entry: entry.archive_path.as_posix())
     return entries

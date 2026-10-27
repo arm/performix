@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 // findMessageByCode is a helper function that searches an error chain via

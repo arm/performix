@@ -330,6 +330,41 @@ func TestSQLRendererCreatesViewFromDatasourceTablePlaceholder(t *testing.T) {
 	require.Equal(t, []int{7, 9}, values)
 }
 
+func TestSQLRendererMaterializesQueryOnce(t *testing.T) {
+	model := cdf.NewOnDiskModel(t.TempDir(), &cdf.Manifest{}, cdf.Metadata{})
+	session := newSQLTestSession(t, model, "run1")
+	_, err := session.Database().Conn.ExecContext(context.Background(),
+		`CREATE TABLE source (value INTEGER); INSERT INTO source VALUES (7), (9)`)
+	require.NoError(t, err)
+
+	renderer := &SQLRenderer{}
+	require.NoError(t, renderer.Configure(&render.Config{
+		Identity: render.RendererIdentity{Name: "SQLRenderer"},
+		JSON: `{
+			"sql": "SELECT SUM(value) AS total FROM source",
+			"materialize": true,
+			"output": {
+				"name": "result",
+				"component_type": {"name": "flat_table", "schema_version": "1.0"}
+			}
+		}`,
+	}))
+	require.NoError(t, renderer.Initialize(session, nil))
+
+	// Removing the source proves later queries use the stored result.
+	_, err = session.Database().Conn.ExecContext(context.Background(), `DROP TABLE source`)
+	require.NoError(t, err)
+	tableName := session.Manifest().Entries()[0].TableName()
+	for range 2 {
+		var total int
+		//nolint:gosec
+		err = session.Database().Conn.QueryRowContext(context.Background(),
+			`SELECT total FROM `+sqlDoubleQuoteString(tableName)).Scan(&total)
+		require.NoError(t, err)
+		require.Equal(t, 16, total)
+	}
+}
+
 func TestSQLRendererCreatesViewFromRunPathPlaceholder(t *testing.T) {
 	tmpDir := t.TempDir()
 	csvPath := filepath.Join(tmpDir, "inputs", "numbers.csv")

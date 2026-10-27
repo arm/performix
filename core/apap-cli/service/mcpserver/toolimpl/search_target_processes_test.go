@@ -18,8 +18,8 @@ import (
 	targetservice "github.com/Arm-Debug/apap-cli/apap-cli/service/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func TestSearchTargetProcessesTool(t *testing.T) {

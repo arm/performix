@@ -18,8 +18,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
-	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/api/mocks"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 // --- Tests ---

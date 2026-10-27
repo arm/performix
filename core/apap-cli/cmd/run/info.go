@@ -22,7 +22,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/run"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 var InfoCmd = NewInfoCmd(client.NewAutostartClient(), run.InfoService{})

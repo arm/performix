@@ -12,10 +12,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/test"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -28,6 +30,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
@@ -45,10 +48,10 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
 	"github.com/Arm-Debug/apap-cli/apap-engine/userdirs"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/api/mocks"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-compatibility/compatibility"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 type MockSleeper struct {
@@ -214,8 +217,12 @@ func TestGetVersion(t *testing.T) {
 
 	version, err := server.GetVersion(context.Background(), &emptypb.Empty{})
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotEqual(t, "0.0.0-dev", version.GetVersion())
+
+	// SemVer regex from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
+	const semverPattern = `^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`
+	assert.Regexp(t, semverPattern, version.GetVersion())
 }
 
 func TestSetAdbPath(t *testing.T) {
@@ -379,30 +386,45 @@ var recipe = {
 		})
 	}
 
-	t.Run("keeps explicit and mapped values authoritative on the second execution", func(t *testing.T) {
+	t.Run("keeps explicit values authoritative", func(t *testing.T) {
 		request := &apapproto.PrepareRenderRequest{
 			Content: &apapproto.ContentSelection{Runs: []*apapproto.RunId{{Value: runID.Value}}},
 			RenderParameters: map[string]*structpb.Value{
+				"mode":   structpb.NewStringValue("manual"),
 				"choice": structpb.NewStringValue("explicit"),
-			},
-			VisualizationParameters: map[string]*structpb.Value{
-				"view.mode":   structpb.NewStringValue("mapped"),
-				"view.choice": structpb.NewStringValue("mapped-choice"),
 			},
 		}
 
-		first, err := server.PrepareRender(context.Background(), request)
-		require.NoError(t, err)
-		second, err := server.PrepareRender(context.Background(), request)
+		response, err := server.PrepareRender(context.Background(), request)
 		require.NoError(t, err)
 
-		config := first.Renderers[0].GetConfig().GetFields()
-		assert.Equal(t, "mapped", config["mode"].GetStringValue())
+		config := response.Renderers[0].GetConfig().GetFields()
+		assert.Equal(t, "manual", config["mode"].GetStringValue())
 		assert.Equal(t, "explicit", config["choice"].GetStringValue())
-		assert.Equal(t, "mapped", first.RenderParameters["mode"].GetValue().GetStringValue())
-		assert.Equal(t, "explicit", first.RenderParameters["choice"].GetValue().GetStringValue())
-		assert.Equal(t, first, second)
+		assert.Equal(t, "manual", response.RenderParameters["mode"].GetValue().GetStringValue())
+		assert.Equal(t, "explicit", response.RenderParameters["choice"].GetValue().GetStringValue())
+		require.Len(t, response.Visualizations, 1)
+		assert.Equal(t, map[string]string{"mode": "mode", "choice": "choice"}, response.Visualizations[0].GetParameterBindings())
 	})
+}
+
+func TestPrepareRender_RunsRenderStageOnce(t *testing.T) {
+	renderStageCalls := 0
+	server, runID := setupPrepareRenderServer(t, func(_ map[string]any) recipe.RenderOutput {
+		renderStageCalls++
+		return recipe.RenderOutput{}
+	})
+
+	request := &apapproto.PrepareRenderRequest{
+		Content: &apapproto.ContentSelection{
+			Runs: []*apapproto.RunId{{Value: runID.Value}},
+		},
+	}
+
+	resp, err := server.PrepareRender(context.Background(), request)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, 1, renderStageCalls)
 }
 
 func TestPrepareRender_ConvertsStringRenderParameterNumber(t *testing.T) {
@@ -581,44 +603,6 @@ func TestPrepareRender_KeepsNumberLikeStringRenderParameterArray(t *testing.T) {
 	}), threadIDsDetail.GetValue())
 }
 
-func TestPrepareRender_IncludesRenderAndVisualizationParameters(t *testing.T) {
-	server, runID := setupPrepareRenderServer(t, func(renderParams map[string]any) recipe.RenderOutput {
-		return recipe.RenderOutput{
-			Renderers: []recipe.RendererConfig{
-				{Type: "test_renderer", ID: "render"},
-			},
-			Widgets: []recipe.WidgetConfig{
-				{
-					Type:              "test_vis",
-					ID:                "flat",
-					RendererID:        "render",
-					Title:             "static",
-					ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-				},
-			},
-		}
-	})
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-	}
-
-	resp, err := server.PrepareRender(context.Background(), request)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-
-	threadDetail, ok := resp.RenderParameters["thread_id"]
-	require.True(t, ok)
-	assert.Equal(t, structpb.NullValue_NULL_VALUE, threadDetail.GetValue().GetNullValue())
-	assert.Equal(t, structpb.NullValue_NULL_VALUE, threadDetail.GetDefaultValue().GetNullValue())
-
-	renderParam, ok := resp.VisualizationParameters["flat.selected_thread_id"]
-	require.True(t, ok)
-	assert.Equal(t, "thread_id", renderParam)
-}
-
 func TestPrepareRender_IncludesNullRenderParameterDetails(t *testing.T) {
 	rc, runID := createRunCollectionWithRun(t)
 	reader := MockRecipeReader{}
@@ -669,649 +653,6 @@ func TestPrepareRender_IncludesNullRenderParameterDetails(t *testing.T) {
 	assert.Equal(t, structpb.NullValue_NULL_VALUE, modeDetail.GetValue().GetNullValue())
 	assert.Equal(t, structpb.NullValue_NULL_VALUE, modeDetail.GetDefaultValue().GetNullValue())
 	assert.Empty(t, modeDetail.GetOptions())
-}
-
-func TestPrepareRender_WithVisualizationParameters(t *testing.T) {
-	server, runID := setupPrepareRenderServer(t, func(renderParams map[string]any) recipe.RenderOutput {
-		// Use the visualization title as a simple proxy for the current render param value, so we can easily query if it has changed later.
-		title := fmt.Sprintf("thread:%v", renderParams["thread_id"])
-		return recipe.RenderOutput{
-			Renderers: []recipe.RendererConfig{
-				{Type: "test_renderer", ID: "render"},
-			},
-			Widgets: []recipe.WidgetConfig{
-				{
-					Type:              "test_vis",
-					ID:                "flat",
-					RendererID:        "render",
-					Title:             title,
-					ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-				},
-			},
-		}
-	})
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.selected_thread_id": structpb.NewNumberValue(5678),
-		},
-	}
-
-	resp, err := server.PrepareRender(context.Background(), request)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	require.Len(t, resp.Visualizations, 1)
-	assert.Equal(t, "thread:5678", resp.Visualizations[0].GetTitle())
-}
-
-func TestPrepareRender_WithVisualizationParameters_IgnoresInvalidBindings(t *testing.T) {
-	server, runID := setupPrepareRenderServer(t, func(renderParams map[string]any) recipe.RenderOutput {
-		// Use the visualization title as a simple proxy for the current render param value, so we can easily query if it has changed later.
-		title := fmt.Sprintf("thread:%v", renderParams["thread_id"])
-		return recipe.RenderOutput{
-			Renderers: []recipe.RendererConfig{
-				{Type: "test_renderer", ID: "render"},
-			},
-			Widgets: []recipe.WidgetConfig{
-				{
-					Type:              "test_vis",
-					ID:                "flat",
-					RendererID:        "render",
-					Title:             title,
-					ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-				},
-			},
-		}
-	})
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.unknown": structpb.NewNumberValue(9999),
-		},
-	}
-
-	resp, err := server.PrepareRender(context.Background(), request)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	require.Len(t, resp.Visualizations, 1)
-	assert.Equal(t, "thread:<nil>", resp.Visualizations[0].GetTitle())
-}
-
-func TestPrepareRender_WithVisualizationParameters_IgnoresUnqualifiedKey(t *testing.T) {
-	server, runID := setupPrepareRenderServer(t, func(renderParams map[string]any) recipe.RenderOutput {
-		// Use the visualization title as a simple proxy for the current render param value, so we can easily query if it has changed later.
-		title := fmt.Sprintf("thread:%v", renderParams["thread_id"])
-		return recipe.RenderOutput{
-			Renderers: []recipe.RendererConfig{
-				{Type: "test_renderer", ID: "render"},
-			},
-			Widgets: []recipe.WidgetConfig{
-				{
-					Type:              "test_vis",
-					ID:                "flat",
-					RendererID:        "render",
-					Title:             title,
-					ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-				},
-			},
-		}
-	})
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"selected_thread_id": structpb.NewNumberValue(5678),
-		},
-	}
-
-	resp, err := server.PrepareRender(context.Background(), request)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	require.Len(t, resp.Visualizations, 1)
-	assert.Equal(t, "thread:<nil>", resp.Visualizations[0].GetTitle())
-}
-
-func TestPrepareRender_WithVisualizationParameters_IgnoresMissingRenderParam(t *testing.T) {
-	rc, runID := createRunCollectionWithRun(t)
-	reader := MockRecipeReader{}
-	recipes := map[string]recipe.Recipe{
-		"cpu_microarchitecture": {
-			Name: "cpu_microarchitecture",
-			RenderParameters: parameters.RenderParameters{
-				{ID: "thread_id", Type: parameters.RenderParameterValueTypeNumber, IsArray: false, Order: 0},
-			},
-			RenderStages: []recipe.ScriptedStage{
-				&testRenderStage{
-					outputFn: func(renderParams map[string]any) recipe.RenderOutput {
-						title := fmt.Sprintf("thread:%v", renderParams["thread_id"])
-						return recipe.RenderOutput{
-							Renderers: []recipe.RendererConfig{
-								{Type: "test_renderer", ID: "render"},
-							},
-							Widgets: []recipe.WidgetConfig{
-								{
-									Type:              "test_vis",
-									ID:                "flat",
-									RendererID:        "render",
-									Title:             title,
-									ParameterBindings: map[string]string{"selected_thread_id": "missing_param"},
-								},
-							},
-						}
-					},
-				},
-			},
-		},
-	}
-	reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
-
-	server := &ApapServer{
-		runs:         rc,
-		recipeReader: &reader,
-		recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
-			recipeInfo := recipes[recipeName]
-			return &recipeInfo, nil
-		},
-		packageManager:       newTestPackageManager(t),
-		compatibilityChecker: &compatibility.ConcreteCompatibilityChecker{},
-	}
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.selected_thread_id": structpb.NewStringValue("5678"),
-		},
-	}
-
-	resp, err := server.PrepareRender(context.Background(), request)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	require.Len(t, resp.Visualizations, 1)
-	assert.Equal(t, "thread:<nil>", resp.Visualizations[0].GetTitle())
-}
-
-func TestPrepareRender_WithVisualizationParameters_RejectsRenderParamConflict(t *testing.T) {
-	rc, runID := createRunCollectionWithRun(t)
-	reader := MockRecipeReader{}
-	recipes := map[string]recipe.Recipe{
-		"cpu_microarchitecture": {
-			Name: "cpu_microarchitecture",
-			RenderParameters: parameters.RenderParameters{
-				{ID: "thread_id", Type: parameters.RenderParameterValueTypeNumber, IsArray: false, Order: 0},
-			},
-			RenderStages: []recipe.ScriptedStage{
-				&testRenderStage{
-					outputFn: func(renderParams map[string]any) recipe.RenderOutput {
-						return recipe.RenderOutput{
-							Renderers: []recipe.RendererConfig{
-								{Type: "test_renderer", ID: "render"},
-							},
-							Widgets: []recipe.WidgetConfig{
-								{
-									Type:              "test_vis",
-									ID:                "flat",
-									RendererID:        "render",
-									Title:             "static",
-									ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-								},
-								{
-									Type:              "test_vis",
-									ID:                "timeline",
-									RendererID:        "render",
-									Title:             "static",
-									ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-								},
-							},
-						}
-					},
-				},
-			},
-		},
-	}
-	reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
-
-	server := &ApapServer{
-		runs:         rc,
-		recipeReader: &reader,
-		recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
-			recipeInfo := recipes[recipeName]
-			return &recipeInfo, nil
-		},
-		packageManager:       newTestPackageManager(t),
-		compatibilityChecker: &compatibility.ConcreteCompatibilityChecker{},
-	}
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.selected_thread_id":     structpb.NewStringValue("123"),
-			"timeline.selected_thread_id": structpb.NewStringValue("234"),
-		},
-	}
-
-	_, err := server.PrepareRender(context.Background(), request)
-	require.Error(t, err)
-	var msg *message.MessageImpl
-	require.ErrorAs(t, err, &msg)
-	assert.Equal(t, message.EngineGrpcserverApiApapRenderParamConflict, msg.Code())
-}
-
-func TestPrepareRender_WithVisualizationParameters_AllowsMatchingValues(t *testing.T) {
-	rc, runID := createRunCollectionWithRun(t)
-	reader := MockRecipeReader{}
-	recipes := map[string]recipe.Recipe{
-		"cpu_microarchitecture": {
-			Name: "cpu_microarchitecture",
-			RenderParameters: parameters.RenderParameters{
-				{ID: "thread_id", Type: parameters.RenderParameterValueTypeNumber, IsArray: false, Order: 0},
-			},
-			RenderStages: []recipe.ScriptedStage{
-				&testRenderStage{
-					outputFn: func(renderParams map[string]any) recipe.RenderOutput {
-						return recipe.RenderOutput{
-							Renderers: []recipe.RendererConfig{
-								{Type: "test_renderer", ID: "render"},
-							},
-							Widgets: []recipe.WidgetConfig{
-								{
-									Type:              "test_vis",
-									ID:                "flat",
-									RendererID:        "render",
-									Title:             "static",
-									ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-								},
-								{
-									Type:              "test_vis",
-									ID:                "timeline",
-									RendererID:        "render",
-									Title:             "static",
-									ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-								},
-								{
-									Type:              "test_vis",
-									ID:                "cpu",
-									RendererID:        "render",
-									Title:             "static",
-									ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-								},
-							},
-						}
-					},
-				},
-			},
-		},
-	}
-	reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
-
-	server := &ApapServer{
-		runs:         rc,
-		recipeReader: &reader,
-		recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
-			recipeInfo := recipes[recipeName]
-			return &recipeInfo, nil
-		},
-		packageManager:       newTestPackageManager(t),
-		compatibilityChecker: &compatibility.ConcreteCompatibilityChecker{},
-	}
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.selected_thread_id":     structpb.NewNumberValue(123),
-			"timeline.selected_thread_id": structpb.NewNumberValue(123),
-			"cpu.selected_thread_id":      structpb.NewNumberValue(123),
-		},
-	}
-
-	resp, err := server.PrepareRender(context.Background(), request)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-}
-
-func TestPrepareRender_WithVisualizationParameters_RejectsMismatchedValues(t *testing.T) {
-	rc, runID := createRunCollectionWithRun(t)
-	reader := MockRecipeReader{}
-	recipes := map[string]recipe.Recipe{
-		"cpu_microarchitecture": {
-			Name: "cpu_microarchitecture",
-			RenderParameters: parameters.RenderParameters{
-				{ID: "thread_id", Type: parameters.RenderParameterValueTypeNumber, IsArray: false, Order: 0},
-			},
-			RenderStages: []recipe.ScriptedStage{
-				&testRenderStage{
-					outputFn: func(renderParams map[string]any) recipe.RenderOutput {
-						return recipe.RenderOutput{
-							Renderers: []recipe.RendererConfig{
-								{Type: "test_renderer", ID: "render"},
-							},
-							Widgets: []recipe.WidgetConfig{
-								{
-									Type:              "test_vis",
-									ID:                "flat",
-									RendererID:        "render",
-									Title:             "static",
-									ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-								},
-								{
-									Type:              "test_vis",
-									ID:                "timeline",
-									RendererID:        "render",
-									Title:             "static",
-									ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-								},
-								{
-									Type:              "test_vis",
-									ID:                "cpu",
-									RendererID:        "render",
-									Title:             "static",
-									ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-								},
-							},
-						}
-					},
-				},
-			},
-		},
-	}
-	reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
-
-	server := &ApapServer{
-		runs:         rc,
-		recipeReader: &reader,
-		recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
-			recipeInfo := recipes[recipeName]
-			return &recipeInfo, nil
-		},
-		packageManager:       newTestPackageManager(t),
-		compatibilityChecker: &compatibility.ConcreteCompatibilityChecker{},
-	}
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.selected_thread_id":     structpb.NewStringValue("123"),
-			"timeline.selected_thread_id": structpb.NewStringValue("123"),
-			"cpu.selected_thread_id":      structpb.NewStringValue("456"),
-		},
-	}
-
-	_, err := server.PrepareRender(context.Background(), request)
-	require.Error(t, err)
-	var msg *message.MessageImpl
-	require.ErrorAs(t, err, &msg)
-	assert.Equal(t, message.EngineGrpcserverApiApapRenderParamConflict, msg.Code())
-}
-
-func TestPrepareRender_WithVisualizationParameters_DoesNotOverrideExplicitRenderParams(t *testing.T) {
-	server, runID := setupPrepareRenderServer(t, func(renderParams map[string]any) recipe.RenderOutput {
-		// Use the visualization title as a simple proxy for the current render param value, so we can easily query if it has changed later.
-		title := fmt.Sprintf("thread:%v", renderParams["thread_id"])
-		return recipe.RenderOutput{
-			Renderers: []recipe.RendererConfig{
-				{Type: "test_renderer", ID: "render"},
-			},
-			Widgets: []recipe.WidgetConfig{
-				{
-					Type:              "test_vis",
-					ID:                "flat",
-					RendererID:        "render",
-					Title:             title,
-					ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-				},
-			},
-		}
-	})
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		RenderParameters: map[string]*structpb.Value{
-			"thread_id": structpb.NewNumberValue(1111),
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.selected_thread_id": structpb.NewNumberValue(9999),
-		},
-	}
-
-	resp, err := server.PrepareRender(context.Background(), request)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	require.Len(t, resp.Visualizations, 1)
-	assert.Equal(t, "thread:1111", resp.Visualizations[0].GetTitle())
-}
-
-func TestPrepareRender_WithVisualizationParameters_RejectsTopologyChange(t *testing.T) {
-	server, runID := setupPrepareRenderServer(t, func(renderParams map[string]any) recipe.RenderOutput {
-		rendererID := "render"
-		if renderParams["thread_id"] == float64(9999) {
-			rendererID = "render_changed"
-		}
-		return recipe.RenderOutput{
-			Renderers: []recipe.RendererConfig{
-				{Type: "test_renderer", ID: rendererID},
-			},
-			Widgets: []recipe.WidgetConfig{
-				{
-					Type:              "test_vis",
-					ID:                "flat",
-					RendererID:        rendererID,
-					Title:             "static",
-					ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-				},
-			},
-		}
-	})
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.selected_thread_id": structpb.NewNumberValue(9999),
-		},
-	}
-
-	_, err := server.PrepareRender(context.Background(), request)
-	require.Error(t, err)
-	var msg *message.MessageImpl
-	require.ErrorAs(t, err, &msg)
-	assert.Equal(t, message.EngineGrpcserverApiApapRenderTopologyChanged, msg.Code())
-}
-
-func TestPrepareRender_WithVisualizationParameters_RejectsBindingChange(t *testing.T) {
-	rc, runID := createRunCollectionWithRun(t)
-	reader := MockRecipeReader{}
-	recipes := map[string]recipe.Recipe{
-		"cpu_microarchitecture": {
-			Name: "cpu_microarchitecture",
-			RenderParameters: parameters.RenderParameters{
-				{ID: "thread_id", Type: parameters.RenderParameterValueTypeNumber, IsArray: false, Order: 0},
-			},
-			RenderStages: []recipe.ScriptedStage{
-				&testRenderStage{
-					outputFn: func(renderParams map[string]any) recipe.RenderOutput {
-						binding := "thread_id"
-						if renderParams["thread_id"] == float64(9999) {
-							binding = "other_thread_id"
-						}
-						return recipe.RenderOutput{
-							Renderers: []recipe.RendererConfig{
-								{Type: "test_renderer", ID: "render"},
-							},
-							Widgets: []recipe.WidgetConfig{
-								{
-									Type:              "test_vis",
-									ID:                "flat",
-									RendererID:        "render",
-									Title:             "static",
-									ParameterBindings: map[string]string{"selected_thread_id": binding},
-								},
-							},
-						}
-					},
-				},
-			},
-		},
-	}
-	reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
-
-	server := &ApapServer{
-		runs:         rc,
-		recipeReader: &reader,
-		recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
-			recipeInfo := recipes[recipeName]
-			return &recipeInfo, nil
-		},
-		packageManager:       newTestPackageManager(t),
-		compatibilityChecker: &compatibility.ConcreteCompatibilityChecker{},
-	}
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.selected_thread_id": structpb.NewNumberValue(9999),
-		},
-	}
-
-	_, err := server.PrepareRender(context.Background(), request)
-	require.Error(t, err)
-	var msg *message.MessageImpl
-	require.ErrorAs(t, err, &msg)
-	assert.Equal(t, message.EngineGrpcserverApiApapRenderBindingsChanged, msg.Code())
-}
-
-func TestPrepareRender_WithVisualizationParameters_RejectsVisualizationTopologyChange(t *testing.T) {
-	server, runID := setupPrepareRenderServer(t, func(renderParams map[string]any) recipe.RenderOutput {
-		visType := "test_vis"
-		if renderParams["thread_id"] == float64(9999) {
-			visType = "test_vis_changed"
-		}
-		return recipe.RenderOutput{
-			Renderers: []recipe.RendererConfig{
-				{Type: "test_renderer", ID: "render"},
-			},
-			Widgets: []recipe.WidgetConfig{
-				{
-					Type:              visType,
-					ID:                "flat",
-					RendererID:        "render",
-					Title:             "static",
-					ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-				},
-			},
-		}
-	})
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.selected_thread_id": structpb.NewNumberValue(9999),
-		},
-	}
-
-	_, err := server.PrepareRender(context.Background(), request)
-	require.Error(t, err)
-	var msg *message.MessageImpl
-	require.ErrorAs(t, err, &msg)
-	assert.Equal(t, message.EngineGrpcserverApiApapRenderTopologyChanged, msg.Code())
-}
-
-func TestPrepareRender_WithVisualizationParameters_RejectsRendererTypeChange(t *testing.T) {
-	server, runID := setupPrepareRenderServer(t, func(renderParams map[string]any) recipe.RenderOutput {
-		rendererType := "test_renderer"
-		if renderParams["thread_id"] == float64(9999) {
-			rendererType = "test_renderer_changed"
-		}
-		return recipe.RenderOutput{
-			Renderers: []recipe.RendererConfig{
-				{Type: rendererType, ID: "render"},
-			},
-			Widgets: []recipe.WidgetConfig{
-				{
-					Type:              "test_vis",
-					ID:                "flat",
-					RendererID:        "render",
-					Title:             "static",
-					ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-				},
-			},
-		}
-	})
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.selected_thread_id": structpb.NewNumberValue(9999),
-		},
-	}
-
-	_, err := server.PrepareRender(context.Background(), request)
-	require.Error(t, err)
-	var msg *message.MessageImpl
-	require.ErrorAs(t, err, &msg)
-	assert.Equal(t, message.EngineGrpcserverApiApapRenderTopologyChanged, msg.Code())
-}
-
-func TestPrepareRender_WithVisualizationParameters_RejectsVisualizationRendererIDChange(t *testing.T) {
-	server, runID := setupPrepareRenderServer(t, func(renderParams map[string]any) recipe.RenderOutput {
-		visRendererID := "render"
-		if renderParams["thread_id"] == float64(9999) {
-			visRendererID = "render_alt"
-		}
-		return recipe.RenderOutput{
-			Renderers: []recipe.RendererConfig{
-				{Type: "test_renderer", ID: "render"},
-				{Type: "test_renderer_alt", ID: "render_alt"},
-			},
-			Widgets: []recipe.WidgetConfig{
-				{
-					Type:              "test_vis",
-					ID:                "flat",
-					RendererID:        visRendererID,
-					Title:             "static",
-					ParameterBindings: map[string]string{"selected_thread_id": "thread_id"},
-				},
-			},
-		}
-	})
-
-	request := &apapproto.PrepareRenderRequest{
-		Content: &apapproto.ContentSelection{
-			Runs: []*apapproto.RunId{{Value: runID.Value}},
-		},
-		VisualizationParameters: map[string]*structpb.Value{
-			"flat.selected_thread_id": structpb.NewNumberValue(9999),
-		},
-	}
-
-	_, err := server.PrepareRender(context.Background(), request)
-	require.Error(t, err)
-	var msg *message.MessageImpl
-	require.ErrorAs(t, err, &msg)
-	assert.Equal(t, message.EngineGrpcserverApiApapRenderTopologyChanged, msg.Code())
 }
 
 func TestPrepareRender_FetchesAndAttachesCapabilities(t *testing.T) {
@@ -1399,7 +740,7 @@ func TestRecipeParameterValidation(t *testing.T) {
 
 	t.Run("experimental recipe disabled returns dedicated error", func(t *testing.T) {
 		server := ApapServer{
-			config: ApapServerConfig{EnableExperimentalRecipes: false},
+			featureFlags: featureflags.Flags{ExperimentalRecipes: false},
 			recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 				assert.Equal(t, experimentalRecipeName, recipeName)
 				return &recipe.Recipe{Name: recipeName, Status: recipe.RecipeStatusExperimental}, nil
@@ -1420,7 +761,7 @@ func TestRecipeParameterValidation(t *testing.T) {
 			Return(recipe.ParamValidation{}, nil)
 
 		server := ApapServer{
-			config:            ApapServerConfig{EnableExperimentalRecipes: true},
+			featureFlags:      featureflags.Flags{ExperimentalRecipes: true},
 			parameterPipeline: paramPipeline,
 			recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 				assert.Equal(t, experimentalRecipeName, recipeName)
@@ -1436,7 +777,7 @@ func TestRecipeParameterValidation(t *testing.T) {
 
 	t.Run("getRecipe blocks experimental when disabled", func(t *testing.T) {
 		server := ApapServer{
-			config: ApapServerConfig{EnableExperimentalRecipes: false},
+			featureFlags: featureflags.Flags{ExperimentalRecipes: false},
 			recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 				assert.Equal(t, experimentalRecipeName, recipeName)
 				return &recipe.Recipe{Name: recipeName, Status: recipe.RecipeStatusExperimental}, nil
@@ -1453,7 +794,7 @@ func TestRecipeParameterValidation(t *testing.T) {
 		const missingRecipeName = "nonsenserecipe"
 		expectedErr := message.New(message.EngineRecipeDoesNotExist).WithMetadata(map[string]string{"recipe": missingRecipeName})
 		server := ApapServer{
-			config: ApapServerConfig{EnableExperimentalRecipes: false},
+			featureFlags: featureflags.Flags{ExperimentalRecipes: false},
 			recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 				assert.Equal(t, missingRecipeName, recipeName)
 				return nil, expectedErr
@@ -1467,7 +808,7 @@ func TestRecipeParameterValidation(t *testing.T) {
 
 	t.Run("getRecipe allows experimental when enabled", func(t *testing.T) {
 		server := ApapServer{
-			config: ApapServerConfig{EnableExperimentalRecipes: true},
+			featureFlags: featureflags.Flags{ExperimentalRecipes: true},
 			recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 				assert.Equal(t, experimentalRecipeName, recipeName)
 				return &recipe.Recipe{Name: recipeName, Status: recipe.RecipeStatusExperimental}, nil
@@ -1783,7 +1124,7 @@ func TestRecipeList(t *testing.T) {
 		}
 		reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
 		server := ApapServer{
-			config:       ApapServerConfig{EnableExperimentalRecipes: false},
+			featureFlags: featureflags.Flags{ExperimentalRecipes: false},
 			recipeReader: &reader,
 		}
 
@@ -1804,7 +1145,7 @@ func TestRecipeList(t *testing.T) {
 		}
 		reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
 		server := ApapServer{
-			config:       ApapServerConfig{EnableExperimentalRecipes: true, EnableGPURecipe: false},
+			featureFlags: featureflags.Flags{ExperimentalRecipes: true, GPURecipe: false},
 			recipeReader: &reader,
 		}
 
@@ -1825,7 +1166,7 @@ func TestRecipeList(t *testing.T) {
 		}
 		reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
 		server := ApapServer{
-			config:       ApapServerConfig{EnableExperimentalRecipes: true, EnableGPURecipe: true},
+			featureFlags: featureflags.Flags{ExperimentalRecipes: true, GPURecipe: true},
 			recipeReader: &reader,
 		}
 
@@ -1844,7 +1185,7 @@ func TestRecipeList(t *testing.T) {
 		}
 		reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
 		server := ApapServer{
-			config:       ApapServerConfig{EnableExperimentalRecipes: true},
+			featureFlags: featureflags.Flags{ExperimentalRecipes: true},
 			recipeReader: &reader,
 		}
 
@@ -2059,7 +1400,7 @@ func TestParseRecipe(t *testing.T) {
 
 	t.Run("experimental recipe disabled returns dedicated error", func(t *testing.T) {
 		server := ApapServer{
-			config: ApapServerConfig{EnableExperimentalRecipes: false},
+			featureFlags: featureflags.Flags{ExperimentalRecipes: false},
 			recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 				assert.Equal(t, experimentalRecipeName, recipeName)
 				return &recipe.Recipe{Name: recipeName, Status: recipe.RecipeStatusExperimental}, nil
@@ -2074,7 +1415,7 @@ func TestParseRecipe(t *testing.T) {
 
 	t.Run("experimental recipe allowed when enabled", func(t *testing.T) {
 		server := ApapServer{
-			config: ApapServerConfig{EnableExperimentalRecipes: true},
+			featureFlags: featureflags.Flags{ExperimentalRecipes: true},
 			recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 				assert.Equal(t, experimentalRecipeName, recipeName)
 				return &recipe.Recipe{Name: recipeName, Status: recipe.RecipeStatusExperimental}, nil
@@ -2260,7 +1601,7 @@ func TestParseRecipe(t *testing.T) {
 		}
 
 		server := ApapServer{
-			config: ApapServerConfig{EnableRerendering: true},
+			featureFlags: featureflags.Flags{Rerendering: true},
 			recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 				return testRecipe, nil
 			},
@@ -2308,7 +1649,7 @@ func TestParseRecipe(t *testing.T) {
 
 func TestRecipeIssueCommandDisabled(t *testing.T) {
 	server := ApapServer{
-		config: ApapServerConfig{EnableExperimentalRecipes: false},
+		featureFlags: featureflags.Flags{ExperimentalRecipes: false},
 		recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 			assert.Equal(t, experimentalRecipeName, recipeName)
 			return &recipe.Recipe{Name: recipeName, Status: recipe.RecipeStatusExperimental}, nil
@@ -2329,7 +1670,7 @@ func TestRecipeIssueCommandDisabled(t *testing.T) {
 
 func TestRecipeReadyDisabled(t *testing.T) {
 	server := ApapServer{
-		config: ApapServerConfig{EnableExperimentalRecipes: false},
+		featureFlags: featureflags.Flags{ExperimentalRecipes: false},
 		recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 			assert.Equal(t, experimentalRecipeName, recipeName)
 			return &recipe.Recipe{Name: recipeName, Status: recipe.RecipeStatusExperimental}, nil
@@ -2347,7 +1688,7 @@ func TestRecipeReadyDisabled(t *testing.T) {
 
 func TestRecipeReadyExperimentalAllowed(t *testing.T) {
 	server := ApapServer{
-		config: ApapServerConfig{EnableExperimentalRecipes: true},
+		featureFlags: featureflags.Flags{ExperimentalRecipes: true},
 		recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
 			assert.Equal(t, experimentalRecipeName, recipeName)
 			return &recipe.Recipe{Name: recipeName, Status: recipe.RecipeStatusExperimental}, nil
@@ -3165,25 +2506,28 @@ func TestListDirectories(t *testing.T) {
 func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
 	server := &ApapServer{
 		config: ApapServerConfig{
-			ParallelJobs:              3,
-			DataDirectory:             "/var/lib/apap",
-			IsRootWorkerEnabled:       true,
-			EnableFullCaptureSupport:  true,
-			EnableRerendering:         true,
-			EnableExperimentalRecipes: true,
-			EnableSecondaryRunPaths:   true,
-			EnableRenderDBSandbox:     false,
-			EnableNeoprofTimeline:     true,
-			EnableJfrCapture:          true,
-			ServerHostname:            "127.0.0.1",
-			ServerGRPCPort:            9000,
-			ServerAuthPort:            9001,
-			ServerHTTPPort:            8080,
-			ServerHTTPChunkBytes:      4096,
-			LogLevel:                  "debug",
-			LogFile:                   "/tmp/apap.log",
-			SourceToolsDir:            "/opt/apap/tools/src",
-			ConfigDirectory:           "/etc/apap",
+			ParallelJobs:  3,
+			DataDirectory: "/var/lib/apap",
+			FeatureFlags: featureflags.Flags{
+				AndroidTargets:           true,
+				NeoprofSystemUtilization: true,
+				FullCaptureSupport:       true,
+				Rerendering:              true,
+				ExperimentalRecipes:      true,
+				SecondaryRunPaths:        true,
+				RenderDBSandbox:          false,
+				NeoprofTimeline:          true,
+				JfrCapture:               true,
+				RunComponentCompression:  true,
+			},
+			ServerHostname:       "127.0.0.1",
+			ServerGRPCPort:       9000,
+			ServerHTTPPort:       8080,
+			ServerHTTPChunkBytes: 4096,
+			LogLevel:             "debug",
+			LogFile:              "/tmp/apap.log",
+			SourceToolsDir:       "/opt/apap/tools/src",
+			ConfigDirectory:      "/etc/apap",
 		},
 		deploymentPaths: deployer.BaseToolDeploymentPaths{
 			DeployedToolsDirectory: "/opt/apap/tools/deployed",
@@ -3194,28 +2538,29 @@ func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
 	// This structure is used to generate a JSON blob so the intermediate float64 isn't a problem. float64 can map to integers precisely
 	// so long as they're less than 9,007,199,254,740,992 (2^53).
 	expected := map[string]any{
-		"server-hostname":             "127.0.0.1",
-		"server-port":                 float64(9000),
-		"auth-port":                   float64(9001),
-		"http-port":                   float64(8080),
-		"http-chunk-bytes":            float64(4096),
-		"jobs":                        float64(3),
-		"data-dir":                    "/var/lib/apap",
-		"log-level":                   "debug",
-		"log-file":                    "/tmp/apap.log",
-		"enable-on-demand-privilege":  true,
-		"enable-full-capture-support": true,
-		"enable-rerendering":          true,
-		"enable-experimental-recipes": true,
-		"enable-secondary-run-paths":  true,
-		"enable-gpu-recipe":           false,
-		"enable-render-db-sandbox":    false,
-		"enable-neoprof-timeline":     true,
-		"enable-jfr-capture":          true,
-		"deployment-tools-dir":        "/opt/apap/tools/deployed",
-		"source-tools-dir":            "/opt/apap/tools/src",
-		"config-dir":                  "/etc/apap",
-		"adb-path":                    "",
+		"enable-android-targets":            true,
+		"server-hostname":                   "127.0.0.1",
+		"server-port":                       float64(9000),
+		"http-port":                         float64(8080),
+		"http-chunk-bytes":                  float64(4096),
+		"jobs":                              float64(3),
+		"data-dir":                          "/var/lib/apap",
+		"log-level":                         "debug",
+		"log-file":                          "/tmp/apap.log",
+		"enable-full-capture-support":       true,
+		"enable-rerendering":                true,
+		"enable-experimental-recipes":       true,
+		"enable-secondary-run-paths":        true,
+		"enable-gpu-recipe":                 false,
+		"enable-render-db-sandbox":          false,
+		"enable-neoprof-timeline":           true,
+		"enable-neoprof-system-utilization": true,
+		"enable-jfr-capture":                true,
+		"enable-run-component-compression":  true,
+		"deployment-tools-dir":              "/opt/apap/tools/deployed",
+		"source-tools-dir":                  "/opt/apap/tools/src",
+		"config-dir":                        "/etc/apap",
+		"adb-path":                          "",
 	}
 
 	require.Equal(t, expected, server.buildSupportPackageConfig())
@@ -3223,7 +2568,7 @@ func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
 
 func TestNewSessionFactoryUsesRenderDBSandboxFlag(t *testing.T) {
 	server := &ApapServer{
-		config: ApapServerConfig{EnableRenderDBSandbox: false},
+		featureFlags: featureflags.Flags{RenderDBSandbox: false},
 	}
 
 	factory, ok := server.newSessionFactory().(*sessionfactory.Impl)
@@ -3303,4 +2648,39 @@ func TestCreateSupportPackage_SucceedsWhenNoEngineLogs(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.FileExists(t, resp.GetPackagePath())
+}
+
+func TestResolvedFeaturesReachExecutionContext(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv(util.ApplyEnvPrefix("DATA_DIR"), dataDir)
+	// Keep directory cleanup outside the bubble, which waits for startup goroutines to exit.
+	synctest.Test(t, func(t *testing.T) {
+		configured := featureflags.Flags{
+			Rerendering:             true,
+			ExperimentalRecipes:     true,
+			GPURecipe:               true,
+			RenderDBSandbox:         true,
+			NeoprofTimeline:         true,
+			JfrCapture:              true,
+			RunComponentCompression: true,
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		server, err := NewApapServer(ctx, ApapServerConfig{
+			DataDirectory: dataDir,
+			FeatureFlags:  configured,
+		}, deployer.BaseToolDeploymentPaths{}, cancel)
+		require.NoError(t, err)
+		require.Equal(t, featureflags.Resolve(configured), server.featureFlags)
+		stage := server.newBaseStageConfiguration()
+		execution := stage.NewRunExecutionContext(afero.NewMemMapFs())
+		require.Equal(t, server.featureFlags, execution.GetFeatureFlags())
+		require.True(t, execution.GetFeatureFlags().FullCaptureSupport)
+		require.Equal(t, false, server.buildSupportPackageConfig()["enable-full-capture-support"])
+		require.Equal(t, true, server.buildSupportPackageConfig()["enable-rerendering"])
+
+		stage.FeatureFlags.JfrCapture = false
+		require.True(t, execution.GetFeatureFlags().JfrCapture, "execution flags are a value snapshot")
+		require.True(t, server.featureFlags.JfrCapture)
+	})
 }

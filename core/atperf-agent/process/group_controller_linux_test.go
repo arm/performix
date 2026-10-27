@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,11 +22,14 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/Arm-Debug/apap-cli/atperf-agent/process/processcontracttest"
 )
 
 type mockCgroupManager struct {
@@ -773,15 +778,170 @@ func TestGroupController_WriteChildPid(t *testing.T) {
 	})
 }
 
-func TestLinuxBuildCmdUsesTasksetForAffinity(t *testing.T) {
-	pm := NewProcessManager()
-	cmd, err := pm.buildCmd(&LaunchCommand{
-		Command:  []string{"echo", "test"},
-		Affinity: []string{"1", "2"},
+func TestLinuxAffinityLaunchDoesNotNeedTaskset(t *testing.T) {
+	var available unix.CPUSet
+	require.NoError(t, unix.SchedGetaffinity(0, &available))
+	cpu := -1
+	for i := 0; i < 1024; i++ {
+		if available.IsSet(i) {
+			cpu = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, cpu)
+
+	probe := processcontracttest.ProbePath(t)
+	newCommand := func(t *testing.T) *LaunchCommand {
+		t.Helper()
+		return &LaunchCommand{
+			Command:          []string{filepath.Base(probe), "literal argument"},
+			Affinity:         []string{strconv.Itoa(cpu)},
+			WorkingDirectory: t.TempDir(),
+			Environment: map[string]string{
+				"PATH": filepath.Dir(probe),
+				processcontracttest.EnvironmentKeysVariable: `["PATH"]`,
+				processcontracttest.ExitCodeVariable:        "0",
+			},
+		}
+	}
+	t.Setenv("PATH", t.TempDir())
+	t.Run("exec preserves request values and initial affinity", func(t *testing.T) {
+		command := newCommand(t)
+		result, err := NewProcessManager().ExecCommand(command)
+		require.NoError(t, err)
+		require.Zero(t, result.Rc, result.Stderr)
+		report, err := processcontracttest.DecodeReport(result.Stdout)
+		require.NoError(t, err)
+		assert.Equal(t, []int{cpu}, report.CPUAffinity)
+		assert.Equal(t, []string{"literal argument"}, report.Arguments)
+		assert.Equal(t, filepath.Dir(probe), report.Environment["PATH"])
+		assert.Equal(t, command.WorkingDirectory, report.WorkingDirectory)
 	})
+	t.Run("nonzero exit is preserved", func(t *testing.T) {
+		command := newCommand(t)
+		command.Environment[processcontracttest.ExitCodeVariable] = "17"
+		result, err := NewProcessManager().ExecCommand(command)
+		require.NoError(t, err)
+		assert.Equal(t, int32(17), result.Rc)
+		report, err := processcontracttest.DecodeReport(result.Stdout)
+		require.NoError(t, err)
+		assert.Equal(t, []int{cpu}, report.CPUAffinity)
+	})
+	t.Run("managed launch keeps target PID", func(t *testing.T) {
+		command := newCommand(t)
+		manager := NewProcessManager()
+		outputPath := filepath.Join(t.TempDir(), "probe-output")
+		started, err := manager.StartProcess(&StartProcess{
+			LaunchCommand: *command,
+			Stdout:        StreamRedirect{Mode: File, FilePath: outputPath},
+		})
+		require.NoError(t, err)
+		defer manager.ReleaseProcessHandles([]int{started.Pid})
+		exitCode, err := manager.WaitProcess(context.Background(), started.Pid)
+		require.NoError(t, err)
+		require.Zero(t, exitCode)
+		output, err := os.ReadFile(outputPath)
+		require.NoError(t, err)
+		report, err := processcontracttest.DecodeReport(string(output))
+		require.NoError(t, err)
+		assert.Equal(t, started.Pid, report.PID)
+		assert.Equal(t, []int{cpu}, report.CPUAffinity)
+	})
+	t.Run("group controller keeps child PID and affinity", func(t *testing.T) {
+		command := newCommand(t)
+		command.Environment["CLI_MODE"] = "1"
+		manager := NewProcessManager()
+		outputPath := filepath.Join(t.TempDir(), "group-output")
+		child, err := manager.StartProcess(&StartProcess{
+			LaunchCommand:      *command,
+			Stdout:             StreamRedirect{Mode: File, FilePath: outputPath},
+			UseGroupController: true,
+		})
+		require.NoError(t, err)
+		defer manager.ReleaseProcessHandles([]int{child.Pid})
+		exitCode, err := manager.WaitProcess(context.Background(), child.Pid)
+		require.NoError(t, err)
+		require.Zero(t, exitCode)
+		output, err := os.ReadFile(outputPath)
+		require.NoError(t, err)
+		// Controller logs use a separate pipe; stdout contains only the probe report.
+		report, err := processcontracttest.DecodeReport(string(output))
+		require.NoError(t, err)
+		assert.Equal(t, child.Pid, report.PID)
+		assert.Equal(t, []int{cpu}, report.CPUAffinity)
+		assert.Equal(t, command.WorkingDirectory, report.WorkingDirectory)
+	})
+}
+
+func TestLinuxAffinityLaunchErrors(t *testing.T) {
+	manager := NewProcessManager()
+	for _, affinity := range [][]string{{""}, {"1-"}, {"-1"}, {"65536"}} {
+		_, err := manager.ExecCommand(&LaunchCommand{Command: []string{"/bin/true"}, Affinity: affinity})
+		require.Error(t, err)
+	}
+	var available unix.CPUSet
+	require.NoError(t, unix.SchedGetaffinity(0, &available))
+	validCPU := -1
+	for cpu := 0; cpu < 1024; cpu++ {
+		if available.IsSet(cpu) && validCPU == -1 {
+			validCPU = cpu
+		}
+	}
+	require.NotEqual(t, -1, validCPU)
+	t.Run("CPU outside kernel possible set", func(t *testing.T) {
+		possible, err := os.ReadFile("/sys/devices/system/cpu/possible")
+		if err != nil {
+			t.Skipf("cannot establish possible CPUs: %v", err)
+		}
+		mask, err := parseAffinity([]string{strings.TrimSpace(string(possible))})
+		if err != nil {
+			t.Skipf("cannot parse possible CPUs: %v", err)
+		}
+		maxCPU := affinityMaskCPUs - 1
+		highestPossible := -1
+		for cpu := maxCPU; cpu >= 0; cpu-- {
+			if mask.IsSet(cpu) {
+				highestPossible = cpu
+				break
+			}
+		}
+		if highestPossible < 0 || highestPossible == maxCPU {
+			t.Skip("the launch mask cannot represent a CPU beyond the possible set")
+		}
+		unavailableCPU := highestPossible + 1
+		_, err = manager.ExecCommand(&LaunchCommand{Command: []string{"/bin/true"}, Affinity: []string{strconv.Itoa(unavailableCPU)}})
+		require.ErrorContains(t, err, "set CPU affinity")
+	})
+
+	missing := &LaunchCommand{Command: []string{"missing-affinity-test-command"}, Affinity: []string{"0"}, Environment: map[string]string{"PATH": t.TempDir()}}
+	result, err := manager.ExecCommand(missing)
 	require.NoError(t, err)
-	require.NotNil(t, cmd)
-	assert.Equal(t, []string{"taskset", "-c", "1,2", "echo", "test"}, cmd.Args)
+	assert.Equal(t, CommandNotFoundExitCode, result.Rc)
+	_, err = manager.StartProcess(&StartProcess{LaunchCommand: *missing})
+	require.Error(t, err)
+
+	nonExecutable := filepath.Join(t.TempDir(), "not-executable")
+	require.NoError(t, os.WriteFile(nonExecutable, []byte("data"), 0o644))
+	command := &LaunchCommand{Command: []string{nonExecutable}, Affinity: []string{strconv.Itoa(validCPU)}}
+	_, err = manager.ExecCommand(command)
+	require.Error(t, err)
+	_, err = manager.StartProcess(&StartProcess{LaunchCommand: *command})
+	require.Error(t, err)
+	manager.(*UnixProcessManager).common.managedProcesses.Range(func(_, _ any) bool {
+		t.Error("failed launch left a managed process")
+		return false
+	})
+}
+
+func TestParseAffinityListAndRanges(t *testing.T) {
+	mask, err := parseAffinity([]string{"0-2", "4,6"})
+	require.NoError(t, err)
+	for _, cpu := range []int{0, 1, 2, 4, 6} {
+		assert.True(t, mask.IsSet(cpu))
+	}
+	for _, cpu := range []int{3, 5, 7} {
+		assert.False(t, mask.IsSet(cpu))
+	}
 }
 
 func TestLinuxStartProcessIsVisibleInProcfs(t *testing.T) {
@@ -823,71 +983,77 @@ func readStdout(t *testing.T, pm ProcessManager, pid int) string {
 	return string(bytes.Join(sender.chunks, nil))
 }
 
-func waitForExitCode(t *testing.T, pm ProcessManager, pid int, expectedExitCode int, logbuf bytes.Buffer) {
+func readStderr(t *testing.T, pm ProcessManager, pid int) string {
+	sender := &fakeSender{ctx: context.Background()}
+	require.NoError(t, pm.StreamStderr(pid, sender))
+	return string(bytes.Join(sender.chunks, nil))
+}
+
+func waitForExitCode(t *testing.T, pm ProcessManager, pid int, expectedExitCode int) {
 	exitCode, err := pm.WaitProcess(context.Background(), pid)
 	require.NoError(t, err)
 	require.Equal(t, expectedExitCode, exitCode)
-	require.Contains(t, logbuf.String(), "start-group-controller --wait-for-child --child-pid-fd=3")
 }
 
 func TestStartProcess_UseProcessGroupController(t *testing.T) {
-	var logbuf bytes.Buffer
-	defer log.SetOutput(log.StandardLogger().Out)
-	log.SetOutput(&logbuf)
-
+	logger := log.StandardLogger()
+	hooks := logger.ReplaceHooks(make(log.LevelHooks))
+	hook := logtest.NewGlobal()
+	defer logger.ReplaceHooks(hooks)
 	pm := NewProcessManagerWithFs(afero.NewMemMapFs())
 	command := []string{"bash", "-c", "echo pid is $$"}
 	proc := startProcessWithGroupController(t, pm, command)
 
 	stdout := readStdout(t, pm, proc.Pid)
-	require.Contains(t, stdout, fmt.Sprintf("Spawned process: [%s]", strings.Join(command, " ")))
-	require.Contains(t, stdout, fmt.Sprintf("pid is %d\n", proc.Pid))
-	waitForExitCode(t, pm, proc.Pid, 0, logbuf)
+	stderr := readStderr(t, pm, proc.Pid)
+	require.Equal(t, fmt.Sprintf("pid is %d\n", proc.Pid), stdout)
+	require.Empty(t, stderr)
+	waitForExitCode(t, pm, proc.Pid, 0)
+	var forwarded bool
+	for _, entry := range hook.AllEntries() {
+		if entry.Message == fmt.Sprintf("Spawned process: %v", command) {
+			assert.Equal(t, log.InfoLevel, entry.Level)
+			assert.Contains(t, entry.Data, "controller_pid")
+			forwarded = true
+		}
+	}
+	require.True(t, forwarded, "controller diagnostics must reach the parent logger")
 }
 
 func TestStartProcess_UseProcessGroupController_ExitError(t *testing.T) {
-	var logbuf bytes.Buffer
-	defer log.SetOutput(log.StandardLogger().Out)
-	log.SetOutput(&logbuf)
-
 	pm := NewProcessManagerWithFs(afero.NewMemMapFs())
 	command := []string{"bash", "-c", "exit 66"}
 	proc := startProcessWithGroupController(t, pm, command)
 
 	stdout := readStdout(t, pm, proc.Pid)
-	require.Contains(t, stdout, fmt.Sprintf("Spawned process: [%s]", strings.Join(command, " ")))
-	require.Contains(t, stdout, fmt.Sprintf("child process %d exited with code 66\n", proc.Pid))
-	waitForExitCode(t, pm, proc.Pid, 66, logbuf)
+	stderr := readStderr(t, pm, proc.Pid)
+	require.Empty(t, stdout)
+	require.Empty(t, stderr)
+	waitForExitCode(t, pm, proc.Pid, 66)
 }
 
 func TestStartProcess_UseProcessGroupController_KillChild(t *testing.T) {
-	var logbuf bytes.Buffer
-	defer log.SetOutput(log.StandardLogger().Out)
-	log.SetOutput(&logbuf)
-
 	pm := NewProcessManagerWithFs(afero.NewMemMapFs())
 	command := []string{"bash", "-c", "sleep 60"}
 	proc := startProcessWithGroupController(t, pm, command)
 	require.NoError(t, pm.KillProcess(proc.Pid))
 
 	stdout := readStdout(t, pm, proc.Pid)
-	require.Contains(t, stdout, fmt.Sprintf("Spawned process: [%s]", strings.Join(command, " ")))
-	require.Contains(t, stdout, fmt.Sprintf("child process %d exited with code %d\n", proc.Pid, PosixSignalExitBase+int(syscall.SIGKILL)))
-	waitForExitCode(t, pm, proc.Pid, PosixSignalExitBase+int(syscall.SIGKILL), logbuf)
+	stderr := readStderr(t, pm, proc.Pid)
+	require.Empty(t, stdout)
+	require.Empty(t, stderr)
+	waitForExitCode(t, pm, proc.Pid, PosixSignalExitBase+int(syscall.SIGKILL))
 }
 
 func TestStartProcess_UseProcessGroupController_InterruptChild(t *testing.T) {
-	var logbuf bytes.Buffer
-	defer log.SetOutput(log.StandardLogger().Out)
-	log.SetOutput(&logbuf)
-
 	pm := NewProcessManagerWithFs(afero.NewMemMapFs())
 	command := []string{"bash", "-c", "sleep 60"}
 	proc := startProcessWithGroupController(t, pm, command)
 	require.NoError(t, pm.InterruptProcess(proc.Pid))
 
 	stdout := readStdout(t, pm, proc.Pid)
-	require.Contains(t, stdout, fmt.Sprintf("Spawned process: [%s]", strings.Join(command, " ")))
-	require.Contains(t, stdout, fmt.Sprintf("child process %d exited with code %d\n", proc.Pid, PosixSignalExitBase+int(syscall.SIGINT)))
-	waitForExitCode(t, pm, proc.Pid, PosixSignalExitBase+int(syscall.SIGINT), logbuf)
+	stderr := readStderr(t, pm, proc.Pid)
+	require.Empty(t, stdout)
+	require.Empty(t, stderr)
+	waitForExitCode(t, pm, proc.Pid, PosixSignalExitBase+int(syscall.SIGINT))
 }

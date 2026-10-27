@@ -110,17 +110,23 @@ func (renderer *CompareDrilldownFlat) computeDelta(session render.Session, table
 		SELECT
 			COALESCE (t1.measurement_id, t2.measurement_id) as measurement_id,
 			COALESCE(t1.node_type, t2.node_type) AS node_type,
-			t1.symbol_id as symbol_id_1,
-			t2.symbol_id as symbol_id_2,
+			COALESCE(t1.symbol_id, n1.symbol_id) as symbol_id_1,
+			COALESCE(t2.symbol_id, n2.symbol_id) as symbol_id_2,
 			t1.measurement_value as measurement_value_1,
 			t2.measurement_value as measurement_value_2,
-			t1.call_tree_id as call_tree_id_1,
-			t2.call_tree_id as call_tree_id_2,
+			COALESCE(t1.call_tree_id, n1.call_tree_id) as call_tree_id_1,
+			COALESCE(t2.call_tree_id, n2.call_tree_id) as call_tree_id_2,
 			t2.measurement_value-t1.measurement_value AS delta_value,
 			(CASE WHEN t1.measurement_value = 0 THEN NULL ELSE delta_value * 100 / t1.measurement_value END) as delta_percentage,
 		FROM t1
 		FULL OUTER JOIN t2
-			ON t1.name = t2.name AND t1.image_name = t2.image_name AND t1.measurement_id = t2.measurement_id`,
+			ON t1.name = t2.name AND t1.image_name = t2.image_name AND t1.measurement_id = t2.measurement_id
+		LEFT JOIN (SELECT DISTINCT name, image_name, symbol_id, call_tree_id FROM t1) AS n1
+			ON n1.name = CASE WHEN t1.call_tree_id IS NULL THEN t2.name END
+			AND n1.image_name = t2.image_name
+		LEFT JOIN (SELECT DISTINCT name, image_name, symbol_id, call_tree_id FROM t2) AS n2
+			ON n2.name = CASE WHEN t2.call_tree_id IS NULL THEN t1.name END
+			AND n2.image_name = t1.image_name`,
 	)
 
 	_, err := session.Database().Conn.ExecContext(context.Background(), query)

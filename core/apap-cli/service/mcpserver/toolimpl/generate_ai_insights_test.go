@@ -18,8 +18,8 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/mcpserver/insights"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func TestGenerateAIInsightsTool(t *testing.T) {
@@ -291,6 +291,37 @@ func TestGenerateAIInsightsTool(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, result.IsError)
 		assert.Contains(t, requireToolText(t, result), "prepare failed")
+	})
+
+	t.Run("rejects an unsuccessful SQL-based run before rendering", func(t *testing.T) {
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		expectRunDescription(engine, "run-123", insights.SystemUtilizationRecipeName)
+		engine.On("GetRunSummaryBundle", mock.Anything, mock.Anything).Return(
+			(*apapproto.RunSummaryBundleResponse)(nil),
+			message.New(message.EngineGrpcserverApiApapInsightsRunNotSuccessful).WithMetadata(map[string]string{
+				"runID":     "run-123",
+				"runResult": "failed",
+			}),
+		).Once()
+		clientSession, serverSession := connectTestServer(
+			t,
+			ctx,
+			ToolDependencies{Engine: engine},
+			GenerateAIInsightsTool{}.Register,
+		)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "generate_ai_insights",
+			Arguments: map[string]any{"run_id": "run-123"},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		assert.Contains(t, requireToolText(t, result), string(message.EngineGrpcserverApiApapInsightsRunNotSuccessful))
+		engine.AssertNotCalled(t, "PrepareRender", mock.Anything, mock.Anything)
 	})
 
 	t.Run("returns diagnostics from a rejected persistent render", func(t *testing.T) {
@@ -997,6 +1028,135 @@ func TestGenerateQueryResultResponseSize(t *testing.T) {
 			assert.LessOrEqual(t, len(encoded), aiInsightsMaxResponseBytes)
 		})
 	}
+}
+
+func TestGenerateAIInsightsCodeHotspotsMode(t *testing.T) {
+	t.Run("uses curated guidance by default", func(t *testing.T) {
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		expectRunDescription(engine, "run-123", insights.CodeHotspotsRecipeName)
+		engine.On("GetRunSummaryBundle", mock.Anything, mock.Anything).Return(
+			runSummaryBundle(insights.CodeHotspotsRecipeName), nil,
+		).Once()
+		clientSession, serverSession := connectTestServer(
+			t, ctx, ToolDependencies{Engine: engine}, GenerateAIInsightsTool{}.Register,
+		)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "generate_ai_insights",
+			Arguments: map[string]any{
+				"run_id": "run-123",
+			},
+		})
+
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+		var content generateAIInsightsResult
+		require.NoError(t, json.Unmarshal([]byte(requireToolText(t, result)), &content))
+		assert.Empty(t, content.RenderSession)
+		assert.Contains(t, content.Guidance, "Code Hotspots Evidence Guide")
+		engine.AssertNotCalled(t, "PrepareRender", mock.Anything, mock.Anything)
+	})
+
+	t.Run("uses query guidance and forwards render parameters", func(t *testing.T) {
+		t.Setenv(insights.CodeHotspotsModeEnvironment, string(insights.CodeHotspotsModeRunQuery))
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		expectRunDescription(engine, "run-123", insights.CodeHotspotsRecipeName)
+		engine.On("GetRunSummaryBundle", mock.Anything, mock.MatchedBy(func(req *apapproto.RunSummaryBundleRequest) bool {
+			return req.GetRunId().GetValue() == "run-123"
+		})).Return(runSummaryBundle(insights.CodeHotspotsRecipeName), nil).Once()
+		expectAIInsightsRenderSession(engine, "run-123", "session-1")
+		clientSession, serverSession := connectTestServer(
+			t, ctx, ToolDependencies{Engine: engine}, GenerateAIInsightsTool{}.Register,
+		)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "generate_ai_insights",
+			Arguments: map[string]any{
+				"run_id": "run-123",
+				"render_parameters": map[string]any{
+					"pid": 123,
+				},
+			},
+		})
+
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+		var content generateAIInsightsResult
+		require.NoError(t, json.Unmarshal([]byte(requireToolText(t, result)), &content))
+		assert.Equal(t, "session-1", content.RenderSession["session_id"])
+		assert.Contains(t, content.Guidance, "Code Hotspots Query Guide")
+		engine.AssertCalled(t, "PrepareRender", mock.Anything, mock.MatchedBy(func(req *apapproto.PrepareRenderRequest) bool {
+			return req.GetRenderParameters()["pid"].GetNumberValue() == 123
+		}))
+	})
+
+	t.Run("rejects an invalid mode", func(t *testing.T) {
+		t.Setenv(insights.CodeHotspotsModeEnvironment, "invalid")
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		expectRunDescription(engine, "run-123", insights.CodeHotspotsRecipeName)
+		clientSession, serverSession := connectTestServer(
+			t, ctx, ToolDependencies{Engine: engine}, GenerateAIInsightsTool{}.Register,
+		)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "generate_ai_insights",
+			Arguments: map[string]any{"run_id": "run-123"},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		assert.Contains(t, requireToolText(t, result), insights.CodeHotspotsModeEnvironment)
+		engine.AssertNotCalled(t, "GetRunSummaryBundle", mock.Anything, mock.Anything)
+	})
+
+	t.Run("ignores an invalid mode for another recipe", func(t *testing.T) {
+		t.Setenv(insights.CodeHotspotsModeEnvironment, "invalid")
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		expectRunDescription(engine, "run-123", insights.SystemUtilizationRecipeName)
+		engine.On("GetRunSummaryBundle", mock.Anything, mock.Anything).
+			Return(runSummaryBundle(insights.SystemUtilizationRecipeName), nil).Once()
+		expectAIInsightsRenderSession(engine, "run-123", "session-1")
+		clientSession, serverSession := connectTestServer(
+			t, ctx, ToolDependencies{Engine: engine}, GenerateAIInsightsTool{}.Register,
+		)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "generate_ai_insights",
+			Arguments: map[string]any{"run_id": "run-123"},
+		})
+
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+	})
+}
+
+func TestGenerateAIInsightsDescription(t *testing.T) {
+	t.Run("curated", func(t *testing.T) {
+		t.Setenv(insights.CodeHotspotsModeEnvironment, string(insights.CodeHotspotsModeCurated))
+		description := generateAIInsightsDescription()
+		assert.Contains(t, description, "accepted for every supported recipe except code_hotspots")
+		assert.NotContains(t, description, "discover the render parameters")
+	})
+
+	t.Run("run query", func(t *testing.T) {
+		t.Setenv(insights.CodeHotspotsModeEnvironment, string(insights.CodeHotspotsModeRunQuery))
+		description := generateAIInsightsDescription()
+		assert.Contains(t, description, "Call recipe_info to discover the render parameters available for a recipe")
+		assert.NotContains(t, description, "except code_hotspots")
+		assert.NotContains(t, description, "read_ai_insights_payload_details")
+	})
 }
 
 func expectRunDescription(engine *apapprotomocks.ApapClient, runID, recipeName string) {

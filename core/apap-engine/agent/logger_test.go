@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
@@ -18,8 +19,8 @@ import (
 
 	mocks "github.com/Arm-Debug/apap-cli/apap-engine/agent/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	protomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	protomocks "github.com/Arm-Debug/apap-cli/api/mocks"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 func newLogger() (*log.Logger, *logtest.Hook) {
@@ -115,4 +116,43 @@ func TestRunStream_HappyPath(t *testing.T) {
 		}
 	}
 	assert.True(t, found)
+}
+
+func TestRunStream_TimestampsUseEngineTimezone(t *testing.T) {
+	location, err := time.LoadLocation("Europe/London")
+	require.NoError(t, err)
+	originalLocal := time.Local
+	time.Local = location
+	t.Cleanup(func() { time.Local = originalLocal })
+
+	for _, tc := range []struct {
+		name      string
+		timestamp string
+		want      string
+	}{
+		{"UTC in summer", "2026-07-01T12:34:56.123Z", "2026-07-01T13:34:56.123+01:00"},
+		{"UTC in winter", "2026-01-01T12:34:56.123Z", "2026-01-01T12:34:56.123Z"},
+		{"different target timezone", "2026-07-01T18:04:56.123+05:30", "2026-07-01T13:34:56.123+01:00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logger, hook := newLogger()
+			al := &agentLogger{id: "remote_target", logger: logger}
+			stream := &mocks.StubLogStream{
+				Entries: []any{&targetagentproto.LogEntry{
+					Level: "info", Message: "hello", Timestamp: tc.timestamp,
+				}},
+				Err: context.Canceled,
+			}
+
+			require.NoError(t, al.runStream(stream))
+			entries := hook.AllEntries()
+			require.NotEmpty(t, entries)
+			entry := entries[0]
+			assert.Equal(t, "[Agent] hello", entry.Message)
+			assert.Equal(t, tc.want, entry.Time.Format(time.RFC3339Nano))
+			original, err := time.Parse(time.RFC3339Nano, tc.timestamp)
+			require.NoError(t, err)
+			assert.True(t, entry.Time.Equal(original), "preserve the original event time")
+		})
+	}
 }

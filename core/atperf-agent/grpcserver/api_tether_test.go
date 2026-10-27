@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	tethermocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	tethermocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func newTestTether(deadline time.Duration) (*TetherServer, chan string) {

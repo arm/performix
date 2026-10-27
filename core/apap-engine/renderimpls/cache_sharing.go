@@ -134,10 +134,10 @@ ORDER BY sample_count DESC
 	return cachelinesFlat, nil
 }
 
-func (r *CacheSharingRenderer) createAccessesJoin(session render.Session, accessesRaw string, imagesTable string, symbolsTable string) (string, error) {
+func (r *CacheSharingRenderer) createAccessesJoin(session render.Session, accessesRaw string, imagesTable string, symbolsTable string, sourceFilesTable string) (string, error) {
 	accessesJoined := session.Manifest().AddTempTable()
 	// #nosec G201 -- table/view names come from manifest-generated identifiers; values are parameterized.
-	joinSQL := fmt.Sprintf(string(accessesJoinSQL), accessesJoined, accessesRaw, imagesTable, symbolsTable)
+	joinSQL := fmt.Sprintf(string(accessesJoinSQL), accessesJoined, accessesRaw, imagesTable, sourceFilesTable, symbolsTable)
 	if _, err := session.Database().Conn.ExecContext(context.Background(), joinSQL); err != nil {
 		return "", err
 	}
@@ -216,7 +216,7 @@ func (r *CacheSharingRenderer) Initialize(session render.Session, resolvedDataSo
 			return err
 		}
 
-		accessesJoined, err := r.createAccessesJoin(session, accessesRaw, imagesTables[i].Name, symbolsTables[i].Name)
+		accessesJoined, err := r.createAccessesJoin(session, accessesRaw, imagesTables[i].Name, symbolsTables[i].Name, sourceFilesTables[i].Name)
 		if err != nil {
 			return err
 		}

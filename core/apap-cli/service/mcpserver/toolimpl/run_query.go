@@ -20,7 +20,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 const (
@@ -30,7 +30,9 @@ const (
 
 var errRunQueryRowsTooLarge = errors.New("serialized response exceeds the size limit while decoding rows")
 
-type RunQueryTool struct{}
+type RunQueryTool struct {
+	SourceSharingAcknowledged bool
+}
 
 type runQueryInput struct {
 	RunID     string `json:"run_id"`
@@ -132,7 +134,7 @@ var runQueryOutputSchema = &jsonschema.Schema{
 	},
 }
 
-func (RunQueryTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
+func (t RunQueryTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "run_query",
 		Description: "Runs one DuckDB SELECT statement against rendered Performix data. Pass exactly one of run_id or session_id. " +
@@ -142,7 +144,10 @@ func (RunQueryTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 		Annotations:  &mcp.ToolAnnotations{ReadOnlyHint: true},
 		InputSchema:  runQueryInputSchema,
 		OutputSchema: runQueryOutputSchema,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input runQueryInput) (*mcp.CallToolResult, runQueryResult, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input runQueryInput) (*mcp.CallToolResult, runQueryResult, error) {
+		if result, err := checkSourceSharingAcknowledgement(req, t.SourceSharingAcknowledged); result != nil || err != nil {
+			return result, runQueryResult{}, err
+		}
 		result, err := executeRunQuery(ctx, toolDeps.Engine, input)
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true}, runQueryResult{

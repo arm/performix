@@ -6,11 +6,13 @@ package toolintegrations
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/jstest"
 	"github.com/Arm-Debug/apap-cli/apap-engine/jstest/mocks"
@@ -28,6 +30,10 @@ func TestLinuxPerfProperties(t *testing.T) {
 		props := h.ToolProperties()
 		assert.True(t, props.SupportsWorkloadLaunch)
 		assert.Empty(t, props.Migrations)
+		require.Len(t, props.Deployments, 1)
+		require.Len(t, props.Deployments[0].Dependencies, 1)
+		assert.Equal(t, "cache_sharing-1.1.0-py3-none-any.whl", props.Deployments[0].Dependencies[0].Name)
+		assert.Equal(t, "1.1.0", props.Deployments[0].Dependencies[0].Version)
 	})
 }
 
@@ -37,6 +43,8 @@ func TestLinuxPerfProbe(t *testing.T) {
 
 		mockEngine := mocks.MockToolEngine{}
 		mockEngine.On("ExecCommand", []string{"perf", "--version"}, tool_goja.ExecOptions{}).
+			Return(h.ToJSValPromise(t, process.CommandResult{}, nil))
+		mockEngine.On("ExecCommand", []string{"addr2line", "--version"}, tool_goja.ExecOptions{}).
 			Return(h.ToJSValPromise(t, process.CommandResult{}, nil))
 		mockEngine.On("ExecCommand", []string{"python3", "--version"}, tool_goja.ExecOptions{}).
 			Return(h.ToJSValPromise(t, process.CommandResult{Rc: 5}, nil))
@@ -48,7 +56,45 @@ func TestLinuxPerfProbe(t *testing.T) {
 		assert.Equal(t, message.EngineRecipeparserJsRecipeStageReadinessMessage, result.Advice[0].MessageCode)
 		assert.Equal(t, "error", result.Advice[0].Level)
 		assert.Contains(t, result.Advice[0].Metadata["message"], "Python3 is not available")
+		mockEngine.AssertExpectations(t)
 	})
+
+	for _, addr2lineRC := range []int32{0, 1, process.CommandNotFoundExitCode} {
+		t.Run(fmt.Sprintf("addr2line exit code %d", addr2lineRC), func(t *testing.T) {
+			h := jstest.LoadToolIntegration(t, "linux_perf")
+			mockEngine := mocks.MockToolEngine{}
+			mockEngine.On("ExecCommand", []string{"perf", "--version"}, tool_goja.ExecOptions{}).
+				Return(h.ToJSValPromise(t, process.CommandResult{}, nil))
+			mockEngine.On("ExecCommand", []string{"addr2line", "--version"}, tool_goja.ExecOptions{}).
+				Return(h.ToJSValPromise(t, process.CommandResult{Rc: addr2lineRC}, nil))
+			mockEngine.On("ExecCommand", []string{"python3", "--version"}, tool_goja.ExecOptions{}).
+				Return(h.ToJSValPromise(t, process.CommandResult{}, nil))
+			mockEngine.On("ExecCommand", []string{"python3", "-c", "import sys; sys.exit(sys.version_info < (3, 7))"}, tool_goja.ExecOptions{}).
+				Return(h.ToJSValPromise(t, process.CommandResult{}, nil))
+			mockEngine.On("CreateTempDir").Return(h.ToJSValPromise(t, "/tmp/probe", nil))
+			for _, cmd := range [][]string{
+				{"python3", "-m", "venv", "/tmp/probe/probe-venv"},
+				{"/tmp/probe/probe-venv/bin/python3", "--version"},
+				{"/tmp/probe/probe-venv/bin/pip3", "--version"},
+			} {
+				mockEngine.On("ExecCommand", cmd, tool_goja.ExecOptions{}).
+					Return(h.ToJSValPromise(t, process.CommandResult{}, nil))
+			}
+
+			result, err := h.ToolProbe(t, &mockEngine, tool_goja.ToolContext{})
+			require.NoError(t, err)
+			assert.Equal(t, addr2lineRC == 0, result.Available)
+			if addr2lineRC == 0 {
+				assert.Empty(t, result.Advice)
+			} else {
+				require.Len(t, result.Advice, 1)
+				assert.Equal(t, "error", result.Advice[0].Level)
+				assert.Equal(t, message.EngineRecipeparserJsRecipeStageReadinessMessage, result.Advice[0].MessageCode)
+				assert.Contains(t, result.Advice[0].Metadata["message"], "Install the binutils system package")
+			}
+			mockEngine.AssertExpectations(t)
+		})
+	}
 }
 
 func TestLinuxPerfRun(t *testing.T) {

@@ -150,6 +150,10 @@
             "Severity": "Info",
             "Message": "MCP client: {client} was not detected."
           },
+          "CLIENT_INCOMPATIBLE": {
+            "Severity": "Info",
+            "Message": "MCP client: {client} is not compatible."
+          },
           "CHECKED": {
             "Severity": "Info",
             "Message": "Checked:"
@@ -489,11 +493,11 @@
         }
       },
       "daemon": {
-        "SERVER_AUTH_PORTS_MUST_DIFFER": {
+        "SERVER_HOSTNAME_REQUIRES_EXPLICIT_PORT": {
           "Severity": "Error",
-          "Message": "The server and auth ports must be different.",
-          "Explanation": "--server-port and --auth-port have the same value. Each service requires a different port.",
-          "Advice": "Choose distinct port numbers for the main service and the auth service."
+          "Message": "`--server-hostname` requires an explicit port.",
+          "Explanation": "`--server-hostname` is set to `{host}` but `--server-port` is set to the default value zero. Automatic port allocation is incompatible with non-default hostnames.",
+          "Advice": "Specify a non-zero value for `--server-port`, or use the default `--server-hostname` of `127.0.0.1` for automatic port allocation."
         },
         "stop": {
           "NO_RESPONSIVE_DAEMON": {
@@ -770,6 +774,12 @@
         "Explanation": "The agent encountered an unexpected internal error while processing the {request} API request.",
         "Advice": "Retry the operation. If the issue continues, contact Arm support."
       },
+      "INVALID_LAUNCH_REQUEST": {
+        "Severity": "Error",
+        "Message": "{$PRODUCT_FULL_NAME} could not handle the process launch request.",
+        "Explanation": "The process launch request contains an invalid executable, argument, environment setting, or working directory.",
+        "Advice": "Check the process launch values and try again. If the issue continues, contact Arm support."
+      },
       "MISSING_LAUNCH_REQUEST": {
         "Severity": "Error",
         "Message": "{$PRODUCT_FULL_NAME} could not process the API request.",
@@ -779,7 +789,7 @@
       "MISSING_COMMAND": {
         "Severity": "Error",
         "Message": "{$PRODUCT_FULL_NAME} could not handle the API request.",
-        "Explanation": "The {$PRODUCT_FULL_NAME} agent received an API request to launch a new process, but the request did not include the required command string.",
+        "Explanation": "The {$PRODUCT_FULL_NAME} agent received an API request to launch a new process, but the request did not include the required executable.",
         "Advice": "If the issue continues, contact Arm support."
       }
     },
@@ -872,6 +882,12 @@
         "Explanation": "{$PRODUCT_FULL_NAME} cannot find the client application or management command required by this client.",
         "Advice": "Install the MCP client in a standard location, then run `apx mcp doctor {client}` to see the locations checked."
       },
+      "CLIENT_VERSION_UNSUPPORTED": {
+        "Severity": "Error",
+        "Message": "The installed MCP client `{client}` is not compatible.",
+        "Explanation": "{client} version `{version}` does not support MCP servers. Version `{minimumVersion}` or later is required.",
+        "Advice": "Update {client} to version `{minimumVersion}` or later, then try again."
+      },
       "CONFIG_CONFLICT": {
         "Severity": "Error",
         "Message": "The MCP client `{client}` already has a different `{$MCP_SERVER_NAME}` server configuration.",
@@ -961,12 +977,6 @@
         }
       },
       "connection_creator": {
-        "INSUFFICIENT_PRIVILEGES": {
-          "Severity": "Error",
-          "Message": "{$PRODUCT_FULL_NAME} could not start the agent server on the {locality}.",
-          "Explanation": "The agent server requires administrator or root privileges, but the {locality} does not enable privilege elevation.",
-          "Advice": "Check the privilege elevation configuration, such as `sudo`, on the {locality}. See 'Prepare your target for {$PRODUCT_FULL_NAME} connections' in the {$PRODUCT_FULL_NAME} User Guide. If {$PRODUCT_FULL_NAME} still cannot start the agent server, contact Arm support."
-        },
         "AGENT_NOT_DEPLOYED": {
           "Severity": "Error",
           "Message": "{$PRODUCT_FULL_NAME} could not find the launch script for the agent server on the target.",
@@ -1260,6 +1270,14 @@
       }
     },
     "conductor": {
+      "adb": {
+        "ADB_NOT_FOUND": {
+          "Severity": "Error",
+          "Message": "Unable to use Android Debug Bridge (adb).",
+          "Explanation": "The configured adb executable could not be found.",
+          "Advice": "Verify that adb is installed. If it is installed but not found, provide the path to the adb executable with the `--adb-path` option, then retry."
+        }
+      },
       "file_transfer": {
         "CREATE_DEST_FILE": {
           "Severity": "Error",
@@ -1531,6 +1549,18 @@
           "Explanation": "{$PRODUCT_FULL_NAME} encountered an error while connecting to the host at `{nextHost}` from the previous jump node `{prevHost}`. Possible causes include `{nextHost}` sending an unexpected pre-authentication banner, the firewall blocking the connection, or another connection error occurring.",
           "Advice": "Check that you can manually connect to `{nextHost}` from the previous jump node `{prevHost}` using SSH. If {$PRODUCT_FULL_NAME} still cannot connect to this host, contact Arm support."
         },
+        "DIRECT_CONN_FAILED_CLOSED": {
+          "Severity": "Error",
+          "Message": "The SSH connection to `{hostName}` closed unexpectedly.",
+          "Explanation": "The connection was reset or closed before SSH authentication completed.",
+          "Advice": "Retry the connection. If the problem persists, check the SSH server logs and any firewall or connection limits that could reject new connections."
+        },
+        "JUMP_CONN_FAILED_CLOSED": {
+          "Severity": "Error",
+          "Message": "The SSH connection to `{nextHost}` through `{prevHost}` closed unexpectedly.",
+          "Explanation": "The connection was reset or closed before SSH authentication completed.",
+          "Advice": "Retry the connection. If the problem persists, check the SSH server logs on both hosts and any firewall or connection limits that could reject new connections."
+        },
         "FIND_KEYS_FAILED_DIRECT": {
           "Severity": "Error",
           "Message": "{$PRODUCT_FULL_NAME} cannot find an authorized SSH private key for `{hostName}` because your local machine cannot connect to this host.",
@@ -1590,24 +1620,6 @@
           "Message": "{$PRODUCT_FULL_NAME} can only list Android packages for Android targets.",
           "Explanation": "The selected target has type `{targetType}`, but Android package discovery requires an Android target.",
           "Advice": "Select a connected Android target and retry the operation."
-        },
-        "RENDER_PARAM_CONFLICT": {
-          "Severity": "Error",
-          "Message": "Prepare-render rejected the request because multiple visualization parameters map to the same render parameter.",
-          "Explanation": "The visualization parameters include conflicting values for the render parameter `{renderParam}`. This is not supported. Conflicting keys: {keys}.",
-          "Advice": "Ensure that at most one visualization parameter sets each render parameter in a PrepareRender call."
-        },
-        "RENDER_BINDINGS_CHANGED": {
-          "Severity": "Error",
-          "Message": "Prepare-render rejected the request because render parameter bindings would change.",
-          "Explanation": "The visualization parameters would change the mapping between visualization parameters and recipe render parameters. This is not supported for re-rendering. Details: {detail}",
-          "Advice": "Retry with visualization parameters that do not change the recipe's parameter bindings."
-        },
-        "RENDER_TOPOLOGY_CHANGED": {
-          "Severity": "Error",
-          "Message": "Prepare-render rejected the request because render topology would change.",
-          "Explanation": "The visualization parameters would change the renderers or visualizations returned by the recipe. This is not supported for re-rendering. Details: {detail}",
-          "Advice": "Retry with visualization parameters that do not change the recipe's render topology."
         },
         "RENDER_FAILED": {
           "Severity": "Error",
@@ -2192,6 +2204,26 @@
           "Advice": "Choose a core type reported for this Run and try again."
         }
       },
+      "trace_data_renderer": {
+        "CONFIG_INVALID": {
+          "Severity": "Error",
+          "Message": "The trace data renderer configuration is invalid.",
+          "Explanation": "The trace data renderer cannot use the supplied track and span configuration.",
+          "Advice": "Check the trace data renderer configuration in the recipe or render request, then retry."
+        },
+        "INPUT_INVALID": {
+          "Severity": "Error",
+          "Message": "The trace data renderer input is invalid.",
+          "Explanation": "A trace input is missing or does not satisfy the trace fragment schema.",
+          "Advice": "Check the trace renderer input bindings and schemas, then retry."
+        },
+        "MATERIALIZATION_FAILED": {
+          "Severity": "Error",
+          "Message": "The trace data renderer could not create its output tables.",
+          "Explanation": "An error occurred while materializing the canonical trace tracks, spans, or metadata.",
+          "Advice": "Check the underlying technical detail. If the input is valid and the issue continues, contact Arm support."
+        }
+      },
       "sql_renderer": {
         "CONFIG_INVALID_JSON": {
           "Severity": "Error",
@@ -2327,8 +2359,8 @@
         },
         "VIEW_CREATE_FAILED": {
           "Severity": "Error",
-          "Message": "The SQL renderer could not create the output view `{viewName}`.",
-          "Explanation": "The SQL renderer resolved the query for output port `{portName}`, but the render database could not create the view `{viewName}`.",
+          "Message": "The SQL renderer could not create the output `{viewName}`.",
+          "Explanation": "The SQL renderer resolved the query for output port `{portName}`, but the render database could not create the output table or view `{viewName}`.",
           "Advice": "Check the SQL query, placeholder bindings, and referenced run content, then retry."
         }
       },
@@ -2829,6 +2861,24 @@
           "Explanation": "{$PRODUCT_FULL_NAME} attempted to run `{request}` with administrator or root privileges on the target, but the request was not permitted.",
           "Advice": "See 'Prepare your target for {$PRODUCT_FULL_NAME} connections' in the {$PRODUCT_FULL_NAME} User Guide. Check the target privilege elevation configuration. If {$PRODUCT_FULL_NAME} still cannot elevate privileges, contact Arm support."
         }
+      },
+      "COUNTER_COLLECTION_INVALID": {
+        "Severity": "Error",
+        "Message": "The CPU counter collection request could not be used.",
+        "Explanation": "The request, capability data, or tool integration does not support the CPU counter collection contract.",
+        "Advice": "Check the Recipe capability request and use a tool integration that sets `capabilityInterfaceVersion` to `1.0` and implements the capability request contract."
+      },
+      "OPTIONAL_CAPABILITY_UNAVAILABLE": {
+        "Severity": "Warning",
+        "Message": "Optional tool capability {capability} is unavailable; collection can continue without it.",
+        "Explanation": "The tool cannot provide an optional capability requested by this Recipe on the current Target.",
+        "Advice": "Continue without this capability, or use a Target that supports it if you need its data."
+      },
+      "REQUIRED_CAPABILITY_UNAVAILABLE": {
+        "Severity": "Error",
+        "Message": "Requested tool capability {capability} is unavailable.",
+        "Explanation": "The tool cannot provide a capability required by this Recipe on the current Target.",
+        "Advice": "Use a Target that supports the requested capability, or choose a Recipe configuration that does not require it."
       }
     }
   },
@@ -2874,6 +2924,12 @@
       }
     },
     "cpu_microarchitecture": {
+      "PARTIAL_CPU_SUPPORT": {
+        "Severity": "Warning",
+        "Message": "CPU Microarchitecture supports only some CPU cores on this target.",
+        "Explanation": "No compatible telemetry specification is available for CPU types `{cpuNames}` on cores `{coreNumbers}`. CPU Microarchitecture analysis is unavailable for these CPU types.",
+        "Advice": "You can continue with the recipe on supported cores. Use a target with compatible telemetry specifications for all CPU types if you need to analyze every CPU type."
+      },
       "SOFT_LOCKUP_RISK": {
         "Severity": "Warning",
         "Message": "The collection might make the target unresponsive.",
@@ -2882,17 +2938,23 @@
       },
       "TELEMETRY_SPECIFICATION_UNAVAILABLE": {
         "Severity": "Error",
-        "Message": "{$PRODUCT_FULL_NAME} cannot collect CPU Microarchitecture data.",
-        "Explanation": "The CPU Microarchitecture recipe requires a telemetry specification for primary CPU `{cpuName}`. The specification determines which metric groups to collect, but no available specification supports this CPU.",
-        "Advice": "Use a target whose primary CPU is supported by the CPU Microarchitecture recipe."
+        "Message": "None of the CPUs on this target are supported by CPU Microarchitecture.",
+        "Explanation": "The CPU Microarchitecture recipe requires a compatible telemetry specification for at least one CPU type to determine which metric groups to collect. No compatible specification is available for any CPU type on this target.",
+        "Advice": "Use a target with at least one CPU type supported by the CPU Microarchitecture recipe."
       }
     },
     "instruction_mix": {
-      "TELEMETRY_SPECIFICATION_UNAVAILABLE": {
+      "PARTIAL_CPU_SUPPORT": {
         "Severity": "Warning",
-        "Message": "Some Instruction Mix measurement details will be unavailable.",
-        "Explanation": "No compatible telemetry specification is available for the primary CPU, `{cpuName}`. Dynamic Instruction Mix data can still be collected and rendered, but some measurement descriptions and grouping information will not be available.",
-        "Advice": "You can continue with the recipe. To include complete measurement details, use a target whose primary CPU has a compatible telemetry specification."
+        "Message": "Dynamic Instruction Mix results exclude some CPU cores.",
+        "Explanation": "No compatible telemetry specification is available for CPU types `{cpuNames}` on cores `{coreNumbers}`. Data from these cores is excluded from the dynamic analysis and will not appear in its results.",
+        "Advice": "You can continue with the recipe, but the dynamic results will cover only supported cores. Use a target with compatible telemetry specifications for all CPU types if you need to analyze every CPU type."
+      },
+      "TELEMETRY_SPECIFICATION_UNAVAILABLE": {
+        "Severity": "Error",
+        "Message": "None of the CPUs on this target are supported by Dynamic Instruction Mix.",
+        "Explanation": "Dynamic Instruction Mix requires a compatible telemetry specification for at least one CPU type. No compatible specification is available for any CPU type on this target.",
+        "Advice": "Use a target with at least one supported CPU type, or select static analysis mode to analyze a workload binary without collecting dynamic data."
       },
       "NO_WORKLOAD_STATIC": {
         "Severity": "Error",
@@ -3081,6 +3143,12 @@
         "Message": "Failed to check privilege requirements for the `neoprof` tool on the target.",
         "Explanation": "{$PRODUCT_FULL_NAME} attempted to retrieve the performance monitoring capabilities (`{capabilities}`) on the target, but the command `{cmd}` failed with exit code `{exitCode}`.",
         "Advice": "Ensure the target mounts `/proc` and supports Linux Capabilities. If the issue continues, contact Arm support."
+      },
+      "WORKING_DIR_NOT_ACCESSIBLE": {
+        "Severity": "Error",
+        "Message": "The workload directory path `{path}` cannot be used on the target.",
+        "Explanation": "{$PRODUCT_FULL_NAME} could not use `{path}` as the working directory because it does not exist, is not a directory, or is not accessible.",
+        "Advice": "Ensure that `{path}` exists on the target, is a directory, and can be accessed by the target login user."
       }
     },
     "asct": {
@@ -3474,14 +3542,50 @@
         "Explanation": "{$PRODUCT_FULL_NAME} failed to capture any samples during profiling. This could be because the workload did not run for long enough, or because of an issue with the profiling configuration.",
         "Advice": "Rerun the recipe with a higher sampling frequency or a longer timeout. If the issue continues, contact Arm support."
       },
+      "NO_SAMPLES_COLLECTED_JAVA_JAR_FILE_NOT_FOUND": {
+        "Severity": "Error",
+        "Message": "{$PRODUCT_FULL_NAME} did not capture samples while profiling the workload.",
+        "Explanation": "Java could not access `{jarFile}` on the target.",
+        "Advice": "Check that `{jarFile}` exists on the target and is readable by the user running the workload. If `{jarFile}` is a relative path, check that the workload working directory is correct. Then run the recipe again."
+      },
       "WORKLOAD_FILE_NOT_FOUND": {
         "Severity": "Error",
         "Message": "{$PRODUCT_FULL_NAME} cannot find the workload file or directory path.",
         "Explanation": "{$PRODUCT_FULL_NAME} cannot find the specified workload on the target.",
         "Advice": "If you specified an absolute path to the workload, ensure that the workload exists at this location on the target. Alternatively, set the current working directory using the `--working-dir` flag. If the issue continues, contact Arm support."
+      },
+      "CPU_COUNTER_OPTIONS_INVALID": {
+        "Severity": "Error",
+        "Message": "The tool options conflict with explicit CPU counter selection.",
+        "Explanation": "Explicit CPU counter selection requires samples mode without metric groups or IPC collection. Selected counters also require timeline output.",
+        "Advice": "Use samples mode, disable metric groups and IPC collection, and enable timeline output when requesting counters."
+      },
+      "CPU_COUNTER_OPTIONAL_UNAVAILABLE": {
+        "Severity": "Warning",
+        "Message": "Optional capability {capability} was skipped.",
+        "Explanation": "The current target does not have a supported, unambiguous CPU counter selection.",
+        "Advice": "Use a supported target if this counter is needed."
+      },
+      "CPU_COUNTER_OUTPUT_UNVERIFIED": {
+        "Severity": "Error",
+        "Message": "Required capability {capability} could not be verified.",
+        "Explanation": "The captured counter selection or its analyzed output is missing or incomplete.",
+        "Advice": "Retry collection. If the issue continues, contact Arm support with the Run logs."
+      },
+      "CPU_COUNTER_OPTIONAL_INCOMPLETE": {
+        "Severity": "Warning",
+        "Message": "Optional capability {capability} has incomplete output.",
+        "Explanation": "The requested CPU counter output could not be fully verified.",
+        "Advice": "Retry collection if this counter is needed. If the issue continues, contact Arm support with the Run logs."
       }
     },
     "linux_perf": {
+      "PEER_SNOOP_UNAVAILABLE": {
+        "Severity": "Warning",
+        "Message": "Required `perf` tool on the target might not support Cache Sharing Analysis.",
+        "Explanation": "Installed `perf` tool on the target does not support peer-snoop. Results might be incomplete or empty.",
+        "Advice": "Update it to a version that is compatible with the Arm SPE on your target architecture, then check recipe readiness again."
+      },
       "POST_PROCESS_FAILED": {
         "Severity": "Error",
         "Message": "{$PRODUCT_FULL_NAME} could not post-process perf c2c output.",

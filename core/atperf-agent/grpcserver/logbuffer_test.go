@@ -10,7 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 func TestLogBuffer_BasicSendReceive(t *testing.T) {

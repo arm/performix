@@ -75,6 +75,10 @@ func TestListTarget(t *testing.T) {
 
 		var execErr *exec.Error
 		require.ErrorAs(t, err, &execErr)
+		var msgErr *message.MessageImpl
+		require.ErrorAs(t, err, &msgErr)
+		assert.Equal(t, message.EngineConductorAdbAdbNotFound, msgErr.Code())
+		require.ErrorIs(t, err, exec.ErrNotFound)
 		assert.Equal(t, "configured-adb-that-does-not-exist", execErr.Name)
 	})
 
@@ -490,7 +494,7 @@ emulator-5556  no       android  n/a              emulator-5556
 		assert.Equal(t, message.CommonUnsupportedTargetType, err.(*message.MessageImpl).Code())
 	})
 
-	t.Run("discover returns adb error", func(t *testing.T) {
+	t.Run("discover preserves non-not-found adb errors", func(t *testing.T) {
 		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
 		viper.Set(enableAndroidTargetsConfigKey, true)
 		t.Cleanup(func() {
@@ -504,6 +508,8 @@ emulator-5556  no       android  n/a              emulator-5556
 		err := listTargetsCommand(&bytes.Buffer{}, &mtm, discoverer, true)
 
 		require.ErrorIs(t, err, adbErr)
+		var msgErr *message.MessageImpl
+		assert.False(t, errors.As(err, &msgErr))
 		assert.Equal(t, 1, discoverer.calls)
 	})
 }

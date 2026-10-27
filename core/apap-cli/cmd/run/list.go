@@ -6,6 +6,7 @@ package run
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
@@ -32,10 +33,20 @@ func printRuns(runs clijson.CLIRunSummaryListing, out io.Writer) {
 
 	// Write table header and rows
 	if l > 0 {
-		t.AppendHeader(table.Row{"ID", "Name", "Start Time", "End Time", "Recipe Name", "Run Result", "Target Host"})
+		t.AppendHeader(table.Row{"ID", "Name", "Group", "Start Time", "End Time", "Recipe Name", "Run Result", "Target Host"})
 
 		for _, summary := range runs.Runs {
-			t.AppendRow(table.Row{summary.ID, summary.Name, summary.StartTime, summary.EndTime, summary.RecipeName, summary.RunResult, summary.Target})
+			// Group names are user-specified labels, so preserve their exact case.
+			t.AppendRow(table.Row{
+				strings.ToLower(summary.ID),
+				strings.ToLower(summary.Name),
+				summary.Group,
+				strings.ToLower(summary.StartTime),
+				strings.ToLower(summary.EndTime),
+				strings.ToLower(summary.RecipeName),
+				strings.ToLower(summary.RunResult),
+				strings.ToLower(summary.Target),
+			})
 		}
 	}
 
@@ -47,7 +58,6 @@ func printRuns(runs clijson.CLIRunSummaryListing, out io.Writer) {
 	// Render table
 	t.SetStyle(table.StyleBold)
 	t.Style().Format.Header = text.FormatUpper
-	t.Style().Format.Row = text.FormatLower
 	t.Style().Format.Footer = text.FormatLower
 	t.Render()
 

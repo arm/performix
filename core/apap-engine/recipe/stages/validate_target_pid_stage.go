@@ -9,7 +9,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 //ValidateTargetPIDStage defines a struct type that's required for validating

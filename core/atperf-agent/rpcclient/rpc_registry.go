@@ -18,7 +18,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 // getRPCHandlers returns a map of RPC method names to handler functions

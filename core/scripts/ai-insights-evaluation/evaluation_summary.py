@@ -15,7 +15,7 @@ Use `render_console_summary()` for terminal output and
  `render_markdown_summary()` for the GitHub Actions summary.
 
 Example:
-    attempts = [{"ai_test_id": "test_case_03", "ai_mode": "rest", "pytest_outcome": "passed"}]
+    attempts = [{"ai_test_id": "test_case_03", "ai_mode": "performix_mcp", "pytest_outcome": "passed"}]
     print(render_console_summary(attempts))
 """
 
@@ -39,12 +39,17 @@ from performance_quality import (
 )
 
 
-MODE_ORDER = ("rest", "hackathon_mcp", "performix_mcp")
+MODE_ORDER = (
+    "performix_mcp",
+    "performix_mcp_run_query",
+)
 MODE_LABELS = {
-    "rest": "REST",
-    "hackathon_mcp": "Hackathon MCP",
     "performix_mcp": "Performix MCP",
+    "performix_mcp_run_query": "Performix MCP (run_query)",
 }
+MCP_MODES = frozenset(
+    {"performix_mcp", "performix_mcp_run_query"}
+)
 TOKEN_KEYS = ("ai_input_tokens", "ai_output_tokens", "ai_reasoning_output_tokens")
 
 
@@ -131,9 +136,14 @@ def _build_summary_data(
 
 
 def _rich_flat_table(summary: SummaryTable) -> Table:
-    table = Table(box=box.SIMPLE_HEAVY, padding=(0, 1, 0, 0))
+    table = Table(box=box.SIMPLE_HEAVY, padding=(0, 1, 0, 0), expand=True)
     for column in summary.columns:
-        table.add_column(column.title)
+        if column.key == "testcase" or column.key.endswith(":runtime"):
+            table.add_column(column.title, no_wrap=True)
+        elif column.key.endswith(":details"):
+            table.add_column(column.title, ratio=1, min_width=20)
+        else:
+            table.add_column(column.title)
     for row in summary.rows:
         table.add_row(*[
             _rich_cell(row.get(column.key, Cell("-")))
@@ -301,10 +311,10 @@ def _mode_columns(mode: str) -> list[Column]:
 
 
 def _console_mode_label(mode: str, label: str) -> str:
-    if mode == "hackathon_mcp":
-        return "Hackathon"
     if mode == "performix_mcp":
         return "Performix"
+    if mode == "performix_mcp_run_query":
+        return "Performix\n(run_query)"
     return label
 
 
@@ -408,9 +418,8 @@ def _multiple_attempt_result(
     attempts: list[dict[str, str]],
     results: list[tuple[str, str]],
 ) -> tuple[str, str]:
-    statuses = [status for status, _ in results]
-    if len(set(statuses)) == 1:
-        return statuses[0], statuses[0].upper()
+    if len(set(results)) == 1:
+        return results[0]
 
     labelled_results = []
     for index, (attempt, result) in enumerate(zip(attempts, results), start=1):
@@ -430,6 +439,10 @@ def _format_mcp_detail_lines(
     tool_failures = _format_mcp_tool_failures(attempts)
     truncation = _format_tool_output_truncation(attempts)
     lines = [details] if details else []
+    for index, attempt in enumerate(attempts, start=1):
+        if limit := attempt.get("ai_agent_timeout_seconds"):
+            prefix = f"attempt {_attempt_label(attempt, index)}: " if len(attempts) > 1 else ""
+            lines.append(f"{prefix}Timeout: {limit}s limit; judge not run")
     lines.extend(_format_performance_quality_lines(attempts))
     if tool_failures:
         lines.append(tool_failures)
@@ -453,6 +466,8 @@ def _attempt_label(attempt: dict[str, str], fallback: int) -> str:
 
 
 def _single_attempt_status_text(attempt: dict[str, str]) -> str:
+    if attempt.get("ai_agent_timeout_seconds"):
+        return "TIMEOUT"
     display_score = _single_display_score(attempt)
     if display_score:
         return display_score.upper()
@@ -546,7 +561,7 @@ def _format_unique_property(attempts: list[dict[str, str]], key: str) -> str:
 
 
 def _is_mcp_mode_name(mode: str) -> bool:
-    return mode.endswith("_mcp")
+    return mode in MCP_MODES
 
 
 def _format_token_usage(attempts: list[dict[str, str]]) -> str:
@@ -566,7 +581,9 @@ def _format_mcp_calls(attempts: list[dict[str, str]]) -> str:
     calls += _sum_int_property(attempts, "ai_mcp_tool_calls_failed")
     if calls == 0:
         return ""
-    return f"calls={calls}"
+    rounds = _sum_int_property(attempts, "ai_mcp_tool_rounds")
+    rounds_text = f"rounds={rounds} " if rounds else ""
+    return f"{rounds_text}calls={calls}"
 
 
 def _format_mcp_tool_failures(attempts: list[dict[str, str]]) -> str:

@@ -13,9 +13,11 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/clijson"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 func TestMCPDoctorShowsDiscoveryAndSetupInstructions(t *testing.T) {
@@ -113,6 +115,75 @@ func TestMCPDoctorGuidesMCPInstallation(t *testing.T) {
 }
 
 func TestMCPDoctorExplainsRegistrationFailure(t *testing.T) {
+	t.Run("unsupported version takes precedence over unreadable configuration", func(t *testing.T) {
+		status := &apapproto.MCPClientStatus{
+			ClientId:          "vscode",
+			DisplayName:       "VS Code",
+			Detected:          true,
+			ExecutablePath:    proto.String("/usr/bin/code"),
+			RegistrationState: apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_UNREADABLE,
+			Error: &apapproto.ErrorChain{Root: &apapproto.ErrorNode{
+				Message: &apapproto.MessageDetails{
+					Code: "engine.mcp_registration.CLIENT_VERSION_UNSUPPORTED",
+					Metadata: map[string]string{
+						"client":         "VS Code",
+						"version":        "1.97.0",
+						"minimumVersion": "1.99.0",
+					},
+				},
+			}},
+		}
+		command := newMCPDoctorCmd(
+			registrationTestDeps(&registrationTestService{listing: &apapproto.MCPClientListing{
+				Server:  &apapproto.MCPServerLaunchConfiguration{Name: "arm-performix"},
+				Clients: []*apapproto.MCPClientStatus{status},
+			}}),
+		)
+		command.SilenceUsage = true
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetArgs([]string{"vscode"})
+
+		_, err := command.ExecuteC()
+		require.ErrorIs(t, err, clijson.ErrorAlreadyHandled)
+		plainOutput := text.StripEscape(output.String())
+		assert.Contains(t, plainOutput, "✗ MCP client: VS Code is not compatible.")
+		assert.Contains(t, plainOutput, "Error: The installed MCP client `VS Code` is not compatible.")
+		assert.Contains(t, plainOutput, "VS Code version `1.97.0` does not support MCP servers.")
+		assert.Contains(t, plainOutput, "Update VS Code to version `1.99.0` or later")
+		assert.Contains(t, plainOutput, "engine.mcp_registration.CLIENT_VERSION_UNSUPPORTED")
+		assert.NotContains(t, plainOutput, "apx mcp install vscode")
+		assert.NotContains(t, plainOutput, "configuration could not be read")
+		assert.Len(t, doctorOutput(status).Checks, 1)
+	})
+
+	t.Run("malformed version output", func(t *testing.T) {
+		for _, state := range []apapproto.MCPClientRegistrationState{
+			apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_NOT_CONFIGURED,
+			apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_CONFIGURED,
+		} {
+			status := &apapproto.MCPClientStatus{
+				ClientId:          "vscode",
+				DisplayName:       "VS Code",
+				Detected:          false,
+				RegistrationState: state,
+				Error: &apapproto.ErrorChain{Root: &apapproto.ErrorNode{
+					Message: &apapproto.MessageDetails{
+						Code: string(message.EngineMcpRegistrationClientUnavailable),
+						Metadata: map[string]string{
+							"client": "VS Code",
+						},
+					},
+				}},
+			}
+			output := doctorOutput(status)
+			assert.False(t, output.Ready)
+			require.Len(t, output.Checks, 1)
+			assert.Equal(t, "fail", output.Checks[0].Status)
+			assert.NotContains(t, output.Checks[0].Remediation, "apx mcp install vscode")
+		}
+	})
+
 	t.Run("conflict", func(t *testing.T) {
 		status := &apapproto.MCPClientStatus{
 			ClientId:          "codex",

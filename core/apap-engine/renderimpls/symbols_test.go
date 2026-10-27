@@ -27,7 +27,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
-	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func setUpDatabase(db *sql.Conn, tableName string, t *testing.T) {
@@ -400,6 +400,47 @@ func TestLoadSourceCodeAttributionTablesMapsPeriodicSampleFiles(t *testing.T) {
 		periodicTargetPath,
 	).Scan(&hostLocation))
 	assert.Equal(t, filepath.Join(hostRoot, "usr/include/c++/13/bits/random.h"), hostLocation)
+}
+
+func TestLoadSymbolTablesEmptyAndInvalidSymbols(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		version string
+		content string
+		wantErr bool
+	}{
+		{name: "empty 1.0", version: "1.0.0", content: "[]"},
+		{name: "empty 1.1", version: "1.1.0", content: "[\n]"},
+		{name: "missing fields", version: "1.0.0", content: `[{"id":1}]`, wantErr: true},
+		{name: "malformed JSON", version: "1.0.0", content: `[`, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			db := newTestDatabase(t)
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "symbols.json"), []byte(tt.content), perms.LocalFilePerm))
+			model := cdf.NewOnDiskModel(dir, &cdf.Manifest{Entries: []cdf.ManifestEntry{{
+				Path:          "symbols.json",
+				ComponentType: cdf.ComponentType{Name: "sl-collect-symbols", SchemaVersion: tt.version},
+			}}}, cdf.Metadata{})
+			var outputs []string
+			err := LoadSymbolTables(db.Conn, model, []string{"symbols.json"}, func(name string) string {
+				outputs = append(outputs, name)
+				return name
+			})
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Empty(t, outputs)
+				return
+			}
+			require.NoError(t, err)
+			assert.ElementsMatch(t, []string{"source_files", "images", "symbols"}, outputs)
+			for _, table := range outputs {
+				var count int
+				require.NoError(t, db.Conn.QueryRowContext(context.Background(), fmt.Sprintf(`SELECT count(*) FROM "%s"`, table)).Scan(&count))
+				assert.Zero(t, count)
+			}
+		})
+	}
 }
 
 func TestAssertSymbolsFieldsExist(t *testing.T) {

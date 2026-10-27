@@ -41,6 +41,12 @@ func TestCmdValidation(t *testing.T) {
 		expectedErrContains string
 	}{
 		{
+			name:                "counter schema validation requires stdout",
+			inputFileNames:      []string{"a.parquet"},
+			flags:               []string{"--validate-counter-series"},
+			expectedErrContains: "requires --stdout",
+		},
+		{
 			name:                "rejects output directory and stdout together",
 			inputFileNames:      []string{"a.parquet"},
 			flags:               []string{"--output-dir", "/b", "--stdout"},

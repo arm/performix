@@ -1,0 +1,38 @@
+[
+  {
+    "raw_name": "C1-Pro: Topdown Level 1: Frontend Bound",
+    "name": "Frontend Bound (self)",
+    "telemetry_id": "frontend_bound",
+    "value": 45.062
+  },
+  {
+    "raw_name": "Topdown Level 1: Backend Bound",
+    "name": "Backend Bound (self)",
+    "telemetry_id": "backend_bound",
+    "value": 25
+  },
+  {
+    "raw_name": "Metrics: Retiring",
+    "name": "Retiring (self)",
+    "telemetry_id": "retiring",
+    "value": 18.5
+  },
+  {
+    "raw_name": "Bad Speculation",
+    "name": "Bad Speculation (self)",
+    "telemetry_id": "bad_speculation",
+    "value": 3.438
+  },
+  {
+    "raw_name": "C1-Pro: Topdown Backend: Backend Core SME Bound",
+    "name": "Backend Core SME2 Bound (self)",
+    "telemetry_id": "backend_core_cme_bound",
+    "value": 12.5
+  },
+  {
+    "raw_name": "C1-Pro: Atomics Effectiveness: Compare and Swap Near Percentage",
+    "name": "Compare and Swap Near Percentage (self)",
+    "telemetry_id": "cas_near_ratio",
+    "value": 37.5
+  }
+]

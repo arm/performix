@@ -9,20 +9,27 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcconnection"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type client struct{}
 
-func newEngineConnector() grpcconnection.GRPCConnector {
+func newEngineConnector(host string, waitForAuthority bool) (grpcconnection.GRPCConnector, error) {
+	tlsCredentials, err := newTransportCredentials(host, waitForAuthority)
+	if err != nil {
+		return nil, err
+	}
 	return grpcconnection.NewLocalConnector(
-		grpc.WithChainUnaryInterceptor(message.ErrorHandlingClientInterceptor()),
+		grpc.WithTransportCredentials(tlsCredentials),
 		grpc.WithChainStreamInterceptor(message.ErrorHandlingClientStreamInterceptor()),
-	)
+	), nil
 }
 
 func (c client) connect(host string, port int) (*grpc.ClientConn, error) {
-	connector := newEngineConnector()
+	connector, err := newEngineConnector(host, true)
+	if err != nil {
+		return nil, err
+	}
 	return connector.Connect(host, port, initialConnectionTimeout)
 }
 

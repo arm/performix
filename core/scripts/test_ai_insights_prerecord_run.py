@@ -67,7 +67,7 @@ class PrintRunInfoTests(unittest.TestCase):
                 prerecord.print_run_info(Path("/tmp/apx"), "run-1")
 
         mock_run.assert_called_once_with(
-            ["/tmp/apx", "run", "info", "run-1", "--json"],
+            [str(Path("/tmp/apx")), "run", "info", "run-1", "--json"],
             Path("/tmp"),
         )
         self.assertIn("===== apx run info run-1 --json =====", output.getvalue())
@@ -101,6 +101,7 @@ class MainTests(unittest.TestCase):
             ssh_target=None,
             ssh_key=None,
             target_workload_root=None,
+            source_root=None,
             output_dir=output_dir,
             artifactory_run_base=artifactory_run_base,
             param=params or [],
@@ -242,7 +243,7 @@ class MainTests(unittest.TestCase):
             )
             self.assertEqual(metadata["recipe_params"], ["collector=enabled", "mode=dynamic"])
 
-    def test_main_collects_sources_without_passing_source_root(self):
+    def test_main_maps_local_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             cli_bin = tmp_path / "apx"
@@ -250,6 +251,7 @@ class MainTests(unittest.TestCase):
             exported = self._write_exported_zip(tmp_path / "exported.zip")
             source_bundle = self._write_exported_zip(tmp_path / "test_src.zip")
             args = self._base_args(cli_bin, tmp_path)
+            args.source_root = tmp_path / "my/workload/source/root"
             resolved_cli_bin = cli_bin.resolve()
             resolved_case_dir = tmp_path.resolve() / "case-1"
             fake_process = CompletedProcess(args=["apx"], returncode=0, stdout="", stderr="")
@@ -303,6 +305,8 @@ class MainTests(unittest.TestCase):
                             "--target",
                             "remote_target",
                             "--deploy-tools",
+                            "--source",
+                            str(args.source_root.resolve()),
                         ],
                         resolved_cli_bin.parent,
                     ),
@@ -466,12 +470,13 @@ class BuildRecipeRunCommandTests(unittest.TestCase):
             prerecord.Launch("/tmp/workload"),
             None,
             [],
+            Path("my/workload/source/root"),
         )
 
         self.assertEqual(
             command,
             [
-                "/tmp/apx",
+                str(Path("/tmp/apx")),
                 "recipe",
                 "run",
                 "code_hotspots",
@@ -480,6 +485,8 @@ class BuildRecipeRunCommandTests(unittest.TestCase):
                 "--target",
                 "remote_target",
                 "--deploy-tools",
+                "--source",
+                str(Path("my/workload/source/root").resolve()),
             ],
         )
 
@@ -496,7 +503,7 @@ class BuildRecipeRunCommandTests(unittest.TestCase):
         self.assertEqual(
             command,
             [
-                "/tmp/apx",
+                str(Path("/tmp/apx")),
                 "recipe",
                 "run",
                 "code_hotspots",
@@ -525,7 +532,7 @@ class BuildRecipeRunCommandTests(unittest.TestCase):
         self.assertEqual(
             command,
             [
-                "/tmp/apx",
+                str(Path("/tmp/apx")),
                 "recipe",
                 "run",
                 "code_hotspots",
@@ -552,7 +559,7 @@ class BuildRecipeRunCommandTests(unittest.TestCase):
         self.assertEqual(
             command,
             [
-                "/tmp/apx",
+                str(Path("/tmp/apx")),
                 "recipe",
                 "run",
                 "system_utilization",

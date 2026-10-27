@@ -24,6 +24,7 @@ func TestCodeHotspotsRunSelectsJfr(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/Java=%t/Jfr=%t", os, java, flag), func(t *testing.T) {
 					h := jstest.LoadRecipe(t, "code_hotspots")
 					ctx := &mocks.MockRunExecutionContext{}
+					ctx.On("IsNeoprofTimelineEnabled").Return(false, nil)
 					ctx.On("IsJfrCaptureEnabled").Return(flag, nil).Maybe()
 					ctx.On("GetWorkload").Return(recipeparser.WorkloadArg{Type: "systemWide"}, nil)
 					ctx.On("GetParameter", "sampling_freq").Return("normal", nil)
@@ -56,6 +57,7 @@ func TestCodeHotspotsRunSelectsJfr(t *testing.T) {
 func TestCodeHotspotsReadyAllowsJavaAnalysisBeforeWorkloadSelection(t *testing.T) {
 	harness := jstest.LoadRecipe(t, "code_hotspots")
 	context := &mocks.MockReadyExecutionContext{}
+	context.On("IsNeoprofTimelineEnabled").Return(false, nil)
 	context.On("IsJfrCaptureEnabled").Return(true, nil)
 	context.On("GetWorkload").Return(recipeparser.WorkloadArg{}, nil)
 	context.On("GetParameter", "sampling_freq").Return("normal", nil)
@@ -90,6 +92,7 @@ func TestCodeHotspotsReadyAllowsJavaAnalysisBeforeWorkloadSelection(t *testing.T
 func TestCodeHotspotsReadyAllowsJavaAnalysisForAttachWorkload(t *testing.T) {
 	harness := jstest.LoadRecipe(t, "code_hotspots")
 	context := &mocks.MockReadyExecutionContext{}
+	context.On("IsNeoprofTimelineEnabled").Return(false, nil)
 	context.On("IsJfrCaptureEnabled").Return(true, nil)
 	context.On("GetWorkload").Return(recipeparser.WorkloadArg{Type: "attach", Data: 42}, nil)
 	context.On("GetParameter", "sampling_freq").Return("normal", nil)

@@ -22,7 +22,6 @@ REQUIRED_UCRT64_FILES = (
     Path("usr/bin/bash.exe"),
     Path("usr/bin/find.exe"),
     Path("usr/bin/sort.exe"),
-    Path("ucrt64/bin/gcc.exe"),
 )
 
 

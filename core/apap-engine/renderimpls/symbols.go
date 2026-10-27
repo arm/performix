@@ -110,6 +110,29 @@ func LoadSymbolTables(
 	type handle = func(db *sql.Conn, comp cdf.Component) error
 
 	handleV10x := func(db *sql.Conn, comp cdf.Component) error {
+		var hasSymbols bool
+		if err := db.QueryRowContext(context.Background(),
+			`SELECT EXISTS (SELECT 1 FROM read_json_auto(?) LIMIT 1)`, comp.AbsolutePath,
+		).Scan(&hasSymbols); err != nil {
+			return err
+		}
+		// An empty symbol array has no fields for DuckDB to infer. Publish the normal
+		// typed output tables so dependent renderers can still initialize.
+		if !hasSymbols {
+			for _, table := range []struct {
+				name string
+				sql  string
+			}{
+				{"source_files", createSourceFilesTableSQL},
+				{"images", createImagesTableSQL},
+				{"symbols", createSymbolsTableSQL},
+			} {
+				if _, err := db.ExecContext(context.Background(), fmt.Sprintf(table.sql, addManifestEntry(table.name))); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		if err := assertSymbolsFieldsExist(db, comp); err != nil {
 			return err
 		}

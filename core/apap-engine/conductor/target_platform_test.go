@@ -18,6 +18,22 @@ func setMockCommandRunnerRunCommand(cmd string, stdout string, stderr string, er
 	return mcr
 }
 
+func TestLinuxGenerateChdirCommandLine(t *testing.T) {
+	const cmd = "ls -d /sys/bus/event_source/devices/arm_spe_* 2>/dev/null"
+	for _, tc := range []struct {
+		name string
+		pwd  string
+		want string
+	}{
+		{name: "readiness check without a working directory", want: cmd},
+		{name: "working directory with spaces", pwd: "/working dir", want: `cd "/working dir" && ` + cmd},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, (&LinuxPathUtils{}).GenerateChdirCommandLine(tc.pwd, cmd))
+		})
+	}
+}
+
 // TestRunLinuxCommand tests the concrete implementation of LinuxTargetActions.RunCommand
 func TestRunLinuxCommand(t *testing.T) {
 	cmd := "cd \"/working-dir\"; my-command"
@@ -61,33 +77,6 @@ func TestRunLinuxCommand(t *testing.T) {
 		output, err := linuxTargetActions.RunCommandAsAdmin(cmd)
 		assert.NoError(t, err)
 		assert.Equal(t, output.Stdout, "valid output")
-	})
-
-	t.Run("HasAdminPerms fails when CommandRunner fails", func(t *testing.T) {
-		rcErr := errors.New("no perms")
-		expectedCmd := "sudo -n true"
-		linuxTargetActions := LinuxTargetActions{BaseTargetActions: BaseTargetActions{CmdRunner: setMockCommandRunnerRunCommand(expectedCmd, "", "", rcErr)}}
-		hasAdminPerms, err := linuxTargetActions.HasAdminPerms()
-		assert.False(t, hasAdminPerms)
-		assert.Equal(t, err, rcErr)
-	})
-
-	t.Run("HasAdminPerms returns false when RC is not 0", func(t *testing.T) {
-		fakeErr := FakeExitError{Code: 5}
-		expectedCmd := "sudo -n true"
-		linuxTargetActions := LinuxTargetActions{BaseTargetActions: BaseTargetActions{CmdRunner: setMockCommandRunnerRunCommand(expectedCmd, "", "", fakeErr)}}
-		hasAdminPerms, err := linuxTargetActions.HasAdminPerms()
-		assert.False(t, hasAdminPerms)
-		assert.NoError(t, err)
-	})
-
-	t.Run("HasAdminPerms returns true when RC is 0", func(t *testing.T) {
-		fakeErr := FakeExitError{Code: 0}
-		expectedCmd := "sudo -n true"
-		linuxTargetActions := LinuxTargetActions{BaseTargetActions: BaseTargetActions{CmdRunner: setMockCommandRunnerRunCommand(expectedCmd, "", "", fakeErr)}}
-		hasAdminPerms, err := linuxTargetActions.HasAdminPerms()
-		assert.True(t, hasAdminPerms)
-		assert.NoError(t, err)
 	})
 
 	t.Run("RemoveDir executes successfully", func(t *testing.T) {
@@ -157,13 +146,6 @@ func TestRunWindowsCommand(t *testing.T) {
 		output, err := windowsTargetActions.RunCommandAsAdmin(cmd)
 		assert.NoError(t, err)
 		assert.Equal(t, output.Stdout, "admin output")
-	})
-
-	t.Run("HasAdminPerms always returns true", func(t *testing.T) {
-		windowsTargetActions := WindowsTargetActions{BaseTargetActions: BaseTargetActions{CmdRunner: setMockCommandRunnerRunCommand(cmd, "", "", nil)}}
-		hasAdminPerms, err := windowsTargetActions.HasAdminPerms()
-		assert.True(t, hasAdminPerms)
-		assert.NoError(t, err)
 	})
 
 	t.Run("RemoveDir executes successfully", func(t *testing.T) {

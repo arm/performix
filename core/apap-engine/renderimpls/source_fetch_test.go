@@ -26,8 +26,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
-	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	targetagentproto "github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/api/mocks"
+	targetagentproto "github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 type fakeTarget struct{}

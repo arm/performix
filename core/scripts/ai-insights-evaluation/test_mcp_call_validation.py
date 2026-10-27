@@ -11,9 +11,10 @@ from pathlib import Path
 import pytest
 
 from test_ai_insights_evaluation import (
+    MCP_MODES,
     McpServer,
     codex_truncation_markers,
-    mcp_mode_env,
+    write_codex_home,
     should_fail_on_tool_output_truncation,
     validate_mcp_call,
 )
@@ -23,9 +24,7 @@ MODE = McpServer(
     id="performix_mcp",
     server="arm-performix",
     tool="generate_ai_insights",
-    server_dir_key="cli_dir",
-    command=None,
-    args=("mcp", "start"),
+    args=("mcp", "start", "--acknowledge-source-sharing"),
 )
 
 
@@ -39,10 +38,51 @@ def _write_events(path: Path, *items: dict) -> None:
     )
 
 
-def test_performix_mcp_enables_experimental_recipes() -> None:
-    assert mcp_mode_env(MODE, {}) == {
-        "APXD_ENABLE_EXPERIMENTAL_RECIPES": "true"
-    }
+@pytest.mark.parametrize("mode", MCP_MODES.values(), ids=lambda mode: mode.id)
+def test_mcp_modes_use_performix_cli(tmp_path: Path, mode: McpServer) -> None:
+    import tomli
+    from performix_attempt import prepare_performix_state
+
+    cli = tmp_path / "bin" / "apx"
+    home = write_codex_home(
+        tmp_path, tmp_path, {"cli_bin": cli},
+        mode, False, prepare_performix_state(tmp_path)
+    )
+    config = tomli.loads((home / "config.toml").read_text())
+    server = config["mcp_servers"][mode.server]
+    assert server["command"] == str(cli)
+    assert server["cwd"] == str(cli.parent)
+    assert server["args"] == ["mcp", "start", "--acknowledge-source-sharing"]
+    assert server["env"]["APXD_ENABLE_EXPERIMENTAL_RECIPES"] == "true"
+    assert server["env"]["APXD_CODE_HOTSPOTS_AI_INSIGHTS_MODE"] == {
+        "performix_mcp": "curated",
+        "performix_mcp_run_query": "run_query",
+    }[mode.id]
+
+
+def test_query_comparison_mode_reports_failed_run_query(tmp_path: Path) -> None:
+    raw_jsonl = tmp_path / "codex_exec.jsonl"
+    _write_events(
+        raw_jsonl,
+        {
+            "type": "mcp_tool_call",
+            "server": "arm-performix",
+            "tool": "generate_ai_insights",
+            "status": "completed",
+        },
+        {
+            "type": "mcp_tool_call",
+            "server": "arm-performix",
+            "tool": "run_query",
+            "status": "failed",
+            "error": {"message": "invalid SQL"},
+        },
+    )
+
+    result = validate_mcp_call(raw_jsonl, MCP_MODES["performix_mcp_run_query"])
+
+    assert result["required_completed_calls"] == 1
+    assert result["failed_by_tool"] == {"run_query": 1}
 
 
 def test_auxiliary_tool_failure_does_not_invalidate_attempt(
@@ -127,6 +167,41 @@ def test_required_ai_insights_call_must_still_succeed(tmp_path: Path) -> None:
     )
 
     with pytest.raises(RuntimeError, match="generate_ai_insights did not complete successfully"):
+        validate_mcp_call(raw_jsonl, MODE)
+
+
+def test_completed_auxiliary_call_does_not_mask_failed_required_call(
+    tmp_path: Path,
+) -> None:
+    raw_jsonl = tmp_path / "codex_exec.jsonl"
+    events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "mcp_tool_call",
+                "server": "arm-performix",
+                "tool": "generate_ai_insights",
+                "status": "failed",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "mcp_tool_call",
+                "server": "arm-performix",
+                "tool": "run_query",
+                "status": "completed",
+            },
+        },
+    ]
+    raw_jsonl.write_text(
+        "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RuntimeError, match="generate_ai_insights did not complete successfully"
+    ):
         validate_mcp_call(raw_jsonl, MODE)
 
 
@@ -231,6 +306,23 @@ def test_auxiliary_tool_truncation_does_not_invalidate_attempt() -> None:
     }
 
     assert not should_fail_on_tool_output_truncation("performix_mcp", invoke_meta)
+
+
+def test_run_query_mode_truncation_does_not_invalidate_attempt() -> None:
+    invoke_meta = {
+        "truncation_markers": 1,
+        "truncation_details": [
+            {
+                "namespace": "mcp__arm_performix",
+                "tool": "run_query",
+                "token_count": 1234,
+            }
+        ],
+    }
+
+    assert not should_fail_on_tool_output_truncation(
+        "performix_mcp_run_query", invoke_meta
+    )
 
 
 def test_required_tool_truncation_invalidates_attempt() -> None:

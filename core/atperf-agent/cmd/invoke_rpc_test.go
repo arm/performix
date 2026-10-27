@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	targetagentproto "github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	targetagentproto "github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 type mockClient struct {

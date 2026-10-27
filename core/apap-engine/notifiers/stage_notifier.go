@@ -18,10 +18,11 @@ type StageInfo struct {
 
 // StageProgress carries progress-specific data for a stage.
 type StageProgress struct {
-	Sent    int64
-	Max     int64
-	Unit    StageProgressUnit
-	Message string
+	Sent                      int64
+	Max                       int64
+	Unit                      StageProgressUnit
+	Message                   string
+	EstimatedRemainingSeconds *uint64
 }
 
 type StageProgressUnit int

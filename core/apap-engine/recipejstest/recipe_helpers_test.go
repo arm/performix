@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe/runtime"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe/stages"
@@ -45,7 +46,8 @@ func recipeTestPath(t *testing.T, recipeFile string) string {
 }
 
 type renderStageOptions struct {
-	neoprofTimelineEnabled bool
+	neoprofTimelineEnabled          bool
+	neoprofSystemUtilizationEnabled bool
 }
 
 func executeRenderStage(
@@ -114,12 +116,11 @@ func executeRenderStageWithResolvedCapabilities(
 		StageName:     parsedRecipe.RenderStages[0].Name(),
 		ScriptedStage: parsedRecipe.RenderStages[0],
 		Ctx: &recipe.RunExecutionContext{
-			RecipeCtx:              &recipe.RecipeCtx{RenderParamValues: renderParams},
-			RunDescriptions:        runDescriptions,
-			RunModels:              runModels,
-			RunCapabilities:        runCapabilities,
-			NeoprofTimelineEnabled: options.neoprofTimelineEnabled,
-			RerenderingEnabled:     false,
+			RecipeCtx:       &recipe.RecipeCtx{RenderParamValues: renderParams},
+			RunDescriptions: runDescriptions,
+			RunModels:       runModels,
+			RunCapabilities: runCapabilities,
+			FeatureFlags:    featureflags.Flags{NeoprofTimeline: options.neoprofTimelineEnabled, NeoprofSystemUtilization: options.neoprofSystemUtilizationEnabled, Rerendering: false},
 		},
 	}
 
@@ -159,6 +160,7 @@ func initializeRenderers(
 	t.Helper()
 
 	renderers := make(render.RendererList, len(output.Renderers))
+	registry := renderimpls.NewRegistry()
 	for i, rendererConfig := range output.Renderers {
 		if shouldInitialize != nil && !shouldInitialize(rendererConfig) {
 			continue
@@ -167,7 +169,8 @@ func initializeRenderers(
 		configJSON, err := json.Marshal(rendererConfig.Config)
 		require.NoError(t, err)
 
-		renderer := &renderimpls.SQLRenderer{}
+		renderer, err := registry.NewRenderer(rendererConfig.Type)
+		require.NoError(t, err)
 		renderers[i] = renderer
 		rendererID := rendererConfig.ID
 		err = renderer.Configure(&render.Config{

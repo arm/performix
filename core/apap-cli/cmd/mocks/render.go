@@ -6,7 +6,7 @@ package mocks
 import (
 	"github.com/stretchr/testify/mock"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type MockQueryProcessor struct {

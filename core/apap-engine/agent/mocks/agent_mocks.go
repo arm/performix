@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 type MockAgentTether struct {

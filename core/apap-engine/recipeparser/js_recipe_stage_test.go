@@ -16,6 +16,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/gojautils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
@@ -28,6 +29,7 @@ import (
 
 type mockExecutionContext struct {
 	mock.Mock
+	featureFlags featureflags.Flags
 }
 
 func newMockExecutionContext(t *testing.T, recipeCtx *recipe.RecipeCtx, targetInfo *target.Description) *mockExecutionContext {
@@ -130,24 +132,13 @@ func (m *mockExecutionContext) ProbeToolsFromIntegrations(ctx context.Context, c
 	return probeResults, errs
 }
 
-func (m *mockExecutionContext) IsFullCaptureSupportEnabled() bool {
-	args := m.Called()
-	return args.Bool(0)
+func (m *mockExecutionContext) GetFeatureFlags() featureflags.Flags {
+	return m.featureFlags
 }
 
-func (m *mockExecutionContext) IsRerenderingEnabled() bool {
-	args := m.Called()
-	return args.Bool(0)
-}
-
-func (m *mockExecutionContext) IsNeoprofTimelineEnabled() bool {
-	args := m.Called()
-	return args.Bool(0)
-}
-
-func (m *mockExecutionContext) IsJfrCaptureEnabled() bool {
-	args := m.Called()
-	return args.Bool(0)
+// Stage tests do not reuse target discovery.
+func (m *mockExecutionContext) DiscoveryCacheContext() recipe.DiscoveryCacheContext {
+	return recipe.DiscoveryCacheContext{}
 }
 
 func (m *mockExecutionContext) ToolVersions() map[string]string {

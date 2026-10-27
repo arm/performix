@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/tetherproto"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/api/mocks"
+	"github.com/Arm-Debug/apap-cli/api/tetherproto"
 )
 
 func newTestAgentTether(

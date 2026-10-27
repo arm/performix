@@ -14,7 +14,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/clients/go/tetherproto"
+	"github.com/Arm-Debug/apap-cli/api/tetherproto"
 )
 
 const (

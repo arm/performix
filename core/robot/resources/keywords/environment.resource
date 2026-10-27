@@ -75,12 +75,6 @@ Set Enable Agent Env Var
   [Arguments]  ${value}
   Set Performix Env Var  ENABLE_AGENT  ${value}
 
-Set Enable On Demand Privilege Env Var
-  [Documentation]  Enable or disable on-demand privilege mode. The apx engine daemon must be
-  ...  restarted for this to take effect.
-  [Arguments]  ${value}
-  Set Performix Env Var  ENABLE_ON_DEMAND_PRIVILEGE  ${value}
-
 Set Enable Experimental Recipes Env Var
   [Documentation]  Enable experimental recipes. The apx engine daemon must be
   ...  restarted for this to take effect.

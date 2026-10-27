@@ -6,7 +6,9 @@ package tool
 import (
 	"context"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 )
 
 // Migration fields for the tool integration
@@ -34,19 +36,22 @@ type IntegrationProperties struct {
 
 // IntegrationContext contains the instance specific data for a tool integration execution
 type IntegrationContext struct {
-	Name                        string
-	Version                     string
-	Params                      map[string]any
-	Workload                    Workload
-	WorkingDir                  string
-	Env                         map[string]string
-	Ctx                         context.Context
-	OutputEntityDir             string
-	Timeout                     uint32
-	IsFullCaptureSupportEnabled bool
-	IsNeoprofTimelineEnabled    bool
-	DefaultEngineLocality       EngineLocality
-	ResolveLocality             EngineLocalityResolver
+	InvocationIndex       int
+	counterOutcomes       *counterOutcomeSet
+	CapabilityRequest     *capabilities.CapabilityRequest
+	Discovery             *ProbeResult
+	Name                  string
+	Version               string
+	Params                map[string]any
+	Workload              Workload
+	WorkingDir            string
+	Env                   map[string]string
+	Ctx                   context.Context
+	OutputEntityDir       string
+	Timeout               uint32
+	FeatureFlags          featureflags.Flags
+	DefaultEngineLocality EngineLocality
+	ResolveLocality       EngineLocalityResolver
 }
 
 type ProbeAdvice struct {

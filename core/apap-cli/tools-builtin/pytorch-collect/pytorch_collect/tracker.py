@@ -52,7 +52,8 @@ class TraceTracker:
             )
             return
 
-        self.api_call.timestamp_end = time_monotnonic_raw()
+        self.api_call.timestamp_end = max(time_monotnonic_raw(),
+                                          self.api_call.timestamp_begin + 1)
         self.api_call.output = output
         self.writer.write_api_call(self.api_call)
         self.api_call = None
@@ -101,7 +102,8 @@ class TraceTracker:
             )
             return
 
-        self.operator_call.timestamp_end = time_monotnonic_raw()
+        self.operator_call.timestamp_end = max(time_monotnonic_raw(),
+                                               self.operator_call.timestamp_begin + 1)
         self.operator_call.output = output
         self.api_call.operator_calls.append(self.operator_call)
         self.operator_call = None

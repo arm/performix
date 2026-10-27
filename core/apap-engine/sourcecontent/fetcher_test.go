@@ -19,7 +19,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
-	targetagentproto "github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	targetagentproto "github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 func hostSource(path string) SourceFileLocation {

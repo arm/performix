@@ -15,11 +15,12 @@ import (
 )
 
 type HTTPQueryServer struct {
-	addr       string
-	chunkBytes int
-	executor   httpQueryExecutor
-	listen     func(network string, address string) (net.Listener, error)
-	server     *http.Server
+	addr        string
+	chunkBytes  int
+	executor    httpQueryExecutor
+	bearerToken string
+	listen      func(network string, address string) (net.Listener, error)
+	server      *http.Server
 }
 
 func NewHTTPQueryServer(
@@ -27,13 +28,15 @@ func NewHTTPQueryServer(
 	port int,
 	chunkBytes int,
 	executor httpQueryExecutor,
+	bearerToken string,
 	listen func(network string, address string) (net.Listener, error),
 ) *HTTPQueryServer {
 	return &HTTPQueryServer{
-		addr:       fmt.Sprintf("%s:%d", host, port),
-		chunkBytes: chunkBytes,
-		executor:   executor,
-		listen:     listen,
+		addr:        fmt.Sprintf("%s:%d", host, port),
+		chunkBytes:  chunkBytes,
+		executor:    executor,
+		bearerToken: bearerToken,
+		listen:      listen,
 	}
 }
 
@@ -44,7 +47,7 @@ func (s *HTTPQueryServer) Start(ctx context.Context, cancel context.CancelFunc) 
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/query", newHTTPQueryHandler(s.executor, s.chunkBytes))
+	mux.Handle("/query", newHTTPQueryHandler(s.executor, s.chunkBytes, s.bearerToken))
 
 	s.server = &http.Server{
 		Addr:              s.addr,

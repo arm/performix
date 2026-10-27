@@ -22,8 +22,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/utils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 type mockRenderPreparer struct {
@@ -218,7 +218,7 @@ func TestRenderCommand(t *testing.T) {
 }
 
 func TestFilterPreparedRender(t *testing.T) {
-	t.Run("filters visualizations and prunes unused renderers and visualization parameters", func(t *testing.T) {
+	t.Run("filters visualizations and prunes unused renderers", func(t *testing.T) {
 		// Setup: three visualizations, two renderers
 		preparation := &apapproto.PrepareRenderResponse{
 			Renderers: []*apapproto.RendererConfig{
@@ -229,11 +229,6 @@ func TestFilterPreparedRender(t *testing.T) {
 				{Id: &apapproto.VisualizationId{Value: "viz1"}, Type: "bar_chart", RendererId: &apapproto.RendererId{Value: "profile_main"}},
 				{Id: &apapproto.VisualizationId{Value: "viz2"}, Type: "table", RendererId: &apapproto.RendererId{Value: "summary_main"}},
 				{Id: &apapproto.VisualizationId{Value: "viz3"}, Type: "line_chart", RendererId: &apapproto.RendererId{Value: "profile_main"}},
-			},
-			VisualizationParameters: map[string]string{
-				"viz1.foo": "boo",
-				"viz2.bar": "car",
-				"viz3.baz": "shaz",
 			},
 		}
 
@@ -256,11 +251,6 @@ func TestFilterPreparedRender(t *testing.T) {
 		assert.Len(t, filtered.Renderers, 1)
 		assert.Equal(t, "profile_main", filtered.Renderers[0].GetId().GetValue())
 
-		// Check: only visualization parameters for viz1 and viz3 remain
-		assert.Equal(t, filtered.VisualizationParameters, map[string]string{
-			"viz1.foo": "boo",
-			"viz3.baz": "shaz",
-		})
 	})
 }
 

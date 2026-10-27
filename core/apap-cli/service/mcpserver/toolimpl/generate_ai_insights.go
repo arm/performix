@@ -22,7 +22,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/mcpserver/insights"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 const (
@@ -38,7 +38,9 @@ const (
 	generateAIInsightsErrorSchemaID  = toolErrorSchemaID + ":generate-ai-insights"
 )
 
-type GenerateAIInsightsTool struct{}
+type GenerateAIInsightsTool struct {
+	SourceSharingAcknowledged bool
+}
 
 type generateAIInsightsInput struct {
 	RunID            string         `json:"run_id"`
@@ -218,29 +220,29 @@ func aiInsightsInitialPayloadDetailsOutputSchemaProperties() map[string]*jsonsch
 	return properties
 }
 
-func (GenerateAIInsightsTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
+func (t GenerateAIInsightsTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 	// defaultAIInsightsCacheMaxBundles is a positive constant, so lru.New cannot fail here.
 	cache, _ := newAIInsightsBundleCache(defaultAIInsightsCacheMaxBundles)
-	registerGenerateAIInsightsTool(server, toolDeps, cache)
-	registerReadAIInsightsPayloadDetailsTool(server, cache)
+	t.registerGenerateAIInsightsTool(server, toolDeps, cache)
+	t.registerReadAIInsightsPayloadDetailsTool(server, cache)
 }
 
 // registerGenerateAIInsightsTool registers the recipe-aware entry point. SQL
 // recipes pass render parameters to their persistent session; summary-based
 // recipes reject them because GetRunSummaryBundle cannot apply them.
-func registerGenerateAIInsightsTool(server *mcp.Server, toolDeps ToolDependencies, cache *aiInsightsBundleCache) {
+func (t GenerateAIInsightsTool) registerGenerateAIInsightsTool(server *mcp.Server, toolDeps ToolDependencies, cache *aiInsightsBundleCache) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "generate_ai_insights",
-		Description: "Prepares an existing successful " + terminology.GetProductFullName() + " run for AI Insights. " +
-			"The result contains the evidence or recipe guidance needed to analyse the run. Follow the returned guidance. " +
-			"When recipe_info lists render parameters, optional render_parameters can limit the evidence by PID, TID, time range, or another recipe filter. They are accepted for every supported recipe except code_hotspots. " +
-			"If a payload is incomplete, call read_ai_insights_payload_details with the returned bundle_id, payload name, and next_offset to continue reading it.",
+		Name:        "generate_ai_insights",
+		Description: generateAIInsightsDescription(),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint: false,
 		},
 		InputSchema:  generateAIInsightsInputSchema,
 		OutputSchema: generateAIInsightsOutputSchema,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input generateAIInsightsInput) (*mcp.CallToolResult, generateAIInsightsResult, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input generateAIInsightsInput) (*mcp.CallToolResult, generateAIInsightsResult, error) {
+		if result, err := checkSourceSharingAcknowledgement(req, t.SourceSharingAcknowledged); result != nil || err != nil {
+			return result, generateAIInsightsResult{}, err
+		}
 		runID := strings.TrimSpace(input.RunID)
 		if runID == "" {
 			return generateAIInsightsErrorResult(errors.New("run_id is required"))
@@ -266,6 +268,13 @@ func registerGenerateAIInsightsTool(server *mcp.Server, toolDeps ToolDependencie
 				}),
 			)
 		}
+		if recipeName == insights.CodeHotspotsRecipeName {
+			codeHotspotsMode, err := insights.CodeHotspotsModeFromEnvironment()
+			if err != nil {
+				return generateAIInsightsErrorResult(err)
+			}
+			recipe, _ = insights.ForRecipeWithCodeHotspotsMode(recipeName, codeHotspotsMode)
+		}
 
 		var renderParameters map[string]*structpb.Value
 		if len(input.RenderParameters) > 0 {
@@ -289,14 +298,14 @@ func registerGenerateAIInsightsTool(server *mcp.Server, toolDeps ToolDependencie
 		if err != nil {
 			return generateAIInsightsErrorResult(err)
 		}
-		runDetails := runSummaryPayloadByName(resp.GetPayloads(), "run_details")
-		if runDetails == nil {
-			return generateAIInsightsErrorResult(errors.New("run details are unavailable"))
-		}
 
 		guidanceText := insights.GeneralGuidance() + "\n\n" + recipe.Guidance
 		switch recipe.Method {
 		case insights.MethodRunQuery:
+			runDetails := runSummaryPayloadByName(resp.GetPayloads(), "run_details")
+			if runDetails == nil {
+				return generateAIInsightsErrorResult(errors.New("run details are unavailable"))
+			}
 			session, renderSession, err := openRenderSessionResult(ctx, toolDeps.Engine, runID, renderParameters)
 			if err != nil {
 				return generateAIInsightsRenderSessionErrorResult(session, err)
@@ -323,6 +332,22 @@ func registerGenerateAIInsightsTool(server *mcp.Server, toolDeps ToolDependencie
 			))
 		}
 	})
+}
+
+func generateAIInsightsDescription() string {
+	description := "Prepares an existing successful " + terminology.GetProductFullName() + " run for AI Insights. " +
+		"The result contains the evidence or recipe guidance needed to analyse the run. Follow the returned guidance. "
+	// The description must match the active Code Hotspots mode. Render
+	// parameters are unavailable for curated Code Hotspots, but are available
+	// when it uses run_query.
+	codeHotspotsMode, err := insights.CodeHotspotsModeFromEnvironment()
+	if err != nil || codeHotspotsMode == insights.CodeHotspotsModeCurated {
+		return description +
+			"When recipe_info lists render parameters, optional render_parameters can limit the evidence by PID, TID, time range, or another recipe filter. They are accepted for every supported recipe except code_hotspots. " +
+			"If a payload is incomplete, call read_ai_insights_payload_details with the returned bundle_id, payload name, and next_offset to continue reading it."
+	}
+	return description +
+		"Call recipe_info to discover the render parameters available for a recipe. Optional render_parameters can limit the evidence by PID, TID, time range, or another recipe filter."
 }
 
 func generateAIInsightsErrorResult(err error) (*mcp.CallToolResult, generateAIInsightsResult, error) {
@@ -404,7 +429,7 @@ func generateEvidenceBundleResult(resp *apapproto.RunSummaryBundleResponse, cach
 	return result, nil
 }
 
-func registerReadAIInsightsPayloadDetailsTool(server *mcp.Server, cache *aiInsightsBundleCache) {
+func (t GenerateAIInsightsTool) registerReadAIInsightsPayloadDetailsTool(server *mcp.Server, cache *aiInsightsBundleCache) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "read_ai_insights_payload_details",
 		Description: "Reads details from an AI Insights summarizer payload produced by generate_ai_insights. Use the bundle_id, the payload name, and next_offset " +
@@ -414,7 +439,10 @@ func registerReadAIInsightsPayloadDetailsTool(server *mcp.Server, cache *aiInsig
 		},
 		InputSchema:  readAIInsightsPayloadDetailsInputSchema,
 		OutputSchema: aiInsightsPayloadDetailsOutputSchema,
-	}, func(_ context.Context, _ *mcp.CallToolRequest, input readAIInsightsPayloadDetailsInput) (*mcp.CallToolResult, aiInsightsPayloadDetails, error) {
+	}, func(_ context.Context, req *mcp.CallToolRequest, input readAIInsightsPayloadDetailsInput) (*mcp.CallToolResult, aiInsightsPayloadDetails, error) {
+		if result, err := checkSourceSharingAcknowledgement(req, t.SourceSharingAcknowledged); result != nil || err != nil {
+			return result, aiInsightsPayloadDetails{}, err
+		}
 		bundleID := strings.TrimSpace(input.BundleID)
 		if bundleID == "" {
 			return &mcp.CallToolResult{IsError: true}, aiInsightsPayloadDetails{Error: newToolError(errors.New("bundle_id is required"))}, nil

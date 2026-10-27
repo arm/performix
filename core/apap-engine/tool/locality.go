@@ -14,11 +14,12 @@ import (
 type CopyFromFunc func(sourceLocality string, sourcePath string, destinationPath string) error
 
 type EngineLocality struct {
-	Name          string
-	Engine        Engine
-	FileCollector FileCollector
-	ToolsRoot     string
-	CopyFrom      CopyFromFunc
+	Name                string
+	Engine              Engine
+	FileCollector       FileCollector
+	CapabilityPublisher CapabilityPublisher
+	ToolsRoot           string
+	CopyFrom            CopyFromFunc
 }
 
 type EngineLocalityResolver func(name string) (EngineLocality, error)

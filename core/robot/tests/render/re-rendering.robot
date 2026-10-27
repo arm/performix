@@ -34,8 +34,12 @@ The Prepare Render Response Uses Null for Unset Render Parameters
 
 *** Keywords ***
 Generate Re-Rendering Run
-  ${recipe_path} =  Get External Recipe Path  render_params_recipe.js
-  ${run_id} =  Run Recipe And Extract Run ID  ${recipe_path}
+  IF  '${USE_PRERECORDED_RUNS}' == 'True'
+    ${run_id} =  Import Prerecorded Run  rerender-parameters
+  ELSE
+    ${recipe_path} =  Get External Recipe Path  render_params_recipe.js
+    ${run_id} =  Run Recipe And Extract Run ID  ${recipe_path}
+  END
   VAR  ${RERENDER_RUN_ID} =  ${run_id}  scope=SUITE
 
 The Re-Rendering Run Exists
@@ -64,10 +68,12 @@ The Render Parameter Is
 
 Re-Rendering Suite Setup
   Common Setup
-  The Test Target Is Added Successfully
-  The Target Is Set To Default Successfully  ${G_TARGET_NAME}
+  IF  '${USE_PRERECORDED_RUNS}' == 'False'
+    The Test Target Is Added Successfully
+    The Target Is Set To Default Successfully  ${G_TARGET_NAME}
+  END
   Generate Re-Rendering Run
 
 Re-Rendering Suite Teardown
-  The Test Target Is Removed Successfully
+  IF  '${USE_PRERECORDED_RUNS}' == 'False'  The Test Target Is Removed Successfully
   Common Teardown

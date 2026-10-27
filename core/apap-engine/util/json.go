@@ -96,7 +96,14 @@ func WriteJSONFileAtomic[T any](filename string, data *T, perm fs.FileMode) erro
 	if err != nil {
 		return err
 	}
+	return WriteFileAtomic(filename, result, perm)
+}
 
+// WriteFileAtomic replaces the target file with fully written data from a temp
+// file in the same directory. Unlike WriteJSONFileAtomic, it does not re-encode
+// the data, allowing callers to retain syntax such as JSON comments. Readers see
+// either the old file or the new file, never a truncated in-place write.
+func WriteFileAtomic(filename string, data []byte, perm fs.FileMode) error {
 	dir := filepath.Dir(filename)
 	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(filename)+".*.tmp")
 	if err != nil {
@@ -115,7 +122,7 @@ func WriteJSONFileAtomic[T any](filename string, data *T, perm fs.FileMode) erro
 		_ = tmpFile.Close()
 		return err
 	}
-	if _, err := tmpFile.Write(result); err != nil {
+	if _, err := tmpFile.Write(data); err != nil {
 		_ = tmpFile.Close()
 		return err
 	}

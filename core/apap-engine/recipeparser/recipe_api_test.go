@@ -6,10 +6,12 @@ package recipeparser
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/dop251/goja"
 	"github.com/klauspost/compress/zstd"
@@ -24,6 +26,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	conductormocks "github.com/Arm-Debug/apap-cli/apap-engine/conductor/conductormocks"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/gojautils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
@@ -55,6 +58,20 @@ let tool = {
 };
 `
 
+const nonStoppableToolSource = `
+let tool = {
+	name: "nonStoppableTool",
+	version: "0.1",
+	supportsStop: false,
+	description: {short: "Non-stoppable tool", long: "Non-stoppable tool"},
+	run: () => {},
+	reformat: () => {},
+	onStop: () => {},
+	onCancel: () => {},
+	probe: () => ({available: true, capabilities: {}, advice: []}),
+};
+`
+
 const failingToolSource = `
 let tool = {
 	name: "failingTestTool",
@@ -66,6 +83,26 @@ let tool = {
 	onCancel: (engine, ctx) => {},
 	onStop: (engine, ctx) => {},
 	probe: (engine, ctx) => {return {available: true, capabilities: {}, advice: [{level: "info", messageCode: "some.CODE"}]}},
+};
+`
+
+const blockingProbeToolSource = `
+let finishProbe;
+const delay = () => new Promise(resolve => setTimeout(resolve, 1));
+let tool = {
+	name: "blockingProbeTool",
+	version: "0.1",
+	description: {short: "Blocking probe", long: "Blocking probe"},
+	run: () => {},
+	reformat: () => {},
+	onStop: () => {},
+	onCancel: async () => {
+		while (!finishProbe) await delay();
+		await delay();
+		await delay();
+		finishProbe({available: false, capabilities: {}, advice: []});
+	},
+	probe: () => new Promise(resolve => { finishProbe = resolve; }),
 };
 `
 
@@ -97,6 +134,48 @@ func TestRunTools(t *testing.T) {
 		ToolPathsSupplier: func() deployer.BaseToolDeploymentPaths { return resolvedTools },
 	}
 	ch := &cmdsync.CommandStateChannel{StopChan: make(chan struct{}), CancelChan: make(chan struct{})}
+
+	t.Run("feature snapshots reach tool execution and probing", func(t *testing.T) {
+		original := execCtx.FeatureFlags
+		t.Cleanup(func() { execCtx.FeatureFlags = original })
+		for _, enabled := range []bool{true, false} {
+			execCtx.FeatureFlags = featureflags.Flags{
+				FullCaptureSupport:       enabled,
+				Rerendering:              enabled,
+				ExperimentalRecipes:      enabled,
+				SecondaryRunPaths:        enabled,
+				GPURecipe:                enabled,
+				RenderDBSandbox:          enabled,
+				NeoprofTimeline:          enabled,
+				NeoprofSystemUtilization: enabled,
+				JfrCapture:               enabled,
+				RunComponentCompression:  enabled,
+			}
+			api := ConcreteRecipeAPI{execCtx: execCtx}
+			integrations, err := api.toolConfigurationToIntegrationContext(RunToolConfigurationsArg{
+				ToolConfigs: []ToolConfiguration{{Name: "testTool", Workload: WorkloadArg{Type: "systemWide"}}},
+			})
+			require.NoError(t, err)
+			require.Equal(t, execCtx.FeatureFlags, integrations[0].FeatureFlags)
+
+			// The execution context owns runtime flags even when callers pass
+			// stale integration values. Exercise both entry points.
+			integrations[0].FeatureFlags.JfrCapture = !enabled
+			cleanup, errs := execCtx.RunToolIntegrations(context.Background(), ch, integrations)
+			cleanup()
+			for _, err := range errs {
+				require.NoError(t, err)
+			}
+			require.Equal(t, execCtx.FeatureFlags, integrations[0].FeatureFlags)
+
+			integrations[0].FeatureFlags.RunComponentCompression = !enabled
+			_, errs = execCtx.ProbeToolsFromIntegrations(context.Background(), ch, integrations)
+			for _, err := range errs {
+				require.NoError(t, err)
+			}
+			require.Equal(t, execCtx.FeatureFlags, integrations[0].FeatureFlags)
+		}
+	})
 
 	t.Run("runTools succeeds", func(t *testing.T) {
 		js := `
@@ -264,6 +343,7 @@ func TestProbeTools_WithIntegrations(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(pckManagerDir, "tool-integrations"), perms.LocalDirPerm))
 	require.NoError(t, os.Mkdir(filepath.Join(pckManagerDir, "recipes"), perms.LocalDirPerm))
 	require.NoError(t, os.WriteFile(filepath.Join(pckManagerDir, "tool-integrations", "testTool.js"), []byte(toolSource), perms.LocalFilePerm))
+	require.NoError(t, os.WriteFile(filepath.Join(pckManagerDir, "tool-integrations", "blockingProbeTool.js"), []byte(blockingProbeToolSource), perms.LocalFilePerm))
 
 	agentSupplier := func() *agent.AgentConn { return agent.NewAgentConn(nil) }
 	resolvedTools := deployer.BaseToolDeploymentPaths{DeployedToolsDirectory: fmt.Sprintf("/home/testuser/.local/share/%v/tools", terminology.GetProductBinaryName())}
@@ -272,7 +352,7 @@ func TestProbeTools_WithIntegrations(t *testing.T) {
 		PackageManager:    packages.NewPackageManager(pckManagerDir, pckManagerDir),
 		StageNotifier:     nil,
 		Collector:         &recipe.Collector{},
-		RecipeCtx:         &recipe.RecipeCtx{ToolVersions: map[string]string{"testTool": "0.1", "failingTestTool": "0.1"}},
+		RecipeCtx:         &recipe.RecipeCtx{ToolVersions: map[string]string{"testTool": "0.1", "failingTestTool": "0.1", "blockingProbeTool": "0.1"}},
 		TargetPlatform:    func() *conductor.TargetPlatform { return &conductor.TargetPlatform{} },
 		ToolPathsSupplier: func() deployer.BaseToolDeploymentPaths { return resolvedTools },
 	}
@@ -310,6 +390,104 @@ func TestProbeTools_WithIntegrations(t *testing.T) {
 			Advice:       []tool.ProbeAdvice{{MessageCode: "some.CODE", Level: "info"}},
 		})
 	})
+
+	runBlockingProbe := func(t *testing.T, stageCtx context.Context, cancelCh chan struct{}, cancel func()) {
+		t.Helper()
+		vm := goja.New()
+		recipeAPI := ConcreteRecipeAPI{
+			vm: vm, execCtx: execCtx,
+			cmdStateCh: &cmdsync.CommandStateChannel{StopChan: make(chan struct{}), CancelChan: cancelCh},
+			cmdState:   &cmdsync.CommandState{}, context: stageCtx,
+		}
+		_, err := vm.RunString(`let toolsArg = {toolConfigs: [{
+			name: "blockingProbeTool", params: {},
+			workload: {type: "systemWide", data: ""}, env: {}
+		}]};`)
+		require.NoError(t, err)
+		fn, ok := goja.AssertFunction(vm.ToValue(recipeAPI.probeTools))
+		require.True(t, ok)
+		done := make(chan error, 1)
+		go func() {
+			_, callErr := fn(goja.Undefined(), vm.Get("toolsArg"))
+			done <- callErr
+		}()
+
+		// The probe has no completion path other than onCancel, so returning
+		// proves cancellation reached the integration and its runtime settled.
+		cancel()
+		select {
+		case callErr := <-done:
+			require.Error(t, callErr)
+			require.ErrorContains(t, callErr, context.Canceled.Error())
+		case <-time.After(time.Second):
+			t.Fatal("blocking run-stage probe did not finish after cancellation")
+		}
+	}
+
+	t.Run("run-stage cancellation stops a blocking probe", func(t *testing.T) {
+		cancelCh := make(chan struct{})
+		runBlockingProbe(t, context.Background(), cancelCh, func() { close(cancelCh) })
+	})
+
+	t.Run("parent-context cancellation keeps probe cleanup alive", func(t *testing.T) {
+		stageCtx, cancelStage := context.WithCancel(context.Background())
+		runBlockingProbe(t, stageCtx, make(chan struct{}), cancelStage)
+	})
+}
+
+func TestProbeTools_DoesNotAffectRunStopSupport(t *testing.T) {
+	packageDir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(packageDir, "tools"), perms.LocalDirPerm))
+	require.NoError(t, os.Mkdir(filepath.Join(packageDir, "tool-integrations"), perms.LocalDirPerm))
+	require.NoError(t, os.Mkdir(filepath.Join(packageDir, "recipes"), perms.LocalDirPerm))
+	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "tool-integrations", "stoppable.js"), []byte(toolSource), perms.LocalFilePerm))
+	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "tool-integrations", "non-stoppable.js"), []byte(nonStoppableToolSource), perms.LocalFilePerm))
+
+	runCollection, err := run.NewRunCollection(filepath.Join(t.TempDir(), "runs"))
+	require.NoError(t, err)
+	builder, err := runCollection.RunBuilder()
+	require.NoError(t, err)
+	runID, err := runCollection.CreateRun(builder, &cdf.Metadata{Name: "stop support test"})
+	require.NoError(t, err)
+
+	mockRunWriter := &mocks.MockRunWriter{}
+	mockRunWriter.On("WriteManifest", mock.Anything).Return(nil)
+	mockRunWriter.On("WriteEntityDirs", mock.Anything).Return(nil)
+	collectionState := &recipe.CollectionState{RunBuilder: builder}
+	collectionState.RunManifestUpdater = run.NewRunManifestUpdater(&collectionState.RunBuilder, mockRunWriter)
+	collectionState.RunMetadataUpdater = run.NewRunMetadataUpdater(runID, runCollection, nil)
+	execCtx := &recipe.RunExecutionContext{
+		AgentSupplier:  func() *agent.AgentConn { return agent.NewAgentConn(nil) },
+		PackageManager: packages.NewPackageManager(packageDir, packageDir),
+		Collector:      &recipe.Collector{CollectionState: collectionState},
+		RecipeCtx: &recipe.RecipeCtx{ToolVersions: map[string]string{
+			"testTool":         "0.1",
+			"nonStoppableTool": "0.1",
+		}},
+		TargetPlatform:    func() *conductor.TargetPlatform { return &conductor.TargetPlatform{} },
+		ToolPathsSupplier: func() deployer.BaseToolDeploymentPaths { return deployer.BaseToolDeploymentPaths{} },
+	}
+	cmdStateCh := &cmdsync.CommandStateChannel{StopChan: make(chan struct{}), CancelChan: make(chan struct{})}
+
+	_, probeErrs := execCtx.ProbeToolsFromIntegrations(context.Background(), cmdStateCh, []tool.IntegrationContext{{
+		Name: "nonStoppableTool", Version: "0.1",
+	}})
+	require.NoError(t, errors.Join(probeErrs...))
+
+	model, err := runCollection.LoadRun(runID)
+	require.NoError(t, err)
+	require.Nil(t, model.Metadata().SupportsStop, "probing an alternative must not change run metadata")
+
+	cleanup, runErrs := execCtx.RunToolIntegrations(context.Background(), cmdStateCh, []tool.IntegrationContext{{
+		Name: "testTool", Version: "0.1",
+	}})
+	defer cleanup()
+	require.NoError(t, errors.Join(runErrs...))
+
+	model, err = runCollection.LoadRun(runID)
+	require.NoError(t, err)
+	require.NotNil(t, model.Metadata().SupportsStop)
+	require.True(t, *model.Metadata().SupportsStop, "only tools selected for collection determine Stop support")
 }
 
 func TestGetRunDescriptions(t *testing.T) {
@@ -2089,7 +2267,7 @@ func TestIsFullCaptureSupportEnabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			execCtx := &recipe.RunExecutionContext{FullCaptureSupport: tt.enabled}
+			execCtx := &recipe.RunExecutionContext{FeatureFlags: featureflags.Flags{FullCaptureSupport: tt.enabled}}
 			vm := goja.New()
 			recipeAPI := ConcreteRecipeAPI{vm: vm, execCtx: execCtx, cmdState: &cmdsync.CommandState{}, context: context.Background()}
 			fn, _ := goja.AssertFunction(vm.ToValue(recipeAPI.isFullCaptureSupportEnabled))
@@ -2121,7 +2299,7 @@ func TestIsNeoprofTimelineEnabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			execCtx := &recipe.RunExecutionContext{NeoprofTimelineEnabled: tt.enabled}
+			execCtx := &recipe.RunExecutionContext{FeatureFlags: featureflags.Flags{NeoprofTimeline: tt.enabled}}
 			vm := goja.New()
 			recipeAPI := ConcreteRecipeAPI{vm: vm, execCtx: execCtx, cmdState: &cmdsync.CommandState{}, context: context.Background()}
 			fn, _ := goja.AssertFunction(vm.ToValue(recipeAPI.isNeoprofTimelineEnabled))
@@ -2132,6 +2310,24 @@ func TestIsNeoprofTimelineEnabled(t *testing.T) {
 			parseErr := gojautils.ParseObjectFromJS(out, &isEnabled)
 			assert.NoError(t, parseErr)
 			assert.Equal(t, tt.enabled, isEnabled)
+		})
+	}
+}
+
+func TestTimelineFlagAvailableInCollectionStages(t *testing.T) {
+	for name, exposer := range map[string]APIExposer{"ready": &ReadyStageAPIExposer{}, "run": &RunStageAPIExposer{}} {
+		t.Run(name, func(t *testing.T) {
+			for _, enabled := range []bool{false, true} {
+				vm := goja.New()
+				api := &ConcreteRecipeAPI{vm: vm, execCtx: &recipe.RunExecutionContext{FeatureFlags: featureflags.Flags{NeoprofTimeline: enabled}}}
+				ctx := vm.NewObject()
+				require.NoError(t, exposer.ExposeAPI(api, ctx))
+				fn, ok := goja.AssertFunction(ctx.Get("isNeoprofTimelineEnabled"))
+				require.True(t, ok)
+				value, err := fn(ctx)
+				require.NoError(t, err)
+				require.Equal(t, enabled, value.ToBoolean())
+			}
 		})
 	}
 }
@@ -2300,7 +2496,7 @@ func TestIsJfrCaptureEnabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			execCtx := &recipe.RunExecutionContext{JfrCaptureEnabled: tt.enabled}
+			execCtx := &recipe.RunExecutionContext{FeatureFlags: featureflags.Flags{JfrCapture: tt.enabled}}
 			vm := goja.New()
 			recipeAPI := ConcreteRecipeAPI{vm: vm, execCtx: execCtx, cmdState: &cmdsync.CommandState{}, context: context.Background()}
 			fn, _ := goja.AssertFunction(vm.ToValue(recipeAPI.isJfrCaptureEnabled))
@@ -2312,5 +2508,31 @@ func TestIsJfrCaptureEnabled(t *testing.T) {
 			assert.NoError(t, parseErr)
 			assert.Equal(t, tt.enabled, isEnabled)
 		})
+	}
+}
+
+func TestNeoprofSystemUtilizationFlagIsExposedToCaptureStages(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, stage := range []struct {
+			name    string
+			exposer APIExposer
+		}{
+			{name: "ready", exposer: &ReadyStageAPIExposer{}},
+			{name: "run", exposer: &RunStageAPIExposer{}},
+		} {
+			t.Run(fmt.Sprintf("%s stage returns %t for the NeoProf system utilization flag", stage.name, enabled), func(t *testing.T) {
+				vm := goja.New()
+				api := &ConcreteRecipeAPI{vm: vm, execCtx: &recipe.RunExecutionContext{
+					FeatureFlags: featureflags.Flags{NeoprofSystemUtilization: enabled},
+				}}
+				obj := vm.NewObject()
+				require.NoError(t, stage.exposer.ExposeAPI(api, obj))
+				fn, ok := goja.AssertFunction(obj.Get("isNeoprofSystemUtilizationEnabled"))
+				require.True(t, ok)
+				value, err := fn(goja.Undefined())
+				require.NoError(t, err)
+				assert.Equal(t, enabled, value.ToBoolean())
+			})
+		}
 	}
 }

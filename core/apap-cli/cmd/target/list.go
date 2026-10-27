@@ -5,8 +5,11 @@ package target
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os/exec"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -172,7 +175,9 @@ func listTargetsCommand(out io.Writer, targetService target.TargetManagerService
 
 		discoveredTargets, err := discoverer.DiscoverAndroidTargets()
 		if err != nil {
-			// TODO: Wrap ADB discovery failures in a user-facing message.Message and preserve the raw error as cause context.
+			if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
+				return message.Wrap(message.EngineConductorAdbAdbNotFound, err)
+			}
 			return err
 		}
 

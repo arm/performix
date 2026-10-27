@@ -22,21 +22,28 @@ func NewToolRegistry(tools ...Tool) ToolRegistry {
 	return ToolRegistry{tools: tools}
 }
 
-func DefaultToolRegistry() ToolRegistry {
-	return NewToolRegistry(
-		toolimpl.GenerateAIInsightsTool{},
+func DefaultToolRegistry(options MCPServerOptions) ToolRegistry {
+	tools := []Tool{
+		toolimpl.GenerateAIInsightsTool{SourceSharingAcknowledged: options.SourceSharingAcknowledged},
 		toolimpl.OpenRenderSessionTool{},
 		toolimpl.ListRenderSessionsTool{},
 		toolimpl.CloseRenderSessionTool{},
-		toolimpl.RunQueryTool{},
+		toolimpl.RunQueryTool{SourceSharingAcknowledged: options.SourceSharingAcknowledged},
 		toolimpl.ListRecipesTool{},
 		toolimpl.RecipeInfoTool{},
 		toolimpl.ListRunsTool{},
-		toolimpl.ListTargetsTool{},
+		toolimpl.UpdateRunsTool{},
+		toolimpl.ImportRunTool{},
+		toolimpl.ExportRunTool{},
+		toolimpl.ListTargetsTool{AndroidTargetsEnabled: options.AndroidTargetsEnabled},
 		toolimpl.SearchTargetProcessesTool{},
-		toolimpl.AddTargetTool{},
-		toolimpl.RunRecipeTool{},
-	)
+		toolimpl.AddTargetTool{AndroidTargetsEnabled: options.AndroidTargetsEnabled},
+		toolimpl.RunRecipeTool{AndroidTargetsEnabled: options.AndroidTargetsEnabled},
+	}
+	if options.AndroidTargetsEnabled {
+		tools = append(tools, toolimpl.SearchAndroidPackagesTool{})
+	}
+	return NewToolRegistry(tools...)
 }
 
 func (r ToolRegistry) Register(server *mcp.Server, toolDeps toolimpl.ToolDependencies) {

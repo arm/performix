@@ -19,7 +19,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 var PrepareRenderCmd = NewPrepareRenderCmd(client.NewAutostartClient(), run.RenderService{})
@@ -28,8 +28,7 @@ type prepareRenderCliParams struct {
 	Runs           []string
 	Visualizations []string
 	recipeSelectionParams
-	renderParamsList        []string
-	visualizationParamsList []string
+	renderParamsList []string
 }
 
 type recipeSelectionParams struct {
@@ -81,7 +80,6 @@ func NewPrepareRenderCmd(cc client.ClientConnector, preparer run.RenderPreparer)
 	cmd.Args = cobra.MinimumNArgs(1)
 	cmd.Flags().StringArrayVar(&cliParams.Visualizations, "visualization", []string{}, "Visualization IDs to include; if omitted, all visualizations will be included.")
 	cmd.Flags().StringArrayVar(&cliParams.renderParamsList, "param", nil, "Render parameter value in key=value form. Repeatable. Duplicate keys are not permitted.")
-	cmd.Flags().StringArrayVar(&cliParams.visualizationParamsList, "visualization-param", nil, "Visualization parameter value in key=value form. Repeatable. Duplicate keys are not permitted.")
 	addRecipeSelectionFlags(&cliParams.recipeSelectionParams, cmd)
 	cmd.ValidArgsFunction = completion.CompleteTargetNames
 
@@ -105,11 +103,6 @@ func prepareRender(cc client.ClientConnector, preparer run.RenderPreparer, cliPa
 	if err != nil {
 		return err
 	}
-	params.VisualizationParameterValues, err = recipe.ParamListToMap(cliParams.visualizationParamsList)
-	if err != nil {
-		return err
-	}
-
 	preparation, err := preparer.PrepareRender(connector, content, params)
 	if err != nil {
 		return err

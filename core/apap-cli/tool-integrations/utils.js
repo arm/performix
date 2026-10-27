@@ -103,10 +103,15 @@ async function probePython(
   execOptions = {},
 ) {
   // Check Python is present.
-  const pyCheck = await engine.execCommand(
-    [pythonExecutable, '--version'],
-    execOptions,
-  );
+  let pyCheck;
+  try {
+    pyCheck = await engine.execCommand(
+      [pythonExecutable, '--version'],
+      execOptions,
+    );
+  } catch {
+    pyCheck = { rc: 1 };
+  }
   if (pyCheck.rc !== 0) {
     const message =
       pythonExecutable === 'python3'
@@ -551,11 +556,43 @@ async function posixTestWorkload(engine, workload, args) {
   let testResult = await engine.execCommand(['test', ...args, filePath], {
     workingDirectory: workload.workingDir,
   });
-  if (testResult.rc !== 0) {
-    return false;
+  return testResult.rc === 0;
+}
+
+/**
+ * Checks that the target login user can use the workload working directory.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {import("../recipes/docs/jsdocs").WorkloadLaunch} workload
+ * @returns {Promise<void>}
+ */
+async function assertWorkloadWorkingDirectory(engine, workload) {
+  if (!workload.workingDir) {
+    return;
   }
 
-  return true;
+  const directoryResult = await engine.execCommand(
+    ['test', '-d', workload.workingDir],
+    {},
+  );
+  if (directoryResult.rc !== 0) {
+    throw {
+      code: 'tool_integrations.common.WORKING_DIR_NOT_ACCESSIBLE',
+      metadata: { path: workload.workingDir },
+      cause: `working directory is missing or is not a directory, exited with code ${directoryResult.rc}`,
+    };
+  }
+
+  const accessResult = await engine.execCommand(
+    ['test', '-x', workload.workingDir],
+    {},
+  );
+  if (accessResult.rc !== 0) {
+    throw {
+      code: 'tool_integrations.common.WORKING_DIR_NOT_ACCESSIBLE',
+      metadata: { path: workload.workingDir },
+      cause: `target login user cannot search or enter the working directory, exited with code ${accessResult.rc}`,
+    };
+  }
 }
 
 /**
@@ -680,6 +717,7 @@ module.exports = {
   isElevatePrivilegeError,
   normalizeRootOutputAccess,
   posixTestWorkload,
+  assertWorkloadWorkingDirectory,
   resolveWorkloadPath,
   buildToolBundlePath,
   delay,

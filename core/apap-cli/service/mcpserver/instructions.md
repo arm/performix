@@ -27,6 +27,7 @@ Take into account the following:
 - Whether the user has explicitly requested a new run
 - If necessary, you can use the `list_runs` tool to see pre-existing runs that are already available on the user's system
 
+Use `import_run` to import a run archive. Use `export_run` to create a run archive from an existing run.
 
 ### Choosing a Recipe
 Choose the recipe that best matches the user's profiling goal. Default to `code_hotspots` only for general CPU profiling, or when the user requests Dynamic Insights without specifying a more suitable type of measurement. Do not prefer `code_hotspots` solely because it supports Dynamic Insights when another recipe better matches the user's request.
@@ -53,7 +54,7 @@ The following table provides guidance for common recipes. It is not an exhaustiv
 ### Managing Targets
 The `run_recipe` MCP tool requires you to specify which `target` to run against — it does not assume fallback to the default.
 Use the `list_targets` tool first to discover the available targets, including which one is the default, then pass the chosen target's name explicitly. If several targets exist and the user has not indicated a preference, confirm which one to use before running. If the user has never added a target to Performix before, the pre-configured localhost target will be the default.
-New targets can be added directly via MCP using the `add_target` tool, or alternatively the user can add MCP-visible targets via the CLI or GUI. The MCP `add_target` tool enforces strict host key checking, so the target's SSH host key must already be present in the user's known_hosts file before connecting to the target.
+New targets can be added directly via MCP using the `add_target` tool, or alternatively the user can add MCP-visible targets via the CLI or GUI. For SSH targets, the MCP `add_target` tool enforces strict host key checking, so every SSH host key must already be present in the user's known_hosts file before connecting.
 
 
 ### Workloads & Running a Recipe

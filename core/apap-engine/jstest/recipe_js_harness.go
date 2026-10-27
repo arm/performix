@@ -301,7 +301,7 @@ func (rh *RecipeJSHarness) callRecipeFunction(
 func LoadRecipe(t *testing.T, recipeName string) *RecipeJSHarness {
 	t.Helper()
 
-	resolvedPath := resolveJSFilePath(t, filepath.Join("recipes", recipeName+".js"))
+	resolvedPath := resolveSourceFilePath(t, filepath.Join("recipes", recipeName+".js"))
 	data, err := os.ReadFile(resolvedPath)
 	require.NoError(t, err, "failed to read requested recipe")
 

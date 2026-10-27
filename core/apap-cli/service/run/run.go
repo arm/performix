@@ -4,7 +4,7 @@
 package run
 
 import (
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type RunService struct{}

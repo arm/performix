@@ -16,6 +16,7 @@ ${MCP_CLIENT_TEST_MODE}  %{MCP_CLIENT_TEST_MODE=mock}
 ${CONFIG_CONFLICT}       engine.mcp_registration.CONFIG_CONFLICT
 ${CONFIG_READ_FAILED}    engine.mcp_registration.CONFIG_READ_FAILED
 ${CLIENT_UNAVAILABLE}    engine.mcp_registration.CLIENT_UNAVAILABLE
+${CLIENT_VERSION_UNSUPPORTED}  engine.mcp_registration.CLIENT_VERSION_UNSUPPORTED
 
 
 *** Keywords ***
@@ -34,11 +35,64 @@ MCP Client Registration Lifecycle Should Succeed
     Remove MCP Registration Fixture
   END
 
+Create Downlevel VS Code Test Context
+  Skip If  '${MCP_CLIENT_TEST_MODE}' != 'mock'  The downlevel fixture requires mock mode.
+  ${bin} =  Determine ATPerf CLI Bin Path
+  ${fixture} =  Create MCP Registration Fixture  vscode  mock  downlevel
+  ${context} =  Create Dictionary  bin=${bin}  fixture=${fixture}
+  RETURN  ${context}
+
+Exercise Downlevel VS Code Install
+  [Arguments]  ${bin}  ${fixture}
+  ${connection_args} =  Start MCP Registration Daemon  ${bin}  ${fixture}
+  TRY
+    ${plain} =  Run Process  ${bin}  @{connection_args}  mcp  install  vscode
+    ...  env=${fixture}[environment]
+    ${json} =  Run Process  ${bin}  @{connection_args}  --json  mcp  install  vscode
+    ...  env=${fixture}[environment]
+    ${doctor} =  Run Process  ${bin}  @{connection_args}  mcp  doctor  vscode
+    ...  env=${fixture}[environment]
+    ${doctor_json} =  Run Process  ${bin}  @{connection_args}  --json  mcp  doctor  vscode
+    ...  env=${fixture}[environment]
+  FINALLY
+    Run Process  ${bin}  @{connection_args}  daemon  stop  --json
+    ...  env=${fixture}[environment]
+  END
+  ${results} =  Create Dictionary
+  ...  plain=${plain}
+  ...  json=${json}
+  ...  doctor=${doctor}
+  ...  doctor_json=${doctor_json}
+  RETURN  ${results}
+
+Downlevel VS Code Results Should Be Clear
+  [Arguments]  ${results}
+  Downlevel VS Code Install Error Should Be Clear  ${results}[plain]
+  Downlevel VS Code Install Error Should Be Clear  ${results}[json]
+  Downlevel VS Code Doctor Error Should Be Clear  ${results}[doctor]
+  Downlevel VS Code Doctor Error Should Be Clear  ${results}[doctor_json]
+
+Downlevel VS Code Install Error Should Be Clear
+  [Arguments]  ${result}
+  MCP Process Should Fail  ${result}
+  Should Contain  ${result.stdout}  The installed MCP client `VS Code` is not compatible.
+  Should Contain  ${result.stdout}  VS Code version `1.97.0` does not support MCP servers. Version `1.99.0` or later is required.
+  Should Contain  ${result.stdout}  Update VS Code to version `1.99.0` or later, then try again.
+  Should Contain  ${result.stdout}  ${CLIENT_VERSION_UNSUPPORTED}
+
+Downlevel VS Code Doctor Error Should Be Clear
+  [Arguments]  ${result}
+  MCP Process Should Fail  ${result}
+  Should Contain  ${result.stdout}  MCP client: VS Code is not compatible.
+  Should Contain  ${result.stdout}  The installed MCP client `VS Code` is not compatible.
+  Should Contain  ${result.stdout}  VS Code version `1.97.0` does not support MCP servers. Version `1.99.0` or later is required.
+  Should Contain  ${result.stdout}  Update VS Code to version `1.99.0` or later, then try again.
+  Should Contain  ${result.stdout}  ${CLIENT_VERSION_UNSUPPORTED}
+
 Exercise MCP Registration Lifecycle
   [Arguments]  ${bin}  ${fixture}  ${client}  ${display_name}
   ${connection_args} =  Create List
   ...  --server-port  ${fixture}[server_port]
-  ...  --auth-port  ${fixture}[auth_port]
   TRY
     ${start} =  Run Process  ${bin}  @{connection_args}  daemon  start  --http-port  0
     ...  env=${fixture}[environment]
@@ -187,7 +241,6 @@ Start MCP Registration Daemon
   [Arguments]  ${bin}  ${fixture}
   ${connection_args} =  Create List
   ...  --server-port  ${fixture}[server_port]
-  ...  --auth-port  ${fixture}[auth_port]
   ${start} =  Run Process  ${bin}  @{connection_args}  daemon  start  --http-port  0
   ...  env=${fixture}[environment]
   MCP Process Should Succeed  ${start}
@@ -267,7 +320,6 @@ Exercise MCP Diagnostic Commands
   [Arguments]  ${bin}  ${fixture}  ${client}
   ${connection_args} =  Create List
   ...  --server-port  ${fixture}[server_port]
-  ...  --auth-port  ${fixture}[auth_port]
   TRY
     ${start} =  Run Process  ${bin}  @{connection_args}  daemon  start  --http-port  0
     ...  env=${fixture}[environment]
@@ -365,6 +417,7 @@ MCP Configuration Should Contain Server
   Should Be Equal  ${server}[command]  ${expected_command}
   ${expected_args} =  Create List  mcp  start
   Lists Should Be Equal  ${server}[args]  ${expected_args}
+  IF  '${root}' == 'servers'  Should Be Equal  ${server}[type]  stdio
 
 MCP Configuration Should Not Contain Server
   [Arguments]  ${path}  ${root}

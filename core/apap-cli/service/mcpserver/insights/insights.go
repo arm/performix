@@ -9,17 +9,24 @@ import (
 	_ "embed"
 	"maps"
 	"slices"
+
+	engineinsights "github.com/Arm-Debug/apap-cli/apap-engine/insights"
 )
 
 const (
 	ASCTRecipeName                 = "asct"
 	CacheSharingRecipeName         = "cache_sharing"
-	CodeHotspotsRecipeName         = "code_hotspots"
+	CodeHotspotsRecipeName         = engineinsights.CodeHotspotsRecipeName
 	CPUMicroarchitectureRecipeName = "cpu_microarchitecture"
 	InstructionMixRecipeName       = "instruction_mix"
 	MemoryAccessRecipeName         = "memory_access"
 	SyscallTraceSummaryRecipeName  = "syscall_trace_summary"
 	SystemUtilizationRecipeName    = "system_utilization"
+
+	// CodeHotspotsModeEnvironment is read by both the MCP server and engine.
+	// Sharing the setting keeps them on the same temporary Code Hotspots mode
+	// while APAP-5690 compares curated summaries with SQL queries.
+	CodeHotspotsModeEnvironment = engineinsights.CodeHotspotsModeEnvironment
 )
 
 // Method selects how generate_ai_insights obtains evidence for a recipe.
@@ -30,6 +37,15 @@ const (
 	MethodRunQuery       Method = "run_query"
 )
 
+// CodeHotspotsMode selects the implementation used for Code Hotspots AI
+// Insights.
+type CodeHotspotsMode = engineinsights.CodeHotspotsMode
+
+const (
+	CodeHotspotsModeCurated  = engineinsights.CodeHotspotsModeCurated
+	CodeHotspotsModeRunQuery = engineinsights.CodeHotspotsModeRunQuery
+)
+
 // Recipe describes the analysis method and guidance for a supported recipe.
 type Recipe struct {
 	Method   Method
@@ -38,6 +54,9 @@ type Recipe struct {
 
 //go:embed code_hotspots_curated.md
 var codeHotspotsGuidance string
+
+//go:embed code_hotspots_run_query.md
+var codeHotspotsRunQueryGuidance string
 
 // generalAIInsightsGuidance describes how to interpret evidence and shape the
 // resulting insights. It is returned with the tool result so that the guidance
@@ -111,6 +130,26 @@ var recipes = map[string]Recipe{
 func ForRecipe(recipeName string) (Recipe, bool) {
 	recipe, ok := recipes[recipeName]
 	return recipe, ok
+}
+
+// CodeHotspotsModeFromEnvironment uses the engine parser so the MCP server and
+// engine accept the same Code Hotspots mode. Curated remains the default while
+// SQL is measured against it.
+func CodeHotspotsModeFromEnvironment() (CodeHotspotsMode, error) {
+	return engineinsights.CodeHotspotsModeFromEnvironment()
+}
+
+// ForRecipeWithCodeHotspotsMode returns the recipe configuration selected for
+// Code Hotspots. Other recipes do not use this temporary setting.
+func ForRecipeWithCodeHotspotsMode(recipeName string, codeHotspotsMode CodeHotspotsMode) (Recipe, bool) {
+	recipe, ok := ForRecipe(recipeName)
+	if !ok || recipeName != CodeHotspotsRecipeName || codeHotspotsMode != CodeHotspotsModeRunQuery {
+		return recipe, ok
+	}
+	return Recipe{
+		Method:   MethodRunQuery,
+		Guidance: runQueryGuidance + "\n\n" + codeHotspotsRunQueryGuidance,
+	}, true
 }
 
 // SupportedRecipeNames returns the Dynamic Insights recipe allowlist.

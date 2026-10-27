@@ -24,7 +24,25 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
 
-const mlOperatorCallsPath = "tool/pytorch-collect/0/operator_calls.parquet"
+const (
+	mlAPICallsPath         = "tool/pytorch-collect/0/api_calls.parquet"
+	mlOperatorCallsPath    = "tool/pytorch-collect/0/operator_calls.parquet"
+	mlCollectionTimingPath = "tool/pytorch-collect/0/collection_timing.json"
+
+	mlTraceAPICallID       int64 = 7
+	mlTraceOperatorCallID  int64 = 11
+	mlTraceStartNs         int64 = 1_000_000
+	mlTraceEndNs           int64 = 5_000_000
+	mlTraceAPIBeginNs      int64 = 1_000_100
+	mlTraceAPIEndNs        int64 = 1_000_900
+	mlTraceOperatorBeginNs int64 = 1_000_200
+	mlTraceOperatorEndNs   int64 = 1_000_800
+
+	mlTraceAPIEventID      int64 = 0
+	mlTraceOperatorEventID int64 = 1
+	mlTraceAPITrackID      int64 = 2
+	mlTraceOperatorTrackID int64 = 3
+)
 
 func TestMLAnalysisReady(t *testing.T) {
 	harness := jstest.LoadRecipe(t, "ml_analysis")
@@ -62,18 +80,68 @@ func TestMLAnalysisRun(t *testing.T) {
 }
 
 func TestMLAnalysisSingleRunUsesTheRunOperatorCalls(t *testing.T) {
-	model := newMLOperatorCallsModel(t, `
-		SELECT 'aten::add'::VARCHAR AS operator_name,
-		       0::BIGINT AS ts_begin_ns,
-		       1000000::BIGINT AS ts_end_ns`)
+	model := newMLTraceModel(t)
 	output := executeMLAnalysisRenderStage(t, []cdf.ModelView{model})
 
-	require.Len(t, output.Renderers, 1)
+	require.Len(t, output.Renderers, 4)
 	sql := output.Renderers[0].Config["sql"].(string)
 	require.Contains(t, sql, "{{path:"+mlOperatorCallsPath+"}}")
 	require.NotContains(t, sql, "{{path:0:")
-	require.Len(t, output.Widgets, 1)
+	require.Equal(t, "pytorch_api_call_spans", output.Renderers[1].ID)
+	require.Equal(t, "pytorch_operator_call_spans", output.Renderers[2].ID)
+	require.Equal(t, "pytorch_trace_data", output.Renderers[3].ID)
+	require.Len(t, output.Widgets, 2)
 	require.Equal(t, "Operator Summary", output.Widgets[0].Title)
+	require.Equal(t, []any{"num_calls_percent", "total_time_percent"}, output.Widgets[0].Config["percentageColumns"])
+	require.Equal(t, "PyTorch Trace", output.Widgets[1].Title)
+	timeDomain := output.Widgets[1].Config["timeDomain"].(map[string]any)
+	require.Equal(t, int64(0), timeDomain["start"])
+	require.Equal(t, mlTraceEndNs-mlTraceStartNs, timeDomain["end"])
+	require.Equal(t, "ns", timeDomain["unit"])
+
+	session := newRenderSession(t, "ml-trace-run", model.BasePath(), model)
+	initializeRenderers(t, session, output, nil)
+
+	spans := findTableByComponentName(t, session.Manifest(), "trace_spans")
+	rows, err := session.Database().Conn.QueryContext(context.Background(), fmt.Sprintf(`
+		SELECT event_id, track_id, start_ns, end_ns, name, parent_event_id
+		FROM %s
+		ORDER BY event_id`, spans))
+	require.NoError(t, err)
+	defer rows.Close()
+	type spanRow struct {
+		eventID, trackID int64
+		start, end       int64
+		name             string
+		parent           *int64
+	}
+	var got []spanRow
+	for rows.Next() {
+		var row spanRow
+		require.NoError(t, rows.Scan(
+			&row.eventID, &row.trackID, &row.start, &row.end, &row.name, &row.parent,
+		))
+		got = append(got, row)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []spanRow{
+		{
+			eventID: mlTraceAPIEventID, trackID: mlTraceAPITrackID,
+			start: mlTraceAPIBeginNs - mlTraceStartNs, end: mlTraceAPIEndNs - mlTraceStartNs,
+			name: "torch.add",
+		},
+		{
+			eventID: mlTraceOperatorEventID, trackID: mlTraceOperatorTrackID,
+			start: mlTraceOperatorBeginNs - mlTraceStartNs, end: mlTraceOperatorEndNs - mlTraceStartNs,
+			name: "aten.add.Tensor", parent: util.Ptr(mlTraceAPIEventID),
+		},
+	}, got)
+
+	tracks := findTableByComponentName(t, session.Manifest(), "trace_tracks")
+	var trackNames string
+	require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf(`
+		SELECT string_agg(name, ',' ORDER BY track_id) FROM %s`, tracks)).Scan(&trackNames))
+	require.Equal(t, "PyTorch,API calls,Operator calls", trackNames)
 }
 
 func TestMLAnalysisComparisonSummarizesBothRuns(t *testing.T) {
@@ -101,6 +169,7 @@ func TestMLAnalysisComparisonSummarizesBothRuns(t *testing.T) {
 	require.Contains(t, sql, "FULL OUTER JOIN")
 	require.Len(t, output.Widgets, 1)
 	require.Equal(t, "Operator Summary Comparison", output.Widgets[0].Title)
+	require.Equal(t, []any{"num_calls_percent", "total_time_percent"}, output.Widgets[0].Config["percentageColumns"])
 
 	session := newMLComparisonRenderSession(t, models)
 	initializeRenderers(t, session, output, nil)
@@ -169,6 +238,74 @@ func TestMLAnalysisComparisonSummarizesBothRuns(t *testing.T) {
 	require.InDelta(t, 3, *got[2].averageTimeDelta, 0.001)
 	require.InDelta(t, 6, got[2].totalTime, 0.001)
 	require.InDelta(t, 0, got[2].totalTimeDelta, 0.001)
+
+	var callsShare, durationShare float64
+	require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf(
+		`SELECT num_calls_percent, total_time_percent FROM %s WHERE operator = 'shared'`, table,
+	)).Scan(&callsShare, &durationShare))
+	require.InDelta(t, 50, callsShare, 0.001)
+	require.InDelta(t, 75, durationShare, 0.001)
+	require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf(
+		`SELECT num_calls_percent, total_time_percent FROM %s WHERE operator = 'baseline_only'`, table,
+	)).Scan(&callsShare, &durationShare))
+	require.Zero(t, callsShare)
+	require.Zero(t, durationShare)
+}
+
+func TestMLAnalysisSummaryPercentagesAndNumericValues(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		rows            string
+		calls, duration float64
+		count           int
+	}{
+		{"unequal calls", `SELECT 'a' AS operator_name, 0::BIGINT AS ts_begin_ns, 2000000::BIGINT AS ts_end_ns
+		 UNION ALL SELECT 'a', 0::BIGINT, 2000000::BIGINT
+		 UNION ALL SELECT 'b', 0::BIGINT, 6000000::BIGINT`, 200.0 / 3, 40, 2},
+		{"zero durations", `SELECT 'a' AS operator_name, 0::BIGINT AS ts_begin_ns, 0::BIGINT AS ts_end_ns`, 100, 0, 1},
+		{"empty", `SELECT 'a' AS operator_name, 0::BIGINT AS ts_begin_ns, 0::BIGINT AS ts_end_ns WHERE FALSE`, 0, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := newMLOperatorCallsModel(t, tc.rows)
+			output := executeMLAnalysisRenderStage(t, []cdf.ModelView{model})
+			// Only the summary is needed; these fixtures deliberately contain no API trace.
+			output.Renderers = output.Renderers[:1]
+			output.Widgets = output.Widgets[:1]
+			session := newRenderSession(t, "ml-summary", model.BasePath(), model)
+			initializeRenderers(t, session, output, nil)
+			table := findTableByComponentName(t, session.Manifest(), "flat_table")
+			rows, err := session.Database().Conn.QueryContext(context.Background(), fmt.Sprintf(
+				`SELECT num_calls, num_calls_percent, average_time_ms, total_time_ms, total_time_percent FROM %s ORDER BY operator`, table,
+			))
+			require.NoError(t, err)
+			defer rows.Close()
+			var callsShares, durationShares []float64
+			for rows.Next() {
+				var calls, callsShare, averageTime, totalTime, durationShare any
+				require.NoError(t, rows.Scan(&calls, &callsShare, &averageTime, &totalTime, &durationShare))
+				require.IsType(t, int64(0), calls, "num_calls")
+				for column, value := range map[string]any{
+					"num_calls_percent": callsShare, "average_time_ms": averageTime,
+					"total_time_ms": totalTime, "total_time_percent": durationShare,
+				} {
+					require.IsType(t, float64(0), value, column)
+				}
+				callsShares = append(callsShares, callsShare.(float64))
+				durationShares = append(durationShares, durationShare.(float64))
+			}
+			require.NoError(t, rows.Err())
+			require.Len(t, callsShares, tc.count)
+			if tc.count == 0 {
+				return
+			}
+			require.InDelta(t, tc.calls, callsShares[0], 0.000001)
+			require.InDelta(t, tc.duration, durationShares[0], 0.000001)
+			if tc.count == 2 {
+				require.InDelta(t, 100, callsShares[0]+callsShares[1], 0.000001)
+				require.InDelta(t, 100, durationShares[0]+durationShares[1], 0.000001)
+			}
+		})
+	}
 }
 
 func executeMLAnalysisRenderStage(t *testing.T, models []cdf.ModelView) recipe.RenderOutput {
@@ -177,6 +314,24 @@ func executeMLAnalysisRenderStage(t *testing.T, models []cdf.ModelView) recipe.R
 	descriptions := make([]recipeparser.RunDescription, len(models))
 	context := &mocks.MockRenderExecutionContext{}
 	context.On("GetRunDescriptions").Return(descriptions, nil).Once()
+	if len(models) == 1 {
+		collectionTiming, err := models[0].ResolveComponentByManifestPattern(mlCollectionTimingPath)
+		require.NoError(t, err)
+		collectionTimingContent, err := os.ReadFile(collectionTiming.AbsolutePath)
+		require.NoError(t, err)
+		context.On("ListRunComponents", 0, mlCollectionTimingPath).Return(
+			[]recipeparser.RunComponentDescription{{
+				RelativePath: collectionTiming.RelativePath,
+				FileName:     filepath.Base(collectionTiming.RelativePath),
+				ComponentType: recipeparser.ComponentType{
+					Name: collectionTiming.Type.Name, Version: collectionTiming.Type.SchemaVersion,
+				},
+			}}, nil,
+		).Once()
+		context.On("ReadRunComponent", 0, collectionTiming.RelativePath).Return(
+			string(collectionTimingContent), nil,
+		).Once()
+	}
 
 	output, err := harness.RecipeRender(t, context)
 	require.NoError(t, err)
@@ -209,13 +364,71 @@ func newMLOperatorCallsModel(t *testing.T, rowsSQL string) cdf.ModelView {
 	))
 	require.NoError(t, err)
 
+	require.NoError(t, os.WriteFile(filepath.Join(runRoot, filepath.FromSlash(mlCollectionTimingPath)),
+		[]byte(`{"start_time_ns":"0","end_time_ns":"10000000"}`), 0o600))
 	return cdf.NewOnDiskModel(runRoot, &cdf.Manifest{Entries: []cdf.ManifestEntry{{
 		Path: mlOperatorCallsPath,
 		ComponentType: cdf.ComponentType{
 			Name:          "pytorch-operator-calls",
 			SchemaVersion: "1.0",
 		},
-	}}}, cdf.Metadata{})
+	}, {Path: mlCollectionTimingPath, ComponentType: cdf.ComponentType{Name: "pytorch-collection-timing-json", SchemaVersion: "1.0"}}}}, cdf.Metadata{})
+}
+
+func newMLTraceModel(t *testing.T) cdf.ModelView {
+	t.Helper()
+	runRoot := t.TempDir()
+	for _, path := range []string{mlAPICallsPath, mlOperatorCallsPath, mlCollectionTimingPath} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(runRoot, filepath.FromSlash(path))), 0o755))
+	}
+
+	db, err := (&render.DuckDBFactory{}).Connect(t.Name() + "_ml_trace_fixture")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Conn.ExecContext(context.Background(), fmt.Sprintf(`
+		COPY (
+			SELECT %d::BIGINT AS api_call_id,
+			       'torch.add'::VARCHAR AS function_name,
+			       %d::BIGINT AS ts_begin_ns,
+			       %d::BIGINT AS ts_end_ns,
+			       '[]'::VARCHAR AS args_json,
+			       '{}'::VARCHAR AS kwargs_json,
+			       'null'::VARCHAR AS output_json
+		) TO %s (FORMAT PARQUET);
+		COPY (
+			SELECT %d::BIGINT AS api_call_id,
+			       %d::BIGINT AS operator_call_id,
+			       'aten.add.Tensor'::VARCHAR AS operator_name,
+			       %d::BIGINT AS ts_begin_ns,
+			       %d::BIGINT AS ts_end_ns,
+			       '[]'::VARCHAR AS args_json,
+			       '{}'::VARCHAR AS kwargs_json,
+			       'null'::VARCHAR AS output_json
+		) TO %s (FORMAT PARQUET)`,
+		mlTraceAPICallID,
+		mlTraceAPIBeginNs,
+		mlTraceAPIEndNs,
+		util.SQLQuoteStringLiteral(filepath.Join(runRoot, filepath.FromSlash(mlAPICallsPath))),
+		mlTraceAPICallID,
+		mlTraceOperatorCallID,
+		mlTraceOperatorBeginNs,
+		mlTraceOperatorEndNs,
+		util.SQLQuoteStringLiteral(filepath.Join(runRoot, filepath.FromSlash(mlOperatorCallsPath))),
+	))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(runRoot, filepath.FromSlash(mlCollectionTimingPath)),
+		[]byte(fmt.Sprintf(
+			`{"start_time_ns":"%d","end_time_ns":"%d"}`+"\n", mlTraceStartNs, mlTraceEndNs,
+		)),
+		0o600,
+	))
+
+	return cdf.NewOnDiskModel(runRoot, &cdf.Manifest{Entries: []cdf.ManifestEntry{
+		{Path: mlAPICallsPath, ComponentType: cdf.ComponentType{Name: "pytorch-api-calls-parquet", SchemaVersion: "1.0"}},
+		{Path: mlOperatorCallsPath, ComponentType: cdf.ComponentType{Name: "pytorch-operator-calls-parquet", SchemaVersion: "1.0"}},
+		{Path: mlCollectionTimingPath, ComponentType: cdf.ComponentType{Name: "pytorch-collection-timing-json", SchemaVersion: "1.0"}},
+	}}, cdf.Metadata{})
 }
 
 func newMLComparisonRenderSession(t *testing.T, models []cdf.ModelView) render.Session {

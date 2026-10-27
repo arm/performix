@@ -1,0 +1,32 @@
+{
+  "counters": "<counters><counter name=\"ARMv8_Cortex_X1_ccnt\" />\n    <counter name=\"ARMv8_Cortex_A78_ccnt\" />\n    <counter name=\"ARMv8_Cortex_A55_ccnt\" />\n    <cluster id=\"0\" name=\"ARMv8_Cortex_A55\" />\n<cluster id=\"1\" name=\"ARMv8_Cortex_A78\" />\n<cluster id=\"2\" name=\"ARMv8_Cortex_X1\" />\n<cpu id=\"0\" cluster=\"0\" />\n<cpu id=\"1\" cluster=\"0\" />\n<cpu id=\"2\" cluster=\"0\" />\n<cpu id=\"3\" cluster=\"0\" />\n<cpu id=\"4\" cluster=\"1\" />\n<cpu id=\"5\" cluster=\"1\" />\n<cpu id=\"6\" cluster=\"2\" />\n<cpu id=\"7\" cluster=\"2\" />\n  </counters>",
+  "events": "<events><category counter_set=\"ARMv8_Cortex_A55_cnt\" name=\"Cortex-A55\" per_cpu=\"yes\" supports_event_based_sampling=\"yes\"><event counter=\"ARMv8_Cortex_A55_ccnt\" event=\"0x11\" title=\"Cycles\" name=\"CPU Cycles\" description=\"The counter increments on every cycle\" units=\"cycles\" /> \n</category><category counter_set=\"ARMv8_Cortex_A78_cnt\" name=\"Cortex-A78\" per_cpu=\"yes\" supports_event_based_sampling=\"yes\"><event counter=\"ARMv8_Cortex_A78_ccnt\" event=\"0x11\" title=\"Cycles\" name=\"CPU Cycles\" description=\"The counter increments on every cycle\" units=\"cycles\" /> \n</category><category counter_set=\"ARMv8_Cortex_X1_cnt\" name=\"Cortex-X1\" per_cpu=\"yes\" supports_event_based_sampling=\"yes\"><event counter=\"ARMv8_Cortex_X1_ccnt\" event=\"0x11\" title=\"Cycles\" name=\"CPU Cycles\" description=\"The counter increments on every cycle\" units=\"cycles\" /> \n</category><category counter_set=\"Unrelated_cnt\" per_cpu=\"yes\"><event counter=\"Unrelated_ccnt\" event=\"0x11\" units=\"cycles\" /></category></events>",
+  "expected": [
+    {
+      "name": "ARMv8_Cortex_A55_ccnt",
+      "event": 17,
+      "devices": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "name": "ARMv8_Cortex_A78_ccnt",
+      "event": 17,
+      "devices": [
+        4,
+        5
+      ]
+    },
+    {
+      "name": "ARMv8_Cortex_X1_ccnt",
+      "event": 17,
+      "devices": [
+        6,
+        7
+      ]
+    }
+  ]
+}

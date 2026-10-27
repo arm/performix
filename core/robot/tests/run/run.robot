@@ -33,7 +33,7 @@ Run Info Can Be Display For A Run That Exists
   Given The Run Exists  ${CODE_HOTSPOTS_RUN_ID_1}
   When Display Run Info  ${CODE_HOTSPOTS_RUN_ID_1}
   Then The Last Command Succeeded
-  And The Run Info Contains  target_name  ${G_TARGET_NAME}
+  And The Run Info Contains Target  ${G_TARGET_NAME}  code-hotspots-baseline
 
 Run Info Cannot Be Displayed For A Run That Does Not Exist
   [Documentation]  Tests that a non-existing run's full details cannot be displayed.
@@ -148,11 +148,15 @@ A Run Can Be Imported
 
 Runs Suite Setup
   Common Setup
-  The Test Target Is Added Successfully
-  The Target Is Set To Default Successfully  ${G_TARGET_NAME}
-  ${run_id} =  Run Recipe And Extract Run ID  code_hotspots
+  IF  '${USE_PRERECORDED_RUNS}' == 'True'
+    ${run_id} =  Import Prerecorded Run  code-hotspots-baseline
+  ELSE
+    The Test Target Is Added Successfully
+    The Target Is Set To Default Successfully  ${G_TARGET_NAME}
+    ${run_id} =  Run Recipe And Extract Run ID  code_hotspots
+    The Test Target Is Removed Successfully
+  END
   VAR  ${CODE_HOTSPOTS_RUN_ID_1} =  ${run_id}  scope=SUITE
-  The Test Target Is Removed Successfully
 
 Runs Suite Teardown
   Common Teardown

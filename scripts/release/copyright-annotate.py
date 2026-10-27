@@ -122,10 +122,6 @@ def is_in_scope(path: str) -> bool:
         return False
     if any(path.endswith(suffix) for suffix in GENERATED_SUFFIXES):
         return False
-    if path == "core/atperf-agent/systeminfo/armcpus/cpus.go":
-        return False
-    if path.startswith("core/clients/go/mocks/") and path.endswith(".go"):
-        return False
     if "/regressiontests/test-data/" in path:
         return False
     if "/tests/fixtures/" in path:

@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/spf13/viper"
-
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/userdirs"
 )
@@ -25,8 +23,8 @@ const stdout = "stdout"
 // (at least, I think this is what's happening - not totally sure).
 // Using 127.0.0.1 instead results in the loopback interface being selected (see output of `ip route get 127.0.0.1`)
 const DefaultServerHostname = "127.0.0.1"
-const DefaultServerPort = 9000
-const DefaultAuthPort = 9001
+const AutomaticPort = 0
+const DefaultServerPort = AutomaticPort
 const DefaultHTTPPort = 0
 const DefaultHTTPChunkBytes = 1024 * 1024
 
@@ -34,18 +32,6 @@ const DefaultLogLevel = "info"
 const DefaultLogFile = stdout
 const DefaultADBPath = "adb"
 
-const DefaultEnableOnDemandPrivilege = true
-const DefaultAgentUseGroupController = true
-
-const DefaultEnableFullCaptureSupport = true
-const DefaultEnableRerendering = true
-const DefaultEnableExperimentalRecipes = false
-const DefaultEnableSecondaryRunPaths = true
-const DefaultEnableAndroidTargets = false
-const DefaultEnableGPURecipe = false
-const DefaultEnableRenderDBSandbox = true
-const DefaultEnableNeoprofTimeline = false
-const DefaultEnableJfrCapture = false
 const DefaultDaemonAutostart = true
 
 const EnableAndroidTargetsConfigKey = "enable-android-targets"
@@ -93,11 +79,6 @@ var DefaultSrcToolsDirectory = defaultSrcToolsDirectory()
 
 // DefaultToolsDeploymentDirectory is intentionally empty so the appropriate path gets resolved when connecting to the target.
 var DefaultToolsDeploymentDirectory = ""
-
-func init() {
-	viper.SetDefault("server-port", DefaultServerPort)
-	viper.SetDefault("auth-port", DefaultAuthPort)
-}
 
 func ValidatePort(name string, port int) error {
 	if port < minPort || port > maxPort {

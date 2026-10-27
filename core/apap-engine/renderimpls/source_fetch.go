@@ -21,7 +21,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/sourcecontent"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
-	targetagentproto "github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	targetagentproto "github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 const (

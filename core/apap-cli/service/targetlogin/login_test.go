@@ -13,13 +13,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/encoding"
 
+	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
+	"github.com/Arm-Debug/apap-cli/apap-cli/service/daemonstate"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/authproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/authproto"
+	"github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 type mockCloser struct {
@@ -29,6 +33,57 @@ type mockCloser struct {
 func (m *mockCloser) Close() error {
 	args := m.Called()
 	return args.Error(0)
+}
+
+func TestLoginToTargetResolvesDaemonAuthEndpoint(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	store, err := daemonstate.NewStore()
+	require.NoError(t, err)
+	require.NoError(t, store.Write(daemonstate.Daemon{
+		Host: "127.0.0.1", ServerPort: 12345,
+	}))
+	lifetimeLock, err := daemonstate.AcquireLifetimeLock()
+	require.NoError(t, err)
+	defer func() { require.NoError(t, lifetimeLock.Release()) }()
+	expectedErr := errors.New("stop after connect")
+	service := NewTargetLoginService(
+		func(host string, port int) (authproto.AuthClient, io.Closer, error) {
+			assert.Equal(t, "127.0.0.1", host)
+			assert.Equal(t, 12345, port)
+			return nil, nil, expectedErr
+		},
+		PromptSecret,
+		PromptFingerprint,
+	)
+
+	err = service.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{
+		Host: serverconfig.DefaultServerHostname, Port: serverconfig.AutomaticPort,
+	})
+	require.ErrorIs(t, err, expectedErr)
+}
+
+func TestLoginToTargetDoesNotUseAuthEndpointWhenLifetimeLockIsFree(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	store, err := daemonstate.NewStore()
+	require.NoError(t, err)
+	require.NoError(t, store.Write(daemonstate.Daemon{
+		Host: "127.0.0.1", ServerPort: 12345,
+	}))
+	service := NewTargetLoginService(
+		func(string, int) (authproto.AuthClient, io.Closer, error) {
+			t.Fatal("auth connection was not expected")
+			return nil, nil, nil
+		},
+		PromptSecret,
+		PromptFingerprint,
+	)
+
+	err = service.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{
+		Host: serverconfig.DefaultServerHostname, Port: serverconfig.AutomaticPort,
+	})
+	require.ErrorIs(t, err, daemonstate.ErrNoRunningDaemon)
 }
 
 func TestPromptSecretReadsFromStdinWhenNotTTY(t *testing.T) {
@@ -259,6 +314,7 @@ func TestNormalizeHostKeyType(t *testing.T) {
 }
 
 func TestLoginToTarget(t *testing.T) {
+	config := grpcserver.GrpcServerConfig{Host: "auth-host", Port: 1234}
 	t.Run("Successful login", func(t *testing.T) {
 		authHost := "auth-host"
 		authPort := 1234
@@ -336,7 +392,9 @@ func TestLoginToTarget(t *testing.T) {
 		closer.On("Close").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.MatchedBy(func(option grpc.CompressorCallOption) bool {
+			return option.CompressorType == encoding.Identity
+		})).Return(stream, nil)
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -348,7 +406,7 @@ func TestLoginToTarget(t *testing.T) {
 			PromptFingerprint,
 		)
 
-		config := grpcserver.GrpcServerConfig{Host: authHost, AuthPort: authPort}
+		config := grpcserver.GrpcServerConfig{Host: authHost, Port: authPort}
 
 		err = client.LoginToTarget(context.Background(), target, config)
 		require.NoError(t, err)
@@ -403,7 +461,7 @@ func TestLoginToTarget(t *testing.T) {
 		closer.On("Close").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, nil)
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -419,7 +477,7 @@ func TestLoginToTarget(t *testing.T) {
 			},
 		)
 
-		config := grpcserver.GrpcServerConfig{Host: authHost, AuthPort: authPort}
+		config := grpcserver.GrpcServerConfig{Host: authHost, Port: authPort}
 
 		err = client.LoginToTarget(context.Background(), target, config)
 		require.NoError(t, err)
@@ -475,7 +533,7 @@ func TestLoginToTarget(t *testing.T) {
 		closer.On("Close").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, nil)
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -491,7 +549,7 @@ func TestLoginToTarget(t *testing.T) {
 			},
 		)
 
-		config := grpcserver.GrpcServerConfig{Host: authHost, AuthPort: authPort}
+		config := grpcserver.GrpcServerConfig{Host: authHost, Port: authPort}
 
 		err = client.LoginToTarget(context.Background(), target, config)
 		require.NoError(t, err)
@@ -515,7 +573,7 @@ func TestLoginToTarget(t *testing.T) {
 		stream.On("CloseSend").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, nil)
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -525,7 +583,7 @@ func TestLoginToTarget(t *testing.T) {
 			func(prompt string, fingerprint string) (bool, error) { return true, nil },
 		)
 
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		expectedErr := message.New(message.CommonUnknownError).
 			WithCause(errors.New("missing host for host key fingerprint prompt"))
 		assert.Equal(t, expectedErr, err)
@@ -550,7 +608,7 @@ func TestLoginToTarget(t *testing.T) {
 		stream.On("CloseSend").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, nil)
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -560,7 +618,7 @@ func TestLoginToTarget(t *testing.T) {
 			func(prompt string, fingerprint string) (bool, error) { return false, confirmErr },
 		)
 
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		assert.Equal(t, confirmErr, err)
 
 		stream.AssertExpectations(t)
@@ -584,7 +642,7 @@ func TestLoginToTarget(t *testing.T) {
 		stream.On("CloseSend").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, nil)
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -594,7 +652,7 @@ func TestLoginToTarget(t *testing.T) {
 			func(prompt string, fingerprint string) (bool, error) { return true, nil },
 		)
 
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		expectedErr := message.New(message.CliServiceTargetloginStreamFailure).WithCause(sendErr)
 		assert.Equal(t, expectedErr, err)
 
@@ -603,7 +661,7 @@ func TestLoginToTarget(t *testing.T) {
 	})
 	t.Run("Missing deps", func(t *testing.T) {
 		client := &targetLoginService{}
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		require.Error(t, err)
 		expectedErr := message.New(message.CommonUnknownError).
 			WithCause(errors.New("TargetLoginService is missing required dependencies"))
@@ -618,14 +676,14 @@ func TestLoginToTarget(t *testing.T) {
 			func(prompt string) ([]byte, error) { return nil, nil },
 			PromptFingerprint,
 		)
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		assert.Equal(t, err, expectedErr)
 	})
 	t.Run("TargetLogin call failure", func(t *testing.T) {
 		streamErr := errors.New("stream error")
 		stream := mocks.NewAuthTargetLoginClient(t)
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, streamErr).Once()
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, streamErr).Once()
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -635,7 +693,7 @@ func TestLoginToTarget(t *testing.T) {
 			PromptFingerprint,
 		)
 
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		expectedErr := message.New(message.CliServiceTargetloginStreamFailure).WithCause(streamErr)
 		assert.Equal(t, expectedErr, err)
 
@@ -648,7 +706,7 @@ func TestLoginToTarget(t *testing.T) {
 		stream.On("CloseSend").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, nil)
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -658,7 +716,7 @@ func TestLoginToTarget(t *testing.T) {
 			PromptFingerprint,
 		)
 
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		expectedErr := message.New(message.CliServiceTargetloginStreamFailure).WithCause(sendErr)
 		assert.Equal(t, expectedErr, err)
 
@@ -672,7 +730,7 @@ func TestLoginToTarget(t *testing.T) {
 		stream.On("CloseSend").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, nil)
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -682,7 +740,7 @@ func TestLoginToTarget(t *testing.T) {
 			PromptFingerprint,
 		)
 
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		expectedErr := message.New(message.CliServiceTargetloginStreamFailure).WithCause(io.EOF)
 		assert.Equal(t, expectedErr, err)
 
@@ -696,7 +754,7 @@ func TestLoginToTarget(t *testing.T) {
 		stream.On("CloseSend").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, nil)
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -706,7 +764,7 @@ func TestLoginToTarget(t *testing.T) {
 			PromptFingerprint,
 		)
 
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		expectedErr := message.New(message.CommonUnknownError).
 			WithCause(errors.New("unexpected message type received during target login"))
 		assert.Equal(t, expectedErr, err)
@@ -728,7 +786,7 @@ func TestLoginToTarget(t *testing.T) {
 		stream.On("CloseSend").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, nil)
 
 		promptErr := errors.New("prompt failed")
 		client := NewTargetLoginService(
@@ -739,7 +797,7 @@ func TestLoginToTarget(t *testing.T) {
 			PromptFingerprint,
 		)
 
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		expectedErr := message.New(message.CliServiceTargetloginPromptFailed).WithCause(promptErr)
 		assert.Equal(t, expectedErr, err)
 
@@ -762,7 +820,7 @@ func TestLoginToTarget(t *testing.T) {
 		stream.On("CloseSend").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, nil)
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -772,7 +830,7 @@ func TestLoginToTarget(t *testing.T) {
 			PromptFingerprint,
 		)
 
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		expectedErr := message.New(message.CliServiceTargetloginStreamFailure).WithCause(sendErr)
 		assert.Equal(t, expectedErr, err)
 
@@ -795,7 +853,7 @@ func TestLoginToTarget(t *testing.T) {
 		stream.On("CloseSend").Return(nil).Once()
 
 		authClient := mocks.NewAuthClient(t)
-		authClient.On("TargetLogin", mock.Anything).Return(stream, nil)
+		authClient.On("TargetLogin", mock.Anything, mock.Anything).Return(stream, nil)
 
 		client := NewTargetLoginService(
 			func(host string, port int) (authproto.AuthClient, io.Closer, error) {
@@ -805,7 +863,7 @@ func TestLoginToTarget(t *testing.T) {
 			PromptFingerprint,
 		)
 
-		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, grpcserver.GrpcServerConfig{})
+		err := client.LoginToTarget(context.Background(), &engine_target.SSHTarget{}, config)
 		assert.Equal(t, err.Error(), connectErr.Error())
 
 		stream.AssertExpectations(t)

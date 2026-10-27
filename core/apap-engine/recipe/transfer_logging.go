@@ -11,6 +11,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
+	"github.com/Arm-Debug/apap-cli/apap-engine/progress"
 )
 
 // LoggingFileRetrievalObserver logs per-file retrieval updates
@@ -112,7 +113,8 @@ type StageProgressTracker struct {
 	transferred int64
 	totalBytes  int64
 	lastUpdate  time.Time
-	report      func(received int64, max int64)
+	report      func(notifiers.StageProgress)
+	eta         progress.ETAEstimator
 	sync.Mutex
 }
 
@@ -166,6 +168,10 @@ func (s *StageProgressTracker) Progress(received int64) {
 
 	newTransferred := s.transferred + received
 	s.transferred = newTransferred
+	// Start timing on actual bytes, including while totals or the phase are hidden.
+	if received > 0 {
+		s.eta.Update(newTransferred, 0)
+	}
 
 	if s.goalCount == 0 || s.count != s.goalCount {
 		s.Unlock()
@@ -175,16 +181,15 @@ func (s *StageProgressTracker) Progress(received int64) {
 	now := time.Now()
 	// Ensure we send: on first write, on interval, and at completion.
 	update := s.lastUpdate.IsZero() || (newTransferred >= 0 && newTransferred >= s.totalBytes) || now.Sub(s.lastUpdate) >= notifiers.ClientFileStreamUpdateInterval
-	var transferred int64
-	var totalBytes int64
+	var snapshot notifiers.StageProgress
 	if update {
-		transferred, totalBytes = s.snapshotForReportLocked(now)
+		snapshot = s.snapshotForReportLocked(now)
 	}
 
 	s.Unlock()
 
 	if update {
-		s.report(transferred, totalBytes)
+		s.report(snapshot)
 	}
 }
 
@@ -198,17 +203,19 @@ func (s *StageProgressTracker) reportCurrent() {
 		return
 	}
 
-	transferred, totalBytes := s.snapshotForReportLocked(time.Now())
+	snapshot := s.snapshotForReportLocked(time.Now())
 	s.Unlock()
 
-	s.report(transferred, totalBytes)
+	s.report(snapshot)
 }
 
 // snapshotForReportLocked returns a consistent progress snapshot and updates
 // the rate-limit timestamp. The caller must hold the tracker mutex.
-func (s *StageProgressTracker) snapshotForReportLocked(now time.Time) (int64, int64) {
+func (s *StageProgressTracker) snapshotForReportLocked(now time.Time) notifiers.StageProgress {
 	s.lastUpdate = now
-	return s.transferred, s.totalBytes
+	snapshot := notifiers.StageProgress{Sent: s.transferred, Max: s.totalBytes, Unit: notifiers.UnitBytes}
+	snapshot.EstimatedRemainingSeconds = s.eta.Update(s.transferred, s.totalBytes)
+	return snapshot
 }
 
 // multiPhaseProgressTracker keeps separate progress state for phase1 and
@@ -217,7 +224,7 @@ func (s *StageProgressTracker) snapshotForReportLocked(now time.Time) (int64, in
 type multiPhaseProgressTracker struct {
 	phase1     *StageProgressTracker
 	background *StageProgressTracker
-	report     func(phase transferPhase, received int64, totalBytes int64)
+	report     func(phase transferPhase, snapshot notifiers.StageProgress)
 	active     transferPhase
 	sync.Mutex
 }
@@ -225,16 +232,16 @@ type multiPhaseProgressTracker struct {
 // newMultiPhaseProgressTracker wires each phase tracker through reportIfActive,
 // so individual transfers can always report to their own phase without knowing
 // whether that phase is currently visible.
-func newMultiPhaseProgressTracker(report func(transferPhase, int64, int64)) *multiPhaseProgressTracker {
+func newMultiPhaseProgressTracker(report func(transferPhase, notifiers.StageProgress)) *multiPhaseProgressTracker {
 	trackers := &multiPhaseProgressTracker{
 		report: report,
 		active: phase1TransferPhase,
 	}
-	trackers.phase1 = &StageProgressTracker{report: func(received int64, totalBytes int64) {
-		trackers.reportIfActive(phase1TransferPhase, received, totalBytes)
+	trackers.phase1 = &StageProgressTracker{report: func(snapshot notifiers.StageProgress) {
+		trackers.reportIfActive(phase1TransferPhase, snapshot)
 	}}
-	trackers.background = &StageProgressTracker{report: func(received int64, totalBytes int64) {
-		trackers.reportIfActive(backgroundTransferPhase, received, totalBytes)
+	trackers.background = &StageProgressTracker{report: func(snapshot notifiers.StageProgress) {
+		trackers.reportIfActive(backgroundTransferPhase, snapshot)
 	}}
 	return trackers
 }
@@ -267,14 +274,14 @@ func (t *multiPhaseProgressTracker) SetBackground() {
 
 // reportIfActive forwards a phase progress update only when that phase is
 // active. Inactive phases keep their internal counters but stay silent.
-func (t *multiPhaseProgressTracker) reportIfActive(phase transferPhase, received int64, totalBytes int64) {
+func (t *multiPhaseProgressTracker) reportIfActive(phase transferPhase, snapshot notifiers.StageProgress) {
 	t.Lock()
 	active := t.active == phase
 	report := t.report
 	t.Unlock()
 
 	if active && report != nil {
-		report(phase, received, totalBytes)
+		report(phase, snapshot)
 	}
 }
 

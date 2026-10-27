@@ -371,6 +371,7 @@ Recipe Workload Is Killed When A Run Is Stopped
   And Start Code Hotspots Recipe  --workload "python3 ${SLEEP_SCRIPT_PATH}" --timeout 30 --target ${G_TARGET_NAME}
   And Wait For Workload To Run On The Target  ${SLEEP_PROCESS_MATCH}
   When Stop Run  ${G_LAST_PROCESS}
+  And The Last Command Succeeded
   Then No Processes Are Running On The Target  ${SLEEP_PROCESS_MATCH}
   And The Target Output Directory Is Empty
   [Teardown]  Run Keywords  Remove Sleep Script From Target

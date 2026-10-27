@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -22,10 +23,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/pidfiles"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/apap-engine/tlsconfig"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 const localhost = "127.0.0.1"
@@ -59,6 +62,21 @@ func TestRun(t *testing.T) {
 		_ = s.Run(grpcserver.GrpcServerConfig{})
 
 		assert.Contains(t, strings.Join(receivedArgs, " "), "daemon start --block")
+	})
+
+	t.Run("requests lifetime lock for automatically managed daemon", func(t *testing.T) {
+		var receivedArgs []string
+		expectedError := errors.New("stop before readiness check")
+		runCommand := func(_ string, args ...string) (startedProcess, error) {
+			receivedArgs = args
+			return nil, expectedError
+		}
+		s := backgroundRunner{runCommand: runCommand}
+
+		err := s.StartDaemonChild(grpcserver.GrpcServerConfig{})
+
+		require.ErrorIs(t, err, expectedError)
+		assert.Contains(t, receivedArgs, "--daemon-child")
 	})
 
 	t.Run("writes daemon started message to configured output", func(t *testing.T) {
@@ -186,13 +204,11 @@ func TestRun(t *testing.T) {
 			}{
 				{grpcserver.GrpcServerConfig{Host: "example.com"}, "--server-hostname example.com"},
 				{grpcserver.GrpcServerConfig{Port: 123}, "--server-port 123"},
-				{grpcserver.GrpcServerConfig{AuthPort: 456}, "--auth-port 456"},
 				{grpcserver.GrpcServerConfig{ParallelJobs: 12}, "--jobs 12"},
 				{grpcserver.GrpcServerConfig{DataDirectory: "~/some-data-dir"}, "--data-dir ~/some-data-dir"},
 				{grpcserver.GrpcServerConfig{LogPath: "/var/log/apxd.log"}, "--log-file /var/log/apxd.log"},
 				{grpcserver.GrpcServerConfig{LogLevel: "info"}, "--log-level info"},
 				{grpcserver.GrpcServerConfig{DeploymentToolsDir: "/tmp/tools"}, "--deployment-tools-dir /tmp/tools"},
-				{grpcserver.GrpcServerConfig{EnableRenderDBSandbox: false}, "--enable-render-db-sandbox=false"},
 			}
 
 			for _, test := range cases {
@@ -309,7 +325,12 @@ func newReadyServerCommand(t testing.TB) (grpcserver.GrpcServerConfig, commandRu
 func newReadyServerCommandWithPid(t testing.TB) (grpcserver.GrpcServerConfig, int, func()) {
 	t.Helper()
 	listener := newTestListener(t)
-	server := grpc.NewServer()
+	configDir := t.TempDir()
+	manager, err := tlsconfig.NewManager(configDir)
+	require.NoError(t, err)
+	serverCredentials, err := manager.GenerateServerCredentials(localhost)
+	require.NoError(t, err)
+	server := grpc.NewServer(grpc.Creds(serverCredentials))
 	apapproto.RegisterApapServer(server, testApapServer{})
 	done := make(chan struct{})
 	t.Cleanup(func() {
@@ -325,7 +346,7 @@ func newReadyServerCommandWithPid(t testing.TB) (grpcserver.GrpcServerConfig, in
 	}
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	return grpcserver.GrpcServerConfig{Host: localhost, Port: port}, os.Getpid(), runServer
+	return grpcserver.GrpcServerConfig{Host: localhost, Port: port, ConfigDirectory: configDir}, os.Getpid(), runServer
 }
 
 type testApapServer struct {
@@ -336,17 +357,55 @@ func (testApapServer) GetVersion(context.Context, *emptypb.Empty) (*apapproto.Se
 	return &apapproto.ServiceVersion{Version: "test-version"}, nil
 }
 
-func TestBackgroundRunnerForwardsJfrCapture(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+func TestBackgroundRunnerFeatureConfiguration(t *testing.T) {
+	for _, withFile := range []bool{false, true} {
+		t.Run(fmt.Sprintf("configFile=%t", withFile), func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			t.Setenv("APXD_ENABLE_JFR_CAPTURE", "false")
+			setup := func(v *viper.Viper) {
+				serverconfig.RegisterFeatureDefaults(v)
+				v.SetEnvPrefix("APXD")
+				v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+				v.AutomaticEnv()
+			}
+			setup(viper.GetViper())
+			var configPath string
+			if withFile {
+				configPath = filepath.Join(t.TempDir(), "custom settings.yaml")
+				require.NoError(t, os.WriteFile(configPath, []byte("enable-jfr-capture: true\nenable-run-component-compression: false\n"), 0600))
+				viper.SetConfigFile(configPath)
+				require.NoError(t, viper.ReadInConfig())
+			}
+			parent := serverconfig.LoadFeatureFlags(viper.GetViper())
 			var receivedArgs []string
 			stop := errors.New("stop before starting a daemon")
 			runner := backgroundRunner{runCommand: func(_ string, args ...string) (startedProcess, error) {
 				receivedArgs = args
 				return nil, stop
 			}}
-			require.ErrorIs(t, runner.Run(grpcserver.GrpcServerConfig{EnableJfrCapture: enabled}), stop)
-			assert.Contains(t, receivedArgs, fmt.Sprintf("--enable-jfr-capture=%t", enabled))
+			require.ErrorIs(t, runner.Run(grpcserver.GrpcServerConfig{FeatureFlags: parent}), stop)
+			child := viper.New()
+			setup(child)
+			for i, arg := range receivedArgs {
+				require.False(t, strings.HasPrefix(arg, "--enable-"), arg)
+				if arg == "--config" {
+					require.Equal(t, configPath, receivedArgs[i+1])
+					child.SetConfigFile(receivedArgs[i+1])
+					require.NoError(t, child.ReadInConfig())
+				}
+			}
+			if withFile {
+				require.Contains(t, receivedArgs, "--config")
+			} else {
+				require.NotContains(t, receivedArgs, "--config")
+			}
+			loaded := serverconfig.LoadFeatureFlags(child)
+			require.Equal(t, parent, loaded)
+			require.False(t, loaded.JfrCapture, "environment overrides YAML")
+			if withFile {
+				require.False(t, loaded.RunComponentCompression, "custom YAML reaches the child")
+			}
 		})
 	}
 }

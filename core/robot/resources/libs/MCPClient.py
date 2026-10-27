@@ -34,6 +34,10 @@ SUPPORTED_MCP_CLIENTS = (
     "vscode",
 )
 
+# Keep a space in the mock executable path so client command invocation is
+# exercised with a common installation-path layout on every host platform.
+MOCK_CLIENT_BINARY_DIRECTORY = "client stubs"
+
 
 class _MCPStderr:
     """Own the client side of the MCP process's stderr destination."""
@@ -240,14 +244,10 @@ class MCPClient:
             raise
 
         server_port = self._available_tcp_port()
-        auth_port = self._available_tcp_port()
-        while auth_port == server_port:
-            auth_port = self._available_tcp_port()
 
         return {
             "environment": environment,
             "server_port": server_port,
-            "auth_port": auth_port,
             "configuration_path": str(config_path) if config_path else "",
             "configuration_root": (
                 "servers" if client_id == "vscode" else "mcpServers"
@@ -276,12 +276,18 @@ class MCPClient:
         environment: dict,
         scenario: str,
     ):
-        if scenario not in {"normal", "conflict", "unreadable", "undetected"}:
+        if scenario not in {
+            "normal",
+            "conflict",
+            "unreadable",
+            "undetected",
+            "downlevel",
+        }:
             raise ValueError(f"unsupported MCP client fixture scenario: {scenario}")
         if scenario == "undetected":
             if client_id != "codex":
                 raise ValueError("the undetected fixture currently uses Codex")
-            binary_directory = test_root / "bin"
+            binary_directory = test_root / MOCK_CLIENT_BINARY_DIRECTORY
             binary_directory.mkdir()
             environment["PATH"] = str(binary_directory)
             return None
@@ -297,7 +303,7 @@ class MCPClient:
 
         # Do not let real clients installed on the host affect mock-mode
         # discovery or --all selection.
-        environment["PATH"] = str(test_root / "bin")
+        environment["PATH"] = str(test_root / MOCK_CLIENT_BINARY_DIRECTORY)
         if scenario == "conflict":
             if client_id != "codex":
                 raise ValueError("the conflict fixture currently uses Codex")
@@ -320,6 +326,12 @@ class MCPClient:
                     "the unreadable fixture currently uses Antigravity"
                 )
             config_path.write_text('{"mcpServers":', encoding="utf-8")
+        elif scenario == "downlevel":
+            if client_id != "vscode":
+                raise ValueError("the downlevel fixture currently uses VS Code")
+            # Keep the launcher discoverable so the test checks upgrade advice
+            # for an installed client.
+            environment["APAP_MCP_STUB_VSCODE_VERSION"] = "1.97.0"
         return config_path
 
     @staticmethod
@@ -333,11 +345,7 @@ class MCPClient:
                 client_id, test_root, environment
             )
             if client_id == "vscode":
-                config_path = MCPClient._vscode_config_path(
-                    test_root, environment
-                )
-                environment["APAP_MCP_STUB_VSCODE_CONFIG"] = str(config_path)
-                return config_path
+                return MCPClient._vscode_config_path(test_root, environment)
             return None
 
         config_path = MCPClient._file_client_config_path(
@@ -555,7 +563,7 @@ class MCPClient:
         }
         suffix = ".exe" if platform.system() == "Windows" else ""
         name = names[client_id] + suffix
-        binary_directory = test_root / "bin"
+        binary_directory = test_root / MOCK_CLIENT_BINARY_DIRECTORY
         binary_directory.mkdir(exist_ok=True)
         binary = binary_directory / name
         source = Path(__file__).resolve().parents[1].joinpath(

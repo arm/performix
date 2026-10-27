@@ -21,8 +21,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/utils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func TestListRecipe(t *testing.T) {

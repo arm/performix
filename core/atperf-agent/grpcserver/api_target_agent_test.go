@@ -17,20 +17,21 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/api/mocks"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/filelock"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/filetransfer"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/fsutil"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/privilege"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/systeminfo"
-	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 func newTestTokenStorage(t *testing.T) privilege.TokenStorage {
@@ -107,8 +108,7 @@ func TestProcessManagement(t *testing.T) {
 	mockProcessManager.On("InterruptProcess", -1).Return(fmt.Errorf("Wrong pid"))
 	mockProcessManager.On("WaitProcess", 22).Return(5, nil)
 	mockProcessManager.On("WaitProcess", -1).Return(0, fmt.Errorf("Wrong pid"))
-	mockProcessManager.On("StartProcess", &process.StartProcess{LaunchCommand: process.LaunchCommand{Command: []string{"test"}}, UseGroupController: false}).Return(&os.Process{Pid: 12345}, nil)
-	mockProcessManager.On("StartProcess", &process.StartProcess{LaunchCommand: process.LaunchCommand{Command: []string{"test"}}, UseGroupController: true}).Return(&os.Process{Pid: 12345}, nil)
+	mockProcessManager.On("StartProcess", &process.StartProcess{LaunchCommand: process.LaunchCommand{Command: []string{"test"}}, UseGroupController: runtime.GOOS == "linux"}).Return(&os.Process{Pid: 12345}, nil)
 	mockProcessManager.On("ReleaseProcessHandles", []int{12345})
 	mockProcessManager.On("ExecCommand", &process.LaunchCommand{Command: []string{"test"}}).Return(&process.CommandResult{Rc: 0, Stdout: "success", Stderr: ""}, nil)
 	mockProcessManager.On("StreamStdout", 123, &grpcStreamAdapter{stream: &process.MockStreamStdoutServer{}}).Return(nil)
@@ -154,11 +154,62 @@ func TestProcessManagement(t *testing.T) {
 		assert.Equal(t, result.Stdout, "success")
 		assert.Equal(t, result.Stderr, "")
 	})
+	t.Run("ExecCommand preserves validation messages through the server interceptor", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			request  *targetagentproto.ExecCommandRequest
+			wantCode message.MessageCode
+		}{
+			{name: "missing request", wantCode: message.AgentApiMissingLaunchRequest},
+			{name: "missing command", request: &targetagentproto.ExecCommandRequest{}, wantCode: message.AgentApiMissingCommand},
+			{
+				name:     "invalid command",
+				request:  &targetagentproto.ExecCommandRequest{Command: []string{"echo", "bad\x00argument"}},
+				wantCode: message.AgentApiInvalidLaunchRequest,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				pm := &process.MockProcessManager{}
+				server := &AgentServerAPI{Pm: pm}
+				interceptor := message.ErrorHandlingServerInterceptor()
+
+				result, err := interceptor(
+					context.Background(),
+					tt.request,
+					&grpc.UnaryServerInfo{FullMethod: "/targetagent.TargetAgent/ExecCommand"},
+					func(ctx context.Context, request any) (any, error) {
+						return server.ExecCommand(ctx, request.(*targetagentproto.ExecCommandRequest))
+					},
+				)
+
+				assert.Nil(t, result)
+				require.Error(t, err)
+				msg := message.IsMessage(message.FromGRPCStatus(err))
+				require.NotNil(t, msg)
+				assert.Equal(t, tt.wantCode, msg.Code())
+				pm.AssertNotCalled(t, "ExecCommand", mock.Anything)
+			})
+		}
+	})
 	t.Run("StartProcess succeeds", func(t *testing.T) {
 		server := &AgentServerAPI{Pm: mockProcessManager}
 		result, err := server.StartProcess(context.Background(), &targetagentproto.StartProcessRequest{Command: []string{"test"}})
 		assert.NoError(t, err)
 		assert.Equal(t, result.Pid, int32(12345))
+	})
+	t.Run("StartProcess rejects invalid requests before calling the process manager", func(t *testing.T) {
+		pm := &process.MockProcessManager{}
+		server := &AgentServerAPI{Pm: pm}
+
+		result, err := server.StartProcess(context.Background(), &targetagentproto.StartProcessRequest{
+			Command: []string{""},
+		})
+
+		assert.Nil(t, result)
+		assert.Error(t, err)
+		pm.AssertNotCalled(t, "StartProcess", mock.Anything)
 	})
 	t.Run("ReleaseProcessHandles is stable", func(t *testing.T) {
 		server := &AgentServerAPI{Pm: mockProcessManager}

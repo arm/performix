@@ -17,6 +17,7 @@ import (
 	"github.com/dop251/goja"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
 	"github.com/Arm-Debug/apap-cli/apap-engine/gojautils"
@@ -89,10 +90,11 @@ type RunComponentDescription struct {
 const maxRunComponentTextBytes int64 = 10 << 20
 
 type ToolConfiguration struct {
-	Name     string            `json:"name"`
-	Params   map[string]any    `json:"params"`
-	Workload WorkloadArg       `json:"workload"`
-	Env      map[string]string `json:"env"`
+	CapabilityRequest *capabilities.CapabilityRequest `json:"capabilityRequest"`
+	Name              string                          `json:"name"`
+	Params            map[string]any                  `json:"params"`
+	Workload          WorkloadArg                     `json:"workload"`
+	Env               map[string]string               `json:"env"`
 }
 
 type RunToolConfigurationsArg struct {
@@ -131,16 +133,24 @@ type RecipeAPI interface {
 	isFullCaptureSupportEnabled(goja.FunctionCall) goja.Value
 	isRerenderingEnabled(goja.FunctionCall) goja.Value
 	isJfrCaptureEnabled(goja.FunctionCall) goja.Value
+	isNeoprofSystemUtilizationEnabled(goja.FunctionCall) goja.Value
 	isNeoprofTimelineEnabled(goja.FunctionCall) goja.Value
 }
 
+type capabilityDiscoveryKey struct {
+	cacheContext  recipe.DiscoveryCacheContext
+	configuration string
+}
+
 type ConcreteRecipeAPI struct {
-	execCtx         recipe.ExecutionContext
-	vm              *goja.Runtime // Required in order to return values to JS context
-	cmdState        *cmdsync.CommandState
-	cmdStateCh      *cmdsync.CommandStateChannel
-	context         context.Context
-	deferredActions *notifiers.DeferredActions
+	discovery             map[capabilityDiscoveryKey]tool.ProbeResult
+	discoveryCacheContext recipe.DiscoveryCacheContext
+	execCtx               recipe.ExecutionContext
+	vm                    *goja.Runtime // Required in order to return values to JS context
+	cmdState              *cmdsync.CommandState
+	cmdStateCh            *cmdsync.CommandStateChannel
+	context               context.Context
+	deferredActions       *notifiers.DeferredActions
 }
 
 type exposedFunction struct {
@@ -603,13 +613,11 @@ func (r *ConcreteRecipeAPI) runTools(call goja.FunctionCall) goja.Value {
 
 	arg := call.Argument(0)
 
-	// One of these will always fail (with an unused argument error)
 	var cfgArg RunToolConfigurationsArg
-	cfgArgErr := gojautils.ParseObjectFromJS(arg, &cfgArg)
+	cfgArgErr := parseToolConfigurations(arg, &cfgArg)
 
 	if cfgArgErr != nil {
-		errString := fmt.Sprintf("runTools called with invalid arguments: could not parse as either RunToolConfigurationsArg (%v)", cfgArgErr)
-		panic(r.vm.ToValue(errString))
+		panic(r.vm.NewGoError(fmt.Errorf("runTools called with invalid arguments: could not parse as either RunToolConfigurationsArg: %w", cfgArgErr)))
 	}
 
 	errs := r.runToolsImpl(cfgArg)
@@ -650,15 +658,15 @@ func (r *ConcreteRecipeAPI) toolConfigurationToIntegrationContext(arg RunToolCon
 			return nil, message.New(message.EngineRecipeToolsRootMissing).WithMetadata(metadata)
 		}
 		intCtxs = append(intCtxs, tool.IntegrationContext{
-			Name:                        toolConfig.Name,
-			Version:                     version,
-			Params:                      toolConfig.Params,
-			Workload:                    wl,
-			WorkingDir:                  r.execCtx.GetRecipeCtx().OutputDir,
-			Env:                         toolConfig.Env,
-			Timeout:                     r.execCtx.GetRecipeCtx().Timeout,
-			IsFullCaptureSupportEnabled: r.execCtx.IsFullCaptureSupportEnabled(),
-			IsNeoprofTimelineEnabled:    r.execCtx.IsNeoprofTimelineEnabled(),
+			Name:              toolConfig.Name,
+			Version:           version,
+			Params:            toolConfig.Params,
+			CapabilityRequest: toolConfig.CapabilityRequest,
+			Workload:          wl,
+			WorkingDir:        r.execCtx.GetRecipeCtx().OutputDir,
+			Env:               toolConfig.Env,
+			Timeout:           r.execCtx.GetRecipeCtx().Timeout,
+			FeatureFlags:      r.execCtx.GetFeatureFlags(),
 		})
 	}
 	return intCtxs, nil
@@ -669,6 +677,16 @@ func (r *ConcreteRecipeAPI) runToolsImpl(arg RunToolConfigurationsArg) []error {
 	if err != nil {
 		panic(r.vm.NewGoError(err))
 	}
+	for i := range intCtxs {
+		if intCtxs[i].CapabilityRequest == nil {
+			continue
+		}
+		if cached, ok := r.cachedDiscovery(intCtxs[i]); ok {
+			copy := r.cloneDiscovery(cached)
+			intCtxs[i].Discovery = &copy
+		}
+	}
+	r.discovery = nil // Starting collection invalidates all stage discoveries.
 	cleanup, toolErr := r.execCtx.RunToolIntegrations(r.context, r.cmdStateCh, intCtxs)
 	r.deferredActions.AddAction(cleanup)
 	return toolErr
@@ -790,9 +808,9 @@ func (r *ConcreteRecipeAPI) probeTools(call goja.FunctionCall) goja.Value {
 
 	// Attempt a tool integration parse & run first
 	var probeToolConfigs RunToolConfigurationsArg
-	err := gojautils.ParseObjectFromJS(call.Argument(0), &probeToolConfigs)
+	err := parseToolConfigurations(call.Argument(0), &probeToolConfigs)
 	if err != nil {
-		panic(r.vm.ToValue(err))
+		panic(r.vm.NewGoError(err))
 	}
 
 	intCtxs, err := r.toolConfigurationToIntegrationContext(probeToolConfigs)
@@ -800,10 +818,42 @@ func (r *ConcreteRecipeAPI) probeTools(call goja.FunctionCall) goja.Value {
 		panic(r.vm.ToValue(err))
 	}
 
-	resp, probeErrs := r.execCtx.ProbeToolsFromIntegrations(r.context, r.cmdStateCh, intCtxs)
+	resp := make([]tool.ProbeResult, len(intCtxs))
+	missing := []tool.IntegrationContext{}
+	indices := []int{}
+	for i, ic := range intCtxs {
+		if cached, ok := r.cachedDiscovery(ic); ok {
+			resp[i] = r.cloneDiscovery(cached)
+		} else {
+			missing = append(missing, ic)
+			indices = append(indices, i)
+		}
+	}
+	var probeErrs []error
+	if len(missing) > 0 {
+		results, errs := r.execCtx.ProbeToolsFromIntegrations(r.context, r.cmdStateCh, missing)
+		probeErrs = errs
+		for j, result := range results {
+			resp[indices[j]] = result
+		}
+	}
 	if joined := errors.Join(probeErrs...); joined != nil {
 		// Preserve the error type with NewGoError
 		panic(r.vm.NewGoError(joined))
+	}
+	for i, result := range resp {
+		if key := r.discoveryKey(intCtxs[i]); key != (capabilityDiscoveryKey{}) {
+			if r.discovery == nil {
+				r.discovery = map[capabilityDiscoveryKey]tool.ProbeResult{}
+			}
+			r.discovery[key] = r.cloneDiscovery(result)
+		}
+	}
+	// Keep cached discovery selection-neutral; every caller gets fresh policy advice.
+	for i := range resp {
+		if err := tool.AddCapabilitySelectionAdvice(&resp[i], intCtxs[i].CapabilityRequest); err != nil {
+			panic(r.vm.NewGoError(err))
+		}
 	}
 	obj, err := gojautils.GoArrayToJS(r.vm, resp)
 	if err != nil {
@@ -843,6 +893,7 @@ func (r *ConcreteRecipeAPI) retrieveFile(call goja.FunctionCall) goja.Value {
 }
 
 func (r *ConcreteRecipeAPI) runCommand(call goja.FunctionCall) goja.Value {
+	r.discovery = nil // Commands may change target discovery state.
 	log.Debug("Recipe API: runCommand")
 
 	if len(call.Arguments) != 1 {
@@ -865,17 +916,21 @@ func (r *ConcreteRecipeAPI) runCommand(call goja.FunctionCall) goja.Value {
 }
 
 func (r *ConcreteRecipeAPI) isFullCaptureSupportEnabled(call goja.FunctionCall) goja.Value {
-	return r.vm.ToValue(r.execCtx.IsFullCaptureSupportEnabled())
+	return r.vm.ToValue(r.execCtx.GetFeatureFlags().FullCaptureSupport)
 }
 
 func (r *ConcreteRecipeAPI) isRerenderingEnabled(call goja.FunctionCall) goja.Value {
-	return r.vm.ToValue(r.execCtx.IsRerenderingEnabled())
+	return r.vm.ToValue(r.execCtx.GetFeatureFlags().Rerendering)
 }
 
 func (r *ConcreteRecipeAPI) isNeoprofTimelineEnabled(call goja.FunctionCall) goja.Value {
-	return r.vm.ToValue(r.execCtx.IsNeoprofTimelineEnabled())
+	return r.vm.ToValue(r.execCtx.GetFeatureFlags().NeoprofTimeline)
 }
 
 func (r *ConcreteRecipeAPI) isJfrCaptureEnabled(call goja.FunctionCall) goja.Value {
-	return r.vm.ToValue(r.execCtx.IsJfrCaptureEnabled())
+	return r.vm.ToValue(r.execCtx.GetFeatureFlags().JfrCapture)
+}
+
+func (r *ConcreteRecipeAPI) isNeoprofSystemUtilizationEnabled(call goja.FunctionCall) goja.Value {
+	return r.vm.ToValue(r.execCtx.GetFeatureFlags().NeoprofSystemUtilization)
 }

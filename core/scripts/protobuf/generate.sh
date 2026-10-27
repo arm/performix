@@ -6,71 +6,38 @@
 set -euo pipefail
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-PROJECT_ROOT=`$SCRIPT_DIR/../get-project-root.sh`
+PROJECT_ROOT=$("$SCRIPT_DIR/../get-project-root.sh")
+API_DIR="$PROJECT_ROOT/api"
 
-# === CONFIGURATION ===
-# Adjust these as needed
-PROTOBUF_SOURCE_DIR="$PROJECT_ROOT/api"                   # Directory containing your .proto files
-PROTOBUF_SOURCE_FILES=$(find "$PROTOBUF_SOURCE_DIR" -name "*.proto")  # All .proto files
-OUTPUT_DIR="$PROJECT_ROOT"         # Where generated files will go
-GO_CLIENT_DIR="clients/go"                          # Subdirectory for Go output
-MOCK_OUTPUT_DIR="$OUTPUT_DIR/$GO_CLIENT_DIR/mocks"
-
-# === TOOLS SETUP ===
-
-echo "Installing protoc if not present..."
-if ! command -v protoc &> /dev/null; then
-    echo "Please install protoc manually: https://grpc.io/docs/protoc-installation/"
-    exit 1
-fi
-
-echo "Installing Go gRPC plugins..."
-GO_EXECUTABLE=$(command -v go)
-"$GO_EXECUTABLE" install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2
-"$GO_EXECUTABLE" install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.4.0
-
-GO_HOST_OS=$("$GO_EXECUTABLE" env GOHOSTOS)
-GO_BIN_DIR=$("$GO_EXECUTABLE" env GOBIN)
-if [[ -z "$GO_BIN_DIR" ]]; then
-    GO_PATHS=$("$GO_EXECUTABLE" env GOPATH)
-    if [[ "$GO_HOST_OS" == "windows" ]]; then
-        GO_BIN_DIR="${GO_PATHS%%;*}/bin"
-    else
-        GO_BIN_DIR="${GO_PATHS%%:*}/bin"
+for tool in go protoc protoc-gen-go protoc-gen-go-grpc mockery; do
+    if ! command -v "$tool" &> /dev/null; then
+        echo "Required tool '$tool' is not installed. Run ./bootstrap first." >&2
+        exit 1
     fi
-fi
-if [[ "$GO_HOST_OS" == "windows" ]]; then
-    GO_BIN_DIR=$(cygpath -u "$GO_BIN_DIR")
-fi
-export PATH="$GO_BIN_DIR:$PATH"
-
-# === REPORT VERSIONS ===
+done
 
 echo "== Tool Versions =="
 echo "protoc: $(protoc --version)"
 echo "protoc-gen-go: $(protoc-gen-go --version 2>&1)"
 echo "protoc-gen-go-grpc: $(protoc-gen-go-grpc --version)"
 
-# === GENERATE CODE ===
+PROTOBUF_SOURCE_FILES=()
+while IFS= read -r -d '' file; do
+    PROTOBUF_SOURCE_FILES+=("$file")
+done < <(find "$API_DIR" -name '*.proto' -print0)
 
 echo "Generating Go gRPC code..."
-mkdir -p "$OUTPUT_DIR/$GO_CLIENT_DIR"
+mkdir -p "$API_DIR"
+# Remove stale outputs for renamed or deleted schemas.
+find "$API_DIR" -type f -name '*.pb.go' -delete
 protoc \
-  --proto_path="$PROTOBUF_SOURCE_DIR" \
-  --go_out="$OUTPUT_DIR/$GO_CLIENT_DIR" \
+  --proto_path="$API_DIR" \
+  --go_out="$API_DIR" \
   --go_opt=paths=source_relative \
-  --go-grpc_out="$OUTPUT_DIR/$GO_CLIENT_DIR" \
+  --go-grpc_out="$API_DIR" \
   --go-grpc_opt=paths=source_relative \
-  $PROTOBUF_SOURCE_FILES
+  "${PROTOBUF_SOURCE_FILES[@]}"
 
-echo "Code generation complete. Output is in $OUTPUT_DIR/$GO_CLIENT_DIR"
-
-# === GENERATE MOCKS ===
-
-echo "Installing mockery..."
-"$GO_EXECUTABLE" install github.com/vektra/mockery/v3@v3.7.4
-
-echo "Generating testify mocks from interfaces in $OUTPUT_DIR/$GO_CLIENT_DIR ..."
+echo "Generating testify mocks..."
 "$SCRIPT_DIR/generate-mocks.sh"
-
-echo "Mocks generated in $MOCK_OUTPUT_DIR"
+echo "Code generation complete. Output is in $API_DIR"

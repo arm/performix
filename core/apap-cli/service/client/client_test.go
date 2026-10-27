@@ -19,7 +19,7 @@ func TestConnect(t *testing.T) {
 
 	t.Run("returns connected client if connection succeeds", func(t *testing.T) {
 		port := getFreePort(localhost)
-		stop := runServer(localhost, port)
+		stop := runTLSServer(localhost, port, testServerCredentials(t, localhost))
 		defer stop()
 
 		conn, err := NewClient().connect(localhost, port)

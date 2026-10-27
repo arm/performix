@@ -13,7 +13,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 // CLITarget describes the target JSON as interacted with via the CLI
@@ -48,6 +48,7 @@ type CLIRunDescription struct {
 	Timeout             uint32                             `json:"timeout"`
 	RunResult           string                             `json:"run_result"`
 	RunError            string                             `json:"run_error"`
+	Group               string                             `json:"group"`
 	SizeBytes           *uint64                            `json:"size_bytes,omitempty"`
 	RendererOutput      map[string]CLITableWithDescription `json:"renderer_output,omitempty"`
 	HostSourceCodePaths run.HostSourceCodePath             `json:"host_source_code_paths"`
@@ -63,6 +64,7 @@ type CLIRunSummary struct {
 	Cmdline    string `json:"cmdline"`
 	RunResult  string `json:"run_result"`
 	Target     string `json:"target"`
+	Group      string `json:"group"`
 }
 
 type CLIRunListing struct {
@@ -141,6 +143,7 @@ func CLIRunSummaryFromRunDescription(desc CLIRunDescription) CLIRunSummary {
 		Cmdline:    cmdline,
 		RunResult:  desc.RunResult,
 		Target:     targetDisplay,
+		Group:      desc.Group,
 	}
 }
 
@@ -194,6 +197,7 @@ func CLIRunDescriptionFromProto(id string, item *apapproto.RunDescription) (CLIR
 		Timeout:             item.Metadata.GetTimeout(),
 		RunResult:           item.Metadata.GetRunResult(),
 		RunError:            item.Metadata.GetRunError(),
+		Group:               item.Metadata.GetGroup(),
 		SizeBytes:           sizeBytes,
 		TargetName:          item.Metadata.GetTargetName(),
 	}
@@ -331,21 +335,19 @@ func ValidateParamsResponseToJSON(resp *apapproto.RecipeValidateParametersRespon
 }
 
 type PrepareRenderResponseJSON struct {
-	Renderers               []*apapproto.RendererConfig                  `json:"renderers,omitempty"`
-	Visualizations          []*apapproto.VisualizationConfig             `json:"visualizations,omitempty"`
-	RenderParameters        map[string]*apapproto.RenderParameterDetails `json:"render_parameters,omitempty"`
-	VisualizationParameters map[string]string                            `json:"visualization_parameters,omitempty"`
-	CompatibilityWarning    *ErrorPayload                                `json:"compatibilityWarning,omitempty"`
+	Renderers            []*apapproto.RendererConfig                  `json:"renderers,omitempty"`
+	Visualizations       []*apapproto.VisualizationConfig             `json:"visualizations,omitempty"`
+	RenderParameters     map[string]*apapproto.RenderParameterDetails `json:"render_parameters,omitempty"`
+	CompatibilityWarning *ErrorPayload                                `json:"compatibilityWarning,omitempty"`
 }
 
 func PrepareRenderResponseToJSON(resp *apapproto.PrepareRenderResponse) PrepareRenderResponseJSON {
 	reconstructedWarning := message.ReconstructFromChain(resp.CompatibilityWarning)
 	return PrepareRenderResponseJSON{
-		Renderers:               resp.Renderers,
-		Visualizations:          resp.Visualizations,
-		RenderParameters:        resp.RenderParameters,
-		VisualizationParameters: resp.VisualizationParameters,
-		CompatibilityWarning:    BuildErrorTree(reconstructedWarning),
+		Renderers:            resp.Renderers,
+		Visualizations:       resp.Visualizations,
+		RenderParameters:     resp.RenderParameters,
+		CompatibilityWarning: BuildErrorTree(reconstructedWarning),
 	}
 }
 

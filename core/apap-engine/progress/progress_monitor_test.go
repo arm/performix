@@ -9,11 +9,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 // mockRecipeStream implements apapproto.Apap_RecipeIssueCommandServer for testing.
@@ -313,4 +315,21 @@ func TestSendRecipeFinishMessage_LogsOnSendError(t *testing.T) {
 	notifier.SendRecipeFinishMessage(stream, apapproto.StatusCode_SUCCESS, nil)
 
 	stream.AssertExpectations(t)
+}
+
+func TestOnStageProgressETAPresenceSurvivesWireEncoding(t *testing.T) {
+	zero, remaining := uint64(0), uint64(45)
+	for _, seconds := range []*uint64{nil, &zero, &remaining} {
+		stream := new(mockRecipeStream)
+		stream.On("Send", mock.Anything).Return(nil).Once()
+		newNotifier(stream).OnStageProgress(stageInfo(), notifiers.StageProgress{
+			Sent: 512, Max: 1024, Unit: notifiers.UnitBytes, EstimatedRemainingSeconds: seconds,
+		})
+		sent := stream.Calls[0].Arguments[0].(*apapproto.RecipeResponse)
+		encoded, err := proto.Marshal(sent)
+		require.NoError(t, err)
+		var decoded apapproto.RecipeResponse
+		require.NoError(t, proto.Unmarshal(encoded, &decoded))
+		require.Equal(t, seconds, decoded.GetStageProgress().EstimatedRemainingSeconds)
+	}
 }

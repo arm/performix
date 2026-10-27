@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -210,33 +209,21 @@ func (w *WindowsProcessManager) InterruptProcess(pid int) error {
 }
 
 // buildCmd creates the executable command for Windows, handling sudo-like behavior (or lack thereof) and affinity.
-func (w *WindowsProcessManager) buildCmd(lc *LaunchCommand) (*exec.Cmd, error) {
-	var parts []string
-
-	parts = append(parts, lc.Command...)
-
+func (w *WindowsProcessManager) buildCmd(lc *LaunchCommand) (*launchCommand, error) {
 	if lc.AsPrivileged {
 		// Not available under windows without user interaction
 		return nil, fmt.Errorf("AsPrivileged flag is not supported on Windows without interactive elevation")
 	}
 
-	//nolint:gosec
-	c := exec.Command(parts[0], parts[1:]...)
-
-	if len(lc.Environment) > 0 {
-		c.Env = mergeEnv(lc.Environment)
-	}
-	if lc.WorkingDirectory != "" {
-		c.Dir = lc.WorkingDirectory
-	}
+	launch := newLaunchCommand(lc)
 
 	// Always create a process group and a dedicated console for CTRL+C handling
 	creationFlags := uint32(syscall.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NEW_CONSOLE)
-	c.SysProcAttr = &syscall.SysProcAttr{CreationFlags: creationFlags}
+	launch.command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: creationFlags}
 
-	log.WithField("cmd", strings.Join(c.Args, " ")).Info("Launch command")
+	log.WithFields(launchLogFields(lc)).Info("Launch command")
 
-	return c, nil
+	return launch, nil
 }
 
 // setCPUAffinityAfterStart sets CPU affinity for a Windows process after it has started

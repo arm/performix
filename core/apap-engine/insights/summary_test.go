@@ -53,4 +53,43 @@ func TestSummarizersForRecipe(t *testing.T) {
 			assert.Empty(t, summarizers.Budgeted)
 		})
 	}
+
+	t.Run("curated Code Hotspots includes recipe summaries", func(t *testing.T) {
+		summarizers := SummarizersForRecipe(CodeHotspotsRecipeName)
+
+		require.Len(t, summarizers.Unbudgeted, 1)
+		assert.Equal(t, RunDetailsSummarizer.Name, summarizers.Unbudgeted[0].Name)
+		assert.Len(t, summarizers.Budgeted, 4)
+	})
+}
+
+func TestSummarizersForRecipeFromEnvironment(t *testing.T) {
+	t.Run("applies run-query mode to Code Hotspots", func(t *testing.T) {
+		t.Setenv(CodeHotspotsModeEnvironment, string(CodeHotspotsModeRunQuery))
+
+		summarizers, err := SummarizersForRecipeFromEnvironment(CodeHotspotsRecipeName)
+
+		require.NoError(t, err)
+		require.Len(t, summarizers.Unbudgeted, 1)
+		assert.Equal(t, RunDetailsSummarizer.Name, summarizers.Unbudgeted[0].Name)
+		assert.Empty(t, summarizers.Budgeted)
+	})
+
+	t.Run("rejects invalid mode for Code Hotspots", func(t *testing.T) {
+		t.Setenv(CodeHotspotsModeEnvironment, "invalid")
+
+		_, err := SummarizersForRecipeFromEnvironment(CodeHotspotsRecipeName)
+
+		require.ErrorContains(t, err, CodeHotspotsModeEnvironment)
+	})
+
+	t.Run("ignores invalid mode for another recipe", func(t *testing.T) {
+		t.Setenv(CodeHotspotsModeEnvironment, "invalid")
+
+		summarizers, err := SummarizersForRecipeFromEnvironment("system_utilization")
+
+		require.NoError(t, err)
+		require.Len(t, summarizers.Unbudgeted, 1)
+		assert.Empty(t, summarizers.Budgeted)
+	})
 }

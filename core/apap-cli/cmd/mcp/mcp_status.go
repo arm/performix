@@ -22,7 +22,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/mcpclientinstaller/clientids"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 func newMCPStatusCmd(deps mcpClientDependencies) *cobra.Command {

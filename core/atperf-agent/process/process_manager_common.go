@@ -14,6 +14,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -211,12 +213,75 @@ func (s *streamHandle) close() {
 	s.closeReader()
 }
 
-// mergeEnv merges the current inheritted env with the overrides.
-// When setting the command's env, it replaces the previously inherited env.
+// mergeEnv merges the inherited environment with the supplied overrides.
+// Windows environment names are case-insensitive, so PATH and Path identify
+// the same entry there.
 func mergeEnv(overrides map[string]string) []string {
-	env := os.Environ()
-	for k, v := range overrides {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	return mergeEnvForOS(os.Environ(), overrides, runtime.GOOS)
+}
+
+func mergeEnvForOS(inherited []string, overrides map[string]string, goos string) []string {
+	normalize := func(name string) string {
+		if goos == "windows" {
+			return strings.ToUpper(name)
+		}
+		return name
+	}
+	environmentName := func(entry string) string {
+		separator := strings.Index(entry, "=")
+		// Windows may expose drive-current-directory entries such as =C:=C:\dir.
+		if separator == 0 {
+			if next := strings.Index(entry[1:], "="); next >= 0 {
+				separator = next + 1
+			}
+		}
+		if separator < 0 {
+			return entry
+		}
+		return entry[:separator]
+	}
+
+	type override struct {
+		name  string
+		value string
+	}
+	keys := make([]string, 0, len(overrides))
+	for name := range overrides {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+
+	byName := make(map[string]override, len(overrides))
+	for _, name := range keys {
+		byName[normalize(name)] = override{name: name, value: overrides[name]}
+	}
+
+	env := make([]string, 0, len(inherited)+len(byName))
+	applied := make(map[string]struct{}, len(byName))
+	for _, entry := range inherited {
+		name := normalize(environmentName(entry))
+		value, replaced := byName[name]
+		if !replaced {
+			env = append(env, entry)
+			continue
+		}
+		if _, duplicate := applied[name]; duplicate {
+			continue
+		}
+		env = append(env, fmt.Sprintf("%s=%s", value.name, value.value))
+		applied[name] = struct{}{}
+	}
+
+	remaining := make([]string, 0, len(byName))
+	for name := range byName {
+		if _, ok := applied[name]; !ok {
+			remaining = append(remaining, name)
+		}
+	}
+	sort.Strings(remaining)
+	for _, name := range remaining {
+		value := byName[name]
+		env = append(env, fmt.Sprintf("%s=%s", value.name, value.value))
 	}
 	return env
 }
@@ -425,7 +490,8 @@ func (pc *processCommon) startProcessWithGroupController(sp *StartProcess) (*os.
 		execPath,
 		"start-group-controller",
 		"--wait-for-child",
-		"--child-pid-fd=3", // File descriptor 3 is implied by appending the write pipe to Cmd.ExtraFiles (0=stdin, 1=stdout, 2=stderr)
+		"--log-fd=4",
+		"--child-pid-fd=3",
 		"--",
 	}
 	sp.LaunchCommand.Command = append(cmdLine, sp.LaunchCommand.Command...)
@@ -518,6 +584,13 @@ func readChildPID(r io.Reader) (int, error) {
 
 // StartProcessCommon provides the common StartProcess implementation for platform-specific managers
 func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessManager) (*os.Process, error) {
+	if sp == nil {
+		return nil, ErrMissingLaunchCommand
+	}
+	if err := ValidateLaunchCommand(&sp.LaunchCommand); err != nil {
+		return nil, err
+	}
+
 	if IsFileModeEnabled(sp.Stdout.Mode) {
 		sp.Stdout.FilePath = filepath.Clean(sp.Stdout.FilePath)
 		if err := pc.validateFilePath(sp.Stdout.FilePath); err != nil {
@@ -538,6 +611,8 @@ func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessMan
 
 	var childPidReader *os.File
 	var childPidWriter *os.File
+	var controllerLogs *controllerLogPipe
+	logsHandedOff := false
 
 	if sp.UseGroupController {
 		var err error
@@ -547,15 +622,25 @@ func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessMan
 			return nil, err
 		}
 		defer closePipe()
+		controllerLogs, err = newControllerLogPipe()
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if !logsHandedOff {
+				controllerLogs.close()
+			}
+		}()
 	}
 
-	cmd, err := builder.buildCmd(&sp.LaunchCommand)
+	launch, err := builder.buildCmd(&sp.LaunchCommand)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build command: %w", err)
 	}
+	cmd := launch.command
 
 	if childPidWriter != nil {
-		cmd.ExtraFiles = append(cmd.ExtraFiles, childPidWriter)
+		cmd.ExtraFiles = append(cmd.ExtraFiles, childPidWriter, controllerLogs.writer)
 	}
 
 	stdoutHandle, err := pc.newStreamHandle(sp.Stdout.Mode, sp.Stdout.FilePath)
@@ -585,7 +670,7 @@ func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessMan
 		return nil, err
 	}
 
-	if err := cmd.Start(); err != nil {
+	if err := launch.start(); err != nil {
 		stdoutHandle.close()
 		stderrHandle.close()
 		_ = stdinRedirect.close()
@@ -593,6 +678,9 @@ func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessMan
 		return nil, fmt.Errorf("error running command: %w", err)
 	}
 
+	if controllerLogs != nil {
+		controllerLogs.start(cmd.Process.Pid)
+	}
 	pid := cmd.Process.Pid
 	proc := cmd.Process
 
@@ -606,6 +694,7 @@ func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessMan
 			childPidWriter,
 		)
 		if err != nil {
+			<-controllerLogs.done
 			return nil, err
 		}
 
@@ -629,9 +718,13 @@ func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessMan
 	// Send shutdown signal to process if shutdown began while process was starting
 	pc.applyInFlightShutdown(pid, builder)
 
+	logsHandedOff = true
 	// Wait for the process to exit and clean up resources
 	go func() {
 		_ = cmd.Wait()
+		if controllerLogs != nil {
+			<-controllerLogs.done
+		}
 		processState.ProcessExited()
 		stdoutHandle.closeWriters()
 		stderrHandle.closeWriters()
@@ -644,10 +737,15 @@ func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessMan
 
 // ExecCommandCommon provides the common ExecCommand implementation for platform-specific managers
 func (pc *processCommon) ExecCommandCommon(lc *LaunchCommand, builder ProcessManager) (*CommandResult, error) {
-	cmd, err := builder.buildCmd(lc)
+	if err := ValidateLaunchCommand(lc); err != nil {
+		return nil, err
+	}
+
+	launch, err := builder.buildCmd(lc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build command: %w", err)
 	}
+	cmd := launch.command
 
 	// Treat a command that cannot be resolved through PATH like any other
 	// non-zero command result. This lets callers probe optional executables
@@ -668,7 +766,7 @@ func (pc *processCommon) ExecCommandCommon(lc *LaunchCommand, builder ProcessMan
 		return nil, err
 	}
 
-	if err := cmd.Start(); err != nil {
+	if err := launch.start(); err != nil {
 		pc.decrementWaitGroup()
 		return nil, fmt.Errorf("error starting command: %w", err)
 	}

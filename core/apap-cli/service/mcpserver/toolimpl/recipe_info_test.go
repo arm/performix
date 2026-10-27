@@ -17,8 +17,8 @@ import (
 	recipejson "github.com/Arm-Debug/apap-cli/apap-cli/service/clijson/recipe"
 	targetservice "github.com/Arm-Debug/apap-cli/apap-cli/service/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func decodeRecipeInfoResult(t *testing.T, result *mcp.CallToolResult) recipeInfoResult {

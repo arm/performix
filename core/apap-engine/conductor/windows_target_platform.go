@@ -123,11 +123,6 @@ func (p *WindowsTargetActions) RunCommandAsAdmin(cmd string) (RunCommandOutput, 
 	return p.RunCommand(cmd)
 }
 
-// Under Windows, there's no per command privilege elevation, so we assume admin
-func (p *WindowsTargetActions) HasAdminPerms() (bool, error) {
-	return true, nil
-}
-
 func NewWindowsTargetPlatform(cmdRunner CommandRunner, fs TargetFilesystem, arch Architecture) *TargetPlatform {
 	return &TargetPlatform{
 		PlatformConfiguration: PlatformConfiguration{Architecture: arch, OS: Win},

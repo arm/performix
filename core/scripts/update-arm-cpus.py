@@ -27,12 +27,12 @@ def main():
     print("Generating atperf-agent/systeminfo/armcpus/cpus.go")
     try:
         subprocess.run(
-            ["go", "generate", "./systeminfo/armcpus"],
-            cwd=repo_root / "atperf-agent",
+            ["go", "run", "generate_cpus.go", "-in", "cpus.json", "-out", "cpus.go"],
+            cwd=target.parent,
             check=True,
         )
     except subprocess.CalledProcessError as exc:
-        sys.exit(f"go generate failed with exit code {exc.returncode}")
+        sys.exit(f"CPU data generation failed with exit code {exc.returncode}")
 
 
 if __name__ == "__main__":

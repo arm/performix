@@ -21,6 +21,9 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpclogging"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
+	"github.com/Arm-Debug/apap-cli/api/healthproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/tetherproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/agentconfig"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/filelock"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/filetransfer"
@@ -29,9 +32,6 @@ import (
 	"github.com/Arm-Debug/apap-cli/atperf-agent/privilege"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/systeminfo"
-	"github.com/Arm-Debug/apap-cli/clients/go/healthproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/tetherproto"
 )
 
 const defaultTetherShutdownDeadline = 30 * time.Second

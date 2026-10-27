@@ -24,11 +24,15 @@ from mcp_test_clients import (
     wait_for_pid_file_count,
 )
 
+FIXTURE_RUN_GROUP = "mcp-smoke-runs"
+
 COVERED_MCP_TOOLS = frozenset(
     {
         "add_target",
         "close_render_session",
+        "export_run",
         "generate_ai_insights",
+        "import_run",
         "list_recipes",
         "list_render_sessions",
         "list_runs",
@@ -39,6 +43,13 @@ COVERED_MCP_TOOLS = frozenset(
         "run_query",
         "run_recipe",
         "search_target_processes",
+        "update_runs",
+    }
+)
+
+EXEMPT_MCP_TOOLS = frozenset(
+    {
+        "search_android_packages" # Requires an Android target
     }
 )
 
@@ -58,7 +69,6 @@ class MCPClientSmoke:
         self._curated_run_id = ""
         self._query_run_id = ""
         self._server_port = 0
-        self._auth_port = 0
         self._client: CodingAgentMCPTestClient = CodexMCPTestClient()
 
     @keyword("Prepare MCP Client Smoke Tests")
@@ -83,6 +93,7 @@ class MCPClientSmoke:
         self._environment, self._state_directory = isolated_environment(
             self._test_root
         )
+        self._environment["APXD_ENABLE_ANDROID_TARGETS"] = "1"
         copy_known_hosts(self._test_root)
         self._apx_binary = str(Path(apx_binary).resolve())
         self._output_dir = Path(output_dir)
@@ -94,9 +105,6 @@ class MCPClientSmoke:
             "private_key_path": str(Path(target_key).expanduser().resolve()),
         }
         self._server_port = self._available_tcp_port()
-        self._auth_port = self._available_tcp_port()
-        while self._auth_port == self._server_port:
-            self._auth_port = self._available_tcp_port()
 
         try:
             login = (
@@ -117,6 +125,9 @@ class MCPClientSmoke:
             self._curated_run_id = self._create_fixture_run(
                 "code_hotspots",
                 ["--system-wide", "--timeout", "1"],
+            )
+            self._assign_fixture_run_group(
+                self._curated_run_id, FIXTURE_RUN_GROUP
             )
             self._query_run_id = self._create_fixture_run(
                 "system_utilization",
@@ -152,9 +163,9 @@ class MCPClientSmoke:
         """Check that the suite fixture completed successfully."""
         self._require_prepared()
 
-    @keyword("Registered MCP Tools Have Smoke Coverage")
-    def registered_tools_have_smoke_coverage(self) -> bool:
-        """Check that every registered tool has coding-agent coverage."""
+    @keyword("Registered MCP Tools Are Accounted For")
+    def registered_tools_are_accounted_for(self) -> bool:
+        """Check that every registered tool is covered or explicitly exempt."""
         self._require_prepared()
         stderr_path = self._output_dir / "tool-inventory.stderr"
         try:
@@ -171,8 +182,9 @@ class MCPClientSmoke:
                 f"Could not list registered MCP tools. MCP stderr:\n{stderr}"
             ) from error
 
-        untested = registered - COVERED_MCP_TOOLS
-        obsolete = COVERED_MCP_TOOLS - registered
+        accounted_for = COVERED_MCP_TOOLS | EXEMPT_MCP_TOOLS
+        untested = registered - accounted_for
+        obsolete = accounted_for - registered
         if untested or obsolete:
             details = []
             if untested:
@@ -180,11 +192,11 @@ class MCPClientSmoke:
                     "Add smoke tests to mcp_clients.robot and "
                     "MCPClientSmoke.py for: "
                     f"{', '.join(sorted(untested))}; then update "
-                    "COVERED_MCP_TOOLS"
+                    "COVERED_MCP_TOOLS or explicitly exempt them"
                 )
             if obsolete:
                 details.append(
-                    "Remove obsolete COVERED_MCP_TOOLS entries for: "
+                    "Remove obsolete MCP tool tracking entries for: "
                     f"{', '.join(sorted(obsolete))}"
                 )
             raise AssertionError(
@@ -196,8 +208,15 @@ class MCPClientSmoke:
     @keyword("Codex Can Call Add Target")
     def call_add_target(self) -> bool:
         """Check that Codex can call add_target with explicit arguments."""
-        target = dict(self._target)
-        target["name"] = f"{target['name']}-mcp-{uuid.uuid4().hex[:8]}"
+        target = {
+            "name": f"{self._target['name']}-mcp-{uuid.uuid4().hex[:8]}",
+            "ssh": {
+                "host": self._target["host"],
+                "port": self._target["port"],
+                "user": self._target["user"],
+                "private_key_path": self._target["private_key_path"],
+            },
+        }
         call = self._call_tool("add-target", "add_target", target)
         if call["result"].get("target_name") != target["name"]:
             raise AssertionError(f"Target was not added: {call['result']}")
@@ -309,6 +328,116 @@ class MCPClientSmoke:
         ]
         if failed:
             raise AssertionError(f"Fixture runs were not successful: {failed}")
+        if fixtures[self._curated_run_id].get("group") != FIXTURE_RUN_GROUP:
+            raise AssertionError(
+                "Fixture run group was not listed: "
+                f"{fixtures[self._curated_run_id]}"
+            )
+        return True
+
+    @keyword("Codex Can Update Runs")
+    def update_runs(self) -> bool:
+        """Verify group and source path updates through Codex and the engine."""
+        group = "mcp-updated-runs"
+        paths = [str(self._test_root / "src"), str(self._test_root / "src with spaces")]
+        for path in paths:
+            Path(path).mkdir(exist_ok=True)
+        # Use separate sessions so the CLI can check saved paths after each update.
+        set_arguments = {
+            "run_ids": [self._query_run_id],
+            "updates": {
+                "group": {"operation": "set", "value": group},
+                "host_source_paths": {"operation": "set", "paths": paths},
+            },
+        }
+        prompt = self._prompt(
+            "Call `update_runs` exactly once with these JSON arguments: "
+            f"{json.dumps(set_arguments)}. Then call `list_runs` exactly once with {{}}."
+        )
+        calls = self._run_client("set-run-properties", prompt)
+        self._require_call_sequence(calls, ["update_runs", "list_runs"])
+        set_call, listed = calls
+        self._require_arguments(set_call, set_arguments)
+        self._require_arguments(listed, {})
+        if not set_call["result"].get("statuses", [{}])[0].get("success"):
+            raise AssertionError(f"Run properties were not set: {set_call['result']}")
+        runs = {run.get("id"): run for run in listed["result"].get("runs", [])}
+        if runs.get(self._query_run_id, {}).get("group") != group:
+            raise AssertionError(f"Set run group was not listed: {listed['result']}")
+        self._require_host_source_paths(paths)
+
+        clear_arguments = {
+            "run_ids": [self._query_run_id],
+            "updates": {
+                "group": {"operation": "clear"},
+                "host_source_paths": {"operation": "clear"},
+            },
+        }
+        prompt = self._prompt(
+            "Call `update_runs` exactly once with these JSON arguments: "
+            f"{json.dumps(clear_arguments)}. Then call `list_runs` exactly once with {{}}."
+        )
+        calls = self._run_client("clear-run-properties", prompt)
+        self._require_call_sequence(calls, ["update_runs", "list_runs"])
+        clear_call, listed = calls
+        self._require_arguments(clear_call, clear_arguments)
+        self._require_arguments(listed, {})
+        if not clear_call["result"].get("statuses", [{}])[0].get("success"):
+            raise AssertionError(f"Run properties were not cleared: {clear_call['result']}")
+        runs = {run.get("id"): run for run in listed["result"].get("runs", [])}
+        if runs.get(self._query_run_id, {}).get("group") != "":
+            raise AssertionError(f"Cleared run group was not listed: {listed['result']}")
+        self._require_host_source_paths([])
+        return True
+
+    def _require_host_source_paths(self, expected: list[str]) -> None:
+        """Read source paths through CLI JSON to verify the persisted MCP update."""
+        try:
+            process = self._run_apx(["run", "info", self._query_run_id], json_output=True)
+            result = json.loads(process.stdout)
+            paths = result["data"]["host_source_code_paths"]["paths"]
+        finally:
+            # run info starts a daemon; stop it before the next MCP client runs.
+            self._stop_fixture_daemon()
+        # The CLI can return cleared protobuf paths as null rather than [].
+        if paths is None:
+            paths = []
+        if paths != expected:
+            raise AssertionError(
+                f"Expected host source paths {expected}, got {paths}"
+            )
+
+    @keyword("Codex Can Export And Import A Run")
+    def export_and_import_run(self) -> bool:
+        """Check that a captured run can be exported and imported through Codex."""
+        export_arguments = {
+            "run_id": self._curated_run_id,
+            "target_directory": str(self._test_root),
+        }
+        prompt = self._prompt(
+            "Call `export_run` exactly once with these JSON arguments: "
+            f"{json.dumps(export_arguments)}. Then call `import_run` exactly "
+            "once with `path` set to the `archive_path` returned by `export_run`. "
+            "Finally, call `list_runs` exactly once with {}."
+        )
+        calls = self._run_client("export-import-run", prompt)
+        self._require_call_sequence(calls, ["export_run", "import_run", "list_runs"])
+        exported, imported, listed = calls
+
+        self._require_arguments(exported, export_arguments)
+        archive_path = self._test_root / f"{self._curated_run_id}.zip"
+        if exported["result"].get("archive_path") != str(archive_path) or not archive_path.is_file():
+            raise AssertionError(f"Run archive was not exported: {exported['result']}")
+
+        self._require_arguments(imported, {"path": str(archive_path)})
+        imported_run_id = imported["result"].get("run_id")
+        if not imported_run_id or imported_run_id == self._curated_run_id:
+            raise AssertionError(f"Import did not create a new run ID: {imported['result']}")
+
+        self._require_arguments(listed, {})
+        run_ids = {run.get("id") for run in listed["result"].get("runs", [])}
+        if not {self._curated_run_id, imported_run_id}.issubset(run_ids):
+            raise AssertionError(f"Original and imported runs were not listed: {listed['result']}")
         return True
 
     @keyword("Codex Can Manage A Render Session")
@@ -530,8 +659,6 @@ class MCPClientSmoke:
             self._apx_binary,
             "--server-port",
             str(self._server_port),
-            "--auth-port",
-            str(self._auth_port),
         ]
         if json_output:
             command.append("--json")
@@ -571,6 +698,19 @@ class MCPClientSmoke:
         )
         return self._run_id(process.stdout)
 
+    def _assign_fixture_run_group(self, run_id: str, group: str) -> None:
+        """Write group metadata for the read-only list_runs smoke test."""
+        categorization_path = (
+            Path(self._environment["APXD_DATA_DIR"])
+            / "runs"
+            / run_id
+            / "categorization.json"
+        )
+        categorization_path.write_text(
+            json.dumps({"group": group, "tags": []}),
+            encoding="utf-8",
+        )
+
     def _stop_fixture_daemon(self) -> None:
         if not self._apx_binary or not self._server_port:
             return
@@ -579,8 +719,6 @@ class MCPClientSmoke:
                 self._apx_binary,
                 "--server-port",
                 str(self._server_port),
-                "--auth-port",
-                str(self._auth_port),
                 "daemon",
                 "stop",
             ],

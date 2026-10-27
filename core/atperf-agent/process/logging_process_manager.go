@@ -6,7 +6,6 @@ package process
 import (
 	"context"
 	"os"
-	"os/exec"
 
 	"github.com/sirupsen/logrus"
 )
@@ -42,15 +41,17 @@ func (l *LoggingProcessManager) InterruptProcess(pid int) error {
 }
 
 func (l *LoggingProcessManager) StartProcess(cmd *StartProcess) (*os.Process, error) {
-	l.Logger.WithField("cmd", cmd).Info("StartProcess called")
+	fields := logrus.Fields{}
+	if cmd != nil {
+		fields = launchLogFields(&cmd.LaunchCommand)
+	}
+	l.Logger.WithFields(fields).Info("StartProcess called")
 	proc, err := l.Delegate.StartProcess(cmd)
 	if err != nil {
-		l.Logger.WithError(err).WithField("cmd", cmd).Error("StartProcess failed")
+		l.Logger.WithError(err).WithFields(fields).Error("StartProcess failed")
 	} else {
-		l.Logger.WithFields(logrus.Fields{
-			"cmd": cmd,
-			"pid": proc.Pid,
-		}).Info("StartProcess succeeded")
+		fields["pid"] = proc.Pid
+		l.Logger.WithFields(fields).Info("StartProcess succeeded")
 	}
 	return proc, err
 }
@@ -62,20 +63,35 @@ func (l *LoggingProcessManager) ReleaseProcessHandles(pids []int) {
 }
 
 func (l *LoggingProcessManager) ExecCommand(cmd *LaunchCommand) (*CommandResult, error) {
-	l.Logger.WithField("cmd", cmd).Info("ExecCommand called")
+	fields := launchLogFields(cmd)
+	l.Logger.WithFields(fields).Info("ExecCommand called")
 	result, err := l.Delegate.ExecCommand(cmd)
 	if err != nil {
 		l.Logger.
 			WithError(err).
-			WithField("cmd", cmd).
+			WithFields(fields).
 			Error("ExecCommand failed")
 	} else {
 		l.Logger.
-			WithField("cmd", cmd).
+			WithFields(fields).
 			WithField("exitCode", result.Rc).
 			Info("ExecCommand succeeded")
 	}
 	return result, err
+}
+
+func launchLogFields(command *LaunchCommand) logrus.Fields {
+	fields := logrus.Fields{}
+	if command == nil {
+		return fields
+	}
+	fields["argumentCount"] = max(len(command.Command)-1, 0)
+	fields["environmentCount"] = len(command.Environment)
+	fields["hasWorkingDirectory"] = command.WorkingDirectory != ""
+	if len(command.Command) > 0 {
+		fields["executable"] = command.Command[0]
+	}
+	return fields
 }
 
 func (l *LoggingProcessManager) KillProcess(pid int) error {
@@ -144,7 +160,7 @@ func (l *LoggingProcessManager) Shutdown(force bool) error {
 	return err
 }
 
-func (l *LoggingProcessManager) buildCmd(lc *LaunchCommand) (*exec.Cmd, error) {
+func (l *LoggingProcessManager) buildCmd(lc *LaunchCommand) (*launchCommand, error) {
 	return l.Delegate.buildCmd(lc)
 }
 

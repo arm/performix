@@ -23,7 +23,6 @@ run_apx() {
   pause 0.5
   "$APX_DEMO_BIN" \
     --server-port "$APX_DEMO_SERVER_PORT" \
-    --auth-port "$APX_DEMO_AUTH_PORT" \
     "$@"
   pause 2
 }

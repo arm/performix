@@ -18,7 +18,7 @@ var recipe = {
   api_version: '1.0.0',
   status: 'stable',
   description:
-    'The Memory Access recipe analyzes how your software interacts with the memory system and identifies where latency occurs. It uses low-overhead profiling to reveal inefficient data access patterns under typical workload conditions, without significant overhead.',
+    'Find functions with slow memory accesses and see whether data comes from caches or main memory.',
   deployments: [
     {
       appliesTo: [{ architecture: 'aarch64', os: 'Linux' }],

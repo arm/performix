@@ -169,6 +169,11 @@ func (m *MockRecipeAPI) isJfrCaptureEnabled(call goja.FunctionCall) goja.Value {
 	return arg.Get(0).(goja.Value)
 }
 
+func (m *MockRecipeAPI) isNeoprofSystemUtilizationEnabled(call goja.FunctionCall) goja.Value {
+	arg := m.Called(call)
+	return arg.Get(0).(goja.Value)
+}
+
 var globalRecipeProperties = `
 
 const recipe = {

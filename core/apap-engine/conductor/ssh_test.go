@@ -742,9 +742,11 @@ func TestPublicKeyAuthCallback(t *testing.T) {
 	})
 
 	t.Run("auto-detect skips passphrase-protected keys when prompting is disabled", func(t *testing.T) {
-		homeDir := t.TempDir()
-		fs := afero.NewOsFs()
+		// Keep key discovery inside the temporary filesystem, including on Windows.
+		fs := afero.NewBasePathFs(afero.NewOsFs(), t.TempDir())
+		homeDir := "home"
 		t.Setenv("HOME", homeDir)
+		t.Setenv("USERPROFILE", homeDir)
 
 		sshDir := filepath.Join(homeDir, ".ssh")
 
@@ -768,7 +770,10 @@ func TestPublicKeyAuthCallback(t *testing.T) {
 		require.NotNil(t, callback)
 		signers, err := callback()
 		require.NoError(t, err)
-		require.NotEmpty(t, signers)
+		require.Len(t, signers, 1)
+		expectedSigner, err := ssh.ParsePrivateKey([]byte(testPrivateKey))
+		require.NoError(t, err)
+		assert.Equal(t, ssh.FingerprintSHA256(expectedSigner.PublicKey()), ssh.FingerprintSHA256(signers[0].PublicKey()))
 	})
 }
 
@@ -2208,6 +2213,53 @@ func Test_passwordAuthSupported_usesKeyboardInteractiveWhenPasswordUnsupported(t
 	assert.ErrorIs(t, probeErr, errKeyboardInteractivePasswordProbeSuccess)
 	assert.NotErrorIs(t, probeErr, errPasswordProbeSuccess)
 	assert.Equal(t, int32(1), keyboardInteractiveChallenges.Load())
+}
+
+func TestFindSSHKeysForTargetConnectionClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		hops      int
+		code      message.MessageCode
+		causeCode message.MessageCode
+	}{
+		{"direct", 1, message.EngineConductorSshFindKeysFailedDirect, message.EngineConductorSshDirectConnFailedClosed},
+		{"jump", 2, message.EngineConductorSshFindKeysFailedJump, message.EngineConductorSshJumpConnFailedClosed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hosts := []target.SSHHostConfig{{Host: "first", Port: 22}, {Host: "second", Port: 22}}
+			var dialCalls int
+			var dialError message.Message
+			kf := &SSHKeyFinder{
+				HostPrivateKeyPaths: []string{"first-key", "second-key"},
+				Dial: func(ctx context.Context, cfg target.SSHHostConfig, current *ssh.Client, retries int, info SSHDialInfo) (*ssh.Client, error) {
+					dialCalls++
+					assert.Zero(t, retries)
+					if info.HopIndex < tc.hops-1 {
+						return &ssh.Client{}, nil
+					}
+					handshakeErr := fmt.Errorf("ssh: handshake failed: %w", connectionResetErrno)
+					if current == nil {
+						dialError = consolidateDirectErrs([]error{handshakeErr}, cfg.Host, cfg.Port)
+					} else {
+						dialError = consolidateJumpErrs([]error{handshakeErr}, info.CurrentHost, cfg.Host, cfg.Port)
+					}
+					return nil, dialError
+				},
+			}
+
+			keys, err := kf.FindSSHKeysForTarget(context.Background(), &target.SSHTarget{Jumps: hosts[:tc.hops]})
+			assert.Nil(t, keys)
+			assert.Equal(t, tc.hops, dialCalls)
+			msg := message.IsMessage(err)
+			require.NotNil(t, msg)
+			assert.Equal(t, tc.code, msg.Code())
+			assert.Equal(t, tc.causeCode, dialError.Code())
+			assert.Same(t, dialError, errors.Unwrap(msg))
+			assert.ErrorIs(t, err, connectionResetErrno)
+			assert.NoError(t, message.ValidateMetadataPlaceholders(msg))
+			assert.NoError(t, message.ValidateMetadataPlaceholders(dialError))
+		})
+	}
 }
 
 func TestFindSSHKeysForTarget(t *testing.T) {

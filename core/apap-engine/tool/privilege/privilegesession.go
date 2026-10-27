@@ -13,7 +13,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 // gRPC metadata headers to pass privilege information

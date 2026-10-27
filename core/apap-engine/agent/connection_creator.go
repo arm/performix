@@ -25,9 +25,9 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/tetherproto"
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/tetherproto"
 )
 
 // ErrAgentDisconnected is the cancellation cause when the agent connection is lost.
@@ -238,25 +238,23 @@ type ConnectionCreator interface {
 	NewConnection(id string, localityName string, tp conductor.TargetPlatform, dialer grpcconnection.TCPDialer) (*AgentConn, error)
 }
 
-func NewConnectionCreator(toolsDir string, rootWorkerEnabled bool) ConnectionCreator {
+func NewConnectionCreator(toolsDir string) ConnectionCreator {
 	return &agentConnectionCreator{
-		toolsDir:          toolsDir,
-		rootWorkerEnabled: rootWorkerEnabled,
-		launch:            launchAgent,
-		connect:           newAgentConnection,
-		newTether:         newAgentTether,
-		newLogger:         newAgentLogger,
+		toolsDir:  toolsDir,
+		launch:    launchAgent,
+		connect:   newAgentConnection,
+		newTether: newAgentTether,
+		newLogger: newAgentLogger,
 	}
 }
 
 // agentConnectionCreator implements ConnectionCreator.
 type agentConnectionCreator struct {
-	toolsDir          string
-	rootWorkerEnabled bool
-	launch            func(tp conductor.TargetPlatform, agentPath string, rootWorkerEnabled bool, localityName string) (int, error)
-	connect           func(conn grpcconnection.GRPCConnector, port int, localityName string) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error)
-	newTether         func(tether tetherproto.TetherClient, pulseEvery time.Duration) AgentTether
-	newLogger         func(client targetagentproto.TargetAgentClient, logger log.FieldLogger, id string) AgentLogger
+	toolsDir  string
+	launch    func(tp conductor.TargetPlatform, agentPath string, localityName string) (int, error)
+	connect   func(conn grpcconnection.GRPCConnector, port int, localityName string) (targetagentproto.TargetAgentClient, *grpc.ClientConn, error)
+	newTether func(tether tetherproto.TetherClient, pulseEvery time.Duration) AgentTether
+	newLogger func(client targetagentproto.TargetAgentClient, logger log.FieldLogger, id string) AgentLogger
 }
 
 // NewConnection launches a new target agent gRPC server on the target platform
@@ -269,7 +267,7 @@ func (p *agentConnectionCreator) NewConnection(
 	dialer grpcconnection.TCPDialer,
 ) (*AgentConn, error) {
 	agentPath := GetAgentPath(p.toolsDir, tp, localityName)
-	port, err := p.launch(tp, agentPath, p.rootWorkerEnabled, localityName)
+	port, err := p.launch(tp, agentPath, localityName)
 	if err != nil {
 		return nil, err
 	}
@@ -327,32 +325,15 @@ func (p *agentConnectionCreator) NewConnection(
 func launchAgent(
 	tp conductor.TargetPlatform,
 	agentPath string,
-	rootWorkerEnabled bool,
 	localityName string,
 ) (int, error) {
 	scriptFile := GetAgentLaunchScript(tp)
 	cmd := tp.Path.GenerateRunScriptCommand(scriptFile, agentPath)
 
-	// We have two ways to launch the agent:
-	// 1. non-root: Part of target agent security model. The agent will act as a
-	// 	controller and handle the normal (user) operations itself.
-	// 	If a privileged operation (root) is required, it will launch the root
-	//	worker agent and proxy the request to it.
-	// 2. root (default): The current default behaviour. The agent will handle
-	//	both normal and privileged operations itself.
-
-	var out conductor.RunCommandOutput
-	var err error
-	if rootWorkerEnabled {
-		// Non-root launch
-		out, err = tp.Actions.RunCommand(cmd)
-	} else {
-		// Root launch (default)
-		out, err = tp.Actions.RunCommandAsAdmin(cmd)
-	}
+	out, err := tp.Actions.RunCommand(cmd)
 
 	if err != nil || out.ReturnCode != 0 {
-		return 0, classifyLaunchFailure(tp, agentPath, out, err, !rootWorkerEnabled, localityName)
+		return 0, classifyLaunchFailure(tp, agentPath, out, err, localityName)
 	}
 
 	portString := strings.TrimSpace(out.Stdout)
@@ -374,7 +355,6 @@ func classifyLaunchFailure(
 	agentPath string,
 	out conductor.RunCommandOutput,
 	runErr error,
-	requiresAdmin bool,
 	localityName string,
 ) error {
 	scriptFile := GetAgentLaunchScript(tp)
@@ -385,18 +365,6 @@ func classifyLaunchFailure(
 	}
 
 	log.Warnf("working dir: %v", agentPath)
-
-	if requiresAdmin {
-		hasAdmin, adminErr := tp.Actions.HasAdminPerms()
-		if !hasAdmin || adminErr != nil {
-			log.Errorf("failed to launch new target agent due to lack of admin or root privileges")
-			msg := message.New(message.EngineAgentConnectionCreatorInsufficientPrivileges).WithMetadata(map[string]string{"locality": localityName})
-			if adminErr != nil {
-				msg = msg.WithCause(adminErr)
-			}
-			return msg
-		}
-	}
 
 	if _, statErr := tp.Actions.Stat(filepath.Join(agentPath, scriptFile)); statErr != nil {
 		log.Errorf("failed to find verify-and-launch script when launching new target agent at %s", agentPath)

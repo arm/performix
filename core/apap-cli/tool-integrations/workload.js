@@ -90,8 +90,12 @@ async function launchWorkloadIfNeeded(
   const processOptions = {
     stdout: { redirect: 'stream' },
     stderr: { redirect: 'stream' },
-    environment: workloadInfo.environment,
-    workingDirectory: workloadInfo.workingDir,
+    ...(workloadInfo.environment !== undefined && {
+      environment: workloadInfo.environment,
+    }),
+    ...(workloadInfo.workingDir !== undefined && {
+      workingDirectory: workloadInfo.workingDir,
+    }),
     ...(options.processOptions || {}),
   };
   const captureLogs = options.captureLogs !== false;

@@ -21,10 +21,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/grpcserver/transport"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/privilege"
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 // Helper to start root worker and return a connected gRPC client

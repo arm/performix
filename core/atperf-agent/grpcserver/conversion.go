@@ -9,11 +9,11 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/fsutil"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/privilege"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/systeminfo"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 // launchRequest is implemented by both StartProcessRequest and ExecCommandRequest in the proto generated files.
@@ -30,17 +30,21 @@ func buildLaunchCommand(in launchRequest) (*process.LaunchCommand, error) {
 		return nil, message.New(message.AgentApiMissingLaunchRequest)
 	}
 
-	if len(in.GetCommand()) == 0 {
-		return nil, message.New(message.AgentApiMissingCommand)
-	}
-
-	return &process.LaunchCommand{
+	launchCommand := &process.LaunchCommand{
 		Command:          in.GetCommand(),
 		AsPrivileged:     in.GetAsPrivileged(),
 		WorkingDirectory: in.GetWorkingDirectory(),
 		Environment:      in.GetEnvironment(),
 		Affinity:         in.GetAffinity(),
-	}, nil
+	}
+	if err := process.ValidateLaunchCommand(launchCommand); err != nil {
+		if errors.Is(err, process.ErrMissingExecutable) {
+			return nil, message.New(message.AgentApiMissingCommand)
+		}
+		return nil, message.New(message.AgentApiInvalidLaunchRequest).WithCause(err)
+	}
+
+	return launchCommand, nil
 }
 
 func buildStreamRedirect(sr *targetagentproto.StreamRedirect) *process.StreamRedirect {
@@ -57,25 +61,24 @@ func buildStreamRedirect(sr *targetagentproto.StreamRedirect) *process.StreamRed
 
 func StartProcessFromProto(in *targetagentproto.StartProcessRequest) (*process.StartProcess, error) {
 	if in == nil {
-		return nil, errors.New("missing StartProcessRequest")
+		return nil, message.New(message.AgentApiMissingLaunchRequest)
 	}
 	launchCommand, err := buildLaunchCommand(in)
 	if err != nil {
 		return nil, err
 	}
 	startProcess := &process.StartProcess{
-		LaunchCommand:      *launchCommand,
-		Stdout:             *buildStreamRedirect(in.Stdout),
-		Stderr:             *buildStreamRedirect(in.Stderr),
-		Stdin:              process.StdinMode(in.Stdin),
-		UseGroupController: in.UseGroupController,
+		LaunchCommand: *launchCommand,
+		Stdout:        *buildStreamRedirect(in.Stdout),
+		Stderr:        *buildStreamRedirect(in.Stderr),
+		Stdin:         process.StdinMode(in.Stdin),
 	}
 	return startProcess, nil
 }
 
 func LaunchCommandFromProto(in *targetagentproto.ExecCommandRequest) (*process.LaunchCommand, error) {
 	if in == nil {
-		return nil, errors.New("missing ExecCommandRequest")
+		return nil, message.New(message.AgentApiMissingLaunchRequest)
 	}
 	return buildLaunchCommand(in)
 }

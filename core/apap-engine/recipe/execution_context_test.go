@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
+	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf/semver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
@@ -24,14 +25,80 @@ import (
 	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
+	toolgoja "github.com/Arm-Debug/apap-cli/apap-engine/tool/goja"
+	toolmocks "github.com/Arm-Debug/apap-cli/apap-engine/tool/mocks"
+	"github.com/Arm-Debug/apap-cli/api/mocks"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
-	"github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 func TestRunExecutionContext_TargetInfo_NilSupplier(t *testing.T) {
 	ctx := &RunExecutionContext{}
 	require.Nil(t, ctx.TargetInfo())
+}
+
+func TestPrepareAndRecordRunStopSupport_IgnoresRejectedIntegrations(t *testing.T) {
+	const nonStoppableUnsupportedSource = `
+let tool = {
+	name: "nonStoppableUnsupported", version: "1.0", supportsStop: false,
+	description: {short: "test", long: "test"},
+	run: () => {}, reformat: () => {}, onStop: () => {}, onCancel: () => {},
+	probe: () => ({available: true, capabilities: {}, advice: []}),
+};`
+	const stoppableSource = `
+let tool = {
+	name: "stoppable", version: "1.0", supportsStop: true,
+	description: {short: "test", long: "test"},
+	run: () => {}, reformat: () => {}, onStop: () => {}, onCancel: () => {},
+	probe: () => ({available: true, capabilities: {}, advice: []}),
+};`
+
+	registry := tool.NewToolRegistry()
+	for sourceName, source := range map[string]string{
+		"non-stoppable.js": nonStoppableUnsupportedSource,
+		"stoppable.js":     stoppableSource,
+	} {
+		factory, err := toolgoja.LoadFromSource(source, sourceName)
+		require.NoError(t, err)
+		registry.RegisterTool(factory)
+	}
+
+	runCollection, err := run.NewRunCollection(t.TempDir())
+	require.NoError(t, err)
+	builder, err := runCollection.RunBuilder()
+	require.NoError(t, err)
+	runID, err := runCollection.CreateRun(builder, &cdf.Metadata{Name: "stop support test"})
+	require.NoError(t, err)
+	execCtx := &RunExecutionContext{Collector: &Collector{CollectionState: &CollectionState{
+		RunMetadataUpdater: run.NewRunMetadataUpdater(runID, runCollection, nil),
+	}}}
+
+	rejected := []tool.IntegrationContext{{
+		Name:    "nonStoppableUnsupported",
+		Version: "1.0",
+		CapabilityRequest: &capabilities.CapabilityRequest{
+			Required: []string{}, Optional: []string{},
+		},
+	}}
+	_, errs := execCtx.prepareAndRecordRunStopSupport(context.Background(), rejected, registry)
+	require.Error(t, errors.Join(errs...))
+	model, err := runCollection.LoadRun(runID)
+	require.NoError(t, err)
+	require.Nil(t, model.Metadata().SupportsStop)
+
+	accepted := []tool.IntegrationContext{{
+		Name: "stoppable", Version: "1.0",
+		DefaultEngineLocality: tool.EngineLocality{Engine: &toolmocks.MockEngineContext{}},
+	}}
+	prepared, errs := execCtx.prepareAndRecordRunStopSupport(context.Background(), accepted, registry)
+	require.NoError(t, errors.Join(errs...))
+	require.NoError(t, errors.Join(tool.RunAndReformatPreparedToolIntegrations(
+		make(chan struct{}), make(chan struct{}), prepared, nil,
+	)...))
+	model, err = runCollection.LoadRun(runID)
+	require.NoError(t, err)
+	require.NotNil(t, model.Metadata().SupportsStop)
+	require.True(t, *model.Metadata().SupportsStop)
 }
 
 func TestGetToolCapabilities(t *testing.T) {
@@ -335,10 +402,9 @@ func TestHostLocalityCreatesHostEngine(t *testing.T) {
 		AgentSupplier: func() *agent.AgentConn {
 			return targetAgentConn
 		},
-		StageNotifier:     &NullStageNotifier{},
-		RecipeCtx:         &RecipeCtx{},
-		RootWorkerEnabled: false,
-		UsrMessageWriter:  nil,
+		StageNotifier:    &NullStageNotifier{},
+		RecipeCtx:        &RecipeCtx{},
+		UsrMessageWriter: nil,
 		ToolPathsSupplier: func() deployer.BaseToolDeploymentPaths {
 			return deployer.BaseToolDeploymentPaths{DeployedToolsDirectory: "/target/tools"}
 		},
@@ -435,10 +501,9 @@ func TestHostLocalityCreationErrors(t *testing.T) {
 			AgentSupplier: func() *agent.AgentConn {
 				return targetAgentConn
 			},
-			StageNotifier:     &NullStageNotifier{},
-			RecipeCtx:         &RecipeCtx{},
-			RootWorkerEnabled: false,
-			UsrMessageWriter:  nil,
+			StageNotifier:    &NullStageNotifier{},
+			RecipeCtx:        &RecipeCtx{},
+			UsrMessageWriter: nil,
 			ToolPathsSupplier: func() deployer.BaseToolDeploymentPaths {
 				return deployer.BaseToolDeploymentPaths{DeployedToolsDirectory: "/target/tools"}
 			},
@@ -471,10 +536,9 @@ func TestHostLocalityCreationErrors(t *testing.T) {
 			AgentSupplier: func() *agent.AgentConn {
 				return targetAgentConn
 			},
-			StageNotifier:     &NullStageNotifier{},
-			RecipeCtx:         &RecipeCtx{},
-			RootWorkerEnabled: false,
-			UsrMessageWriter:  nil,
+			StageNotifier:    &NullStageNotifier{},
+			RecipeCtx:        &RecipeCtx{},
+			UsrMessageWriter: nil,
 			ToolPathsSupplier: func() deployer.BaseToolDeploymentPaths {
 				return deployer.BaseToolDeploymentPaths{DeployedToolsDirectory: "/target/tools"}
 			},
@@ -510,10 +574,9 @@ func TestHostLocalityCreationErrors(t *testing.T) {
 			AgentSupplier: func() *agent.AgentConn {
 				return targetAgentConn
 			},
-			StageNotifier:     &NullStageNotifier{},
-			RecipeCtx:         &RecipeCtx{},
-			RootWorkerEnabled: false,
-			UsrMessageWriter:  nil,
+			StageNotifier:    &NullStageNotifier{},
+			RecipeCtx:        &RecipeCtx{},
+			UsrMessageWriter: nil,
 			ToolPathsSupplier: func() deployer.BaseToolDeploymentPaths {
 				return deployer.BaseToolDeploymentPaths{DeployedToolsDirectory: "/target/tools"}
 			},
@@ -554,10 +617,9 @@ func TestContextCancelledOnHostAgentDisconnect(t *testing.T) {
 		AgentSupplier: func() *agent.AgentConn {
 			return targetAgentConn
 		},
-		StageNotifier:     &NullStageNotifier{},
-		RecipeCtx:         &RecipeCtx{},
-		RootWorkerEnabled: false,
-		UsrMessageWriter:  nil,
+		StageNotifier:    &NullStageNotifier{},
+		RecipeCtx:        &RecipeCtx{},
+		UsrMessageWriter: nil,
 		ToolPathsSupplier: func() deployer.BaseToolDeploymentPaths {
 			return deployer.BaseToolDeploymentPaths{DeployedToolsDirectory: "/target/tools"}
 		},
@@ -618,10 +680,9 @@ func TestHostLocalityCleanupSurvivesTargetDisconnect(t *testing.T) {
 		AgentSupplier: func() *agent.AgentConn {
 			return targetAgentConn
 		},
-		StageNotifier:     &NullStageNotifier{},
-		RecipeCtx:         &RecipeCtx{},
-		RootWorkerEnabled: false,
-		UsrMessageWriter:  nil,
+		StageNotifier:    &NullStageNotifier{},
+		RecipeCtx:        &RecipeCtx{},
+		UsrMessageWriter: nil,
 		ToolPathsSupplier: func() deployer.BaseToolDeploymentPaths {
 			return deployer.BaseToolDeploymentPaths{DeployedToolsDirectory: "/target/tools"}
 		},
@@ -634,6 +695,7 @@ func TestHostLocalityCleanupSurvivesTargetDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = hostLocality.Engine.StartProcess(&process.StartProcess{
+		Ctx:           runCtx,
 		LaunchCommand: process.LaunchCommand{Command: []string{"host-helper"}},
 	})
 	require.NoError(t, err)

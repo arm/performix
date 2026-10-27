@@ -89,7 +89,7 @@ func TestHTTPQueryServerStartAndQueryIPCStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	httpServer := NewHTTPQueryServer("127.0.0.1", 0, 0, apapServer, listen)
+	httpServer := NewHTTPQueryServer("127.0.0.1", 0, 0, apapServer, "test-arrow-token", listen)
 	require.NoError(t, httpServer.Start(ctx, cancel))
 	require.NotNil(t, listener)
 
@@ -98,7 +98,10 @@ func TestHTTPQueryServerStartAndQueryIPCStream(t *testing.T) {
 		listener.Addr().String(),
 		session.ID(),
 	)
-	resp, err := http.Get(url) // #nosec G107
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil) // #nosec G107
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer test-arrow-token")
+	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 

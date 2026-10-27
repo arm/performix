@@ -23,7 +23,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 var stageInfo = notifiers.StageInfo{
@@ -80,14 +80,10 @@ func transferPhaseStageInfo(phase transferPhase) notifiers.StageInfo {
 
 // createMultiStageProgressTrackers creates progress trackers for phase1 and background transfers.
 func (t *TransferManager) createMultiStageProgressTrackers(notifier notifiers.StageNotifier) *multiPhaseProgressTracker {
-	var report func(phase transferPhase, received int64, max int64)
+	var report func(transferPhase, notifiers.StageProgress)
 	if notifier != nil {
-		report = func(phase transferPhase, received int64, max int64) {
-			notifier.OnStageProgress(transferPhaseStageInfo(phase), notifiers.StageProgress{
-				Sent: received,
-				Max:  max,
-				Unit: notifiers.UnitBytes,
-			})
+		report = func(phase transferPhase, snapshot notifiers.StageProgress) {
+			notifier.OnStageProgress(transferPhaseStageInfo(phase), snapshot)
 		}
 	}
 

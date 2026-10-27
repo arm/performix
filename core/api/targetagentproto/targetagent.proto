@@ -3,7 +3,7 @@
 
 syntax = "proto3";
 
-option go_package = "github.com/Arm-Debug/apap-cli/clients/go/targetagentproto";
+option go_package = "github.com/Arm-Debug/apap-cli/api/targetagentproto";
 
 import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
@@ -109,8 +109,6 @@ message StartProcessRequest {
     // StreamStderr must be called to drain the stderr buffer if Stream mode is enabled for stderr
     StreamRedirect stderr = 7;
     StdinMode stdin = 8;
-
-    bool use_group_controller = 9;
 }
 
 message ReleaseProcessHandlesRequest {

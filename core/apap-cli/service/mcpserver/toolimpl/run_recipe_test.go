@@ -25,8 +25,9 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipeparser"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 // mcpRunRecipeResult decodes the run_recipe tool's JSON text output.
@@ -159,6 +160,87 @@ func TestRunRecipeTool(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(schemaJSON), `"enum"`)
 		assert.Contains(t, string(schemaJSON), "list_recipes")
+		assert.NotContains(t, string(schemaJSON), "android_launch")
+	})
+
+	t.Run("advertises Android launch when enabled", func(t *testing.T) {
+		ctx := context.Background()
+		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{}, RunRecipeTool{AndroidTargetsEnabled: true}.Register)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		tools, err := clientSession.ListTools(ctx, nil)
+
+		require.NoError(t, err)
+		require.Len(t, tools.Tools, 1)
+		require.NotNil(t, tools.Tools[0].InputSchema)
+		schemaJSON, err := json.Marshal(tools.Tools[0].InputSchema)
+		require.NoError(t, err)
+		assert.Contains(t, string(schemaJSON), "android_launch")
+	})
+
+	t.Run("rejects Android launch when disabled", func(t *testing.T) {
+		ctx := context.Background()
+		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{}, RunRecipeTool{}.Register)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "run_recipe",
+			Arguments: map[string]any{
+				"recipe":         "code_hotspots",
+				"target":         "android-device",
+				"android_launch": map[string]any{"package_name": "com.example.app", "activity_name": ".MainActivity"},
+				"system":         map[string]any{},
+			},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		decoded := decodeRunRecipeResult(t, result)
+		assert.Equal(t, "error", decoded.Status)
+		require.NotNil(t, decoded.Error)
+		assert.Equal(t, string(message.CommonUnsupportedTargetType), decoded.Error.Code)
+	})
+
+	t.Run("rejects Android targets when disabled", func(t *testing.T) {
+		for name, workload := range map[string]map[string]any{
+			"launch":        {"launch": map[string]any{"command": "app"}},
+			"attach to PID": {"attach_to_pid": map[string]any{"pid": 123}},
+			"system-wide":   {"system": map[string]any{}},
+		} {
+			t.Run(name, func(t *testing.T) {
+				ctx := context.Background()
+				targets := &targetservice.MockTargetManager{}
+				targets.On("GetTarget", "android-device").
+					Return(&engine_target.AndroidTarget{SerialNumber: "device-1"}, nil).Once()
+
+				engine := apapprotomocks.NewApapClient(t)
+				expectAvailableRecipes(engine, "code_hotspots")
+
+				clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine, Targets: targets}, RunRecipeTool{}.Register)
+				defer clientSession.Close()
+				defer serverSession.Close()
+
+				arguments := map[string]any{"recipe": "code_hotspots", "target": "android-device"}
+				for key, value := range workload {
+					arguments[key] = value
+				}
+				result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+					Name:      "run_recipe",
+					Arguments: arguments,
+				})
+
+				require.NoError(t, err)
+				require.True(t, result.IsError)
+				decoded := decodeRunRecipeResult(t, result)
+				assert.Equal(t, runStatusError, decoded.Status)
+				require.NotNil(t, decoded.Error)
+				assert.Equal(t, string(message.CommonUnsupportedTargetType), decoded.Error.Code)
+				engine.AssertNotCalled(t, "TargetPrepare", mock.Anything, mock.Anything)
+				engine.AssertNotCalled(t, "RecipeIssueCommand", mock.Anything, mock.Anything)
+			})
+		}
 	})
 
 	t.Run("runs a system-wide recipe to completion", func(t *testing.T) {

@@ -23,8 +23,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func TestPrepareRenderCommand(t *testing.T) {
@@ -151,7 +151,7 @@ func TestPrepareRenderCommand(t *testing.T) {
 		assert.Equal(t, expectedError, err)
 	})
 
-	t.Run("includes render and visualization parameters in JSON output", func(t *testing.T) {
+	t.Run("includes render parameters in JSON output", func(t *testing.T) {
 		test.SetViperJSON(t, true)
 		client := apapprotomocks.NewApapClient(t)
 		cc := &mocks.MockAutostartClientConnector{}
@@ -172,9 +172,6 @@ func TestPrepareRenderCommand(t *testing.T) {
 					DefaultValue: structpb.NewStringValue("auto"),
 					Options:      []string{"auto", "manual"},
 				},
-			},
-			VisualizationParameters: map[string]string{
-				"flat.selected_thread_id": "thread_id",
 			},
 		}
 		preparer.On("PrepareRender", client, content, mock.Anything).Return(prepared, nil)
@@ -210,9 +207,7 @@ func TestPrepareRenderCommand(t *testing.T) {
 		assert.Equal(t, "auto", modeParams["default_value"])
 		assert.ElementsMatch(t, []any{"auto", "manual"}, modeParams["options"])
 
-		visualizationParams, ok := data["visualization_parameters"].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, "thread_id", visualizationParams["flat.selected_thread_id"])
+		assert.NotContains(t, data, "visualization_parameters")
 	})
 }
 

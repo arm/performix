@@ -6,6 +6,7 @@ Documentation  A resource file containing 'run' keywords for the Arm Total Perfo
 
 Resource       common.resource
 Resource       recipe.resource
+Resource       prerecorded.resource
 
 
 *** Variables ***
@@ -154,17 +155,18 @@ The Run Is Exported Successfully
   File Should Exist  ${path}${/}${id}.zip
 
 Import Run
-  [Documentation]  Imports the run at the specified path into the run list.
+  [Documentation]  Imports a run without assuming success, so failure cases can be tested.
   [Arguments]  ${path}
   Run ATPerf CLI Command  run import ${path}
-  ${runs} =  Get Runs As List
-  ${new_id} =  Get From Dictionary  ${runs}  new_id
-  ${id} =  Get From Dictionary  ${new_id}  value
-  RETURN  ${id}
 
 The Run Is Imported Successfully
-  [Arguments]  ${id}
+  The Last Command Succeeded
+  ${result} =  Parse JSON To Dictionary  ${G_LAST_RESULT.stdout}
+  ${data} =  Get From Dictionary  ${result}  data
+  ${new_id} =  Get From Dictionary  ${data}  new_id
+  ${id} =  Get From Dictionary  ${new_id}  value
   The Run Exists  ${id}
+  RETURN  ${id}
 
 Get Runs As List
   [Documentation]  Lists all runs and returns the JSON data as a list.

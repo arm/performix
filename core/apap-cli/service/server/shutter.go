@@ -10,7 +10,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/daemon"
 	"github.com/Arm-Debug/apap-cli/apap-engine/pidfiles"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type shutter struct{}

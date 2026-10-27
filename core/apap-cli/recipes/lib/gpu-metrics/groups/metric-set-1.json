@@ -1,0 +1,1977 @@
+{
+  "schemaVersion": 1,
+  "metricSetId": 1,
+  "products": [
+    {
+      "names": [
+        "Mali-T720"
+      ],
+      "gpuIds": [
+        1824
+      ],
+      "architecture": "midgard",
+      "releaseYear": 2013,
+      "visibility": "public",
+      "metricSetId": 1
+    }
+  ],
+  "runtimeInputs": [
+    "MALI_CONFIG_EXT_BUS_BYTE_SIZE",
+    "MALI_CONFIG_L2_CACHE_COUNT",
+    "MALI_CONFIG_SHADER_CORE_COUNT",
+    "MALI_CONFIG_TIME_SPAN"
+  ],
+  "sections": [
+    {
+      "name": "GPU Front-end",
+      "longDescription": "The GPU front-end is the interface between the GPU hardware and the driver. The front-end schedules workloads submitted by the driver onto multiple hardware work queues. Each work queue handles a specific type of workload and is responsible for breaking a workload into smaller tasks that can be dispatched to the shader cores. Work stays at the head of the queue while being processed, so queue activity is a direct way of measuring that the GPU is busy handling a workload.\nIn this generation of hardware, there are two work queues:\n* Non-fragment queue for compute shaders, vertex shaders, and primitive culling and binning.\n* Fragment queue for render pass fragment shading.\nIt is beneficial to schedule work on multiple queues in parallel, as this can balance the hardware load more evenly. Parallel processing increases the latency of individual tasks, but usually significantly improves overall throughput.\nPerformance counters in this section can show activity on each of the queues, which indicates the complexity and scheduling patterns of submitted workloads.",
+      "groups": [
+        {
+          "name": "GPU Cycles",
+          "longDescription": "This counter group shows the workload processing activity level of the GPU, showing the overall use and when work is running for each of the hardware scheduling queues.",
+          "metrics": [
+            {
+              "id": 6,
+              "kind": "hardware",
+              "machineName": "MaliGPUActiveCy",
+              "humanName": "GPU active cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of cycles when the GPU has a workload of any type queued for processing.",
+              "longDescription": "This counter increments every clock cycle when the GPU has any pending workload present in one of its processing queues. It shows the overall GPU processing load requested by the application.\nThis counter increments when any workload is present in any processing queue, even if the GPU is stalled waiting for external memory. These cycles are counted as active time even though no progress is being made.",
+              "scaleMultiplier": 1,
+              "layoutName": "GPU active"
+            },
+            {
+              "id": 68,
+              "kind": "hardware",
+              "machineName": "MaliNonFragQueueActiveCy",
+              "humanName": "Non-fragment queue active cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of cycles when work is queued in the GPU non-fragment queue.",
+              "longDescription": "This counter increments every clock cycle when the GPU has any workload present in the non-fragment queue. This queue is used for vertex shaders, tessellation shaders, geometry shaders, fixed-function tiling, and compute shaders. This counter can not disambiguate between these workloads.\nIn content achieving good parallelism, which is important for overall efficiency of rendering, the highest queue active cycle counter must be similar to the GPU active counter.\nThis counter increments when any workload is present in the non-fragment processing queue, even if the GPU is stalled waiting for external memory. These cycles are counted as active time even though no progress is being made.",
+              "scaleMultiplier": 1,
+              "layoutName": "Non-fragment queue active"
+            },
+            {
+              "id": 60,
+              "kind": "hardware",
+              "machineName": "MaliFragQueueActiveCy",
+              "humanName": "Fragment queue active cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of cycles when work is queued for processing in the GPU fragment queue.",
+              "longDescription": "This counter increments every clock cycle when the GPU has any workload present in the fragment queue.\nIn content achieving good parallelism, which is important for overall efficiency of rendering, the highest queue active cycle counter must be similar to the GPU active counter.\nThis counter increments when any workload is present in the fragment queue, even if the GPU is stalled waiting for external memory. These cycles are counted as active time even though no progress is being made.",
+              "scaleMultiplier": 1,
+              "layoutName": "Fragment queue active"
+            },
+            {
+              "id": 76,
+              "kind": "hardware",
+              "machineName": "MaliResQueueActiveCy",
+              "humanName": "Reserved active cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "advanced_system",
+              "shortDescription": "The number of cycles when work is queued in the GPU reserved queue.",
+              "longDescription": "This counter increments any clock cycle that the GPU has any workload present in the reserved processing queue.",
+              "scaleMultiplier": 1,
+              "layoutName": "Reserved queue active"
+            },
+            {
+              "id": 139,
+              "kind": "hardware",
+              "machineName": "MaliTilerActiveCy",
+              "humanName": "Tiler active cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "advanced_application",
+              "shortDescription": "The number of cycles when the tiler has a workload queued for processing.",
+              "longDescription": "This counter increments every clock cycle the tiler has a workload in its processing queue. The tiler is responsible for coordinating geometry processing and providing the fixed-function tiling needed for the Mali tile-based rendering pipeline. It can run in parallel to vertex shading and fragment shading.\nA high cycle count here does not necessarily imply a bottleneck, unless the {{C::MaliNonFragActiveCy}} counter in the shader core is comparatively low.",
+              "scaleMultiplier": 1,
+              "layoutName": "Tiler active"
+            },
+            {
+              "id": 54,
+              "kind": "hardware",
+              "machineName": "MaliGPUIRQActiveCy",
+              "humanName": "GPU interrupt pending cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "advanced_system",
+              "shortDescription": "The number of cycles when the GPU has a pending interrupt.",
+              "longDescription": "This counter increments every clock cycle when the GPU has an interrupt pending and is waiting for the CPU to process it.\nCycles with a pending interrupt do not necessarily indicate lost performance because the GPU can process other queued work in parallel. However, if {{C::MaliGPUIRQActiveCy}} are a high percentage of {{C::MaliGPUActiveCy}}, an underlying problem might be preventing the CPU from efficiently handling interrupts. This problem is normally a system integration issue, which an application developer can not work around.",
+              "scaleMultiplier": 1,
+              "layoutName": "GPU interrupt active"
+            }
+          ]
+        },
+        {
+          "name": "GPU Jobs",
+          "longDescription": "This counter group shows the total number of workload jobs issued to the GPU front-end for each queue. Most jobs correspond to an API workload, for example a compute dispatch generates a compute job. However, the driver can also generate small housekeeping jobs for each queue, so job counts do not directly correlate with API behavior.",
+          "metrics": [
+            {
+              "id": 66,
+              "kind": "hardware",
+              "machineName": "MaliNonFragQueueJob",
+              "humanName": "Non-fragment jobs",
+              "unit": "jobs",
+              "trend": "lower_better",
+              "audience": "advanced_system",
+              "shortDescription": "The number of non-fragment jobs processed.",
+              "longDescription": "This counter increments for every job processed by the GPU non-fragment queue.",
+              "scaleMultiplier": 1,
+              "layoutName": "Non-fragment jobs"
+            },
+            {
+              "id": 8,
+              "kind": "hardware",
+              "machineName": "MaliFragQueueJob",
+              "humanName": "Fragment jobs",
+              "unit": "jobs",
+              "trend": "lower_better",
+              "audience": "advanced_system",
+              "shortDescription": "The number of fragment jobs processed.",
+              "longDescription": "This counter increments for every job processed by the fragment queue.",
+              "scaleMultiplier": 1,
+              "layoutName": "Fragment jobs"
+            },
+            {
+              "id": 74,
+              "kind": "hardware",
+              "machineName": "MaliResQueueJob",
+              "humanName": "Reserved queue jobs",
+              "unit": "jobs",
+              "trend": "lower_better",
+              "audience": "advanced_system",
+              "shortDescription": "The number of reserved queue jobs processed.",
+              "longDescription": "This counter increments for every job processed by the GPU reserved queue.",
+              "scaleMultiplier": 1,
+              "layoutName": "Reserved jobs"
+            }
+          ]
+        },
+        {
+          "name": "GPU Tasks",
+          "longDescription": "This counter group shows the total number of workload tasks issued by the GPU front-end to the processing endpoints inside the GPU.",
+          "metrics": [
+            {
+              "id": 67,
+              "kind": "hardware",
+              "machineName": "MaliNonFragQueueTask",
+              "humanName": "Non-fragment tasks",
+              "unit": "tasks",
+              "trend": "lower_better",
+              "audience": "advanced_system",
+              "shortDescription": "The number of non-fragment tasks processed.",
+              "longDescription": "This counter increments for every non-fragment task processed by the GPU.",
+              "scaleMultiplier": 1,
+              "layoutName": "Non-fragment tasks"
+            },
+            {
+              "id": 46,
+              "kind": "hardware",
+              "machineName": "MaliFragQueueTask",
+              "humanName": "Fragment tasks",
+              "unit": "tasks",
+              "trend": "lower_better",
+              "audience": "advanced_application",
+              "shortDescription": "The number of fragment tasks processed.",
+              "longDescription": "This counter increments for every {{C::MaliFragQueueTaskSize.equation}} x {{C::MaliFragQueueTaskSize.equation}} pixel region of a render pass that is processed by the GPU. The processed region of a render pass can be smaller than the full size of the attached surfaces if the application's viewport and scissor settings prevent the whole image being rendered.",
+              "scaleMultiplier": 1,
+              "layoutName": "Fragment tasks"
+            },
+            {
+              "id": 75,
+              "kind": "hardware",
+              "machineName": "MaliResQueueTask",
+              "humanName": "Reserved queue tasks",
+              "unit": "tasks",
+              "trend": "lower_better",
+              "audience": "advanced_system",
+              "shortDescription": "The number of reserved queue tasks processed.",
+              "longDescription": "This counter increments for every reserved task processed by the GPU.",
+              "scaleMultiplier": 1,
+              "layoutName": "Reserved tasks"
+            }
+          ]
+        },
+        {
+          "name": "GPU Utilization",
+          "longDescription": "This counter group shows the workload processing activity level of the GPU queues, normalized as a percentage of overall GPU activity.",
+          "metrics": [
+            {
+              "id": 65539,
+              "kind": "derived",
+              "machineName": "MaliNonFragQueueUtil",
+              "humanName": "Non-fragment queue utilization",
+              "unit": "percent",
+              "trend": "higher_better",
+              "audience": "novice",
+              "shortDescription": "The non-fragment queue utilization relative to the GPU active cycles.",
+              "longDescription": "This expression defines the non-fragment queue utilization compared against the GPU active cycles. For GPU bound content, it is expected that the GPU queues process work in parallel. The dominant queue must be close to 100% utilized. If no queue is dominant, but the GPU is close to 100% utilized, then there might be a serialization or dependency problem preventing better overlap across the queues.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 68
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 6
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Non-fragment queue utilization"
+            },
+            {
+              "id": 65538,
+              "kind": "derived",
+              "machineName": "MaliFragQueueUtil",
+              "humanName": "Fragment queue utilization",
+              "unit": "percent",
+              "trend": "higher_better",
+              "audience": "novice",
+              "shortDescription": "The fragment queue utilization relative to the GPU active cycles.",
+              "longDescription": "This expression defines the fragment queue utilization compared against the GPU active cycles. For GPU bound content, the GPU queues are expected to process work in parallel. Aim to keep the dominant queue close to 100% utilized. If no queue is dominant, but the GPU is close to 100% utilized, then there might be a serialization or dependency problem preventing better queue overlap.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 60
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 6
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Fragment queue utilization"
+            },
+            {
+              "id": 65544,
+              "kind": "derived",
+              "machineName": "MaliGPUIRQUtil",
+              "humanName": "Interrupt pending utilization",
+              "unit": "percent",
+              "trend": "lower_better",
+              "audience": "advanced_system",
+              "shortDescription": "The IRQ pending utilization relative to the GPU active cycles.",
+              "longDescription": "This expression defines the IRQ pending utilization compared against the GPU active cycles. In a well-functioning system, this expression should be less than 3% of the total cycles. If the value is much higher than this, a system issue might be preventing the CPU from efficiently handling interrupts.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 54
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 6
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Interrupt utilization"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "External Memory System",
+      "longDescription": "The GPU external memory interface connects the GPU to the system DRAM, via an on-chip memory bus. The exact configuration of the memory system outside of the GPU varies from device to device and might include additional levels of system cache before reaching the off-chip memory.\nGPUs are data-plane processors, with workloads that are too large to keep in system cache and that therefore make heavy use of main memory. GPUs are designed to be tolerant of high latency, when compared to a CPU, but poor memory system performance can still reduce GPU efficiency.\nAccessing external DRAM is one of the most energy-intensive operations that the GPU can perform. Reducing memory bandwidth is a key optimization goal for mobile applications, even if the application is not bandwidth-limited, ensuring users get long battery life and thermally stable performance.\nPerformance counters in this section measure how much memory bandwidth your application uses, as well as stall and latency counters to show how well the memory system is coping with the generated traffic.",
+      "groups": [
+        {
+          "name": "External Bus Beats",
+          "longDescription": "This counter group shows the absolute number of external memory data transfer cycles used by the GPU.",
+          "metrics": [
+            {
+              "id": 114,
+              "kind": "hardware",
+              "machineName": "MaliExtBusRdBt",
+              "humanName": "Output external read beats",
+              "unit": "beats",
+              "trend": "lower_better",
+              "audience": "advanced_application",
+              "shortDescription": "The number of external bus data read beats.",
+              "longDescription": "This counter increments for every clock cycle when a data beat is read from the external memory bus.",
+              "scaleMultiplier": 1,
+              "layoutName": "Read beats"
+            },
+            {
+              "id": 129,
+              "kind": "hardware",
+              "machineName": "MaliExtBusWrBt",
+              "humanName": "Output external write beats",
+              "unit": "beats",
+              "trend": "lower_better",
+              "audience": "advanced_application",
+              "shortDescription": "The number of external bus data write beats.",
+              "longDescription": "This counter increments for every clock cycle when a data beat is written to the external memory bus.",
+              "scaleMultiplier": 1,
+              "layoutName": "Write beats"
+            }
+          ]
+        },
+        {
+          "name": "External Bus Bytes",
+          "longDescription": "This counter group shows the absolute amount of external memory traffic generated by the GPU. Absolute measures are the most useful way to check actual bandwidth against a per-frame bandwidth budget.",
+          "metrics": [
+            {
+              "id": 65548,
+              "kind": "derived",
+              "machineName": "MaliExtBusRdBy",
+              "humanName": "Output external read bytes",
+              "unit": "bytes",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The total output read bytes for the GPU.",
+              "longDescription": "This expression defines the total output read bytes for the GPU.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "metric",
+                  "id": 114
+                },
+                "right": {
+                  "operation": "metric",
+                  "id": 65653
+                }
+              },
+              "layoutName": "Read bytes"
+            },
+            {
+              "id": 65553,
+              "kind": "derived",
+              "machineName": "MaliExtBusWrBy",
+              "humanName": "Output external write bytes",
+              "unit": "bytes",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The total output write bytes for the GPU.",
+              "longDescription": "This expression defines the total output write bytes for the GPU.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "metric",
+                  "id": 129
+                },
+                "right": {
+                  "operation": "metric",
+                  "id": 65653
+                }
+              },
+              "layoutName": "Write bytes"
+            }
+          ]
+        },
+        {
+          "name": "External Bus Bandwidth",
+          "longDescription": "This counter group shows the external memory traffic generated by the GPU, presented as a bytes/second rate. Rates are the most useful way to check actual bandwidth against the design limits of a chip, which will usually be specified in bytes/second.",
+          "metrics": [
+            {
+              "id": 554,
+              "kind": "derived",
+              "machineName": "MaliExtBusRdBPS",
+              "humanName": "Output external read bytes/second",
+              "unit": "bytes/second",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The total output read bandwidth for the GPU.",
+              "longDescription": "This expression defines the total output read bandwidth for the GPU, measured in bytes per second.",
+              "expression": {
+                "operation": "divide",
+                "left": {
+                  "operation": "metric",
+                  "id": 65548
+                },
+                "right": {
+                  "operation": "runtime-input",
+                  "name": "MALI_CONFIG_TIME_SPAN"
+                }
+              },
+              "layoutName": "Read bandwidth"
+            },
+            {
+              "id": 555,
+              "kind": "derived",
+              "machineName": "MaliExtBusWrBPS",
+              "humanName": "Output external write bytes/second",
+              "unit": "bytes/second",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The total output write bandwidth for the GPU.",
+              "longDescription": "This expression defines the total output write bandwidth for the GPU, measured in bytes per second.",
+              "expression": {
+                "operation": "divide",
+                "left": {
+                  "operation": "metric",
+                  "id": 65553
+                },
+                "right": {
+                  "operation": "runtime-input",
+                  "name": "MALI_CONFIG_TIME_SPAN"
+                }
+              },
+              "layoutName": "Write bandwidth"
+            }
+          ]
+        },
+        {
+          "name": "External Bus Stall Cycles",
+          "longDescription": "This counter group shows the absolute number of external memory interface stalls, which is the number of cycles when the GPU is trying to send data but the external bus can not accept it.",
+          "metrics": [
+            {
+              "id": 115,
+              "kind": "hardware",
+              "machineName": "MaliExtBusRdStallCy",
+              "humanName": "Output external read stall cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "advanced_application",
+              "shortDescription": "The number of cycles when a read is stalled waiting for the external bus.",
+              "longDescription": "This counter increments for every stall cycle on the AXI bus when the GPU has a valid read transaction to send, but is awaiting a ready signal from the bus.",
+              "scaleMultiplier": 1,
+              "layoutName": "Read stalls"
+            },
+            {
+              "id": 130,
+              "kind": "hardware",
+              "machineName": "MaliExtBusWrStallCy",
+              "humanName": "Output external write stall cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "advanced_application",
+              "shortDescription": "The number of cycles when a write is stalled waiting for the external bus.",
+              "longDescription": "This counter increments for every stall cycle on the external bus where the GPU has a valid write transaction to send, but is awaiting a ready signal from the external bus.",
+              "scaleMultiplier": 1,
+              "layoutName": "Write stalls"
+            }
+          ]
+        },
+        {
+          "name": "External Bus Stall Rate",
+          "longDescription": "This counter group shows the percentage of cycles that the GPU is trying to send data, but the external bus can not accept it.\nA small number of stalls is expected, but sustained periods with stall rates above 10% might indicate that the GPU is generating more traffic than the downstream memory system can handle efficiently.",
+          "metrics": [
+            {
+              "id": 65549,
+              "kind": "derived",
+              "machineName": "MaliExtBusRdStallRate",
+              "humanName": "Output external read stall percentage",
+              "unit": "percent",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The percentage of cycles with an external read transaction stalled.",
+              "longDescription": "This expression defines the percentage of GPU cycles with a memory stall on an external read transaction.\nStall rates can be reduced by reducing the size of data resources, such as buffers or textures.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "divide",
+                    "left": {
+                      "operation": "metric",
+                      "id": 115
+                    },
+                    "right": {
+                      "operation": "metric",
+                      "id": 65654
+                    }
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 6
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Read stall rate"
+            },
+            {
+              "id": 65554,
+              "kind": "derived",
+              "machineName": "MaliExtBusWrStallRate",
+              "humanName": "Output external write stall percentage",
+              "unit": "percent",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The percentage of cycles with an external write transaction stalled.",
+              "longDescription": "This expression defines the percentage of GPU cycles with a memory stall on an external write transaction.\nStall rates can be reduced by reducing geometry complexity, or the size of framebuffers in memory.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "divide",
+                    "left": {
+                      "operation": "metric",
+                      "id": 130
+                    },
+                    "right": {
+                      "operation": "metric",
+                      "id": 65654
+                    }
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 6
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Write stall rate"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Graphics Geometry Workload",
+      "longDescription": "Graphics workloads using the rasterization pipeline pass inputs to the GPU as a geometry stream. Vertices in this stream are position shaded, assembled into primitives, and then passed through a culling pipeline before being passed to the Arm GPU binning unit.\nPerformance counters in this section show how the input geometry is processed, indicating the overall complexity of the geometry workload and how it is processed by the primitive culling stages.",
+      "groups": [
+        {
+          "name": "Input Primitives",
+          "longDescription": "This counter group shows the number of input primitives to the GPU, before any culling is applied.",
+          "metrics": [
+            {
+              "id": 65556,
+              "kind": "derived",
+              "machineName": "MaliGeomTotalPrim",
+              "humanName": "Input primitives",
+              "unit": "primitives",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The total number of input primitives to the rendering process.",
+              "longDescription": "This expression defines the total number of input primitives to the rendering process.\nHigh complexity geometry is one of the most expensive inputs to the GPU, because vertices are much larger than compressed texels. Optimize your geometry to minimize mesh complexity, using dynamic level-of-detail and normal maps to reduce the number of primitives required.",
+              "expression": {
+                "operation": "add",
+                "left": {
+                  "operation": "metric",
+                  "id": 65562
+                },
+                "right": {
+                  "operation": "metric",
+                  "id": 148
+                }
+              },
+              "layoutName": "Input primitives"
+            },
+            {
+              "id": 143,
+              "kind": "hardware",
+              "machineName": "MaliGeomTrianglePrim",
+              "humanName": "Triangle primitives",
+              "unit": "primitives",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of input triangle primitives.",
+              "longDescription": "This counter increments for every input triangle primitive. The count is made before any culling or clipping.",
+              "scaleMultiplier": 1,
+              "layoutName": "Triangle primitives"
+            },
+            {
+              "id": 144,
+              "kind": "hardware",
+              "machineName": "MaliGeomLinePrim",
+              "humanName": "Line primitives",
+              "unit": "primitives",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of input line primitives.",
+              "longDescription": "This counter increments for every input line primitive. The count is made before any culling or clipping.",
+              "scaleMultiplier": 1,
+              "layoutName": "Line primitives"
+            },
+            {
+              "id": 145,
+              "kind": "hardware",
+              "machineName": "MaliGeomPointPrim",
+              "humanName": "Point primitives",
+              "unit": "primitives",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of input point primitives.",
+              "longDescription": "This counter increments for every input point primitive. The count is made before any culling or clipping.",
+              "scaleMultiplier": 1,
+              "layoutName": "Point primitives"
+            }
+          ]
+        },
+        {
+          "name": "Visible Primitives",
+          "longDescription": "This counter group shows the properties of any visible primitives, after any culling is applied.",
+          "metrics": [
+            {
+              "id": 146,
+              "kind": "hardware",
+              "machineName": "MaliGeomFrontFacePrim",
+              "humanName": "Visible front-facing primitives",
+              "unit": "primitives",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of front-facing triangles that are visible after culling.",
+              "longDescription": "This counter increments for every visible front-facing triangle that survives culling.",
+              "scaleMultiplier": 1,
+              "layoutName": "Front-facing primitives"
+            },
+            {
+              "id": 147,
+              "kind": "hardware",
+              "machineName": "MaliGeomBackFacePrim",
+              "humanName": "Visible back-facing primitives",
+              "unit": "primitives",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of back-facing triangles that are visible after culling.",
+              "longDescription": "This counter increments for every visible back-facing triangle that survives culling.",
+              "scaleMultiplier": 1,
+              "layoutName": "Back-facing primitives"
+            }
+          ]
+        },
+        {
+          "name": "Primitive Culling",
+          "longDescription": "This counter group shows the absolute number of primitives that are culled by each of the culling stages in the geometry pipeline, and the number of visible primitives that are not culled by any stage.",
+          "metrics": [
+            {
+              "id": 148,
+              "kind": "hardware",
+              "machineName": "MaliGeomVisiblePrim",
+              "humanName": "Visible primitives",
+              "unit": "primitives",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of primitives that are visible after culling.",
+              "longDescription": "This counter increments for every visible primitive that survives all culling stages.",
+              "scaleMultiplier": 1,
+              "layoutName": "Visible primitives"
+            },
+            {
+              "id": 65562,
+              "kind": "derived",
+              "machineName": "MaliGeomTotalCullPrim",
+              "humanName": "Culled primitives",
+              "unit": "primitives",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of primitives culled during the rendering process.",
+              "longDescription": "This expression defines the number of primitives that are culled during the rendering process.\nFor efficient 3D content, it is expected that only 50% of primitives are visible because back-face culling is used to remove half of each model.",
+              "expression": {
+                "operation": "add",
+                "left": {
+                  "operation": "metric",
+                  "id": 149
+                },
+                "right": {
+                  "operation": "metric",
+                  "id": 150
+                }
+              },
+              "layoutName": "Culled primitives"
+            },
+            {
+              "id": 149,
+              "kind": "hardware",
+              "machineName": "MaliGeomFaceXYPlaneCullPrim",
+              "humanName": "Facing or XY plane test culled primitives",
+              "unit": "primitives",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of primitives that are culled by facing or frustum XY plane tests.",
+              "longDescription": "This counter increments for every primitive culled by the facing test, or culled by testing against the view frustum X and Y clip planes.\nFor an arbitrary 3D scene we would expect approximately half of the triangles to be back-facing. If you see a significantly lower percentage than this, check that the facing test is properly enabled.\nIt is expected that a small number of primitives are outside of the frustum extents, as application culling is never perfect and some models might intersect a frustum clip plane. If this counter is significantly higher than half of the triangles, use draw call bounding box checks to cull draws that are completely out-of-frustum.\nIf batched draw calls are complex and have a large bounding volume, consider using smaller batches to reduce the bounding volume to enable better culling.",
+              "scaleMultiplier": 1,
+              "layoutName": "Facing or XY plane culled primitives"
+            },
+            {
+              "id": 150,
+              "kind": "hardware",
+              "machineName": "MaliGeomZPlaneCullPrim",
+              "humanName": "Z plane test culled primitives",
+              "unit": "primitives",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of primitives that are culled by frustum Z plane tests.",
+              "longDescription": "This counter increments for every primitive culled by testing against the view frustum near and far clip planes.\nIt is expected that a small number of primitives are outside of the frustum extents, as application culling is never perfect and some models might intersect a frustum clip plane.\nUse draw call bounding box checks to cull draws that are completely out-of-frustum. If batched draw calls are complex and have a large bounding volume consider using smaller batches to reduce the bounding volume to enable better culling.",
+              "scaleMultiplier": 1,
+              "layoutName": "Z plane culled primitives"
+            }
+          ]
+        },
+        {
+          "name": "Primitive Culling Rate",
+          "longDescription": "This counter group shows the percentage of the primitives that use each culling stage that are culled by it, and the percentage of primitives that are visible and not culled by any stage.",
+          "metrics": [
+            {
+              "id": 65558,
+              "kind": "derived",
+              "machineName": "MaliGeomFaceXYPlaneCullRate",
+              "humanName": "Facing or XY plane test cull percentage",
+              "unit": "percent",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The percentage of primitives culled by the facing or frustum XY plane tests.",
+              "longDescription": "This expression defines the percentage of primitives entering the facing and XY plane test that are culled by it. Primitives that are outside of the view frustum in the XY axis, or that are back-facing inside the frustum, are culled by this stage.\nFor efficient 3D content, it is expected that 50% of primitives are culled by the facing test. If more than 50% of primitives are culled it might be because they are out-of-frustum, which can often be optimized with better software culling or batching granularity.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 149
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 65556
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Facing or XY plane culled primitive rate"
+            },
+            {
+              "id": 65559,
+              "kind": "derived",
+              "machineName": "MaliGeomZPlaneCullRate",
+              "humanName": "Z plane test cull percentage",
+              "unit": "percent",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The percentage of primitives culled by the frustum Z plane test.",
+              "longDescription": "This expression defines the percentage of primitives entering the Z plane culling test that are culled by it. Primitives that are closer than the frustum near clip plane, or further away than the frustum far clip plane, are culled by this stage.\nSeeing a significant proportion of triangles culled at this stage can be indicative of insufficient application software culling.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 150
+                  },
+                  "right": {
+                    "operation": "subtract",
+                    "left": {
+                      "operation": "metric",
+                      "id": 65556
+                    },
+                    "right": {
+                      "operation": "metric",
+                      "id": 149
+                    }
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Z plane culled primitive rate"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Graphics Fragment Workload",
+      "longDescription": "Graphics workloads using the rasterization pipeline are rendered into the framebuffer to create output images.\nPerformance counters in this section show the workload complexity of your fragment rendering.",
+      "groups": [
+        {
+          "name": "Output Pixels",
+          "longDescription": "This counter group shows the total number of output pixels rendered.",
+          "metrics": [
+            {
+              "id": 65546,
+              "kind": "derived",
+              "machineName": "MaliGPUPix",
+              "humanName": "Pixels",
+              "unit": "pixels",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The total number of pixels that are shaded.",
+              "longDescription": "This expression defines the total number of pixels that are shaded by the GPU, including on-screen and off-screen render passes.\nThis measure can be a slight overestimate because it assumes all pixels in each active {{C::MaliFragQueueTaskSize.equation}} x {{C::MaliFragQueueTaskSize.equation}} pixel region are shaded. If the rendered region does not align with {{C::MaliFragQueueTaskSize.equation}} pixel aligned boundaries, then this metric includes pixels that are not actually shaded.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "multiply",
+                  "left": {
+                    "operation": "metric",
+                    "id": 46
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 65537
+                  }
+                },
+                "right": {
+                  "operation": "metric",
+                  "id": 65537
+                }
+              },
+              "layoutName": "Pixels"
+            }
+          ]
+        },
+        {
+          "name": "Overdraw",
+          "longDescription": "This counter group shows the number of fragments rendered per pixel.",
+          "metrics": [
+            {
+              "id": 65585,
+              "kind": "derived",
+              "machineName": "MaliFragOverdraw",
+              "humanName": "Fragments per pixel",
+              "unit": "threads",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of fragments shaded per output pixel.",
+              "longDescription": "This expression computes the number of fragments shaded per output pixel.\nGPU processing cost per pixel accumulates with the layer count. High overdraw can build up to a significant processing cost, especially when rendering to a high-resolution framebuffer. Minimize overdraw by rendering opaque objects front-to-back and minimizing use of blended transparent layers.",
+              "expression": {
+                "operation": "divide",
+                "left": {
+                  "operation": "metric",
+                  "id": 65572
+                },
+                "right": {
+                  "operation": "metric",
+                  "id": 65546
+                }
+              },
+              "layoutName": "Fragments/pixel"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Workload Cost",
+      "longDescription": "Workload cost metrics give an average throughput per item of work processed by the GPU.\nPerformance counters in this section can be used to track average performance against budget, and to monitor the impact of application changes over time.",
+      "groups": [
+        {
+          "name": "Average Workload Cost",
+          "longDescription": "This counter group gives the average cycle throughput for the different kinds of workloads the GPU is running.\nWhen workloads run in parallel, the shader core is shared, and these throughput metrics are impacted by cross-talk across the queues. However, they are still a useful tool for managing performance budgets.",
+          "metrics": [
+            {
+              "id": 65673,
+              "kind": "derived",
+              "machineName": "MaliGPUCyPerPix",
+              "humanName": "Average cycles per pixel",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The average number of GPU cycles spent per rendered pixel.",
+              "longDescription": "This expression defines the average number of GPU cycles spent per rendered pixel. This includes the cost of all shader stages.\nIt is a useful exercise to set a cycle budget for each render pass in your application, based on your target resolution and frame rate. Rendering 1080p60 is possible with an entry-level device, but you have a small number of cycles per pixel to work with, so you must use them efficiently.",
+              "expression": {
+                "operation": "divide",
+                "left": {
+                  "operation": "metric",
+                  "id": 6
+                },
+                "right": {
+                  "operation": "metric",
+                  "id": 65546
+                }
+              },
+              "layoutName": "GPU cycles/pixel"
+            },
+            {
+              "id": 65593,
+              "kind": "derived",
+              "machineName": "MaliNonFragThroughputCy",
+              "humanName": "Average cycles per non-fragment thread",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The average number of shader core cycles per non-fragment thread.",
+              "longDescription": "This expression defines the average number of shader core cycles per non-fragment thread.\nThis measurement captures the overall shader core throughput, not the shader processing cost. It is impacted by cycles lost to stalls that can not be hidden by other processing. In addition, it is impacted by other workloads that are running concurrently in the shader core.",
+              "expression": {
+                "operation": "divide",
+                "left": {
+                  "operation": "metric",
+                  "id": 226
+                },
+                "right": {
+                  "operation": "metric",
+                  "id": 65591
+                }
+              },
+              "layoutName": "Shader cycles/non-fragment thread"
+            },
+            {
+              "id": 65575,
+              "kind": "derived",
+              "machineName": "MaliFragThroughputCy",
+              "humanName": "Average cycles per fragment thread",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The average number of shader core cycles per fragment thread.",
+              "longDescription": "This expression defines the average number of shader core cycles per fragment thread.\nThis measurement captures the overall shader core throughput, not the shader processing cost. It is impacted by cycles lost to stalls that can not be hidden by other processing. In addition, it is impacted by other workloads that are running concurrently in the shader core.",
+              "expression": {
+                "operation": "divide",
+                "left": {
+                  "operation": "metric",
+                  "id": 196
+                },
+                "right": {
+                  "operation": "metric",
+                  "id": 65572
+                }
+              },
+              "layoutName": "Shader cycles/fragment thread"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Shader Core Front-end",
+      "longDescription": "The shader core front-ends are the internal interfaces inside the GPU that accept tasks from other parts of the GPU and turn them into shader threads running in the programmable core.\nEach shader core has two front-ends:\n* Non-fragment front-end for all non-fragment tasks, including compute, vertex shading, and advanced geometry.\n* Fragment front-end for all fragment tasks.\nThe front-ends are active until task processing is complete, so front-end activity is a direct way of measuring that the shader core is busy handling a workload.\nThe execution engine is the programmable core at the heart of the shader core hardware. The execution engine is active if there is at least one thread running, and monitoring its activity is an indirect way of checking that the front-ends are managing to keep the GPU busy.\nPerformance counters in this section measure the overall workload scheduling for the shader core, showing how busy the shader core is. Note that front-end counters can tell you that a task is scheduled but can not tell you how heavily the programmable core is being used.",
+      "groups": [
+        {
+          "name": "Shader Core Cycles",
+          "longDescription": "This counter group shows the scheduling load on the shader core, indicating which of the shader core front-ends have work scheduled and whether they are running threads on the programmable core.",
+          "metrics": [
+            {
+              "id": 226,
+              "kind": "hardware",
+              "machineName": "MaliNonFragActiveCy",
+              "humanName": "Shader core non-fragment active cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of cycles when the shader core is processing some non-fragment workload.",
+              "longDescription": "This counter increments every clock cycle when the shader core is processing some non-fragment workload. Active processing includes any cycle that non-fragment work is queued in the fixed-function front-end or programmable core.",
+              "scaleMultiplier": 1,
+              "layoutName": "Non-fragment active"
+            },
+            {
+              "id": 196,
+              "kind": "hardware",
+              "machineName": "MaliFragActiveCy",
+              "humanName": "Shader core fragment active cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of cycles when the shader core is processing a fragment workload.",
+              "longDescription": "This counter increments every clock cycle when the shader core is processing some fragment workload. Active processing includes any cycle that fragment work is running anywhere in the fixed-function front-end, fixed-function back-end, or programmable core.",
+              "scaleMultiplier": 1,
+              "layoutName": "Fragment active"
+            },
+            {
+              "id": 230,
+              "kind": "hardware",
+              "machineName": "MaliCoreActiveCy",
+              "humanName": "Programmable core active cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of cycles when the shader core is processing at least one warp.",
+              "longDescription": "This counter increments every clock cycle when the shader core is processing at least one warp. Note that this counter does not provide detailed information about how the functional units are utilized inside the shader core, but simply gives an indication that something is running.",
+              "scaleMultiplier": 1,
+              "layoutName": "Programmable core active"
+            }
+          ]
+        },
+        {
+          "name": "Shader Core Utilization",
+          "longDescription": "This counter group shows the scheduling load on the shader core, normalized against the overall shader core activity.",
+          "metrics": [
+            {
+              "id": 65589,
+              "kind": "derived",
+              "machineName": "MaliNonFragUtil",
+              "humanName": "Shader core non-fragment utilization",
+              "unit": "percent",
+              "trend": "higher_better",
+              "audience": "novice",
+              "shortDescription": "The utilization of the shader core non-fragment endpoint.",
+              "longDescription": "This expression defines the percentage utilization of the shader core non-fragment endpoint. This counter measures any cycle that a non-fragment workload is active in the fixed-function front-end or programmable core.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "divide",
+                    "left": {
+                      "operation": "metric",
+                      "id": 226
+                    },
+                    "right": {
+                      "operation": "metric",
+                      "id": 65655
+                    }
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 6
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Non-fragment utilization"
+            },
+            {
+              "id": 65567,
+              "kind": "derived",
+              "machineName": "MaliFragUtil",
+              "humanName": "Shader core fragment utilization",
+              "unit": "percent",
+              "trend": "higher_better",
+              "audience": "novice",
+              "shortDescription": "The utilization of the shader core fragment endpoint.",
+              "longDescription": "This expression defines the percentage utilization of the shader core fragment endpoint. This counter measures any cycle that a fragment workload is active in the fixed-function front-end, fixed-function back-end, or programmable core.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "divide",
+                    "left": {
+                      "operation": "metric",
+                      "id": 196
+                    },
+                    "right": {
+                      "operation": "metric",
+                      "id": 65655
+                    }
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 6
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Fragment utilization"
+            },
+            {
+              "id": 65579,
+              "kind": "derived",
+              "machineName": "MaliCoreUtil",
+              "humanName": "Programmable core utilization",
+              "unit": "percent",
+              "trend": "higher_better",
+              "audience": "novice",
+              "shortDescription": "The utilization of the programmable shader core.",
+              "longDescription": "This expression defines the percentage utilization of the programmable core, measuring cycles when the shader core contains at least one warp. A low utilization here indicates lost performance, because there are spare shader core cycles that are unused.\nIn some use cases an idle core is unavoidable. For example, a clear color tile that contains no shaded geometry, or a shadow map that is resolved entirely using early ZS depth updates.\nImprove programmable core utilization by parallel processing of the non-fragment and fragment queues, running overlapping workloads from multiple render passes. Also aim to keep the FPK buffer utilization as high as possible, ensuring constant forward-pressure on fragment shading.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "divide",
+                    "left": {
+                      "operation": "metric",
+                      "id": 230
+                    },
+                    "right": {
+                      "operation": "metric",
+                      "id": 65655
+                    }
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 6
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Programmable core utilization"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Shader Core Fragment Front-end",
+      "longDescription": "The shader core fragment front-end is a complex multi-stage pipeline that converts an incoming primitive stream for a screen-space tile into fragment threads that need to be shaded. The fragment front-end handles rasterization, early depth (Z) and stencil (S) testing, and hidden surface removal (HSR).\nPerformance counters in this section measure how the incoming stream is turned into quads and how efficiently those quads interact with ZS testing and HSR.",
+      "groups": [
+        {
+          "name": "Fragment Tiles",
+          "longDescription": "This counter group shows the number of fragment tiles processed by the shader cores.",
+          "metrics": [
+            {
+              "id": 223,
+              "kind": "hardware",
+              "machineName": "MaliFragTile",
+              "humanName": "Tiles",
+              "unit": "tiles",
+              "trend": "lower_better",
+              "audience": "advanced_application",
+              "shortDescription": "The number of tiles processed by the shader core.",
+              "longDescription": "This counter increments for every tile processed by the shader core. Note that tiles are normally {{C::MaliGPUTileSize.equation}} x {{C::MaliGPUTileSize.equation}} pixels but can vary depending on per-pixel storage requirements and the tile buffer size of the current GPU.\nThis GPU supports full size tiles when using up to and including {{C::MaliGPUMaxPixelStorage.equation}} bits per pixel of color storage. Pixel storage requirements depend on the number of color attachments, their data format, and the number of multi-sampling samples per pixel.\nThe most accurate way to get the total pixel count rendered by the application is to use the {{C::MaliFragQueueTask}} counter, because it always counts {{C::MaliFragQueueTaskSize.equation}} x {{C::MaliFragQueueTaskSize.equation}} pixel regions.",
+              "scaleMultiplier": 1,
+              "layoutName": "Tiles"
+            },
+            {
+              "id": 224,
+              "kind": "hardware",
+              "machineName": "MaliFragTileKill",
+              "humanName": "Killed unchanged tiles",
+              "unit": "tiles",
+              "trend": "lower_better",
+              "audience": "advanced_application",
+              "shortDescription": "The number of tiles killed by transaction elimination.",
+              "longDescription": "This counter increments for every 16x16 pixel tile or tile sub-region killed by a transaction elimination CRC check, when the data is the same as the content already stored in memory.",
+              "scaleMultiplier": 1,
+              "layoutName": "Killed unchanged tiles"
+            }
+          ]
+        },
+        {
+          "name": "Fragment Primitives",
+          "longDescription": "This counter group shows how the fragment front-end handles the incoming primitive stream from the tile list built during the binning phase.\nLarge primitives are read in multiple tiles and therefore cause multiple increments to these counter values. These counters do not match the input primitive counts passed by the application.",
+          "metrics": [
+            {
+              "id": 209,
+              "kind": "hardware",
+              "machineName": "MaliFragPrim",
+              "humanName": "Loaded fragment primitives",
+              "unit": "primitives",
+              "trend": "lower_better",
+              "audience": "advanced_system",
+              "shortDescription": "The number of primitives read from the tile list by the fragment front-end.",
+              "longDescription": "This counter increments for every primitive read from the tile list by the fragment front-end. This increments per tile, which means that a single primitive that spans multiple tiles is counted multiple times. If you want to know the total number of primitives in the scene refer to the {{C::MaliGeomTotalPrim}} expression.",
+              "scaleMultiplier": 1,
+              "layoutName": "Loaded primitives"
+            }
+          ]
+        },
+        {
+          "name": "Fragment Quads",
+          "longDescription": "This counter group shows how the rasterizer turns the incoming primitive stream into 2x2 sample quads for shading.",
+          "metrics": [
+            {
+              "id": 216,
+              "kind": "hardware",
+              "machineName": "MaliFragRastQd",
+              "humanName": "Rasterized fine quads",
+              "unit": "quads",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of fine quads generated by the rasterization phase.",
+              "longDescription": "This counter increments for every fine quad generated by the rasterization phase. A fine quad covers a 2x2 pixel screen region. The quads generated have at least some coverage based on the current sample pattern, but can subsequently be killed by early ZS testing or hidden surface removal before they are shaded.\nIn this GPU, this counter has an erratum which causes an over count by 2x when using 8x MSAA, and by 4x when using 16x MSAA.",
+              "scaleMultiplier": 1,
+              "layoutName": "Rasterized fine quads"
+            }
+          ]
+        },
+        {
+          "name": "Fragment ZS Quads",
+          "longDescription": "This counter group shows how the depth (Z) and stencil (S) test unit handles quads for early and late ZS test and update.",
+          "metrics": [
+            {
+              "id": 218,
+              "kind": "hardware",
+              "machineName": "MaliFragEZSTestQd",
+              "humanName": "Early ZS tested quads",
+              "unit": "quads",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of quads that are undergoing early depth and stencil testing.",
+              "longDescription": "This counter increments for every quad undergoing early depth and stencil testing.\nFor maximum performance, this number must be close to the total number of input quads. We want as many of the input quads as possible to be subject to early ZS testing because early ZS testing is significantly more efficient than late ZS testing, which only kills threads after they are shaded.",
+              "scaleMultiplier": 1,
+              "layoutName": "Early ZS tested quads"
+            },
+            {
+              "id": 220,
+              "kind": "hardware",
+              "machineName": "MaliFragEZSKillQd",
+              "humanName": "Early ZS killed quads",
+              "unit": "quads",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of quads killed by early depth and stencil testing.",
+              "longDescription": "This counter increments for every quad killed by early depth and stencil testing.\nQuads killed at this stage are killed before shading, so a high percentage here is not generally a performance problem. However, it can indicate an opportunity to use software culling techniques such as portal culling to avoid sending occluded geometry to the GPU.",
+              "scaleMultiplier": 1,
+              "layoutName": "Early ZS killed quads"
+            }
+          ]
+        },
+        {
+          "name": "Fragment ZS Threads",
+          "longDescription": "This counter group shows how the depth (Z) and stencil (S) test unit handles threads for late ZS test and update.",
+          "metrics": [
+            {
+              "id": 631,
+              "kind": "hardware",
+              "machineName": "MaliFragLZSTestTd",
+              "humanName": "Late ZS tested threads",
+              "unit": "threads",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of threads undergoing late depth and stencil testing.",
+              "longDescription": "This counter increments for every thread undergoing late depth and stencil testing.",
+              "scaleMultiplier": 1,
+              "layoutName": "Late ZS tested threads"
+            },
+            {
+              "id": 632,
+              "kind": "hardware",
+              "machineName": "MaliFragLZSKillTd",
+              "humanName": "Late ZS killed threads",
+              "unit": "threads",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of threads killed by late depth and stencil testing.",
+              "longDescription": "This counter increments for every thread killed by late depth and stencil testing.",
+              "scaleMultiplier": 1,
+              "layoutName": "Late ZS killed threads"
+            }
+          ]
+        },
+        {
+          "name": "ZS Unit Test Rate",
+          "longDescription": "This counter group shows the relative numbers of quads doing early and late depth (Z) and stencil (S) testing.",
+          "metrics": [
+            {
+              "id": 65578,
+              "kind": "derived",
+              "machineName": "MaliFragEZSTestRate",
+              "humanName": "Early ZS tested quad percentage",
+              "unit": "percent",
+              "trend": "higher_better",
+              "audience": "novice",
+              "shortDescription": "The percentage of rasterized quads subjected to early depth and stencil testing.",
+              "longDescription": "This expression defines the percentage of rasterized quads that are subjected to early depth and stencil testing.\nTo achieve the best early test rates, enable depth testing, and avoid draw calls with modifiable coverage or draw calls with fragment shader programs that write to their depth value.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 218
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 216
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Early ZS test rate"
+            },
+            {
+              "id": 65580,
+              "kind": "derived",
+              "machineName": "MaliFragEZSKillRate",
+              "humanName": "Early ZS killed quad percentage",
+              "unit": "percent",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The percentage of rasterized quads that are killed by early depth and stencil testing.",
+              "longDescription": "This expression defines the percentage of rasterized quads that are killed by early depth and stencil testing.\nQuads killed at this stage are killed before shading, so a high percentage here is not generally a performance problem. However, it can indicate an opportunity to use software culling techniques such as portal culling to avoid sending occluded geometry to the GPU.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 220
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 216
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Early ZS kill rate"
+            },
+            {
+              "id": 65583,
+              "kind": "derived",
+              "machineName": "MaliFragLZSTestRate",
+              "humanName": "Late ZS tested thread percentage",
+              "unit": "percent",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The percentage of rasterized threads that are tested by late depth and stencil testing.",
+              "longDescription": "This expression defines the percentage of rasterized threads that are tested by late depth and stencil testing.\nA high percentage of fragments performing a late ZS update can cause slow performance, even if fragments are not killed. This occurs because younger fragments can not complete early ZS until all older fragments at the same coordinate complete their late ZS operations.\nShaders with mutable coverage, mutable depth, or side-effects on shared resources in memory, use late ZS testing.\nThe driver also generates late ZS updates to preload a depth or stencil attachment at the start of a render pass. This is needed if the render pass does not start from a cleared depth value.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 631
+                  },
+                  "right": {
+                    "operation": "multiply",
+                    "left": {
+                      "operation": "metric",
+                      "id": 216
+                    },
+                    "right": {
+                      "operation": "literal",
+                      "value": 4
+                    }
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Late ZS test rate"
+            },
+            {
+              "id": 65584,
+              "kind": "derived",
+              "machineName": "MaliFragLZSKillRate",
+              "humanName": "Late ZS killed thread percentage",
+              "unit": "percent",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The percentage of rasterized threads that are killed by late depth and stencil testing.",
+              "longDescription": "This expression defines the percentage of rasterized threads that are killed by late depth and stencil testing. Threads killed by late ZS testing run at least some of their fragment program before being killed. A significant number of threads being killed at late ZS testing indicates a potential overhead. Aim to minimize the number of threads using and being killed by late ZS testing.\nShaders with mutable coverage, mutable depth, or side-effects on shared resources in memory, use late ZS testing.\nThe driver also generates late ZS updates to preload a depth or stencil attachment at the start of a render pass. This is needed if the render pass does not start from a cleared depth value. These fragments show as a late ZS kill, as no shader is needed after the depth or stencil value has been set.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 632
+                  },
+                  "right": {
+                    "operation": "multiply",
+                    "left": {
+                      "operation": "metric",
+                      "id": 216
+                    },
+                    "right": {
+                      "operation": "literal",
+                      "value": 4
+                    }
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Late ZS kill rate"
+            }
+          ]
+        },
+        {
+          "name": "Fragment Workload Properties",
+          "longDescription": "This counter group shows properties of the fragment front-end workload that can identify specific application optimization opportunities.",
+          "metrics": [
+            {
+              "id": 628,
+              "kind": "derived",
+              "machineName": "MaliFragHelpThreadRate",
+              "humanName": "Fragment helper thread percentage",
+              "unit": "percent",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The percentage of fragment threads that are helper threads.",
+              "longDescription": "This expression defines the percentage of fragment threads that are helper threads with no coverage. A high percentage can indicate that the content has a high density of small triangles, which are expensive to process. To avoid this, use mesh level-of-detail algorithms to select simpler meshes as objects move further from the camera.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 65572
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 627
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Fragment helper thread rate"
+            },
+            {
+              "id": 65586,
+              "kind": "derived",
+              "machineName": "MaliFragTileKillRate",
+              "humanName": "Unchanged tile kill percentage",
+              "unit": "percent",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The percentage of tiles that are killed by transaction elimination.",
+              "longDescription": "This expression defines the percentage of tiles that are killed by the transaction elimination CRC check because the content of a tile matches the content already stored in memory.\nA high percentage of tile writes being killed indicates that a significant part of the framebuffer is static from frame to frame. Consider using scissor rectangles to reduce the area that is redrawn. To help manage the partial frame updates for window surfaces consider using the EGL extensions such as:\n* EGL_KHR_partial_update\n* EGL_EXT_swap_buffers_with_damage",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 224
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 223
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Unchanged tile kill rate"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Shader Core Programmable Core",
+      "longDescription": "The programmable core is responsible for executing shader programs. This generation of Arm GPUs is warp-based, scheduling multiple threads from the same program in lockstep to improve energy efficiency.\nThe programmable core is a massively multi-threaded core, allowing many concurrently resident warps, which provides a level of tolerance to cache misses and data fetch latency. For most applications, having more threads resident improves performance, as it increases the number of threads available for latency hiding, but it might decrease performance if the additional threads cause cache thrashing.\nThe core is built from multiple independent hardware units, which can process workloads from any of the resident threads simultaneously. The most heavily loaded unit sets the upper bound on performance, with the other units running in parallel with it.\nPerformance counters in this section show the overall utilization of the different hardware units, making it easier to identify the units that are likely to be on the critical path.",
+      "groups": [
+        {
+          "name": "Shader Core Unit Utilization",
+          "longDescription": "This counter group shows the use of each of the functional units inside the shader core, relative to their speed-of-light capability.\nThese units can run in parallel, and well-performing content can expect peak load to be above 80% utilization on the most heavily used units. In this scenario, reducing use of those units is likely to improve application performance.\nIf no unit is heavily loaded, it implies that the shader core is starving for work. This can be because not enough threads are getting spawned by the front-end, or because threads in the core are blocked on memory access. Other counters can help determine which of these situations is occurring.",
+          "metrics": [
+            {
+              "id": 65643,
+              "kind": "derived",
+              "machineName": "MaliALUUtil",
+              "humanName": "Arithmetic unit utilization",
+              "unit": "percent",
+              "trend": "higher_better",
+              "audience": "novice",
+              "shortDescription": "The percentage utilization of the arithmetic unit.",
+              "longDescription": "This expression defines the percentage utilization of the arithmetic unit in the programmable core.\nThe most effective technique for reducing arithmetic load is reducing the complexity of your shader programs. Using narrower 8 and 16-bit data types can also help, as it allows multiple operations to be processed in parallel.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 556
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 230
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Arithmetic unit utilization"
+            },
+            {
+              "id": 65646,
+              "kind": "derived",
+              "machineName": "MaliLSUtil",
+              "humanName": "Load/store unit utilization",
+              "unit": "percent",
+              "trend": "higher_better",
+              "audience": "novice",
+              "shortDescription": "The percentage utilization of the load/store unit.",
+              "longDescription": "This expression defines the percentage utilization of the load/store unit. The load/store unit is used for general-purpose memory accesses, including vertex attribute access, buffer access, work group shared memory access, and stack access. This unit also implements imageLoad/Store and atomic access functionality.\nFor traditional graphics content the most significant contributor to load/store usage is vertex data. Arm recommends simplifying mesh complexity, using fewer triangles, fewer vertices, and fewer bytes per vertex.\nShaders that spill to stack are also expensive, as any spilling is multiplied by the large number of parallel threads that are running. You can use the Mali Offline Compiler to check your shaders for spilling.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 65629
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 230
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Load/store unit utilization"
+            },
+            {
+              "id": 65644,
+              "kind": "derived",
+              "machineName": "MaliTexUtil",
+              "humanName": "Texture unit utilization",
+              "unit": "percent",
+              "trend": "higher_better",
+              "audience": "novice",
+              "shortDescription": "The percentage utilization of the texturing unit.",
+              "longDescription": "This expression defines the percentage utilization of the texturing unit.\nTexture unit performance can be impacted by multiple factors, including message bus bandwidth, texture cache bandwidth, and texture filtering usage. Other counters can show more specific information about why the texture unit is heavily utilized.",
+              "expression": {
+                "operation": "multiply",
+                "left": {
+                  "operation": "divide",
+                  "left": {
+                    "operation": "metric",
+                    "id": 457
+                  },
+                  "right": {
+                    "operation": "metric",
+                    "id": 230
+                  }
+                },
+                "right": {
+                  "operation": "literal",
+                  "value": 100
+                }
+              },
+              "layoutName": "Texture unit utilization"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Shader Core Workload",
+      "longDescription": "The programmable core runs the shader program threads that generate the desired application output.\nPerformance counters in this section show how the programmable core converts incoming work into the threads and warps running in the shader core, as well as other important properties of the running workload such as warp divergence.",
+      "groups": [
+        {
+          "name": "Shader Threads",
+          "longDescription": "This counter group shows the number of threads created, split by type. This can help you to understand the running workload mix.\nCounters in this group are derived by scaling quad or warp counters, and their counts include unused thread slots in the coarser granule.",
+          "metrics": [
+            {
+              "id": 65591,
+              "kind": "hardware",
+              "machineName": "MaliNonFragThread",
+              "humanName": "Non-fragment threads",
+              "unit": "threads",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of non-fragment threads started.",
+              "longDescription": "This expression defines the number of non-fragment threads started.",
+              "scaleMultiplier": 1,
+              "layoutName": "Non-fragment threads"
+            },
+            {
+              "id": 65572,
+              "kind": "hardware",
+              "machineName": "MaliFragThread",
+              "humanName": "Fragment threads",
+              "unit": "threads",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of fragment threads started.",
+              "longDescription": "This expression defines the number of fragment threads started.",
+              "scaleMultiplier": 1,
+              "layoutName": "Fragment threads"
+            },
+            {
+              "id": 627,
+              "kind": "hardware",
+              "machineName": "MaliFragHelpThread",
+              "humanName": "Fragment helper threads",
+              "unit": "threads",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of fragment helper threads started.",
+              "longDescription": "This expression defines the number of fragment helper threads started.\nThese threads correspond to fragment locations in a fragment quad that have no sample coverage, but which are needed for mipmap selection.",
+              "scaleMultiplier": 1,
+              "layoutName": "Fragment helper threads"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Shader Core Arithmetic Unit",
+      "longDescription": "The arithmetic unit in the shader core processes all the arithmetic and logic operations in the running shader programs.\nPerformance counters in this section show how the running programs use the arithmetic units, which may indicate the type of operations that are consuming the most performance.",
+      "groups": [
+        {
+          "name": "ALU Cycles",
+          "longDescription": "This counter group shows the number of cycles when work is issued to the arithmetic and logic unit.",
+          "metrics": [
+            {
+              "id": 556,
+              "kind": "derived",
+              "machineName": "MaliALUIssueCy",
+              "humanName": "Arithmetic unit issue cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of cycles when the arithmetic unit is busy.",
+              "longDescription": "This expression defines the number of cycles that the arithmetic unit is busy processing work.",
+              "expression": {
+                "operation": "metric",
+                "id": 234
+              },
+              "layoutName": "Arithmetic unit issues"
+            }
+          ]
+        },
+        {
+          "name": "ALU Instructions",
+          "longDescription": "This counter group gives a breakdown of the types of arithmetic instructions being used by the shader program.",
+          "metrics": [
+            {
+              "id": 234,
+              "kind": "hardware",
+              "machineName": "MaliEngInstr",
+              "humanName": "Arithmetic instruction issue cycles",
+              "unit": "instructions",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of instructions run per warp.",
+              "longDescription": "This counter increments for every instruction that the shader core processes per warp. All instructions are single cycle issue.",
+              "scaleMultiplier": 1,
+              "layoutName": "Executed instructions"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Shader Core Load/store Unit",
+      "longDescription": "The load/store unit in the shader core handles all generic read/write data access, including access to vertex attributes, buffers, images, workgroup local storage, and the program stack.\nPerformance counters in this section show a breakdown of load/store cache accesses, showing whether accesses use an entire cache line or only part of one.",
+      "groups": [
+        {
+          "name": "Load/Store Unit Cycles",
+          "longDescription": "This counter group shows the number of cycles when work is issued to the load/store unit.",
+          "metrics": [
+            {
+              "id": 65629,
+              "kind": "hardware",
+              "machineName": "MaliLSIssueCy",
+              "humanName": "Load/store unit issue cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The total number of load/store issue cycles.",
+              "longDescription": "This expression defines the total number of load/store cache access cycles. This counter ignores secondary effects such as cache misses, so provides the minimum possible cycle usage.",
+              "scaleMultiplier": 1,
+              "layoutName": "Load/store unit issues"
+            }
+          ]
+        },
+        {
+          "name": "Load/Store Unit Cache",
+          "longDescription": "This counter group shows the number of accesses made to the load/store unit data cache.",
+          "metrics": [
+            {
+              "id": 629,
+              "kind": "hardware",
+              "machineName": "MaliLSRdHitCy",
+              "humanName": "Load/store unit read hits",
+              "unit": "requests",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of load/store reads that hit in the cache.",
+              "longDescription": "This expression defines the number of load/store reads that hit in the cache.",
+              "scaleMultiplier": 1,
+              "layoutName": "Read hits"
+            },
+            {
+              "id": 630,
+              "kind": "hardware",
+              "machineName": "MaliLSWrHitCy",
+              "humanName": "Load/store unit write hits",
+              "unit": "requests",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of load/store writes that hit in the cache.",
+              "longDescription": "This expression defines the number of load/store writes that hit in the cache.",
+              "scaleMultiplier": 1,
+              "layoutName": "Write hits"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Shader Core Texture Unit",
+      "longDescription": "The texture unit in the shader core handles all read-only texture access and filtering.\nPerformance counters in this section show a breakdown of texturing operations and the use of sub-units inside the texturing hardware.",
+      "groups": [
+        {
+          "name": "Texture Unit Requests",
+          "longDescription": "This counter group shows the number of requests made to the texture unit.",
+          "metrics": [
+            {
+              "id": 248,
+              "kind": "hardware",
+              "machineName": "MaliTexInstr",
+              "humanName": "Texture unit instructions",
+              "unit": "requests",
+              "trend": "lower_better",
+              "audience": "advanced_application",
+              "shortDescription": "The number of thread-width texture operations processed.",
+              "longDescription": "This counter increments for every thread-width texture operation processed by the texture unit.",
+              "scaleMultiplier": 1,
+              "layoutName": "Texture requests"
+            },
+            {
+              "id": 65609,
+              "kind": "derived",
+              "machineName": "MaliTexSample",
+              "humanName": "Texture samples",
+              "unit": "requests",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of texture samples made.",
+              "longDescription": "This expression defines the number of texture samples made.",
+              "expression": {
+                "operation": "metric",
+                "id": 248
+              },
+              "layoutName": "Texture samples"
+            }
+          ]
+        },
+        {
+          "name": "Texture Unit Cycles",
+          "longDescription": "This counter group shows the number of cycles when work is issued to the sub-units inside the texture unit.",
+          "metrics": [
+            {
+              "id": 457,
+              "kind": "derived",
+              "machineName": "MaliTexIssueCy",
+              "humanName": "Texture unit issue cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of cycles when the texture unit is busy.",
+              "longDescription": "This expression measures the number of cycles the texture unit is busy processing work.",
+              "expression": {
+                "operation": "metric",
+                "id": 253
+              },
+              "layoutName": "Texture unit issues"
+            },
+            {
+              "id": 253,
+              "kind": "hardware",
+              "machineName": "MaliTexFiltIssueCy",
+              "humanName": "Texture unit filtering cycles",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The number of texture filtering issue cycles.",
+              "longDescription": "This counter increments for every texture filtering issue cycle. This GPU can do {{C::MaliTexSamplePerCy.equation}}x 2D bilinear texture samples per clock. More complex filtering operations are composed of multiple 2D bilinear samples, and take proportionally more filtering time to complete. The costs per sample are:\n* 2D bilinear filtering takes one cycle.\n* 2D trilinear filtering takes two cycles.\n* 3D bilinear filtering takes two cycles.\n* 3D trilinear filtering takes four cycles.\n* Sampling from multi-plane YUV takes one cycle per plane.",
+              "scaleMultiplier": 1,
+              "layoutName": "Filtering active"
+            }
+          ]
+        },
+        {
+          "name": "Texture Unit CPI",
+          "longDescription": "This counter group shows the average cost of texture samples.",
+          "metrics": [
+            {
+              "id": 65626,
+              "kind": "derived",
+              "machineName": "MaliTexCPI",
+              "humanName": "Texture filtering cycles per instruction",
+              "unit": "cycles",
+              "trend": "lower_better",
+              "audience": "novice",
+              "shortDescription": "The average number of texture filtering cycles per instruction.",
+              "longDescription": "This expression defines the average number of texture filtering cycles per instruction. For texture-limited content that has a CPI higher than the optimal throughout of this core ({{C::MaliTexSamplePerCy.equation}} samples per cycle), consider using simpler texture filters. See {{C::MaliTexIssueCy}} for details of the expected performance for different types of operation.",
+              "expression": {
+                "operation": "divide",
+                "left": {
+                  "operation": "metric",
+                  "id": 253
+                },
+                "right": {
+                  "operation": "metric",
+                  "id": 65609
+                }
+              },
+              "layoutName": "Filtering CPI"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Constants",
+      "longDescription": "Arm GPUs are configurable, with variable performance across products, and variable configurations across devices.\nThis section lists useful symbolic configuration and constant values that can be used in expressions to compute derived counters. Note that configuration values must be provided by a runtime tool that can query the actual implementation configuration of the target device.",
+      "groups": [
+        {
+          "name": "Implementation Configuration",
+          "longDescription": "This constants group contains symbolic constants that define the configuration of a particular device. These must be populated by the counter sampling runtime tooling.",
+          "metrics": [
+            {
+              "id": 65655,
+              "kind": "derived",
+              "machineName": "MaliConfigCoreCount",
+              "humanName": "Shader core count",
+              "unit": "instances",
+              "trend": "informative",
+              "audience": "novice",
+              "shortDescription": "The number of shader cores implemented in the design.",
+              "longDescription": "This configuration constant defines the number of shader cores in the design.",
+              "expression": {
+                "operation": "runtime-input",
+                "name": "MALI_CONFIG_SHADER_CORE_COUNT"
+              },
+              "layoutName": "Shader core count"
+            },
+            {
+              "id": 65654,
+              "kind": "derived",
+              "machineName": "MaliConfigL2CacheCount",
+              "humanName": "L2 cache slice count",
+              "unit": "instances",
+              "trend": "informative",
+              "audience": "novice",
+              "shortDescription": "The number of cache slices implemented in the design.",
+              "longDescription": "This configuration constant defines the number of L2 cache slices in the design.",
+              "expression": {
+                "operation": "runtime-input",
+                "name": "MALI_CONFIG_L2_CACHE_COUNT"
+              },
+              "layoutName": "L2 cache slice count"
+            },
+            {
+              "id": 65653,
+              "kind": "derived",
+              "machineName": "MaliConfigExtBusBeatSize",
+              "humanName": "External bus beat size",
+              "unit": "bytes",
+              "trend": "higher_better",
+              "audience": "novice",
+              "shortDescription": "The number of bytes transferred per external bus beat.",
+              "longDescription": "This configuration constant defines the number of bytes transferred per external bus beat.",
+              "expression": {
+                "operation": "runtime-input",
+                "name": "MALI_CONFIG_EXT_BUS_BYTE_SIZE"
+              },
+              "layoutName": "External bus beat size"
+            }
+          ]
+        },
+        {
+          "name": "Static Configuration",
+          "longDescription": "This constants group contains literal constants that define the static configuration and performance characteristics of this product.",
+          "metrics": [
+            {
+              "id": 65537,
+              "kind": "derived",
+              "machineName": "MaliFragQueueTaskSize",
+              "humanName": "Fragment queue task size",
+              "unit": "pixels",
+              "trend": "higher_better",
+              "audience": "advanced_application",
+              "shortDescription": "The number of pixels per fragment task.",
+              "longDescription": "This constant defines the number of pixels in each axis per fragment task.",
+              "expression": {
+                "operation": "literal",
+                "value": 16
+              },
+              "layoutName": "Fragment queue task size"
+            },
+            {
+              "id": 65647,
+              "kind": "derived",
+              "machineName": "MaliGPUTileSize",
+              "humanName": "Tile dimensions",
+              "unit": "pixels",
+              "trend": "higher_better",
+              "audience": "advanced_application",
+              "shortDescription": "The maximum size of a tile.",
+              "longDescription": "This constant defines the size of a tile.",
+              "expression": {
+                "operation": "literal",
+                "value": 16
+              },
+              "layoutName": "Tile size"
+            },
+            {
+              "id": 65656,
+              "kind": "derived",
+              "machineName": "MaliGPUMaxPixelStorage",
+              "humanName": "Tile storage per pixel",
+              "unit": "bits",
+              "trend": "higher_better",
+              "audience": "advanced_application",
+              "shortDescription": "The number of bits of color storage per pixel available at full tile size.",
+              "longDescription": "This constant defines the number of bits of color storage per pixel available when using a {{C::MaliGPUTileSize.equation}} x {{C::MaliGPUTileSize.equation}} tile size. If you use more storage than the available storage for multi-sampling, wide color formats, or multiple render targets, the driver dynamically reduces the tile size until sufficient storage is available.",
+              "expression": {
+                "operation": "literal",
+                "value": 128
+              },
+              "layoutName": "Tile storage/pixel"
+            },
+            {
+              "id": 65610,
+              "kind": "derived",
+              "machineName": "MaliTexSamplePerCy",
+              "humanName": "Texture samples per cycle",
+              "unit": "issues",
+              "trend": "higher_better",
+              "audience": "advanced_application",
+              "shortDescription": "The maximum number of texture samples per cycle.",
+              "longDescription": "This constant defines the maximum number of texture samples that can be made per cycle.",
+              "expression": {
+                "operation": "literal",
+                "value": 1
+              },
+              "layoutName": "Texture samples/cycle"
+            },
+            {
+              "id": 65611,
+              "kind": "derived",
+              "machineName": "MaliTexCyPerSample",
+              "humanName": "Texture cycles per sample",
+              "unit": "issues",
+              "trend": "higher_better",
+              "audience": "advanced_application",
+              "shortDescription": "The minimum number of cycles needed per texture sample.",
+              "longDescription": "This constant defines the minimum number of cycles needed to make a texture sample.",
+              "expression": {
+                "operation": "literal",
+                "value": 1
+              },
+              "layoutName": "Texture cycles/sample"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -72,9 +72,15 @@ func TestNeoprofAndroidProbe(t *testing.T) {
 			Type: deploymentsupport.RequirementTypeAlways,
 		},
 	})
-	for _, dependency := range androidDependencies {
-		require.NotEqual(t, "parquet-to-json", dependency.Name)
+	var converter *deploymentsupport.Dependency
+	for i := range androidDependencies {
+		if androidDependencies[i].Name == "parquet-to-json" {
+			converter = &androidDependencies[i]
+		}
 	}
+	require.NotNil(t, converter, "CPU timeline verification needs the Parquet helper")
+	require.Equal(t, deploymentsupport.DeploymentLocalityHost, converter.Locality)
+	require.Equal(t, deploymentsupport.RequirementTypeAlways, converter.RequiredWhen.Type)
 
 	newIntegration := func(t *testing.T, targetEngine, hostEngine *tool_mocks.MockEngineContext) tool.ToolIntegration {
 		t.Helper()
@@ -124,70 +130,122 @@ func TestNeoprofAndroidProbe(t *testing.T) {
 		}).Return(&process.CommandResult{Rc: 1}, nil).Once()
 	}
 
-	t.Run("uses the Android package and activity with host-side analysis", func(t *testing.T) {
-		targetEngine := &tool_mocks.MockEngineContext{}
-		hostEngine := &tool_mocks.MockEngineContext{}
-		targetEngine.On("Log", mock.Anything, mock.Anything).Return().Maybe()
-		targetEngine.On("GetPlatform").Return(androidPlatform).Once()
-		hostEngine.On("GetPlatform").Return(conductor.PlatformConfiguration{OS: conductor.Linux}).Once()
-		mockPerfCapableTarget(targetEngine)
-		integration := newIntegration(t, targetEngine, hostEngine)
+	for _, hostOS := range []conductor.OS{conductor.Linux, conductor.Win} {
+		t.Run(fmt.Sprintf("uses the Android package and activity with %s host-side analysis", hostOS), func(t *testing.T) {
+			targetEngine := &tool_mocks.MockEngineContext{}
+			hostEngine := &tool_mocks.MockEngineContext{}
+			targetEngine.On("Log", mock.Anything, mock.Anything).Return().Maybe()
+			targetEngine.On("GetPlatform").Return(androidPlatform).Once()
+			hostEngine.On("GetPlatform").Return(conductor.PlatformConfiguration{OS: hostOS}).Maybe()
+			mockPerfCapableTarget(targetEngine)
+			integration := newIntegration(t, targetEngine, hostEngine)
 
-		deployPath := "/data/local/tmp/ArmPerformix/tools/sl-record/" + slRecordVersion + "/bin/"
-		hostAnalyzePath := "/host/tools/sl-analyze/" + slAnalyzeVersion + "/bin/"
-		probeReportPath := deployPath + "probe_report.json"
-		for _, command := range [][]string{
-			{"run-as", "com.example.app", "/system/bin/true"},
-			{"stat", deployPath + "sl-record"},
-			{"touch", probeReportPath},
-			{"chmod", "644", probeReportPath},
-			{
-				deployPath + "sl-record",
-				"--probe-report", "-o", "platform_probe", "-r", "normal",
-				"--android-pkg", "com.example.app",
-				"--android-activity", "com.example.app.MainActivity",
-			},
-		} {
-			targetEngine.On("ExecCommand", &process.LaunchCommand{Command: command}).
+			deployPath := "/data/local/tmp/ArmPerformix/tools/sl-record/" + slRecordVersion + "/bin/"
+			hostAnalyzePath := "/host/tools/sl-analyze/" + slAnalyzeVersion + "/bin/"
+			probeReportPath := deployPath + "probe_report.json"
+			discoveryLogPath := deployPath + "gator-log.txt"
+			for _, command := range [][]string{
+				{"run-as", "com.example.app", "/system/bin/true"},
+				{"stat", deployPath + "sl-record"},
+				{"touch", probeReportPath},
+				{"chmod", "644", probeReportPath},
+				{
+					deployPath + "sl-record",
+					"--probe-report", "-o", "platform_probe", "-r", "normal",
+					"--android-pkg", "com.example.app",
+					"--android-activity", "com.example.app.MainActivity",
+				},
+			} {
+				targetEngine.On("ExecCommand", &process.LaunchCommand{Command: command}).
+					Return(&process.CommandResult{}, nil).Once()
+			}
+			targetEngine.On("ExecCommand", &process.LaunchCommand{Command: []string{"cat", probeReportPath}}).
+				Return(&process.CommandResult{Stdout: `{"supports_strobing":true,"supports_event_inherit":false,"advice":[{"severity":"warning","message":"Android probe warning"}]}`}, nil).Once()
+			hostAnalyzeExecutable := hostAnalyzePath + "sl-analyze"
+			if hostOS == conductor.Win {
+				hostAnalyzeExecutable += ".exe"
+				hostEngine.On("ExecCommand", &process.LaunchCommand{
+					Command:     []string{"powershell", "-NoProfile", "-Command", "if (Test-Path -LiteralPath $env:APX_TEST_PATH) { exit 0 } else { exit 1 }"},
+					Environment: map[string]string{"APX_TEST_PATH": hostAnalyzeExecutable},
+				}).Return(&process.CommandResult{}, nil).Once()
+			} else {
+				hostEngine.On("ExecCommand", &process.LaunchCommand{Command: []string{"stat", hostAnalyzeExecutable}}).
+					Return(&process.CommandResult{}, nil).Once()
+			}
+			hostEngine.On("ExecCommand", &process.LaunchCommand{Command: []string{hostAnalyzeExecutable, "--help"}}).
 				Return(&process.CommandResult{}, nil).Once()
-		}
-		targetEngine.On("ExecCommand", &process.LaunchCommand{Command: []string{"cat", probeReportPath}}).
-			Return(&process.CommandResult{Stdout: `{"supports_strobing":true,"supports_event_inherit":false,"advice":[{"severity":"warning","message":"Android probe warning"}]}`}, nil).Once()
-		hostEngine.On("ExecCommand", &process.LaunchCommand{Command: []string{"stat", hostAnalyzePath + "sl-analyze"}}).
-			Return(&process.CommandResult{}, nil).Once()
-		hostEngine.On("ExecCommand", &process.LaunchCommand{Command: []string{hostAnalyzePath + "sl-analyze", "--help"}}).
-			Return(&process.CommandResult{}, nil).Once()
+			for _, command := range [][]string{
+				{"touch", discoveryLogPath},
+				{"chmod", "644", discoveryLogPath},
+			} {
+				targetEngine.On("ExecCommand", &process.LaunchCommand{Command: command}).
+					Return(&process.CommandResult{}, nil).Once()
+			}
+			for name, text := range map[string]string{
+				"counters.xml": `<counters><counter name="ARMv9_ccnt"/><cluster id="0" name="ARMv9"/><cpu id="0" cluster="0"/></counters>`,
+				"events.xml":   `<events><category per_cpu="yes" counter_set="ARMv9_cnt"><event counter="ARMv9_ccnt" event="0x11" units="cycles"/></category></events>`,
+			} {
+				handle := &tool_mocks.MockProcessHandle{}
+				handle.On("Stdout").Return(bytes.NewBufferString(text)).Once()
+				handle.On("Stderr").Return(bytes.NewBufferString("")).Once()
+				handle.On("Wait").Return(0, nil).Once()
+				targetEngine.On("StartProcess", &process.StartProcess{
+					LaunchCommand: process.LaunchCommand{Command: []string{deployPath + "sl-record", "--print", name}},
+					Ctx:           context.Background(),
+					Stdout:        process.StreamRedirect{Mode: process.Stream},
+					Stderr:        process.StreamRedirect{Mode: process.Stream},
+				}).Return(handle, nil).Once()
+				t.Cleanup(func() { handle.AssertExpectations(t) })
+			}
 
-		cleanup, err := integration.StartRuntime()
-		require.NoError(t, err)
-		defer cleanup()
+			cleanup, err := integration.StartRuntime()
+			require.NoError(t, err)
+			defer cleanup()
 
-		result, err := integration.Probe()
-		require.NoError(t, err)
-		assert.Equal(t, tool.ProbeResult{
-			Available: true,
-			Capabilities: map[string]any{
-				"platform": map[string]any{
-					"componentType": map[string]any{
-						"name":    "tool_capabilities/neoprof_platform",
-						"version": "1.0",
+			result, err := integration.Probe()
+			require.NoError(t, err)
+			assert.Equal(t, tool.ProbeResult{
+				Available: true,
+				Capabilities: map[string]any{
+					"counter.cpu_cycles": map[string]any{
+						"componentType": map[string]any{
+							"name":    "tool_capabilities/cpu_counter",
+							"version": "1.0",
+						},
+						"state": "available",
+						"payload": map[string]any{
+							"title":    "CPU Cycles",
+							"units":    "cycles",
+							"bindings": []any{},
+						},
 					},
-					"state": "available",
-					"payload": map[string]any{
-						"supports_event_inherit": false,
-						"supports_strobing":      true,
+					"neoprof_cpu_counter_catalogue": map[string]any{
+						"counters": `<counters><counter name="ARMv9_ccnt"/><cluster id="0" name="ARMv9"/><cpu id="0" cluster="0"/></counters>`,
+						"events":   `<events><category per_cpu="yes" counter_set="ARMv9_cnt"><event counter="ARMv9_ccnt" event="0x11" units="cycles"/></category></events>`,
+					},
+					"platform": map[string]any{
+						"componentType": map[string]any{
+							"name":    "tool_capabilities/neoprof_platform",
+							"version": "1.0",
+						},
+						"state": "available",
+						"payload": map[string]any{
+							"supports_event_inherit": false,
+							"supports_strobing":      true,
+						},
 					},
 				},
-			},
-			Advice: []tool.ProbeAdvice{{
-				Level:       "warning",
-				MessageCode: "engine.recipeparser.js_recipe_stage.READINESS_MESSAGE",
-				Metadata:    map[string]string{"message": "Android probe warning"},
-			}},
-		}, result)
-		targetEngine.AssertExpectations(t)
-		hostEngine.AssertExpectations(t)
-	})
+				Advice: []tool.ProbeAdvice{{
+					Level:       "warning",
+					MessageCode: "engine.recipeparser.js_recipe_stage.READINESS_MESSAGE",
+					Metadata:    map[string]string{"message": "Android probe warning"},
+				}},
+			}, result)
+			targetEngine.AssertExpectations(t)
+			hostEngine.AssertExpectations(t)
+		})
+
+	}
 
 	t.Run("prepares the capture log without invoking bash", func(t *testing.T) {
 		targetEngine := &tool_mocks.MockEngineContext{}
@@ -278,7 +336,21 @@ func TestNeoprofAndroidProbe(t *testing.T) {
 		result, err := integration.Probe()
 		require.NoError(t, err)
 		assert.Equal(t, tool.ProbeResult{
-			Capabilities: map[string]any{},
+			Capabilities: map[string]any{
+				"counter.cpu_cycles": map[string]any{
+					"componentType": map[string]any{
+						"name":    "tool_capabilities/cpu_counter",
+						"version": "1.0",
+					},
+					"state": "unavailable",
+					"payload": map[string]any{
+						"title":    "CPU Cycles",
+						"units":    "cycles",
+						"bindings": []any{},
+						"reason":   "not_supported",
+					},
+				},
+			},
 			Advice: []tool.ProbeAdvice{{
 				Level:       "error",
 				MessageCode: "tool_integrations.neoprof.ANDROID_PACKAGE_NOT_DEBUGGABLE",
@@ -397,7 +469,7 @@ func TestNeoprofBuildAnalyzeArgsForSysUtilWorkflow(t *testing.T) {
 	}, args.Export())
 }
 
-func TestNeoprofBuildAnalyzeArgsRetainsCodeAnalysisForOtherWorkflows(t *testing.T) {
+func TestNeoprofBuildAnalyzeArgsDoesNotEnableTimelineForCPURequest(t *testing.T) {
 	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
 	data, err := os.ReadFile(toolPath)
 	require.NoError(t, err)
@@ -417,6 +489,10 @@ func TestNeoprofBuildAnalyzeArgsRetainsCodeAnalysisForOtherWorkflows(t *testing.
 	ctx := vm.NewObject()
 	require.NoError(t, ctx.Set("params", map[string]any{}))
 	require.NoError(t, ctx.Set("workload", map[string]any{"type": "launch"}))
+	require.NoError(t, ctx.Set("capabilityRequest", map[string]any{
+		"required": []string{"counter.cpu_cycles"},
+		"optional": []string{},
+	}))
 	options := map[string]any{
 		"slAnalyzePath":    "/tools/sl-analyze",
 		"outputDirectory":  "/output",
@@ -1060,6 +1136,94 @@ tool.run = async (engine, ctx) => {
 	assert.Equal(t, message.MessageCode("tool_integrations.neoprof.ANDROID_PACKAGE_NOT_DEBUGGABLE"), msgErr.Code())
 	assert.Equal(t, "com.example.app", msgErr.Metadata()["package"])
 }
+func TestNeoprofReportsMissingJarFileWhenNoSamplesAreCollected(t *testing.T) {
+	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+
+	data = append(data, []byte(`
+tool.run = async (engine, ctx) => {
+	await checkToolFailureFromRun(
+		engine,
+		ctx,
+		"capture-stderr",
+		"capture-stdout",
+		0,
+		"sl-record",
+	);
+	await checkToolFailureFromRun(
+		engine,
+		ctx,
+		"analysis-stderr",
+		null,
+		0,
+		"sl-analyze",
+	);
+};
+`)...)
+	sts, err := LoadFromSource(string(data), toolPath)
+	require.NoError(t, err)
+
+	engine := &tool_mocks.MockEngineContext{}
+	engine.On("ReadHostFile", "capture-stderr").
+		Return("ERROR: Command exited with code 1", nil).Once()
+	engine.On("ReadHostFile", "capture-stdout").
+		Return("Error: Unable to access jarfile example_file.jar", nil).Once()
+	engine.On("ReadHostFile", "analysis-stderr").
+		Return("Skipping symbols.json export because backtrace report is empty", nil).Once()
+	engine.On(
+		"WriteUserMessage",
+		"warn",
+		"Workload exit context: Error: Unable to access jarfile example_file.jar",
+	).Return().Once()
+	engine.On("WriteUserMessage", "warn", "Workload exit code: 1").Return().Once()
+
+	ti, err := sts.NewIntegration(integrationContext(engine, &tool.IntegrationContext{}))
+	require.NoError(t, err)
+
+	ti.(*GojaToolInstance).asyncHelper.StartLoop()
+	err = ti.Run()
+	ti.(*GojaToolInstance).asyncHelper.StopLoop()
+
+	require.Error(t, err)
+	var msgErr *message.MessageImpl
+	require.ErrorAs(t, err, &msgErr)
+	assert.Equal(t, message.MessageCode("tool_integrations.neoprof.NO_SAMPLES_COLLECTED_JAVA_JAR_FILE_NOT_FOUND"), msgErr.Code())
+	assert.Equal(t, "example_file.jar", msgErr.Metadata()["jarFile"])
+	engine.AssertExpectations(t)
+}
+
+func TestNeoprofReportsNoSamplesWhenNoJarFileErrorWasReported(t *testing.T) {
+	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+
+	data = append(data, []byte(`
+tool.run = async (engine, ctx) => {
+	await checkAndThrowNeoprofError(
+		engine,
+		ctx,
+		0,
+		"Skipping symbols.json export because backtrace report is empty",
+		"sl-analyze",
+	);
+};
+`)...)
+	sts, err := LoadFromSource(string(data), toolPath)
+	require.NoError(t, err)
+
+	ti, err := sts.NewIntegration(integrationContext(&tool_mocks.MockEngineContext{}, &tool.IntegrationContext{}))
+	require.NoError(t, err)
+
+	ti.(*GojaToolInstance).asyncHelper.StartLoop()
+	err = ti.Run()
+	ti.(*GojaToolInstance).asyncHelper.StopLoop()
+
+	require.Error(t, err)
+	var msgErr *message.MessageImpl
+	require.ErrorAs(t, err, &msgErr)
+	assert.Equal(t, message.MessageCode("tool_integrations.neoprof.NO_SAMPLES_COLLECTED"), msgErr.Code())
+}
 
 func TestNeoprofReportsWorkloadExitSignalAtSupportedLogLevels(t *testing.T) {
 	toolPath := filepath.Clean(filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js"))
@@ -1112,4 +1276,54 @@ tool.run = async (engine, ctx) => {
 			engine.AssertExpectations(t)
 		})
 	}
+}
+
+func TestNeoprofSysUtilReformatOnTarget(t *testing.T) {
+	toolPath := filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js")
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+	data = append(data, []byte(`
+const reformat = tool.reformat;
+let analysisArgs, analysisPrivileged;
+runSlAnalyze = async (engine, ctx, args, options) => {
+  analysisArgs = args;
+  analysisPrivileged = options.asPrivileged;
+};
+tool.run = async () => {
+  const capabilities = [], reads = [];
+  const engine = {
+    toolsRoot: () => '/tools', getPlatform: () => ({OS: 'Linux'}),
+    getLocality: () => 'target', mkDir: async () => {}, log: () => {},
+    startProgressTracker: () => {}, endProgress: () => {},
+    isNeoprofTimelineEnabled: () => false, isFullCaptureSupportEnabled: () => false,
+    addToolCapability: async (id, type, value) => capabilities.push(value),
+    execCommand: async (args, options) => {
+      if (args[0] === 'cat') {
+        reads.push([args[1], options.asPrivileged]);
+        return {rc: 0, stderr: '', stdout: JSON.stringify({counter_groups: [{key_type: 8, counters: [{
+          id: 1, title: 'Proc Stat CPU Per-core', name: 'Utilization', description: 'CPU use',
+          units: '%', counter_class: 'absolute'
+        }]}]})};
+      }
+      return {rc: 0, stdout: '', stderr: ''};
+    },
+  };
+  const ctx = {workload: {type: 'systemWide'}, params: {
+    mode: 'samples', workflow: 'sys_util', reformat_on_host: false, timeline_device_numbers: '[0,3]'
+  }, metadata: {captureDirectory: '/capture/capture.apc', analysisDirectory: '/capture/analysis', neoprofAsPrivileged: true}};
+  await reformat(engine, ctx);
+  if (!analysisPrivileged) throw new Error('Target analysis must use privilege');
+  if (!analysisArgs.includes('/capture/capture.apc') || !analysisArgs.includes('/capture/analysis')) throw new Error('Wrong target paths');
+  if (JSON.stringify(reads) !== JSON.stringify([['/capture/capture.apc/report-new/apx/metadata/counter_series_metadata.json', true]])) throw new Error('Metadata must be read on the target with privilege');
+  if (capabilities.length !== 1 || JSON.stringify(capabilities[0].payload.device_numbers) !== '[0,3]') throw new Error('Missing per-core capability metadata');
+};
+`)...)
+	sts, err := LoadFromSource(string(data), toolPath)
+	require.NoError(t, err)
+	ti, err := sts.NewIntegration(integrationContext(&tool.AgentEngine{}, nil))
+	require.NoError(t, err)
+	cleanup, err := ti.StartRuntime()
+	require.NoError(t, err)
+	defer cleanup()
+	require.NoError(t, ti.Run())
 }

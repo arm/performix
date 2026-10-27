@@ -41,10 +41,8 @@ The `apx` binary must be built before running the tests. See root-level [README.
 
 ## Running the tests
 
-The recommended way to run the Robot tests is via `task core:test:robot` from
-the repository root, or alternatively `make robot-test` from the `apap-cli`
-directory. Both methods handle virtual environment setup and dependency
-installation automatically.
+Prepare the Core dependencies with `task core:deps`, then run the Robot tests
+via `task core:test:robot` from the repository root.
 
 ### Testing MCP clients
 
@@ -102,7 +100,7 @@ Real-mode cases are skipped when the client is absent or its configuration
 cannot be isolated safely on the host. Mock mode is the deterministic mode for
 normal CI.
 
-### Using `task core:test:robot` (recommended)
+### Using `task core:test:robot`
 
 The `TARGET` argument is mandatory and must match the name of a config file in `robot/resources/files/targets/`:
 
@@ -110,6 +108,36 @@ The `TARGET` argument is mandatory and must match the name of a config file in `
 # Run all tests against a target
 task core:test:robot TARGET=my_device
 ```
+
+### Pre-recorded runs
+
+Some suites import pre-recorded runs by default, using the same target OS,
+architecture, workload and profiling settings as live capture.
+
+CI, `task core:test:robot` and `make robot-test` download missing pre-recorded
+runs and metadata to `robot/resources/files/prerecorded-runs`.
+Set `ARTIFACTORY_API_TOKEN` for local downloads.
+
+Downloads follow the selected target, suites and tag filters. A selected suite
+still needs all runs imported by its setup, even if only some tests run.
+Suites that only capture live runs need no downloads. Tests fail if a required
+run is missing or its metadata does not match the expected settings.
+
+Use `--live-recipe-runs` to capture fresh runs for debugging or testing recipe
+changes. Linux uses `dd if=/dev/zero of=/dev/null bs=1M count=102400`;
+Windows on Arm uses `python -c 10**10**10`. Add `--launch-workload` in live mode
+to use a custom workload, for example:
+
+```shell
+task core:test:robot TARGET=my_device \
+  ROBOT_ARGS="--live-recipe-runs --launch-workload /path/to/workload --test-suite robot/tests/render"
+```
+
+Replace `/path/to/workload` with the executable's path on the target machine.
+
+Regenerate pre-recorded runs using the manual `AI Insights Pre-record Run`
+workflow with `robot` selected whenever a test's recipe, recipe parameters,
+workload or expected run data changes.
 
 To exclude specific tags, use `ROBOT_ARGS`:
 
@@ -121,29 +149,17 @@ task core:test:robot TARGET=my_device ROBOT_ARGS="--exclude-tags cpu_microarchit
 task core:test:robot TARGET=my_device ROBOT_ARGS="--exclude-tags cpu_microarchitecture --exclude-tags instruction_mix"
 ```
 
-Tests tagged `remote-localhost` will be skipped by default, because they require the CLI to be built and deployed on the remote target first and this takes a little extra time to set up. Pass `--run-remote-localhost` to enable automatic remote localhost setup and include those tests:
+Tests tagged `remote-localhost` will be skipped by default, because they require
+the CLI to be built and deployed on the remote target first and this takes a
+little extra time to set up. Remote-localhost setup supports Linux Arm64 targets
+only. Pass `--run-remote-localhost` to enable automatic remote localhost setup
+and include those tests:
 
 ```shell
 task core:test:robot TARGET=my_device ROBOT_ARGS="--run-remote-localhost --launch-workload /path/to/workload"
 ```
 
-### Using `make robot-test` (alternative)
-
-Run from the `apap-cli` directory. `TARGET` is mandatory and must match the name of a config file in `robot/resources/files/targets/`:
-
-```shell
-# Run all tests against a target (from the apap-cli directory)
-make robot-test TARGET=my_device
-```
-
-To exclude specific tags or enable `remote-localhost` tests, use `ROBOT_ARGS` in the same way as shown above for `task core:test:robot`:
-
-```shell
-make robot-test TARGET=my_device ROBOT_ARGS="--exclude-tags cpu_microarchitecture"
-make robot-test TARGET=my_device ROBOT_ARGS="--run-remote-localhost --launch-workload /path/to/workload"
-```
-
-For the full list of supported arguments, run:
+For the full list of supported arguments, run from the `core` directory:
 
 ```shell
 python3 scripts/run-robot.py --help
@@ -151,7 +167,7 @@ python3 scripts/run-robot.py --help
 
 ### Running `robot` directly
 
-If you need to invoke `robot` directly (e.g. for dry runs or targeting a single suite), you will need a Python virtual environment with `robot/requirements.txt` installed. You can reuse the one created automatically by `make robot-test` (`env/` on Unix-like hosts, or the applicable platform-specific `env-*` directory on Windows), or create your own:
+If you need to invoke `robot` directly (e.g. for dry runs or targeting a single suite), you will need a Python virtual environment with `robot/requirements.txt` installed. You can reuse the one created by `task core:deps`, or create your own:
 
 ```shell
 python3 -m venv path/to/venv
@@ -165,7 +181,7 @@ The target is passed as a Robot variable:
 robot -T --outputdir robot/results --exclude disabled --variable TARGET:<name> robot/tests
 ```
 
-Note that `remote-localhost`-tagged tests will be skipped automatically if the remote localhost setup has not been performed (i.e. `apx` is not present on the target at `/tmp/apx-remote-localhost/repo/core/apap-cli/apx`). Use `task core:test:robot` or `make robot-test` with `--run-remote-localhost` to perform that setup.
+Note that `remote-localhost`-tagged tests will be skipped automatically if the remote localhost setup has not been performed (i.e. `apx` is not present on the target at `/tmp/apx-remote-localhost/repo/core/apap-cli/apx`). Use `task core:test:robot` with `--run-remote-localhost` to perform that setup.
 
 #### Example commands
 
@@ -181,7 +197,7 @@ Note that `remote-localhost`-tagged tests will be skipped automatically if the r
 
 ## Continuous integration sharding
 
-The extended validation workflow runs independent parts of the Robot suite in parallel. Sharding is CI orchestration only; local `task core:test:robot` and `make robot-test` invocations remain single Robot runs unless you select suites or tags explicitly.
+The extended validation workflow runs independent parts of the Robot suite in parallel. Sharding is CI orchestration only; local `task core:test:robot` invocations remain single Robot runs unless you select suites or tags explicitly.
 
 The main [Robot Framework workflow](../../.github/workflows/robot-framework.yaml) uses two partition shapes to balance run times. Both shapes cover all eligible ordinary tests:
 
@@ -225,8 +241,6 @@ GITHUB_TOKEN=<token> task core:test:robot TARGET=my_device ROBOT_ARGS="--prepare
 GITHUB_TOKEN=<token> task core:test:robot TARGET=my_device \
     ROBOT_ARGS="--prepare-workloads netbench,simple-java-work,javabench"
 
-# Using make (from the apap-cli directory)
-GITHUB_TOKEN=<token> make robot-test TARGET=my_device ROBOT_ARGS="--prepare-workloads"
 ```
 
 ### Manual workload setup (alternative)

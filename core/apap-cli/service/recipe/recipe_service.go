@@ -9,6 +9,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jedib0t/go-pretty/v6/progress"
@@ -27,7 +28,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type RunResponse struct {
@@ -35,6 +36,7 @@ type RunResponse struct {
 	Progress                     int              `json:"progress"`
 	RunID                        *apapproto.RunId `json:"run_id"`
 	BackgroundTransfersRemaining bool             `json:"background_transfers_remaining"`
+	EstimatedRemainingSeconds    *uint64          `json:"estimated_remaining_seconds,omitempty"`
 }
 
 type ParsedRecipe struct {
@@ -42,6 +44,8 @@ type ParsedRecipe struct {
 	Recipe   engine_recipe.Recipe
 	Error    error
 }
+
+const runMetadataRefreshTimeout = time.Second
 
 type Runner interface {
 	SendRecipeRunToEngine(client apapproto.ApapClient, recipeInfo *engine_recipe.Recipe, recipeCtx *RecipeExecutionCtx, out io.Writer) (RunResponse, error)
@@ -180,10 +184,15 @@ func ParseInputParameters(cliParams []string) (map[string]*structpb.Value, error
 	return recipeParams, nil
 }
 
-// RecipeServiceStdinHandler is called back via the service/cli_interrupt.go when it
-// handles something on STDIN. This function responds to 'q' and 's' to send the appropriate
-// quit/cancel or stop message to the engine
-func RecipeServiceStdinHandler(client apapproto.ApapClient, command service.RecipeCommand, runID run.RunID) {
+// RecipeServiceStdinHandler is called back by the recipe command manager for stdin and Ctrl-C commands.
+// Stop is ignored only when the active run explicitly does not support it; Cancel is always available.
+func RecipeServiceStdinHandler(client apapproto.ApapClient, command service.RecipeCommand, runID run.RunID, supportsStop *atomic.Bool) {
+	if command == service.STOP {
+		if !supportsStop.Load() {
+			return
+		}
+	}
+
 	// Build the correct cancel / stop proto message
 	var recipeCommandRunID = &apapproto.RunId{Value: runID.Value}
 	switch command {
@@ -202,6 +211,26 @@ func RecipeServiceStdinHandler(client apapproto.ApapClient, command service.Reci
 			return
 		}
 	}
+}
+
+// refreshRunStopSupport updates the interrupt behavior after the engine has persisted a Stop-support metadata change.
+// An absent value retains the legacy behavior of allowing Stop.
+func refreshRunStopSupport(client apapproto.ApapClient, runID *apapproto.RunId, supportsStop *atomic.Bool) {
+	if runID == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), runMetadataRefreshTimeout)
+	defer cancel()
+	description, err := client.GetRunDescription(ctx, &apapproto.GetRunDescriptionRequest{Id: runID})
+	if err != nil {
+		return
+	}
+	metadata := description.GetMetadata()
+	if metadata == nil || metadata.SupportsStop == nil {
+		return
+	}
+	supportsStop.Store(*metadata.SupportsStop)
 }
 
 func (s RecipeRunner) SendRecipeRunToEngine(client apapproto.ApapClient, recipeInfo *engine_recipe.Recipe, recipeCtx *RecipeExecutionCtx, out io.Writer) (RunResponse, error) {
@@ -513,6 +542,30 @@ func ProcessRunRecipe(
 	return runErr
 }
 
+// formatStageProgressMessage formats the engine ETA without calculating a local estimate.
+func formatStageProgressMessage(stage *apapproto.StageProgress) string {
+	parts := []string{}
+	if message := strings.TrimSpace(stage.GetMessage()); message != "" {
+		parts = append(parts, message)
+	}
+	if seconds := stage.EstimatedRemainingSeconds; seconds != nil && *seconds > 0 {
+		parts = append(parts, "~"+formatETASeconds(*seconds)+" remaining")
+	}
+	if len(parts) == 0 {
+		return stage.StageName
+	}
+	return stage.StageName + " (" + strings.Join(parts, "; ") + ")"
+}
+
+func formatETASeconds(seconds uint64) string {
+	// Limit seconds so converting to time.Duration cannot overflow.
+	const maxSeconds = uint64((1<<63 - 1) / time.Second)
+	if seconds > maxSeconds {
+		seconds = maxSeconds
+	}
+	return (time.Duration(seconds) * time.Second).String()
+}
+
 func buildPrettyProgressWriter() progress.Writer {
 	progressWriter := progress.NewWriter()
 	progressWriter.SetAutoStop(false)
@@ -522,7 +575,9 @@ func buildPrettyProgressWriter() progress.Writer {
 	progressWriter.SetTrackerPosition(progress.PositionRight)
 	progressWriter.Style().Visibility.TrackerOverall = false
 	progressWriter.Style().Visibility.Value = false
-	progressWriter.Style().Visibility.ETA = true
+	// go-pretty cannot render an externally supplied ETA in its trailing stats.
+	// Display the engine estimate in the message instead of calculating a local ETA.
+	progressWriter.Style().Visibility.ETA = false
 	progressWriter.Style().Options.TimeOverallPrecision = time.Millisecond
 	progressWriter.Style().Options.TimeDonePrecision = time.Millisecond
 	progressWriter.Style().Options.TimeInProgressPrecision = time.Millisecond
@@ -554,6 +609,7 @@ func completeStageTracker(stageName string, trackers map[string]*progress.Tracke
 	}
 
 	// TODO - Allow for non-binary processes to be incremented here
+	tracker.UpdateMessage(stageName)
 	tracker.MarkAsDone()
 }
 
@@ -563,6 +619,7 @@ func markStageTrackerError(stageName string, trackers map[string]*progress.Track
 		return
 	}
 
+	tracker.UpdateMessage(stageName)
 	tracker.MarkAsErrored()
 }
 
@@ -586,6 +643,8 @@ func streamProgressResponses(recipeClient apapproto.Apap_RecipeIssueCommandClien
 
 	var runResponse RunResponse
 	stageTrackers := make(map[string]*progress.Tracker)
+	var supportsStop atomic.Bool
+	supportsStop.Store(true)
 
 	// TODO - implement a timeout on the gRPC calls so it doesn't hang forever
 	for {
@@ -602,9 +661,14 @@ func streamProgressResponses(recipeClient apapproto.Apap_RecipeIssueCommandClien
 		case *apapproto.RecipeResponse_RecipeStart:
 			runResponse = RunResponse{Stage: fmt.Sprintf("Recipe started: %s %v", recipeName, recipeResponse.Id), Progress: 0, RunID: recipeResponse.Id}
 			f := func(client apapproto.ApapClient, command service.RecipeCommand) {
-				RecipeServiceStdinHandler(client, command, run.RunID{Value: recipeResponse.Id.Value})
+				RecipeServiceStdinHandler(client, command, run.RunID{Value: recipeResponse.Id.Value}, &supportsStop)
 			}
 			service.RegisterCallback(f, client)
+		case *apapproto.RecipeResponse_RunMetadataChanged:
+			if event.RunMetadataChanged.GetReason() == apapproto.RunMetadataChangeReason_RUN_METADATA_CHANGE_REASON_STOP_SUPPORT {
+				refreshRunStopSupport(client, recipeResponse.Id, &supportsStop)
+			}
+			continue
 
 		case *apapproto.RecipeResponse_RecipeFinish:
 			if event.RecipeFinish.ReturnCode != apapproto.StatusCode_SUCCESS {
@@ -615,7 +679,8 @@ func streamProgressResponses(recipeClient apapproto.Apap_RecipeIssueCommandClien
 			}
 			backgroundTransfersRemaining := event.RecipeFinish.GetBackgroundTransfersRemaining()
 			if backgroundTransfersRemaining {
-				for _, tracker := range stageTrackers {
+				for stageName, tracker := range stageTrackers {
+					tracker.UpdateMessage(stageName)
 					tracker.MarkAsDone()
 				}
 				if !jsonOut {
@@ -651,12 +716,10 @@ func streamProgressResponses(recipeClient apapproto.Apap_RecipeIssueCommandClien
 			if exists {
 				tracker.Units = progress.UnitsBytes
 				tracker.UpdateTotal(event.StageProgress.Max * 1024)
+				tracker.UpdateMessage(formatStageProgressMessage(event.StageProgress))
 				tracker.SetValue(event.StageProgress.Count * 1024)
-				if event.StageProgress.Message != nil && *event.StageProgress.Message != "" {
-					tracker.Message = event.StageProgress.StageName + " (" + *event.StageProgress.Message + ")"
-				}
 				progress := int(float32(event.StageProgress.Count) / float32(event.StageProgress.Max) * 100)
-				runResponse = RunResponse{Stage: event.StageProgress.StageName, Progress: progress, RunID: recipeResponse.Id}
+				runResponse = RunResponse{Stage: event.StageProgress.StageName, Progress: progress, RunID: recipeResponse.Id, EstimatedRemainingSeconds: event.StageProgress.EstimatedRemainingSeconds}
 			}
 		default:
 			runResponse = RunResponse{Stage: "invalid message", Progress: 100, RunID: recipeResponse.Id}

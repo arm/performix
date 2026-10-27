@@ -10,6 +10,7 @@ const {
   posixTestWorkload,
   resolveWorkloadPath,
   buildToolBundlePath,
+  assertWorkloadWorkingDirectory,
 } = require('./utils');
 const { getExecutableFromWorkload } = require('./workload');
 
@@ -105,6 +106,7 @@ let tool = {
           metadata: {},
         });
       } else {
+        await assertWorkloadWorkingDirectory(engine, ctx.workload);
         let err = await probeObjdump(engine, ctx.workload);
         if (err.level !== 'ready') advice.push(err);
       }
@@ -131,6 +133,7 @@ let tool = {
         metadata: {},
       };
     } else {
+      await assertWorkloadWorkingDirectory(engine, ctx.workload);
       let err = await probeObjdump(engine, ctx.workload);
       if (err.level === 'error')
         throw {

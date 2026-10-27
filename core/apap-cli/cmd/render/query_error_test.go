@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	clientmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	clientmocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func TestHandleResponses_CreatorError(t *testing.T) {

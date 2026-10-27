@@ -3,13 +3,13 @@
 
 module github.com/Arm-Debug/apap-cli/atperf-compatibility
 
-go 1.27.0
+go 1.27.2
 
 replace (
 	github.com/Arm-Debug/apap-cli/apap-engine => ../apap-engine
+	github.com/Arm-Debug/apap-cli/api => ../api
 	github.com/Arm-Debug/apap-cli/atperf-agent => ../atperf-agent
 	github.com/Arm-Debug/apap-cli/atperf-version => ../atperf-version
-	github.com/Arm-Debug/apap-cli/clients/go => ../clients/go
 )
 
 require (

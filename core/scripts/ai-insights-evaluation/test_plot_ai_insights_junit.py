@@ -31,12 +31,17 @@ def write_junit(
     *,
     omit: tuple[str, str] | None = None,
     attempts: int = 1,
+    include_mcp_rounds: bool = True,
 ) -> None:
     testsuite = ET.Element("testsuite")
     for test_number in (1, 2):
         test_id = f"test_case_{test_number:02d}"
         for attempt in range(1, attempts + 1):
-            for mode_number, mode in enumerate(MODE_ORDER, start=1):
+            for mode in MODE_ORDER:
+                mode_number = {
+                    "performix_mcp": 2,
+                    "performix_mcp_run_query": 3,
+                }[mode]
                 if omit == (test_id, mode):
                     continue
                 testcase = ET.SubElement(
@@ -45,16 +50,11 @@ def write_junit(
                     name=f"{test_id}[{mode}][attempt_{attempt:03d}]",
                 )
                 properties = ET.SubElement(testcase, "properties")
-                failed = test_number == 2 and mode_number == 2
-                mcp_calls_failed = (
-                    0 if mode == "rest" else (test_number + mode_number) % 2
-                )
-                mcp_calls_succeeded = (
-                    0 if mode == "rest" else test_number * mode_number - mcp_calls_failed
-                )
-                mcp_duration = (
-                    0.0 if mode == "rest" else float(test_number * (mode_number - 1) ** 2)
-                )
+                failed = test_number == 2 and mode == "performix_mcp"
+                mcp_calls_failed = (test_number + mode_number + 1) % 2
+                mcp_calls_succeeded = test_number * mode_number - mcp_calls_failed
+                mcp_tool_rounds = mcp_calls_succeeded + mcp_calls_failed
+                mcp_duration = float(test_number * mode_number ** 2)
                 mcp_failed_duration = mcp_duration / 4 if mcp_calls_failed else 0.0
                 attempt_scale = 1.0 + 0.1 * (attempt - 1)
                 values = {
@@ -84,6 +84,8 @@ def write_junit(
                         mcp_failed_duration * attempt_scale
                     ),
                 }
+                if include_mcp_rounds:
+                    values["ai_mcp_tool_rounds"] = str(mcp_tool_rounds)
                 for name, value in values.items():
                     ET.SubElement(properties, "property", name=name, value=value)
                 if failed:
@@ -103,28 +105,34 @@ def test_assigns_palette_in_discovered_mode_order() -> None:
 def test_orders_and_colours_historical_mode_variants() -> None:
     modes = _ordered_modes(
         {
-            "hackathon_mcp.10-later",
+            "performix_mcp.10-later",
             "performix_mcp",
-            "hackathon_mcp.2-current",
-            "hackathon_mcp.1-guidance",
+            "performix_mcp.2-current",
+            "performix_mcp.1-guidance",
         }
     )
 
     assert modes == [
-        "hackathon_mcp.1-guidance",
-        "hackathon_mcp.2-current",
-        "hackathon_mcp.10-later",
         "performix_mcp",
+        "performix_mcp.1-guidance",
+        "performix_mcp.2-current",
+        "performix_mcp.10-later",
     ]
     colors = _mode_colors(modes)
-    variants = modes[:3]
+    variants = modes[1:]
     assert len({colors[mode] for mode in variants}) == len(variants)
-    assert colors[variants[-1]] == MODE_PALETTE[0]
+    assert colors["performix_mcp"] == MODE_PALETTE[0]
     assert all(
         colors[variants[0]][channel] >= colors[variants[1]][channel]
         for channel in range(3)
     )
-    assert _mode_label(variants[0]) == "Hackathon MCP\n1 guidance"
+    assert _mode_label(variants[0]) == "Performix MCP\n1 guidance"
+
+
+def test_wraps_parenthesised_and_long_mode_labels() -> None:
+    assert _mode_label("performix_mcp_run_query.6-duration-plus-batching") == (
+        "Performix MCP\n(run_query)\n6 duration plus\nbatching"
+    )
 
 
 def test_configures_base_10_log_ratio_axes() -> None:
@@ -174,17 +182,18 @@ def test_loads_paired_observations_and_generates_graphs(tmp_path: Path) -> None:
         if observation.test_id == "test_case_01" and observation.mode == "performix_mcp"
     )
     assert performix.mcp_tool_duration_seconds == 4.0
-    assert performix.mcp_tool_share_percent == 100.0 * 4.0 / 30.0
-    assert performix.mcp_calls == 3
-    hackathon = next(
+    assert performix.mcp_tool_share_percent == 100.0 * 4.0 / 20.0
+    assert performix.mcp_calls == 2
+    assert performix.mcp_tool_rounds == 2
+    failed_performix = next(
         observation
         for observation in observations
-        if observation.test_id == "test_case_01"
-        and observation.mode == "hackathon_mcp"
+        if observation.test_id == "test_case_02"
+        and observation.mode == "performix_mcp"
     )
-    assert hackathon.mcp_tool_duration_seconds_succeeded == 0.75
-    assert hackathon.mcp_tool_duration_seconds_failed == 0.25
-    assert hackathon.mcp_tool_duration_seconds == 1.0
+    assert failed_performix.mcp_tool_duration_seconds_succeeded == 6.0
+    assert failed_performix.mcp_tool_duration_seconds_failed == 2.0
+    assert failed_performix.mcp_tool_duration_seconds == 8.0
     expected_bases = {
         "quality-matrix",
         "runtime",
@@ -192,6 +201,7 @@ def test_loads_paired_observations_and_generates_graphs(tmp_path: Path) -> None:
         "output-tokens",
         "reasoning-tokens",
         "mcp-calls",
+        "mcp-rounds",
         "mcp-call-outcomes",
         "mcp-tool-duration",
         "mcp-tool-duration-outcomes",
@@ -205,13 +215,17 @@ def test_loads_paired_observations_and_generates_graphs(tmp_path: Path) -> None:
     with (output_dir / "observations.csv").open(encoding="utf-8", newline="") as source:
         rows = list(csv.DictReader(source))
     assert len(rows) == len(observations)
-    assert rows[0]["test_id"] == "test_case_01"
-    assert rows[0]["mcp_tool_duration_seconds"] == "0.0"
-    assert rows[0]["mcp_tool_duration_seconds_succeeded"] == "0.0"
-    assert rows[0]["mcp_tool_duration_seconds_failed"] == "0.0"
-    assert rows[0]["mcp_tool_share_percent"] == "0.0"
-    assert rows[0]["mcp_calls_succeeded"] == "0"
-    assert rows[0]["mcp_calls_failed"] == "0"
+    performix_row = next(
+        row for row in rows
+        if row["test_id"] == "test_case_01" and row["mode"] == "performix_mcp"
+    )
+    assert performix_row["mcp_tool_duration_seconds"] == "4.0"
+    assert performix_row["mcp_tool_duration_seconds_succeeded"] == "4.0"
+    assert performix_row["mcp_tool_duration_seconds_failed"] == "0.0"
+    assert performix_row["mcp_tool_share_percent"] == "20.0"
+    assert performix_row["mcp_calls_succeeded"] == "2"
+    assert performix_row["mcp_calls_failed"] == "0"
+    assert performix_row["mcp_tool_rounds"] == "2"
     html = (output_dir / "index.html").read_text(encoding="utf-8")
     assert "<title>AI Insights mode comparison</title>" in html
     assert 'src="quality-matrix.svg"' in html
@@ -222,6 +236,7 @@ def test_loads_paired_observations_and_generates_graphs(tmp_path: Path) -> None:
     assert 'href="observations.csv"' in html
     assert "End-to-end runtime" in html
     assert "MCP tool calls" in html
+    assert "Sequential MCP tool rounds" in html
     assert "MCP call outcomes" in html
     assert "MCP tool time" in html
     assert "MCP tool time by outcome" in html
@@ -243,9 +258,22 @@ def test_loads_paired_observations_and_generates_graphs(tmp_path: Path) -> None:
         assert all(label in svg for label in panel_labels)
         assert "Each circle is one testcase and attempt" in svg
         assert "Cross: failure" not in svg
-        assert MODE_LABELS["rest"] not in svg
     for mode in MODE_ORDER:
         assert MODE_LABELS[mode] in html
+
+
+def test_older_reports_without_mcp_rounds_remain_graphable(tmp_path: Path) -> None:
+    junit = tmp_path / "results.xml"
+    output_dir = tmp_path / "graphs"
+    write_junit(junit, include_mcp_rounds=False)
+
+    observations = load_observations(junit)
+    outputs = generate_graphs(observations, output_dir)
+
+    assert all(observation.mcp_tool_rounds is None for observation in observations)
+    assert "mcp-rounds" not in {
+        path.stem for path in outputs if path.suffix == ".svg"
+    }
 
 
 def test_html_summary_reports_total_and_median_runtime(tmp_path: Path) -> None:

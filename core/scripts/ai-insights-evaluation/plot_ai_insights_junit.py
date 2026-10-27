@@ -14,6 +14,7 @@ from html import escape as html_escape
 from pathlib import Path
 import re
 from statistics import median
+from textwrap import wrap
 from typing import Callable
 
 import matplotlib
@@ -44,6 +45,7 @@ MARKER_LEGEND = (
     "Open circle: non-high-confidence pass   "
     "Cross: failure"
 )
+MODE_LABEL_WRAP_WIDTH = 16
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class Observation:
     input_tokens: int
     output_tokens: int
     reasoning_tokens: int
+    mcp_tool_rounds: int | None
     mcp_calls_succeeded: int
     mcp_calls_failed: int
     mcp_tool_duration_seconds_succeeded: float
@@ -114,7 +117,13 @@ def percent_formatter(value: float, _position: int) -> str:
 METRICS = (
     Metric("runtime", "End-to-end runtime", "Seconds", "duration_seconds", decimal_formatter),
     Metric("input-tokens", "Input token volume", "Input tokens", "input_tokens", comma_formatter),
-    Metric("output-tokens", "Output token volume", "Output tokens", "output_tokens", comma_formatter),
+    Metric(
+        "output-tokens",
+        "Non-reasoning output token volume",
+        "Non-reasoning output tokens",
+        "output_tokens",
+        comma_formatter,
+    ),
     Metric(
         "reasoning-tokens",
         "Reasoning token volume",
@@ -127,6 +136,14 @@ METRICS = (
         "MCP tool calls",
         "Calls",
         "mcp_calls",
+        comma_formatter,
+        omit_zero=True,
+    ),
+    Metric(
+        "mcp-rounds",
+        "Sequential MCP tool rounds",
+        "Rounds",
+        "mcp_tool_rounds",
         comma_formatter,
         omit_zero=True,
     ),
@@ -173,9 +190,9 @@ FIGURE_DESCRIPTIONS = {
         "sent across model calls; cached tokens are not deducted.",
     ),
     "output-tokens": (
-        "Output token volume",
-        "Model output tokens reported for each attempt. This records generated output separately "
-        "from reasoning tokens.",
+        "Non-reasoning output token volume",
+        "Model output tokens reported for each attempt after subtracting reasoning tokens. Reasoning "
+        "tokens are plotted separately.",
     ),
     "reasoning-tokens": (
         "Reasoning token volume",
@@ -186,6 +203,11 @@ FIGURE_DESCRIPTIONS = {
         "MCP tool calls",
         "The number of MCP tool calls in each attempt, including failed calls. Modes that do not use MCP can "
         "legitimately report zero calls; those zero observations are omitted from this MCP-only figure.",
+    ),
+    "mcp-rounds": (
+        "Sequential MCP tool rounds",
+        "The number of sequential MCP tool-call rounds in each attempt. Calls whose execution "
+        "overlaps count as one round. Modes that made no MCP calls are omitted.",
     ),
     "mcp-call-outcomes": (
         "MCP call outcomes",
@@ -241,6 +263,7 @@ def load_observations(junit_xml: Path) -> list[Observation]:
                 input_tokens=_integer(attempt, "ai_input_tokens"),
                 output_tokens=_integer(attempt, "ai_output_tokens"),
                 reasoning_tokens=_integer(attempt, "ai_reasoning_output_tokens"),
+                mcp_tool_rounds=_optional_integer(attempt, "ai_mcp_tool_rounds"),
                 mcp_calls_succeeded=_integer(
                     attempt, "ai_mcp_tool_calls_succeeded"
                 ),
@@ -288,6 +311,12 @@ def _integer(attempt: dict[str, str], key: str) -> int:
     if not value.is_integer():
         raise ValueError(f"expected integer JUnit property {key}, found {value}")
     return int(value)
+
+
+def _optional_integer(attempt: dict[str, str], key: str) -> int | None:
+    if not attempt.get(key, "").strip():
+        return None
+    return _integer(attempt, key)
 
 
 def _test_sort_key(test_id: str) -> tuple[int, str]:
@@ -349,11 +378,21 @@ def _mode_variant_sort_key(mode: str) -> tuple[int, tuple[tuple[int, object], ..
 def _mode_label(mode: str) -> str:
     family, variant = _mode_parts(mode)
     label = SUMMARY_MODE_LABELS.get(family, family)
-    if label.startswith("Query MCP ("):
-        label = label.replace("Query MCP (", "Query MCP\n(")
+    label = label.replace(" (", "\n(", 1)
     if variant:
-        label = f"{label}\n{variant.replace('-', ' ').replace('_', ' ')}"
+        variant_label = variant.replace("-", " ").replace("_", " ")
+        variant_lines = wrap(
+            variant_label,
+            width=MODE_LABEL_WRAP_WIDTH,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+        label = "\n".join((label, *variant_lines))
     return label
+
+
+def _mode_label_line_count(modes: list[str]) -> int:
+    return max(_mode_label(mode).count("\n") + 1 for mode in modes)
 
 
 def generate_graphs(observations: list[Observation], output_dir: Path) -> list[Path]:
@@ -445,10 +484,12 @@ def _plot_quality_matrix(
         test_id: len(test_ids) - index - 1
         for index, test_id in enumerate(test_ids)
     }
+    label_lines = _mode_label_line_count(modes) + 1
     figure, axis = plt.subplots(
         figsize=(
             max(7.2, 1.45 * len(modes)),
-            max(4.0, 1.5 + len(test_ids) * 0.36),
+            max(4.0, 1.5 + len(test_ids) * 0.36)
+            + 0.18 * max(0, label_lines - 3),
         )
     )
     for test_id in test_ids:
@@ -517,19 +558,35 @@ def _plot_metric(
     metric: Metric,
     output_dir: Path,
 ) -> list[Path]:
+    if not any(
+        _metric_value(observation, metric) is not None
+        for group in groups.values()
+        for observation in group.values()
+    ):
+        return []
     keys = sorted(groups, key=lambda key: (*_test_sort_key(key[0]), key[1]))
     comparison_modes = [mode for mode in modes if mode != PERFORMIX_MODE]
     show_ratios = metric.show_relative and PERFORMIX_MODE in modes and bool(comparison_modes)
+    extra_label_lines = max(0, _mode_label_line_count(modes) - 2)
     if show_ratios:
+        panel_spacing = 0.24 + 0.04 * extra_label_lines
         figure, axes = plt.subplots(
             2,
             1,
-            figsize=(max(8.2, 1.45 * len(modes)), 8.75),
-            gridspec_kw={"height_ratios": (2.0, 1.875), "hspace": 0.24},
+            figsize=(
+                max(8.2, 1.45 * len(modes)),
+                8.75 + 0.18 * extra_label_lines,
+            ),
+            gridspec_kw={"height_ratios": (2.0, 1.875), "hspace": panel_spacing},
         )
         absolute_axis, ratio_axis = axes
     else:
-        figure, absolute_axis = plt.subplots(figsize=(max(8.2, 1.45 * len(modes)), 4.8))
+        figure, absolute_axis = plt.subplots(
+            figsize=(
+                max(8.2, 1.45 * len(modes)),
+                4.8 + 0.18 * extra_label_lines,
+            )
+        )
         ratio_axis = None
     test_offsets, attempt_offsets = _hierarchical_offsets(keys)
     for key in keys:
@@ -539,6 +596,8 @@ def _plot_metric(
             if observation is None:
                 continue
             value = _metric_value(observation, metric)
+            if value is None:
+                continue
             if metric.omit_zero and value == 0:
                 continue
             available.append((position, observation, value))
@@ -563,15 +622,17 @@ def _plot_metric(
         groups,
         modes,
         test_offsets,
-        value=lambda observation: _metric_value(observation, metric),
+        value=lambda observation: _required_metric_value(observation, metric),
         include=lambda value: not metric.omit_zero or value != 0,
+        include_observation=lambda observation: _metric_value(observation, metric) is not None,
     )
     for position, mode in enumerate(modes):
         centre = _median_of_test_medians(
             groups,
             mode,
-            value=lambda observation: _metric_value(observation, metric),
+            value=lambda observation: _required_metric_value(observation, metric),
             include=lambda value: not metric.omit_zero or value != 0,
+            include_observation=lambda observation: _metric_value(observation, metric) is not None,
         )
         if centre is None:
             continue
@@ -605,14 +666,17 @@ def _plot_metric(
             if baseline_observation is None:
                 continue
             baseline = _metric_value(baseline_observation, metric)
-            if baseline <= 0:
+            if baseline is None or baseline <= 0:
                 continue
             available = []
             for position, mode in enumerate(comparison_modes):
                 observation = groups[key].get(mode)
                 if observation is None:
                     continue
-                value = _metric_value(observation, metric) / baseline
+                observation_value = _metric_value(observation, metric)
+                if observation_value is None:
+                    continue
+                value = observation_value / baseline
                 if value > 0:
                     available.append((position, observation, value))
                     ratio_values.setdefault(key, {})[mode] = value
@@ -674,14 +738,19 @@ def _plot_metric(
         linespacing=1.5,
     )
     if ratio_axis is None:
-        figure.subplots_adjust(bottom=0.18, left=0.11, right=0.98, top=0.93)
-    else:
         figure.subplots_adjust(
-            bottom=0.12,
+            bottom=0.18 + 0.02 * extra_label_lines,
             left=0.11,
             right=0.98,
             top=0.93,
-            hspace=0.24,
+        )
+    else:
+        figure.subplots_adjust(
+            bottom=0.12 + 0.02 * extra_label_lines,
+            left=0.11,
+            right=0.98,
+            top=0.93,
+            hspace=panel_spacing,
         )
     return _save_figure(figure, output_dir / metric.filename)
 
@@ -875,10 +944,14 @@ def _plot_mcp_outcomes(
 
     keys = sorted(groups, key=lambda key: (*_test_sort_key(key[0]), key[1]))
     test_offsets, attempt_offsets = _hierarchical_offsets(keys)
+    extra_label_lines = max(0, _mode_label_line_count(mcp_modes) - 2)
     figure, axes = plt.subplots(
         2,
         1,
-        figsize=(max(8.2, 1.45 * len(mcp_modes)), 7.4),
+        figsize=(
+            max(8.2, 1.45 * len(mcp_modes)),
+            7.4 + 0.18 * extra_label_lines,
+        ),
         sharex=True,
         sharey=True,
         gridspec_kw={"hspace": 0.2},
@@ -954,7 +1027,12 @@ def _plot_mcp_outcomes(
         fontstyle="italic",
         linespacing=1.5,
     )
-    figure.subplots_adjust(bottom=0.14, left=0.11, right=0.98, top=0.91)
+    figure.subplots_adjust(
+        bottom=0.14 + 0.02 * extra_label_lines,
+        left=0.11,
+        right=0.98,
+        top=0.91,
+    )
     return _save_figure(figure, output_dir / filename)
 
 
@@ -1032,8 +1110,16 @@ def _blend_with_white(
     return tuple(channel + (1.0 - channel) * fraction for channel in color)
 
 
-def _metric_value(observation: Observation, metric: Metric) -> float:
-    return float(getattr(observation, metric.field))
+def _metric_value(observation: Observation, metric: Metric) -> float | None:
+    value = getattr(observation, metric.field)
+    return None if value is None else float(value)
+
+
+def _required_metric_value(observation: Observation, metric: Metric) -> float:
+    value = _metric_value(observation, metric)
+    if value is None:
+        raise ValueError(f"missing metric {metric.field}")
+    return value
 
 
 def _point_offsets(count: int, *, width: float = 0.10) -> list[float]:
@@ -1192,6 +1278,7 @@ def _write_observations_csv(observations: list[Observation], path: Path) -> None
                 "input_tokens",
                 "output_tokens",
                 "reasoning_tokens",
+                "mcp_tool_rounds",
                 "mcp_calls",
                 "mcp_calls_succeeded",
                 "mcp_calls_failed",
@@ -1213,6 +1300,7 @@ def _write_observations_csv(observations: list[Observation], path: Path) -> None
                     observation.input_tokens,
                     observation.output_tokens,
                     observation.reasoning_tokens,
+                    observation.mcp_tool_rounds,
                     observation.mcp_calls,
                     observation.mcp_calls_succeeded,
                     observation.mcp_calls_failed,

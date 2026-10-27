@@ -116,7 +116,7 @@ func rowToMap(rows *sql.Rows, columnTypes []*sql.ColumnType) (map[string]interfa
 			scanArgs[i] = new(sql.NullString)
 		case "BOOL", "BOOLEAN":
 			scanArgs[i] = new(sql.NullBool)
-		case "INT", "INT4", "INTEGER", "BIGINT", "HUGEINT":
+		case "INT", "INT4", "INTEGER", "UINTEGER", "BIGINT", "HUGEINT":
 			scanArgs[i] = new(sql.NullInt64)
 		case "DOUBLE", "FLOAT64":
 			scanArgs[i] = new(sql.NullFloat64)

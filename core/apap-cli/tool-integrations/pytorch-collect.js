@@ -29,8 +29,11 @@ const operatorCallsComponent = {
   name: 'pytorch-operator-calls-parquet',
   version: '1.0',
 };
+const collectionTimingComponent = {
+  name: 'pytorch-collection-timing-json',
+  version: '1.0',
+};
 const logComponent = { name: 'log-text', version: '1.0' };
-
 function getDeployRoot(ctx) {
   if (!ctx.toolsRoot) {
     throw new Error('toolsRoot missing from context');
@@ -111,14 +114,19 @@ async function getExecutionOptions(engine, ctx) {
     workingDirectory: ctx.workload?.workingDir || ctx.workingdir || '.',
     environment,
   };
-  const pythonPathResult = await engine.execCommand(
-    [
-      getPythonExecutable(ctx),
-      '-c',
-      'import os, sys; sys.stdout.write(os.environ.get("PYTHONPATH", ""))',
-    ],
-    baseOptions,
-  );
+  let pythonPathResult;
+  try {
+    pythonPathResult = await engine.execCommand(
+      [
+        getPythonExecutable(ctx),
+        '-c',
+        'import os, sys; sys.stdout.write(os.environ.get("PYTHONPATH", ""))',
+      ],
+      baseOptions,
+    );
+  } catch {
+    return { options: baseOptions, pythonPathRead: false };
+  }
   if (pythonPathResult.rc !== 0) {
     return { options: baseOptions, pythonPathRead: false };
   }
@@ -374,6 +382,7 @@ const tool = {
     const outputDir = await engine.createTempDir();
     const apiCallsPath = `${outputDir}/api_calls.parquet`;
     const operatorCallsPath = `${outputDir}/operator_calls.parquet`;
+    const collectionTimingPath = `${outputDir}/collection_timing.json`;
     const stdoutPath = `${outputDir}/pytorch_collect_stdout.txt`;
     const stderrPath = `${outputDir}/pytorch_collect_stderr.txt`;
     const completionMarkerPath = `${outputDir}/pytorch_collect_complete`;
@@ -459,7 +468,17 @@ const tool = {
         'operator_calls.parquet',
         operatorCallsComponent,
       );
-      if (!apiCallsPresent || !operatorCallsPresent) {
+      const collectionTimingPresent = await emitIfPresent(
+        engine,
+        collectionTimingPath,
+        'collection_timing.json',
+        collectionTimingComponent,
+      );
+      if (
+        !apiCallsPresent ||
+        !operatorCallsPresent ||
+        !collectionTimingPresent
+      ) {
         throw {
           code: 'tool_integrations.pytorch_collect.RUN_FAILED',
           metadata: { reason: 'expected_output_missing' },

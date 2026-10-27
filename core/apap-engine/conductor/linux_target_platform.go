@@ -55,8 +55,11 @@ func (p *LinuxPathUtils) GetEnvPathSep() string {
 	return ":"
 }
 
-// GenerateChdirCommandLine builds a command that changes dir then runs cmd.
+// GenerateChdirCommandLine changes dir before running cmd when pwd is specified.
 func (p *LinuxPathUtils) GenerateChdirCommandLine(pwd string, cmd string) string {
+	if pwd == "" {
+		return cmd
+	}
 	return fmt.Sprintf("cd %s && %s", p.FormatPathForShell(pwd), cmd)
 }
 
@@ -101,15 +104,6 @@ func (p *LinuxTargetActions) RunCommandAsAdmin(cmd string) (RunCommandOutput, er
 	cmd = fmt.Sprintf("%s '%s'", sudoPrefix, cmd)
 
 	return p.RunCommand(cmd)
-}
-
-func (p *LinuxTargetActions) HasAdminPerms() (bool, error) {
-	cmd := "sudo -n true"
-	output, err := p.RunCommand(cmd)
-	if err != nil {
-		return false, err
-	}
-	return output.ReturnCode == 0, nil
 }
 
 func NewLinuxTargetPlatform(cmdRunner CommandRunner, fs TargetFilesystem, arch Architecture) *TargetPlatform {

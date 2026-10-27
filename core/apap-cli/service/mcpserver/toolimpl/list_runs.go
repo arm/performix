@@ -61,7 +61,7 @@ var listRunsOutputSchema = &jsonschema.Schema{
 			Description: "Run summaries for the requested page, sorted newest first.",
 			Items: &jsonschema.Schema{
 				Type:     "object",
-				Required: []string{"id", "name", "start_time", "end_time", "recipe_name", "cmdline", "run_result", "target"},
+				Required: []string{"id", "name", "start_time", "end_time", "recipe_name", "cmdline", "run_result", "target", "group"},
 				Properties: map[string]*jsonschema.Schema{
 					"id":          {Type: "string", Description: "Unique run identifier. Pass this as the run_id argument to generate_ai_insights."},
 					"name":        {Type: "string", Description: "Friendly name of the run."},
@@ -71,6 +71,7 @@ var listRunsOutputSchema = &jsonschema.Schema{
 					"cmdline":     {Type: "string", Description: "Command line that was profiled, when applicable."},
 					"run_result":  {Type: "string", Description: "Final result of the run (for example \"success\")."},
 					"target":      {Type: "string", Description: "Friendly name of the target the run executed on."},
+					"group":       {Type: "string", Description: "Name of the group assigned to the run, or an empty string when the run is ungrouped."},
 				},
 			},
 		},

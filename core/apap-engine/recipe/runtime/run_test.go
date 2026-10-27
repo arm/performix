@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/afero"
@@ -580,6 +579,7 @@ func TestBuildStages_ToolDeploymentProgressCallback(t *testing.T) {
 		for stageName, deployStage := range deployStages {
 			require.NotNil(t, deployStage.ProgressCallback, "ProgressCallback should be set after BuildStages")
 
+			remaining := uint64(45)
 			// Set up the expectation for OnStageProgress with the correct arguments
 			mockNotifier.On("OnStageProgress",
 				notifiers.StageInfo{
@@ -588,14 +588,15 @@ func TestBuildStages_ToolDeploymentProgressCallback(t *testing.T) {
 					Count: expectedStageCount,
 				},
 				notifiers.StageProgress{
-					Sent: int64(512),
-					Max:  int64(1024),
-					Unit: notifiers.UnitBytes,
+					Sent:                      int64(512),
+					Max:                       int64(1024),
+					Unit:                      notifiers.UnitBytes,
+					EstimatedRemainingSeconds: &remaining,
 				},
 			).Once()
 
 			// Invoke the callback and verify it calls the notifier correctly
-			deployStage.ProgressCallback(512, 1024, time.Time{})
+			deployStage.ProgressCallback(notifiers.StageProgress{Sent: 512, Max: 1024, Unit: notifiers.UnitBytes, EstimatedRemainingSeconds: &remaining})
 		}
 
 		mockNotifier.AssertExpectations(t)
@@ -666,7 +667,7 @@ func TestBuildStages_ToolDeploymentProgressCallback(t *testing.T) {
 				},
 			).Once()
 
-			deployStage.ProgressCallback(0, 2048, time.Time{})
+			deployStage.ProgressCallback(notifiers.StageProgress{Sent: 0, Max: 2048, Unit: notifiers.UnitBytes})
 
 			// Test with completed transfer
 			mockNotifier.On("OnStageProgress",
@@ -682,7 +683,7 @@ func TestBuildStages_ToolDeploymentProgressCallback(t *testing.T) {
 				},
 			).Once()
 
-			deployStage.ProgressCallback(2048, 2048, time.Time{})
+			deployStage.ProgressCallback(notifiers.StageProgress{Sent: 2048, Max: 2048, Unit: notifiers.UnitBytes})
 		}
 
 		mockNotifier.AssertExpectations(t)

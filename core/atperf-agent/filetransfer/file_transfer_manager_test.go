@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/filetransfer"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/grpcserver"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 // errorFile simulates I/O errors on read/write operations.

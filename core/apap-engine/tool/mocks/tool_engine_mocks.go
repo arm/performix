@@ -168,3 +168,11 @@ func (m *MockFileCollector) AddComponent(outputEntityDir string, componentType c
 	args := m.Called(outputEntityDir, componentType, file)
 	return args.String(0), args.Error(1)
 }
+
+func (m *MockFileCollector) PublishCapabilityComponent(entity string, typ cdf.ComponentType, relative string, write func(string) error) error {
+	args := m.Called(entity, typ, relative)
+	if err := args.Error(1); err != nil {
+		return err
+	}
+	return write(args.String(0))
+}

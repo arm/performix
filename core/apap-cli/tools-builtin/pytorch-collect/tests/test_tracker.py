@@ -61,6 +61,32 @@ def test_records_api_call_with_operator_call_and_timestamps():
     assert operator_call.output == {"type": "Tensor"}
 
 
+def test_zero_length_calls_are_recorded_with_one_nanosecond_duration():
+    # Zero length calls could will be rejected at higher levels. I imagine they
+    # are monstrously unlikely to occur in reality, but just in case, the
+    # tracker should fudge them into being minimal, non-zero length.
+    writer = MockWriter()
+    tracker = TraceTracker(writer)
+
+    with patch(
+        "pytorch_collect.tracker.time_monotnonic_raw",
+        return_value=100,
+    ):
+        api_call_id = tracker.begin_api_call("add", [], {})
+        operator_call_id = tracker.begin_operator_call("aten.add.Tensor", [], {})
+        tracker.end_operator_call(operator_call_id, {})
+        tracker.end_api_call(api_call_id, {})
+
+    assert len(writer.api_calls) == 1
+    api_call = writer.api_calls[0]
+    assert api_call.timestamp_begin == 100
+    assert api_call.timestamp_end == 101
+    assert len(api_call.operator_calls) == 1
+    operator_call = api_call.operator_calls[0]
+    assert operator_call.timestamp_begin == 100
+    assert operator_call.timestamp_end == 101
+
+
 def test_begin_api_call_replaces_existing_api_call_and_warns(caplog):
     writer = MockWriter()
     tracker = TraceTracker(writer)

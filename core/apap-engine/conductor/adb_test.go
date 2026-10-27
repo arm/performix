@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 )
 
 type recordingADBRunner struct {
@@ -46,6 +48,22 @@ func adbRunKey(args ...string) string {
 
 func newTestADBClient(serialNumber string, deviceIPAddress *string, runner ADBRunner) *ADBClient {
 	return NewADBClient(serialNumber, deviceIPAddress, runner)
+}
+
+func TestExecADBRunnerReturnsStructuredErrorWhenADBIsNotFound(t *testing.T) {
+	runner := NewExecADBRunner(filepath.Join(t.TempDir(), "adb"))
+
+	_, _, err := runner.Run("devices")
+
+	require.Error(t, err)
+	var messageErr message.Message
+	require.ErrorAs(t, err, &messageErr)
+	assert.Equal(t, message.EngineConductorAdbAdbNotFound, messageErr.Code())
+
+	runner.SetExecutable("")
+	_, _, err = runner.Run("devices")
+	require.ErrorAs(t, err, &messageErr)
+	assert.Equal(t, message.EngineConductorAdbAdbNotFound, messageErr.Code())
 }
 
 func TestADBCommandRunner(t *testing.T) {
@@ -203,6 +221,19 @@ func TestADBCheckHealth(t *testing.T) {
 		require.Len(t, runner.calls, 2)
 		assert.Equal(t, []string{"devices"}, runner.calls[0])
 		assert.Equal(t, []string{"-s", "device-123", "get-state"}, runner.calls[1])
+	})
+
+	t.Run("preserves missing adb error", func(t *testing.T) {
+		adbErr := message.Wrap(message.EngineConductorAdbAdbNotFound, errors.New("adb not found"))
+		runner := &recordingADBRunner{err: adbErr}
+		client := newTestADBClient("device-123", nil, runner)
+
+		err := client.CheckHealth()
+
+		var messageErr message.Message
+		require.ErrorAs(t, err, &messageErr)
+		assert.Equal(t, message.EngineConductorAdbAdbNotFound, messageErr.Code())
+		assert.NotContains(t, err.Error(), "health check for Android target failed")
 	})
 }
 

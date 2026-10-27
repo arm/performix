@@ -122,7 +122,7 @@ class PerformanceQualityHookTests(unittest.TestCase):
             longrepr=None,
             user_properties=[
                 ("ai_test_id", "test_case_01"),
-                ("ai_mode", "hackathon_mcp"),
+                ("ai_mode", "other_mode"),
                 ("ai_agent_duration_seconds", "31"),
                 ("ai_input_tokens", "1001"),
                 ("ai_output_tokens", "1001"),

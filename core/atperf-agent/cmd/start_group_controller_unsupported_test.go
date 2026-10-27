@@ -6,9 +6,11 @@
 package cmd
 
 import (
+	"os"
 	"runtime"
 	"testing"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,6 +18,24 @@ import (
 )
 
 func TestStartGroupController_UnsupportedPlatform(t *testing.T) {
+	t.Chdir(t.TempDir())
+	logger := log.StandardLogger()
+	output, formatter := logger.Out, logger.Formatter
+	hooks := make(log.LevelHooks)
+	for level, entries := range logger.Hooks {
+		hooks[level] = append([]log.Hook(nil), entries...)
+	}
+	hookSetup := isLogHookSetup
+	// Run before TempDir cleanup: Windows cannot remove an open log file.
+	t.Cleanup(func() {
+		if file, ok := logger.Out.(*os.File); ok && file != output {
+			assert.NoError(t, file.Close())
+		}
+		logger.SetOutput(output)
+		logger.SetFormatter(formatter)
+		logger.ReplaceHooks(hooks)
+		isLogHookSetup = hookSetup
+	})
 	cmd := NewStartGroupControllerCmd()
 
 	err := cmd.Execute()

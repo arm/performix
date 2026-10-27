@@ -5,15 +5,19 @@ syntax = "proto3";
 
 package auth;
 
-option go_package = "github.com/Arm-Debug/apap-cli/clients/go/authproto";
+option go_package = "github.com/Arm-Debug/apap-cli/api/authproto";
 
 import "apapproto/apap.proto";
+import "google/protobuf/empty.proto";
 
 // Auth service provides TLS-protected authentication entrypoints between clients and the engine.
 service Auth {
     // TargetLogin establishes an authenticated session for a specific target.
     // The stream allows the service to prompt for additional credentials (for example, passwords) in the future.
     rpc TargetLogin(stream TargetLoginClientMessage) returns (stream TargetLoginServerMessage);
+
+    // GetArrowToken returns the bearer token required by the Arrow HTTP query service.
+    rpc GetArrowToken(google.protobuf.Empty) returns (ArrowToken);
 }
 
 // TargetLoginRequest describes the target that the client wants to log into.
@@ -86,4 +90,9 @@ message TargetLoginFingerprintPrompt {
     string host_key_type = 2;
     string host_key_fingerprint = 3;
     repeated string known_as = 4;
+}
+
+// ArrowToken authorizes requests to the Arrow HTTP query service
+message ArrowToken {
+    string value = 1;
 }

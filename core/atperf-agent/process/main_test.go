@@ -4,10 +4,12 @@
 package process_test
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
 	"github.com/Arm-Debug/apap-cli/atperf-agent/cmd"
+	"github.com/Arm-Debug/apap-cli/atperf-agent/process/processcontracttest"
 )
 
 func TestMain(m *testing.M) {
@@ -20,5 +22,18 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
-	os.Exit(m.Run())
+	cleanupProbe, err := processcontracttest.PrepareProbe()
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "prepare process probe: %v\n", err)
+		os.Exit(1)
+	}
+
+	exitCode := m.Run()
+	if err := cleanupProbe(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "clean up process probe: %v\n", err)
+		if exitCode == 0 {
+			exitCode = 1
+		}
+	}
+	os.Exit(exitCode)
 }

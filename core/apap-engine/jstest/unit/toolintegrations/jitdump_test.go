@@ -50,25 +50,49 @@ func TestJitdumpFiltersAttachedRuntime(t *testing.T) {
 }
 
 func TestJfrRequiredComponents(t *testing.T) {
-	for _, missing := range []bool{false, true} {
-		t.Run(fmt.Sprintf("missing=%t", missing), func(t *testing.T) {
+	for _, missingPath := range []string{"", "events/jfr_gc_heap_summary.parquet", "events/jvm_flags.parquet"} {
+		t.Run(fmt.Sprintf("missing=%s", missingPath), func(t *testing.T) {
 			h := jstest.LoadJSModule(t, "tool-integrations/jitdump.js")
 			engine := &mocks.MockToolEngine{}
-			engine.On("ExecCommand", []string{"cat", "/tools/jfr_schema.xml"}, tool_goja.ExecOptions{}).Return(h.ToJSValPromise(t, process.CommandResult{Stdout: `<schema><event name="jdk.JVMInformation"/><event name="jdk.InitialSystemProperty"/><event name="jdk.GCHeapSummary"/><event name="jdk.GarbageCollection"/><event name="jdk.GCHeapMemoryPoolUsage"/></schema>`}, nil)).Once()
-			for _, path := range []string{"metadata/jfr_recordings.parquet", "events/jfr_jvm_information.parquet", "events/jfr_initial_system_property.parquet", "events/jfr_gc_heap_summary.parquet", "events/jfr_garbage_collection.parquet", "events/jfr_gc_heap_memory_pool_usage.parquet"} {
+			engine.On("ExecCommand", []string{"cat", "/tools/jfr_schema.xml"}, tool_goja.ExecOptions{}).Return(h.ToJSValPromise(t, process.CommandResult{Stdout: `<schema><event name="jdk.JVMInformation"/><event name="jdk.InitialSystemProperty"/><event name="jdk.GCHeapSummary"/><event name="jdk.GarbageCollection"/><event name="jdk.GCHeapMemoryPoolUsage"/><event name="jdk.BooleanFlag" rust_handler="jvm_flags"/><event name="jdk.LongFlag" rust_handler="jvm_flags"/></schema>`}, nil)).Once()
+			for _, path := range []string{"metadata/jfr_recordings.parquet", "events/jfr_jvm_information.parquet", "events/jfr_initial_system_property.parquet", "events/jfr_gc_heap_summary.parquet", "events/jfr_garbage_collection.parquet", "events/jfr_gc_heap_memory_pool_usage.parquet", "events/jvm_flags.parquet"} {
 				var rc int32
-				if missing && path == "events/jfr_gc_heap_summary.parquet" {
+				if path == missingPath {
 					rc = 1
 				}
 				engine.On("ExecCommand", []string{"stat", "/parquet/" + path}, tool_goja.ExecOptions{}).Return(h.ToJSValPromise(t, process.CommandResult{Rc: rc}, nil)).Once()
 			}
 			_, err := h.CallAwait[any](t, "validateJfrParquetComponents", engine, "/parquet", "/tools/jitdump-jvm")
-			if missing {
+			if missingPath != "" {
 				require.ErrorContains(t, err, "incomplete")
 			} else {
 				require.NoError(t, err)
 			}
 			engine.AssertExpectations(t)
+		})
+	}
+}
+
+func TestJfrFlagsManifest(t *testing.T) {
+	for _, tc := range []struct {
+		name, schema, errorText string
+		paths                   []string
+	}{
+		{name: "shared handler", schema: `<event name="jdk.BooleanFlag" rust_handler="jvm_flags"/><event rust_handler='jvm_flags' name='jdk.LongFlag'/><event name="jdk.JVMInformation" rust_handler="jvm_information"/>`, paths: []string{"metadata/jfr_recordings.parquet", "events/jvm_flags.parquet", "events/jfr_jvm_information.parquet"}},
+		{name: "duplicate event", schema: `<event name="jdk.BooleanFlag" rust_handler="jvm_flags"/><event name="jdk.BooleanFlag" rust_handler="jvm_flags"/>`, errorText: "duplicate event"},
+		{name: "output collision", schema: `<event name="one.Event"/><event name="two.Event"/>`, errorText: "duplicate output"},
+		{name: "ordinary handler output collision", schema: `<event name="one.Event" rust_handler="jvm_information"/><event name="two.Event" rust_handler="jvm_information"/>`, errorText: "duplicate output"},
+		{name: "flags without shared handler", schema: `<event name="jdk.BooleanFlag"/><event name="jdk.LongFlag"/>`, paths: []string{"metadata/jfr_recordings.parquet", "events/jfr_boolean_flag.parquet", "events/jfr_long_flag.parquet"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := jstest.LoadJSModule(t, "tool-integrations/jitdump.js")
+			paths, err := h.Call[[]string](t, "parquetManifestFromJfrSchema", tc.schema)
+			if tc.errorText != "" {
+				require.ErrorContains(t, err, tc.errorText)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.paths, paths)
+			}
 		})
 	}
 }

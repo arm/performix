@@ -31,20 +31,19 @@ tasks:
     desc: Install dependencies, generate sources, and build core binaries
     cmds:
       - task: deps
-      - task: generate
       - task: build
 
   build:
-    desc: Build core binaries
+    desc: Generate sources and build core binaries
     cmds:
+      - task: generate
       - task: build:apx
       - task: build:agent
 
   generate:
     desc: Generate all sources (Go, Protobuf, Messages, etc.)
     cmds:
-      - '{{.BASH_RUNNER}} ./scripts/go/generate-all.sh'
-      - '{{.BASH_RUNNER}} ./scripts/protobuf/generate.sh'
+      - '{{.BASH_RUNNER}} ./scripts/generate-all.sh'
 
   deps:tools:
     desc: Package the tools available in the current checkout

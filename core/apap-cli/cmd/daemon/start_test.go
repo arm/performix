@@ -7,45 +7,106 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
-	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/config"
-	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 )
 
-type mockServerFgRunner struct {
+type mockDaemonConnector struct {
 	mock.Mock
 }
 
-func (sr *mockServerFgRunner) Run(config grpcserver.GrpcServerConfig) error {
-	args := sr.Called(config)
-	return args.Error(0)
+func (c *mockDaemonConnector) StartBackgroundDaemon(config grpcserver.GrpcServerConfig) (bool, error) {
+	args := c.MethodCalled("StartBackgroundDaemon", config)
+	return args.Bool(0), args.Error(1)
 }
 
-type mockServerBgRunner struct {
-	mock.Mock
+func (c *mockDaemonConnector) StartForegroundDaemon(config grpcserver.GrpcServerConfig) (bool, error) {
+	args := c.MethodCalled("StartForegroundDaemon", config)
+	return args.Bool(0), args.Error(1)
 }
 
-func (sr *mockServerBgRunner) Run(config grpcserver.GrpcServerConfig) error {
-	args := sr.Called(config)
+func (c *mockDaemonConnector) RunDaemonChild(config grpcserver.GrpcServerConfig) error {
+	args := c.MethodCalled("RunDaemonChild", config)
 	return args.Error(0)
 }
 
 func TestDaemonStartCmd(t *testing.T) {
+	t.Run("starts engine daemon when daemon address flags are omitted", func(t *testing.T) {
+		viper.Reset()
+		t.Cleanup(viper.Reset)
+		t.Cleanup(func() { block = false })
+		viper.Set("jobs", 1)
+		daemon := &mockDaemonConnector{}
+		daemon.On("StartBackgroundDaemon", mock.MatchedBy(func(config grpcserver.GrpcServerConfig) bool {
+			return config.Port == serverconfig.AutomaticPort
+		})).Return(true, nil).Once()
+		cmd := newDaemonStartCmd(daemon)
+		parent := &cobra.Command{Use: "daemon"}
+		parent.AddCommand(cmd)
+
+		parent.SetArgs([]string{"start"})
+		err := parent.Execute()
+
+		require.NoError(t, err)
+		daemon.AssertExpectations(t)
+	})
+
+	t.Run("starts blocking engine daemon with automatic ports", func(t *testing.T) {
+		viper.Reset()
+		t.Cleanup(viper.Reset)
+		t.Cleanup(func() { block = false })
+		viper.Set("jobs", 1)
+		daemon := &mockDaemonConnector{}
+		daemon.On("StartForegroundDaemon", mock.MatchedBy(func(config grpcserver.GrpcServerConfig) bool {
+			return config.Port == serverconfig.AutomaticPort
+		})).Return(true, nil).Once()
+		cmd := newDaemonStartCmd(daemon)
+		parent := &cobra.Command{Use: "daemon"}
+		parent.AddCommand(cmd)
+		parent.SetArgs([]string{"start", "--block"})
+
+		err := parent.Execute()
+
+		require.NoError(t, err)
+		daemon.AssertExpectations(t)
+	})
+
+	t.Run("reports when engine daemon is already running", func(t *testing.T) {
+		viper.Reset()
+		t.Cleanup(viper.Reset)
+		viper.Set("jobs", 1)
+		daemon := &mockDaemonConnector{}
+		daemon.On("StartBackgroundDaemon", mock.Anything).Return(false, nil).Once()
+		cmd := newDaemonStartCmd(daemon)
+		parent := &cobra.Command{Use: "daemon"}
+		parent.AddCommand(cmd)
+		var output bytes.Buffer
+		parent.SetOut(&output)
+		parent.SetArgs([]string{"start"})
+
+		err := parent.Execute()
+
+		require.NoError(t, err)
+		assert.Equal(t, fmt.Sprintf("%v daemon is already running.\n", terminology.GetProductFullName()), output.String())
+	})
+
 	t.Run("errors when given number of jobs is less than 1", func(t *testing.T) {
 		setTestPorts(t)
 		t.Cleanup(func() { block = false })
-		cc := &mocks.MockClientConnector{}
-		cmd := newDaemonStartCmd(&mockServerBgRunner{}, &mockServerFgRunner{}, cc)
+		cc := &mockDaemonConnector{}
+		cmd := newDaemonStartCmd(cc)
 		cmd.SetArgs([]string{"--jobs", "0"})
 		err := cmd.Execute()
 
@@ -60,15 +121,13 @@ func TestDaemonStartCmd(t *testing.T) {
 	t.Run("runs server in the blocking mode using relevant configuration", func(t *testing.T) {
 		setTestPorts(t)
 		t.Cleanup(func() { block = false })
-		fgRunner := &mockServerFgRunner{}
+		cc := &mockDaemonConnector{}
 		var receivedConfig grpcserver.GrpcServerConfig
-		fgRunner.On("Run", mock.Anything).Run(func(args mock.Arguments) {
+		cc.On("StartForegroundDaemon", mock.Anything).Run(func(args mock.Arguments) {
 			receivedConfig = args.Get(0).(grpcserver.GrpcServerConfig)
-		}).Return(nil)
+		}).Return(true, nil)
 
-		cc := &mocks.MockClientConnector{}
-
-		cmd := newDaemonStartCmd(&mockServerBgRunner{}, fgRunner, cc)
+		cmd := newDaemonStartCmd(cc)
 		cmd.SetArgs([]string{
 			"--jobs", "2022",
 			"--block",
@@ -78,10 +137,22 @@ func TestDaemonStartCmd(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, serverconfig.FromViper(), receivedConfig)
 		assert.Equal(t, uint(2022), receivedConfig.ParallelJobs)
+		cc.AssertNotCalled(t, "StartBackgroundDaemon", mock.Anything)
+	})
 
-		// Preload function should not have been called, but add a short delay to ensure goroutine is scheduled
-		time.Sleep(100 * time.Millisecond)
-		cc.AssertNumberOfCalls(t, "ApapClient", 0)
+	t.Run("runs the background daemon child", func(t *testing.T) {
+		setTestPorts(t)
+		t.Cleanup(func() { block = false })
+		starter := &mockDaemonConnector{}
+		starter.On("RunDaemonChild", mock.Anything).Return(nil).Once()
+		cmd := newDaemonStartCmd(starter)
+		cmd.SetArgs([]string{"--block", "--daemon-child"})
+
+		err := cmd.Execute()
+
+		require.NoError(t, err)
+		starter.AssertExpectations(t)
+		starter.AssertNotCalled(t, "StartForegroundDaemon", mock.Anything)
 	})
 
 	t.Run("propagates deployment tools dir flag into configuration", func(t *testing.T) {
@@ -91,14 +162,13 @@ func TestDaemonStartCmd(t *testing.T) {
 			viper.Set("deployment-tools-dir", serverconfig.DefaultToolsDeploymentDirectory)
 		})
 
-		fgRunner := &mockServerFgRunner{}
+		starter := &mockDaemonConnector{}
 		var receivedConfig grpcserver.GrpcServerConfig
-		fgRunner.On("Run", mock.Anything).Run(func(args mock.Arguments) {
+		starter.On("StartForegroundDaemon", mock.Anything).Run(func(args mock.Arguments) {
 			receivedConfig = args.Get(0).(grpcserver.GrpcServerConfig)
-		}).Return(nil)
+		}).Return(true, nil)
 
-		cc := &mocks.MockClientConnector{}
-		cmd := newDaemonStartCmd(&mockServerBgRunner{}, fgRunner, cc)
+		cmd := newDaemonStartCmd(starter)
 		custom := "./custom/tools"
 		cmd.SetArgs([]string{
 			"--block",
@@ -114,26 +184,21 @@ func TestDaemonStartCmd(t *testing.T) {
 		setTestPorts(t)
 		t.Cleanup(func() { block = false })
 		expectedErr := errors.New("🤬")
-		bgRunner := &mockServerBgRunner{}
-		bgRunner.On("Run", mock.Anything).Return(expectedErr)
+		starter := &mockDaemonConnector{}
+		starter.On("StartBackgroundDaemon", mock.Anything).Return(false, expectedErr)
 
-		cc := &mocks.MockClientConnector{}
-
-		cmd := newDaemonStartCmd(bgRunner, &mockServerFgRunner{}, cc)
+		cmd := newDaemonStartCmd(starter)
 		err := cmd.Execute()
 
 		require.ErrorIs(t, err, expectedErr)
 	})
 
 	t.Run("fails when server port invalid", func(t *testing.T) {
-		viper.Set("server-port", 0)
-		viper.Set("auth-port", serverconfig.DefaultAuthPort)
-		t.Cleanup(func() {
-			setTestPorts(t)
-			block = false
-		})
+		setTestPorts(t)
+		viper.Set("server-port", -1)
+		t.Cleanup(func() { block = false })
 
-		cmd := newDaemonStartCmd(&mockServerBgRunner{}, &mockServerFgRunner{}, &mocks.MockClientConnector{})
+		cmd := newDaemonStartCmd(&mockDaemonConnector{})
 		err := cmd.Execute()
 
 		require.Error(t, err)
@@ -142,61 +207,26 @@ func TestDaemonStartCmd(t *testing.T) {
 		require.Equal(t, "--server-port", msg.Metadata()["name"])
 	})
 
-	t.Run("fails when server and auth ports match", func(t *testing.T) {
-		port := 18888
-		viper.Set("server-port", port)
-		viper.Set("auth-port", port)
-		t.Cleanup(func() {
-			setTestPorts(t)
-			block = false
-		})
-		cmd := newDaemonStartCmd(&mockServerBgRunner{}, &mockServerFgRunner{}, &mocks.MockClientConnector{})
-		err := cmd.Execute()
-
-		require.Error(t, err)
-		var msg message.Message
-		require.True(t, errors.As(err, &msg))
-		require.Equal(t, message.CliCmdDaemonServerAuthPortsMustDiffer, msg.Code())
-	})
 }
 
 func setTestPorts(t *testing.T) {
 	t.Helper()
-	viper.Set("server-port", serverconfig.DefaultServerPort)
-	viper.Set("auth-port", serverconfig.DefaultAuthPort)
+	const serverPort = 19000
+	viper.Set("server-port", serverPort)
 	t.Cleanup(func() {
 		viper.Set("server-port", serverconfig.DefaultServerPort)
-		viper.Set("auth-port", serverconfig.DefaultAuthPort)
 	})
 }
 
-func TestDaemonStartJfrCaptureFlag(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
-			viper.Reset()
-			t.Cleanup(viper.Reset)
-			t.Cleanup(func() { block = false })
-			// Explicit false must override a true inherited environment value too.
-			t.Setenv("APXD_ENABLE_JFR_CAPTURE", "true")
-			require.NoError(t, viper.BindEnv("enable-jfr-capture", "APXD_ENABLE_JFR_CAPTURE"))
-			setTestPorts(t)
-			cmd := newDaemonStartCmd(&mockServerBgRunner{}, &mockServerFgRunner{}, &mocks.MockClientConnector{})
-			flag := cmd.Flags().Lookup("enable-jfr-capture")
-			require.NotNil(t, flag)
-			assert.Equal(t, "false", flag.DefValue)
-			require.NoError(t, cmd.ParseFlags([]string{fmt.Sprintf("--enable-jfr-capture=%t", enabled)}))
-			assert.Equal(t, enabled, serverconfig.FromViperForBackground().EnableJfrCapture)
-		})
+func TestDaemonStartRejectsFeatureFlags(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	cmd := newDaemonStartCmd(&mockDaemonConnector{})
+	fields := reflect.TypeOf(featureflags.Flags{})
+	for i := 0; i < fields.NumField(); i++ {
+		key := fields.Field(i).Tag.Get("json")
+		require.Nil(t, cmd.Flags().Lookup(key))
+		require.ErrorContains(t, cmd.ParseFlags([]string{"--" + key + "=true"}), "unknown flag")
 	}
-}
-
-func TestJfrCaptureAppearsInConfigPrint(t *testing.T) {
-	newDaemonStartCmd(&mockServerBgRunner{}, &mockServerFgRunner{}, &mocks.MockClientConnector{})
-	cmd := config.NewPrintCmd()
-	var output bytes.Buffer
-	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"--list"})
-	require.NoError(t, cmd.Execute())
-	assert.Contains(t, output.String(), "Config File Variable: enable-jfr-capture")
-	assert.Contains(t, output.String(), "Environment Variable: APXD_ENABLE_JFR_CAPTURE")
+	require.ErrorContains(t, cmd.ParseFlags([]string{"-P"}), "unknown shorthand flag")
 }

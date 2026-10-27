@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/errorsproto"
+	"github.com/Arm-Debug/apap-cli/api/errorsproto"
 )
 
 func NewTestGRPCError() error {

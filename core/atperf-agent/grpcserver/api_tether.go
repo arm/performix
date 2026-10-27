@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/tetherproto"
+	"github.com/Arm-Debug/apap-cli/api/tetherproto"
 )
 
 const defaultTetherDeadline = 180 * time.Second

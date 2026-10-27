@@ -37,10 +37,18 @@ Run a Python module file under the collector, including any arguments used by th
 pytorch-collect --output ./trace-output --writer parquet -- samples/gpt2.py "What is Arm Performix?" 100
 ```
 
-This generates two parquet files under the trace-output directory:
+This generates two Parquet files and one JSON file under the trace-output directory:
 
 - `api_calls.parquet`
 - `operator_calls.parquet`
+- `collection_timing.json`
+
+The collection timing file contains the fields `start_time_ns` and `end_time_ns`
+for the start and end of collection - as `CLOCK_MONOTONIC_RAW` nanoseconds.
+This information *could* have been put in a parquet file, but it is convenient to
+have it in a form that is easy to read from inside a recipe step. The
+timestamps are encoded as decimal strings to preserve their precision when read
+by JavaScript.
 
 ## Parquet Schema
 

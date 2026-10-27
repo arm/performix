@@ -8,7 +8,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type GRPCRecipeStageNotifier struct {
@@ -47,11 +47,12 @@ func (p *GRPCRecipeStageNotifier) OnStageEnd(stageInfo notifiers.StageInfo, err 
 func (p *GRPCRecipeStageNotifier) OnStageProgress(stageInfo notifiers.StageInfo, stageProgress notifiers.StageProgress) {
 	unit := StageProgressUnitToProto(stageProgress.Unit)
 	stageProgressResponse := &apapproto.RecipeResponse_StageProgress{StageProgress: &apapproto.StageProgress{
-		StageName: stageInfo.Name,
-		Count:     stageProgress.Sent,
-		Max:       stageProgress.Max,
-		Unit:      unit,
-		Message:   &stageProgress.Message,
+		StageName:                 stageInfo.Name,
+		Count:                     stageProgress.Sent,
+		Max:                       stageProgress.Max,
+		Unit:                      unit,
+		Message:                   &stageProgress.Message,
+		EstimatedRemainingSeconds: stageProgress.EstimatedRemainingSeconds,
 	}}
 	response := &apapproto.RecipeResponse{SubMessage: stageProgressResponse, Id: &p.Run}
 	sendErr := p.Out.Send(response)

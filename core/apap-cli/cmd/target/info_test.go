@@ -18,8 +18,8 @@ import (
 	targetloginmocks "github.com/Arm-Debug/apap-cli/apap-cli/service/targetlogin/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-cli/utils"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 type mockTargetInfoCollector struct {

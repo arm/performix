@@ -209,7 +209,6 @@ func (renderer *SlAnalyzeRenderer) buildSlAnalyzeArgs(slAnalyzePath, tempDir, ca
 		slAnalyzePath,
 		"-o",
 		tempDir,
-		"--collect-images",
 		"--all-images",
 		"--apap-export",
 		"--include-empty-columns",

@@ -4,7 +4,7 @@
 package tool_goja
 
 import (
-	"errors"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -14,9 +14,11 @@ import (
 
 	"github.com/dop251/goja"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/gojautils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
@@ -28,16 +30,41 @@ type BoundEngineContext struct {
 	ic                      *tool.IntegrationContext
 	asyncHelper             *gojautils.AsyncHelper
 	fileCollector           tool.FileCollector
+	capabilityPublisher     tool.CapabilityPublisher
 	registeredCapabilityIDs *capabilityIDRegistry
 }
 
 type capabilityIDRegistry struct {
 	mu  sync.Mutex
 	ids map[string]struct{}
+	// counterCapabilities holds published capability metadata identifying collected
+	// data series, not the data itself. CPU bindings must reference one saved by
+	// this invocation.
+	counterCapabilities map[string]registeredCounterCapability
+}
+
+type registeredCounterCapability struct {
+	componentType capabilities.ComponentType
+	data          CapabilityData
+}
+
+func (r *capabilityIDRegistry) validateBindings(value capabilities.CPUCounterValue) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, binding := range value.Payload.Bindings {
+		counterCapability, ok := r.counterCapabilities[binding.SeriesCapabilityID]
+		if !ok {
+			return fmt.Errorf("CPU binding %q has not been saved by this invocation", binding.SeriesCapabilityID)
+		}
+		if err := capabilities.ValidateCPUCounterSeries(counterCapability.componentType, counterCapability.data.State, counterCapability.data.Payload); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newCapabilityIDRegistry() *capabilityIDRegistry {
-	return &capabilityIDRegistry{ids: make(map[string]struct{})}
+	return &capabilityIDRegistry{ids: make(map[string]struct{}), counterCapabilities: make(map[string]registeredCounterCapability)}
 }
 
 func (r *capabilityIDRegistry) reserve(id string) bool {
@@ -82,35 +109,36 @@ type ProcessOptions struct {
 }
 
 // NewBoundEngineContext wires an engine + helper.
-func NewBoundEngineContext(eng tool.Engine, asyncHelper *gojautils.AsyncHelper, ic *tool.IntegrationContext, fileCollector tool.FileCollector, registeredCapabilityIDs *capabilityIDRegistry) *BoundEngineContext {
+func NewBoundEngineContext(eng tool.Engine, asyncHelper *gojautils.AsyncHelper, ic *tool.IntegrationContext, fileCollector tool.FileCollector, capabilityPublisher tool.CapabilityPublisher, registeredCapabilityIDs *capabilityIDRegistry) *BoundEngineContext {
 	return &BoundEngineContext{
 		eng:                     eng,
 		asyncHelper:             asyncHelper,
 		ic:                      ic,
 		fileCollector:           fileCollector,
+		capabilityPublisher:     capabilityPublisher,
 		registeredCapabilityIDs: registeredCapabilityIDs,
 	}
 }
 
 // IsFullCaptureSupportEnabled returns whether the full capture support is enabled for this tool integration.
 func (b *BoundEngineContext) IsFullCaptureSupportEnabled() bool {
-	return b.ic.IsFullCaptureSupportEnabled
+	return b.ic.FeatureFlags.FullCaptureSupport
 }
 
 // IsNeoprofTimelineEnabled returns whether the neoprof timeline feature is enabled for this tool integration.
 func (b *BoundEngineContext) IsNeoprofTimelineEnabled() bool {
-	return b.ic.IsNeoprofTimelineEnabled
+	return b.ic.FeatureFlags.NeoprofTimeline
 }
 
 // ExecCommand runs a short-lived command via engine.
 func (b *BoundEngineContext) ExecCommand(cmd goja.Value, opts goja.Value) (goja.Value, error) {
 	parsedCmd := []string{}
-	if err := gojautils.ParseObjectFromJSWithRegex(cmd, &parsedCmd, nil, nil); err != nil {
+	if err := gojautils.ParseObjectFromJSStrictWithRegex(cmd, &parsedCmd, nil, nil); err != nil {
 		err = fmt.Errorf("invalid value for argument 'cmd': %w", err)
 		panic(err)
 	}
 	eo := &ExecOptions{}
-	if err := gojautils.ParseObjectFromJSWithRegex(opts, eo, []*regexp.Regexp{allowAllUnset}, nil); err != nil {
+	if err := gojautils.ParseObjectFromJSStrictWithRegex(opts, eo, []*regexp.Regexp{allowAllUnset}, nil); err != nil {
 		err = fmt.Errorf("invalid value for argument 'opts': %w", err)
 		panic(err)
 	}
@@ -244,12 +272,12 @@ var allowAllUnset = regexp.MustCompile(`(.*?)`)
 // StartProcess launches a long-running process via engine.
 func (b *BoundEngineContext) StartProcess(cmd goja.Value, opts goja.Value) (goja.Value, error) {
 	parsedCmd := []string{}
-	if err := gojautils.ParseObjectFromJSWithRegex(cmd, &parsedCmd, nil, nil); err != nil {
+	if err := gojautils.ParseObjectFromJSStrictWithRegex(cmd, &parsedCmd, nil, nil); err != nil {
 		err = fmt.Errorf("invalid value for argument 'cmd': %w", err)
 		panic(err)
 	}
 	po := &ProcessOptions{}
-	err := gojautils.ParseObjectFromJSWithRegex(opts, po, []*regexp.Regexp{allowAllUnset}, nil)
+	err := gojautils.ParseObjectFromJSStrictWithRegex(opts, po, []*regexp.Regexp{allowAllUnset}, nil)
 	if err != nil {
 		err = fmt.Errorf("invalid value for argument 'opts': %w", err)
 		panic(err)
@@ -420,7 +448,7 @@ func (b *BoundEngineContext) EmitOutput(path, relativePath string, meta goja.Val
 		ImmediateRetrieval: to.ImmediateRetrieval,
 		Exclude:            to.Exclude,
 		BackgroundTransfer: to.BackgroundTransfer,
-		Compressed:         to.Compressed,
+		Compressed:         to.Compressed && b.ic.FeatureFlags.RunComponentCompression,
 	})
 }
 
@@ -479,7 +507,7 @@ func (b *BoundEngineContext) AddToolCapability(capabilityId string, gojaComponen
 	return nil
 }
 
-func (b *BoundEngineContext) addToolCapability(capabilityId string, gojaComponentType goja.Value, gojaCapabilityData goja.Value) (returnErr error) {
+func (b *BoundEngineContext) addToolCapability(capabilityId string, gojaComponentType goja.Value, gojaCapabilityData goja.Value) error {
 	// Validate and convert capability contents
 	capabilityData := &CapabilityData{}
 	err := gojautils.ParseObjectFromJS(gojaCapabilityData, capabilityData)
@@ -507,27 +535,79 @@ func (b *BoundEngineContext) addToolCapability(capabilityId string, gojaComponen
 		return err
 	}
 	componentType := cdf.ComponentType{Name: om.ComponentType, SchemaVersion: om.Version}
+	var cpuOutcome capabilities.CPUCounterValue
+	definition, defined := capabilities.LookupDefinition(capabilityId)
+	if componentType.Name == capabilities.CPUCounter && !defined {
+		b.registeredCapabilityIDs.release(capabilityId)
+		return message.New(message.EngineToolCounterCollectionInvalid).WithCause(
+			fmt.Errorf("CPU component type %s requires a defined capability, got %q", capabilities.CPUCounter, capabilityId),
+		)
+	}
+	if defined {
+		request := b.ic.CapabilityRequest
+		if request == nil {
+			b.registeredCapabilityIDs.release(capabilityId)
+			return message.New(message.EngineToolCounterCollectionInvalid).WithCause(
+				fmt.Errorf("CPU outcome %q has no explicit counter request", capabilityId),
+			)
+		}
+		selected := false
+		for _, id := range append(append([]string{}, request.Required...), request.Optional...) {
+			selected = selected || id == capabilityId
+		}
+		if !selected {
+			b.registeredCapabilityIDs.release(capabilityId)
+			return message.New(message.EngineToolCounterCollectionInvalid).WithCause(
+				fmt.Errorf("CPU outcome %q was not selected by the counter request", capabilityId),
+			)
+		}
+		if componentType != (cdf.ComponentType{Name: definition.ComponentType.Name, SchemaVersion: definition.ComponentType.Version}) {
+			b.registeredCapabilityIDs.release(capabilityId)
+			return message.New(message.EngineToolCounterCollectionInvalid).WithCause(
+				fmt.Errorf("reserved capability %q requires component type %s version %s", capabilityId, definition.ComponentType.Name, definition.ComponentType.Version),
+			)
+		}
+		envelope := map[string]any{"componentType": gojaComponentType.Export(), "state": capabilityData.State, "payload": capabilityData.Payload}
+		value, err := capabilities.ParseCPUCounterValue(capabilityId, envelope, true)
+		if err == nil {
+			err = b.registeredCapabilityIDs.validateBindings(value)
+		}
+		if err != nil {
+			b.registeredCapabilityIDs.release(capabilityId)
+			return message.New(message.EngineToolCounterCollectionInvalid).WithCause(err)
+		}
+		cpuOutcome = value
+	}
 
 	relativePath := filepath.Join("capabilities", fmt.Sprintf("%v.json", capabilityId))
-	absolutePath, err := b.fileCollector.AddComponent(b.ic.OutputEntityDir, componentType, relativePath)
-	if err != nil {
+	if defined && cpuOutcome.State == capabilities.CPUCounterStateCollected {
+		staged := b.ic.StageCPUCounterOutcome(capabilityId, cpuOutcome, func(value capabilities.CPUCounterValue) error {
+			contents, err := json.Marshal(struct {
+				State   string                         `json:"state"`
+				Payload capabilities.CPUCounterPayload `json:"payload"`
+			}{State: value.State, Payload: value.Payload})
+			if err != nil {
+				return err
+			}
+			return tool.PublishJSONComponent(b.eng, b.capabilityPublisher, b.ic.OutputEntityDir, componentType, relativePath, string(contents))
+		})
+		if staged {
+			return nil
+		}
+	}
+	if err := tool.PublishJSONComponent(b.eng, b.capabilityPublisher, b.ic.OutputEntityDir, componentType, relativePath, contentsString); err != nil {
 		b.registeredCapabilityIDs.release(capabilityId)
 		return err
 	}
-	// note: from now on, we no longer release the ID on failure as the manifest entry has already been recorded
-
-	// Create run file
-	hostHandle, err := b.eng.CreateRunFile(absolutePath)
-	if err != nil {
-		return err
+	if defined {
+		b.ic.RecordCPUCounterOutcome(capabilityId, cpuOutcome)
+	}
+	if componentType.Name == "tool_capabilities/counter" {
+		b.registeredCapabilityIDs.mu.Lock()
+		b.registeredCapabilityIDs.counterCapabilities[capabilityId] = registeredCounterCapability{capabilities.ComponentType{Name: componentType.Name, Version: componentType.SchemaVersion}, *capabilityData}
+		b.registeredCapabilityIDs.mu.Unlock()
 	}
 
-	defer func() {
-		returnErr = errors.Join(returnErr, hostHandle.Close())
-	}()
-	if err = hostHandle.Append(contentsString + "\n"); err != nil {
-		return err
-	}
 	return nil
 }
 

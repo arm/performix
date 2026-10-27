@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 )
@@ -144,14 +145,63 @@ func RunAndReformatToolIntegrations(
 	reg *Registry,
 	manifestUpdater *run.RunManifestUpdater,
 ) []error {
-	errs := make([]error, len(intCtxs))
-	// Keep same length as inputs; nil where creation failed.
-	toolInts := make([]ToolIntegration, len(intCtxs))
-
-	if ConstructToolIntegrations(intCtxs, reg, errs, toolInts) {
+	prepared, errs := PrepareToolIntegrations(intCtxs, reg)
+	if errors.Join(errs...) != nil {
 		return errs
 	}
+	return RunAndReformatPreparedToolIntegrations(stopCh, cancelCh, prepared, manifestUpdater)
+}
 
+// PreparedToolIntegrations contains integrations which have completed all
+// validation, discovery and construction needed before collection starts.
+type PreparedToolIntegrations struct {
+	contexts     []IntegrationContext
+	integrations []ToolIntegration
+}
+
+// PrepareToolIntegrations completes all work which can reject an integration
+// before collection starts.
+func PrepareToolIntegrations(intCtxs []IntegrationContext, reg *Registry) (*PreparedToolIntegrations, []error) {
+	errs := make([]error, len(intCtxs))
+	for i := range intCtxs {
+		if err := normalizeCapabilityRequest(&intCtxs[i]); err != nil {
+			errs[i] = err
+			continue
+		}
+		if err := prepareCounterCollection(&intCtxs[i], reg); err != nil {
+			errs[i] = err
+		}
+	}
+	if errors.Join(errs...) != nil {
+		return nil, errs
+	}
+
+	toolInts := make([]ToolIntegration, len(intCtxs))
+	if ConstructToolIntegrations(intCtxs, reg, errs, toolInts) {
+		return nil, errs
+	}
+	return &PreparedToolIntegrations{contexts: intCtxs, integrations: toolInts}, errs
+}
+
+// RunAndReformatPreparedToolIntegrations launches integrations which have
+// already passed PrepareToolIntegrations.
+func RunAndReformatPreparedToolIntegrations(
+	stopCh, cancelCh chan struct{},
+	prepared *PreparedToolIntegrations,
+	manifestUpdater *run.RunManifestUpdater,
+) []error {
+	intCtxs := prepared.contexts
+	toolInts := prepared.integrations
+	errs := make([]error, len(intCtxs))
+	for i := range intCtxs {
+		intCtxs[i].counterOutcomes = nil
+		if request := intCtxs[i].CapabilityRequest; request != nil && len(request.Required)+len(request.Optional) > 0 {
+			intCtxs[i].counterOutcomes = &counterOutcomeSet{
+				published: make(map[string]capabilities.CPUCounterValue),
+				staged:    make(map[string]stagedCounterOutcome),
+			}
+		}
+	}
 	// Run all tool instances concurrently
 	runWg := sync.WaitGroup{}
 	runWg.Add(len(intCtxs))
@@ -168,6 +218,9 @@ func RunAndReformatToolIntegrations(
 		}(i)
 	}
 	runWg.Wait()
+	for i := range intCtxs {
+		errs[i] = finishCapabilityFailure(&intCtxs[i], cancelCh, errs[i], capabilities.CPUCounterReasonRecordFailed)
+	}
 
 	// Reformat only those that ran without error.
 	var refmtWg sync.WaitGroup
@@ -175,28 +228,71 @@ func RunAndReformatToolIntegrations(
 		if errs[i] != nil {
 			continue
 		}
-
-		// Add to the manifest the tool integration's name and version (hardcode invocation to 0)
-		if err := manifestUpdater.AddToolOutput(intCtxs[i].Name, intCtxs[i].Version, 0); err != nil {
-			errs[i] = fmt.Errorf("failed to write manifest: %w", err)
-			continue
+		// Explicit requests are registered before resolution so their intent remains
+		// readable on failure. Legacy invocations keep the previous success-gated
+		// toolsUsed behaviour.
+		if intCtxs[i].CapabilityRequest == nil && manifestUpdater != nil {
+			if err := manifestUpdater.AddToolOutput(intCtxs[i].Name, intCtxs[i].Version, intCtxs[i].InvocationIndex); err != nil {
+				errs[i] = fmt.Errorf("failed to write manifest: %w", err)
+				continue
+			}
 		}
 
+		errs[i] = finishCapabilityFailure(&intCtxs[i], cancelCh, nil, capabilities.CPUCounterReasonReformatFailed)
+		if errs[i] != nil {
+			continue
+		}
 		closure, err := ti.StartRuntime()
 		if err != nil {
-			errs[i] = fmt.Errorf("failed to start tool runtime: %w", err)
+			errs[i] = finishCapabilityFailure(&intCtxs[i], cancelCh,
+				fmt.Errorf("failed to start tool runtime: %w", err), capabilities.CPUCounterReasonReformatFailed)
+			continue
 		}
 		defer closure()
 
 		refmtWg.Add(1)
 		go func(idx int, tool ToolIntegration) {
 			defer refmtWg.Done()
-			errs[idx] = tool.Reformat()
+			errs[idx] = finishCapabilityFailure(&intCtxs[idx], cancelCh, tool.Reformat(), capabilities.CPUCounterReasonReformatFailed)
+			if errs[idx] != nil {
+				return
+			}
+			errs[idx] = intCtxs[idx].finalizeCounterOutcomes("")
+			if errs[idx] == nil {
+				errs[idx] = intCtxs[idx].validateCounterOutcomes()
+			}
 		}(i, ti)
 	}
 	refmtWg.Wait()
 
 	return errs
+}
+
+// finishCapabilityFailure preserves the phase error and fills only missing
+// outcomes. Cancellation leaves no new outcome and discards staged successes.
+func finishCapabilityFailure(ic *IntegrationContext, cancelCh <-chan struct{}, phaseErr error, reason string) error {
+	// Directly constructed integrations may omit the execution context.
+	var contextErr error
+	if ic.Ctx != nil {
+		contextErr = ic.Ctx.Err()
+	}
+	cancelled := errors.Is(phaseErr, errToolRunCancelled) || errors.Is(phaseErr, context.Canceled) || contextErr != nil
+	select {
+	case <-cancelCh:
+		cancelled = true
+	default:
+	}
+	if cancelled {
+		ic.discardStagedCounterOutcomes()
+		return errors.Join(phaseErr, errToolRunCancelled, contextErr)
+	}
+	if phaseErr == nil {
+		return nil
+	}
+	if publishErr := ic.finalizeCounterOutcomes(reason); publishErr != nil {
+		return errors.Join(phaseErr, publishErr)
+	}
+	return phaseErr
 }
 
 // ProbeTools runs the Probe method of all provided tool integrations concurrently.
@@ -205,9 +301,33 @@ func RunAndReformatToolIntegrations(
 func ProbeTools(
 	probeRequests []IntegrationContext,
 	reg *Registry,
+	cancelCh <-chan struct{},
 ) ([]ProbeResult, []error) {
+	results, errs := ProbeToolDiscovery(probeRequests, reg, cancelCh)
+	for i, request := range probeRequests {
+		if errs[i] == nil {
+			errs[i] = AddCapabilitySelectionAdvice(&results[i], request.CapabilityRequest)
+		}
+	}
+	return results, errs
+}
+
+// ProbeToolDiscovery returns validated discovery with integration advice only.
+// Callers caching these results must apply request-specific advice after cloning
+// the cached result, using AddCapabilitySelectionAdvice.
+func ProbeToolDiscovery(probeRequests []IntegrationContext, reg *Registry, cancelCh <-chan struct{}) ([]ProbeResult, []error) {
 	errs := make([]error, len(probeRequests))
 	probeResults := make([]ProbeResult, len(probeRequests))
+	for i := range probeRequests {
+		if err := normalizeCapabilityRequest(&probeRequests[i]); err != nil {
+			errs[i] = err
+			continue
+		}
+		errs[i] = validateCapabilityRequest(probeRequests[i], reg)
+	}
+	if errors.Join(errs...) != nil {
+		return probeResults, errs
+	}
 	// Keep same length as inputs; nil where creation failed.
 	toolInts := make([]ToolIntegration, len(probeRequests))
 
@@ -232,17 +352,43 @@ func ProbeTools(
 					return
 				}
 
-				defer cleanUp()
 				probeResults[indx], err = toolInstance.Probe()
+				if err == nil {
+					factory := reg.FindTool(probeRequests[indx].Name, probeRequests[indx].Version)
+					optedIn := CapabilityInterfaceVersion(factory) == capabilities.CPUCounterVersion
+					required := optedIn
+					if request := probeRequests[indx].CapabilityRequest; request != nil && len(request.Required)+len(request.Optional) == 0 {
+						required = false
+					}
+					err = validateCPUDiscovery(probeResults[indx], optedIn, required)
+				}
+				cleanUp()
 				probeComplete <- err
 			}()
 
-			// Finish when the first of cancellation or probe completion occurs
+			// Cancellation must settle the probe before its runtime and shared
+			// locality resources can be cleaned up by the caller.
+			var cancellationErr error
 			select {
 			case <-probeRequests[indx].Ctx.Done():
-				errs[indx] = probeRequests[indx].Ctx.Err()
+				cancellationErr = probeRequests[indx].Ctx.Err()
+			case <-cancelCh:
+				cancellationErr = context.Canceled
 			case err := <-probeComplete:
 				errs[indx] = err
+				return
+			}
+			select {
+			case err := <-probeComplete:
+				errs[indx] = err
+				return
+			default:
+			}
+			cancelErr := toolInstance.Cancel()
+			probeErr := <-probeComplete
+			errs[indx] = cancellationErr
+			if cancelErr != nil || probeErr != nil {
+				errs[indx] = errors.Join(errs[indx], cancelErr, probeErr)
 			}
 		}(i)
 	}

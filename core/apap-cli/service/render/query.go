@@ -7,7 +7,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type QueryService interface {

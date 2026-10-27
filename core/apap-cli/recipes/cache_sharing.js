@@ -5,7 +5,7 @@
 
 // @ts-check
 
-const PY_CACHE_SHARING_VERSION = '1.0.0';
+const PY_CACHE_SHARING_VERSION = '1.1.0';
 
 let tool_name = 'linux_perf';
 let tool_version = '1.0.0';
@@ -48,7 +48,8 @@ var recipe = {
   readyStages: [
     {
       name: 'Check perf availability',
-      description: 'Verify that `perf --version` runs cleanly.',
+      description:
+        'Check that perf is available and advertises peer-snoop support.',
       exec: readyCacheSharing,
     },
     {
@@ -77,7 +78,7 @@ var recipe = {
 };
 
 /**
- * ready stage: delegate to the linux_perf integration probe.
+ * ready stage: Probe linux_perf and then check for the peer-snoop support.
  *
  * @param {import("./docs/jsdocs.js").ReadyExecutionContext} context
  */
@@ -90,6 +91,24 @@ function readyCacheSharing(context) {
   const toolResponses = context.probeTools(tools);
 
   const advice = collectToolAdvice(tools, toolResponses);
+
+  if (toolStatusToRecipeStatus(advice) !== 'error') {
+    const perfHelp = context.runCommand({
+      type: 'exec',
+      cmd: 'LC_ALL=C perf c2c report -h 2>&1',
+    });
+
+    // Check for the existence of 'peer'
+    if (!/\bpeer\b/.test(perfHelp.Stdout)) {
+      advice.push({
+        ToolName: tool_name,
+        AdviceSeverity: 'warning',
+        MessageCode: 'tool_integrations.linux_perf.PEER_SNOOP_UNAVAILABLE',
+        Metadata: {},
+        Cause: '',
+      });
+    }
+  }
 
   return {
     status: toolStatusToRecipeStatus(advice),

@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+dir: "mocks"
+filename: "{{.StructName}}.go"
+structname: "{{ .InterfaceName | camelcase | firstUpper }}"
+pkgname: "mocks"
+template: "testify"
+template-data:
+  unroll-variadic: true
+include-auto-generated: true
+packages:
+  github.com/Arm-Debug/apap-cli/api/apapproto:
+    interfaces:
+      ApapClient:
+  github.com/Arm-Debug/apap-cli/api/targetagentproto:
+    interfaces:
+      TargetAgentClient:
+  github.com/Arm-Debug/apap-cli/api/tetherproto:
+    interfaces:
+      TetherClient:
+      Tether_HoldClient:
+      Tether_HoldServer:
+  github.com/Arm-Debug/apap-cli/api/authproto:
+    interfaces:
+      AuthClient:
+      Auth_TargetLoginClient:
+      Auth_TargetLoginServer:

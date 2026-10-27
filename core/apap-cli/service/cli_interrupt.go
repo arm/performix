@@ -10,7 +10,7 @@ import (
 	"os/signal"
 	"sync"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 // ContextWithInterrupt returns a child context canceled by the first Ctrl-C.

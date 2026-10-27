@@ -5,6 +5,8 @@ package grpcserver
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcerrors"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpclogging"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging"
@@ -26,42 +29,32 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/tlsconfig"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
 	"github.com/Arm-Debug/apap-cli/apap-engine/userdirs"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/authproto"
+	"github.com/Arm-Debug/apap-cli/api/healthproto"
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/authproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/healthproto"
 )
 
 type GrpcServerConfig struct {
-	Host                      string
-	Port                      int
-	AuthPort                  int
-	HttpPort                  int
-	HttpChunkBytes            int
-	ParallelJobs              uint
-	DataDirectory             string
-	LogLevel                  string
-	LogPath                   string
-	SrcToolsDirectory         string
-	DeploymentToolsDir        string
-	ADBPath                   string
-	IsRootWorkerEnabled       bool
-	EnableFullCaptureSupport  bool
-	EnableRerendering         bool
-	EnableExperimentalRecipes bool
-	EnableSecondaryRunPaths   bool
-	EnableGPURecipe           bool
-	EnableRenderDBSandbox     bool
-	EnableNeoprofTimeline     bool
-	EnableJfrCapture          bool
-	ConfigDirectory           string
-	RunContext                func() context.Context
+	Host               string
+	Port               int
+	HttpPort           int
+	HttpChunkBytes     int
+	ParallelJobs       uint
+	DataDirectory      string
+	LogLevel           string
+	LogPath            string
+	SrcToolsDirectory  string
+	DeploymentToolsDir string
+	ADBPath            string
+	FeatureFlags       featureflags.Flags
+	ConfigDirectory    string
+	RunContext         func() context.Context
 }
 
 type GrpcServer struct {
-	Config    GrpcServerConfig
-	Listen    func(network string, address string) (net.Listener, error)
-	ListenTLS func(network string, address string) (net.Listener, error)
+	Config GrpcServerConfig
+	Listen func(network string, address string) (net.Listener, error)
 }
 
 func (s *GrpcServer) deletePidFile() {
@@ -95,21 +88,19 @@ func (s *GrpcServer) address() string {
 	return fmt.Sprintf("%s:%d", s.Config.Host, s.Config.Port)
 }
 
-func (s *GrpcServer) authAddress() string {
-	return fmt.Sprintf("%s:%d", s.Config.Host, s.Config.AuthPort)
+func generateArrowToken() (string, error) {
+	const tokenBytes = 32
+	token := make([]byte, tokenBytes)
+	if _, err := rand.Read(token); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(token), nil
 }
 
 // Create and run the gRPC server.
 func (s *GrpcServer) runServer() error {
 	log.WithField("version", versions.GetVersion()).Infof("Launching %v daemon", terminology.GetProductFullName())
 	log.Infof("gRPC server configuration: %+v", s.Config)
-
-	if s.Config.AuthPort <= 0 {
-		return fmt.Errorf("auth port must be configured")
-	}
-	if s.Config.AuthPort == s.Config.Port {
-		return fmt.Errorf("auth port must differ from main gRPC port")
-	}
 
 	var ctx context.Context
 	var cancel context.CancelFunc
@@ -118,12 +109,30 @@ func (s *GrpcServer) runServer() error {
 	} else {
 		ctx, cancel = context.WithCancel(context.Background())
 	}
+	defer cancel()
 
 	logOpts := []grpc_logrus.Option{
 		grpc_logrus.WithMessageProducer(grpcerrors.GRPCLogErrorProducer),
 	}
+	configDir := s.Config.ConfigDirectory
+	if configDir == "" {
+		var err error
+		configDir, err = userdirs.ConfigDir()
+		if err != nil {
+			return message.New(message.EngineLifecycleStartupFailed).WithCause(err)
+		}
+	}
+	tlsManager, err := tlsconfig.NewManager(configDir)
+	if err != nil {
+		return err
+	}
+	serverCredentials, err := tlsManager.GenerateServerCredentials(s.Config.Host)
+	if err != nil {
+		return err
+	}
 
 	grpcServer := grpc.NewServer(
+		grpc.Creds(serverCredentials),
 		grpc.ChainStreamInterceptor(
 			grpclogging.StreamRPCStartInterceptor(log.NewEntry(log.StandardLogger())),
 			grpc_logrus.StreamServerInterceptor(log.NewEntry(log.StandardLogger()), logOpts...),
@@ -140,27 +149,18 @@ func (s *GrpcServer) runServer() error {
 
 	// Create the APAP service
 	packsServerConfig := ApapServerConfig{
-		ParallelJobs:              s.Config.ParallelJobs,
-		DataDirectory:             s.Config.DataDirectory,
-		IsRootWorkerEnabled:       s.Config.IsRootWorkerEnabled,
-		EnableFullCaptureSupport:  s.Config.EnableFullCaptureSupport,
-		EnableRerendering:         s.Config.EnableRerendering,
-		EnableExperimentalRecipes: s.Config.EnableExperimentalRecipes,
-		EnableSecondaryRunPaths:   s.Config.EnableSecondaryRunPaths,
-		EnableGPURecipe:           s.Config.EnableGPURecipe,
-		EnableRenderDBSandbox:     s.Config.EnableRenderDBSandbox,
-		EnableNeoprofTimeline:     s.Config.EnableNeoprofTimeline,
-		EnableJfrCapture:          s.Config.EnableJfrCapture,
-		ServerHostname:            s.Config.Host,
-		ServerGRPCPort:            s.Config.Port,
-		ServerAuthPort:            s.Config.AuthPort,
-		ServerHTTPPort:            s.Config.HttpPort,
-		ServerHTTPChunkBytes:      s.Config.HttpChunkBytes,
-		LogLevel:                  s.Config.LogLevel,
-		LogFile:                   s.Config.LogPath,
-		SourceToolsDir:            s.Config.SrcToolsDirectory,
-		ConfigDirectory:           s.Config.ConfigDirectory,
-		ADBPath:                   s.Config.ADBPath,
+		ParallelJobs:         s.Config.ParallelJobs,
+		DataDirectory:        s.Config.DataDirectory,
+		FeatureFlags:         s.Config.FeatureFlags,
+		ServerHostname:       s.Config.Host,
+		ServerGRPCPort:       s.Config.Port,
+		ServerHTTPPort:       s.Config.HttpPort,
+		ServerHTTPChunkBytes: s.Config.HttpChunkBytes,
+		LogLevel:             s.Config.LogLevel,
+		LogFile:              s.Config.LogPath,
+		SourceToolsDir:       s.Config.SrcToolsDirectory,
+		ConfigDirectory:      s.Config.ConfigDirectory,
+		ADBPath:              s.Config.ADBPath,
 	}
 
 	deploymentPaths := deployer.BaseToolDeploymentPaths{
@@ -170,7 +170,17 @@ func (s *GrpcServer) runServer() error {
 	if err != nil {
 		return err
 	}
+	arrowToken, err := generateArrowToken()
+	if err != nil {
+		return err
+	}
 	apapproto.RegisterApapServer(grpcServer, apapServer)
+	authproto.RegisterAuthServer(grpcServer, NewAuthServer(
+		ctx,
+		apapServer.targetSessions,
+		&apapServer.targetAccess,
+		arrowToken,
+	))
 
 	// Create the health service
 	healthServer := NewHealthServer()
@@ -183,6 +193,7 @@ func (s *GrpcServer) runServer() error {
 			s.Config.HttpPort,
 			s.Config.HttpChunkBytes,
 			apapServer,
+			arrowToken,
 			s.Listen,
 		)
 		if err := httpServer.Start(ctx, cancel); err != nil {
@@ -190,79 +201,22 @@ func (s *GrpcServer) runServer() error {
 		}
 	}
 
-	// Register reflection service on the main gRPC server, but not for the auth server.
+	// Register reflection service on the gRPC server.
 	reflection.Register(grpcServer)
-
-	configDir := s.Config.ConfigDirectory
-	if configDir == "" {
-		configDir, err = userdirs.ConfigDir()
-		if err != nil {
-			return message.New(message.EngineLifecycleStartupFailed).WithCause(err)
-		}
-	}
-
-	// Configure TLS credentials for the auth service.
-	tlsManager, err := tlsconfig.NewManager(configDir)
-	if err != nil {
-		return err
-	}
-	authCreds, err := tlsManager.GenerateServerCredentials(s.Config.Host)
-	if err != nil {
-		return err
-	}
-
-	authServer := grpc.NewServer(
-		grpc.Creds(authCreds),
-		grpc.ChainStreamInterceptor(
-			grpclogging.StreamRPCStartInterceptor(log.NewEntry(log.StandardLogger())),
-			grpc_logrus.StreamServerInterceptor(log.NewEntry(log.StandardLogger()), logOpts...),
-			grpc_recovery.StreamServerInterceptor(grpc_recovery.WithRecoveryHandler(grpclogging.LogPanicCallStackFunc)),
-			message.ErrorHandlingServerStreamInterceptor(),
-		),
-		grpc.ChainUnaryInterceptor(
-			grpclogging.UnaryRPCStartInterceptor(log.NewEntry(log.StandardLogger())),
-			grpc_logrus.UnaryServerInterceptor(log.NewEntry(log.StandardLogger()), logOpts...),
-			grpc_recovery.UnaryServerInterceptor(grpc_recovery.WithRecoveryHandler(grpclogging.LogPanicCallStackFunc)),
-			message.ErrorHandlingServerInterceptor(),
-		),
-	)
-
-	authproto.RegisterAuthServer(authServer, NewAuthServer(
-		ctx,
-		apapServer.targetSessions,
-		&apapServer.targetAccess,
-	))
 
 	// As soon as we start listening, clients will be able to connect and start issuing RPCs.
 	lis, err := s.Listen("tcp", s.address())
 	if err != nil {
-		listenErr := fmt.Errorf("main server failed to listen: %w", err)
+		listenErr := fmt.Errorf("gRPC server failed to listen: %w", err)
 		return message.New(message.EngineLifecycleStartupFailed).WithCause(listenErr)
 	}
-	closeMainListener := true
+	closeListener := true
 	defer func() {
-		if closeMainListener {
+		if closeListener {
 			_ = lis.Close()
 		}
 	}()
-	log.WithFields(log.Fields{"address": lis.Addr()}).Info("Main server is listening with configuration")
-
-	listenTLS := s.ListenTLS
-	if listenTLS == nil {
-		listenTLS = net.Listen
-	}
-	authLis, err := listenTLS("tcp", s.authAddress())
-	if err != nil {
-		listenErr := fmt.Errorf("auth server failed to listen: %w", err)
-		return message.New(message.EngineLifecycleStartupFailed).WithCause(listenErr)
-	}
-	closeAuthListener := true
-	defer func() {
-		if closeAuthListener {
-			_ = authLis.Close()
-		}
-	}()
-	log.WithFields(log.Fields{"address": authLis.Addr()}).Info("Auth server is listening with configuration")
+	log.WithFields(log.Fields{"address": lis.Addr()}).Info("gRPC server is listening with configuration")
 
 	if err := s.makePidFile(); err != nil {
 		return err
@@ -273,7 +227,7 @@ func (s *GrpcServer) runServer() error {
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	stopWatcher := make(chan struct{})
 	// Register this before the server cleanup below so signal handling remains
-	// active until both deferred GracefulStop calls have completed. Stop signal
+	// active until the deferred GracefulStop call has completed. Stop signal
 	// delivery before releasing a watcher that has not received a signal.
 	defer func() {
 		signal.Stop(signals)
@@ -294,12 +248,8 @@ func (s *GrpcServer) runServer() error {
 	}()
 
 	serve(grpcServer, lis, cancel)
-	closeMainListener = false
+	closeListener = false
 	defer grpcServer.GracefulStop()
-
-	serve(authServer, authLis, cancel)
-	closeAuthListener = false
-	defer authServer.GracefulStop()
 
 	<-ctx.Done()
 
@@ -343,5 +293,5 @@ func (s *GrpcServer) RunBlocking() error {
 }
 
 func NewGrpcServer(config GrpcServerConfig) *GrpcServer {
-	return &GrpcServer{Config: config, Listen: net.Listen, ListenTLS: net.Listen}
+	return &GrpcServer{Config: config, Listen: net.Listen}
 }

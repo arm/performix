@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 )
 
@@ -22,8 +23,8 @@ type captureRenderStage struct {
 func (s *captureRenderStage) Execute(ctx recipe.ExecutionContext, stageContext *recipe.StageContext) (func(), error) {
 	s.capturedParams = ctx.GetRecipeCtx().RenderParamValues
 	s.capturedMeta = ctx.GetRecipeCtx().RecipeMetadata
-	s.capturedFullCaptureSupport = ctx.IsFullCaptureSupportEnabled()
-	s.capturedRerenderingEnabled = ctx.IsRerenderingEnabled()
+	s.capturedFullCaptureSupport = ctx.GetFeatureFlags().FullCaptureSupport
+	s.capturedRerenderingEnabled = ctx.GetFeatureFlags().Rerendering
 	return nil, stageContext.RendererNotifier.OnRender(recipe.RenderOutput{})
 }
 
@@ -169,8 +170,7 @@ func TestGetRendererSpec_PopulatesRenderParamsAndMetadata(t *testing.T) {
 				APIVersion: "v1",
 			},
 		},
-		IsFullCaptureEnabled: true,
-		RerenderingEnabled:   true,
+		FeatureFlags: featureflags.Flags{FullCaptureSupport: true, Rerendering: true},
 	}
 
 	output, err := GetRendererSpec(context.Background(), stageConfig, nil, nil)

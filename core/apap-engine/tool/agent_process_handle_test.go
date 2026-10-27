@@ -16,9 +16,9 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/api/mocks"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
-	"github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 func TestAgentProcessHandle_PrivilegePath(t *testing.T) {

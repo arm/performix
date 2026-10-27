@@ -12,13 +12,13 @@ const {
 const TOOL_NAME = 'linux_perf';
 const VERSION = '1.0.0';
 const POST_PROCESS_TOOL_NAME = 'cache_sharing';
-const bundleVersion = '1.0.0';
+const bundleVersion = '1.1.0';
 const toolFile = `cache_sharing-${bundleVersion}-py3-none-any.whl`;
 const readinessMessageCode =
   'engine.recipeparser.js_recipe_stage.READINESS_MESSAGE';
 
 const PYTHON_VER_MAJOR = 3;
-const PYTHON_VER_MINOR = 5;
+const PYTHON_VER_MINOR = 7;
 
 /**
  * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
@@ -74,6 +74,18 @@ const tool = {
         messageCode: readinessMessageCode,
         metadata: {
           message: '`perf` not found on PATH',
+        },
+      });
+    }
+
+    const addr2line = await engine.execCommand(['addr2line', '--version'], {});
+    if (addr2line.rc !== 0) {
+      advice.push({
+        level: 'error',
+        messageCode: readinessMessageCode,
+        metadata: {
+          message:
+            'addr2line is not available on the target machine. Install the binutils system package in order to run cache sharing.',
         },
       });
     }

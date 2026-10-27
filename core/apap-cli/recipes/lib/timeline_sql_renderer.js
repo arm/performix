@@ -3,10 +3,6 @@
 
 // @ts-check
 
-/**
- * @typedef {import("../docs/jsdocs").RunComponentDescription} RunComponentDescription
- */
-
 const TIMELINE_COUNTER_DATA_RELATIVE_PATH_PATTERN =
   /^(.+)\/key_type=(\d+)\/series_id=(\d+)\/bin_duration=(\d+)\/counter\.parquet$/i;
 
@@ -73,8 +69,6 @@ function parseTimelineCounterDataPath(componentRelativePath) {
  * @param {number} runIndex
  * @param {string} counterParquetPattern
  * @returns {{
- *   component: RunComponentDescription,
- *   componentPattern: string,
  *   componentRelativePath: string,
  *   rawSeriesKey: string,
  *   keyType: number,
@@ -103,8 +97,6 @@ function findTimelineCounterBindings(context, runIndex, counterParquetPattern) {
 
     seenBindings.add(bindingKey);
     bindings.push({
-      component,
-      componentPattern: counterParquetPattern,
       ...parsedPath,
     });
   }
@@ -123,22 +115,6 @@ function findTimelineCounterBindings(context, runIndex, counterParquetPattern) {
   });
 
   return bindings;
-}
-
-/**
- * @param {number} binDuration
- * @returns {string}
- */
-function baseComponentTypeName(binDuration) {
-  return `timeline-base-${binDuration}`;
-}
-
-/**
- * @param {number} binDuration
- * @returns {string}
- */
-function baseOutputName(binDuration) {
-  return `timeline_base_${binDuration}`;
 }
 
 /**
@@ -172,65 +148,17 @@ function seriesRendererID(rendererIdPrefix, rawSeriesKey, binDuration) {
 /**
  * @param {Object} args
  * @param {number} args.binDuration
- * @param {string} args.rendererIdPrefix
- * @param {string} args.componentPattern
- * @returns {any}
- */
-function makeBaseScanRenderer({
-  binDuration,
-  rendererIdPrefix,
-  componentPattern,
-}) {
-  return {
-    type: 'SQL',
-    id: `${rendererIdPrefix}_base_${binDuration}`,
-    config: {
-      sql: sql`
-        SELECT
-          start_timestamp,
-          end_timestamp,
-          device_no,
-          thread,
-          value,
-          key_type,
-          series_id,
-          bin_duration
-        FROM read_parquet({{path:${componentPattern}}}, hive_partitioning = true)
-        WHERE bin_duration = ${binDuration}
-      `,
-      inputs: [],
-      output: {
-        name: baseOutputName(binDuration),
-        description: `Timeline base scan view for bin duration ${binDuration}.`,
-        cardinality: 'one',
-        component_type: {
-          name: baseComponentTypeName(binDuration),
-          schema_version: '1.0',
-        },
-      },
-    },
-  };
-}
-
-/**
- * @param {Object} args
- * @param {number} args.binDuration
+ * @param {string} args.componentRelativePath
  * @param {string} args.rendererIdPrefix
  * @param {string} args.rawSeriesKey
- * @param {number} args.keyType
- * @param {number} args.seriesId
  * @returns {any}
  */
 function makeSeriesRenderer({
   binDuration,
+  componentRelativePath,
   rendererIdPrefix,
   rawSeriesKey,
-  keyType,
-  seriesId,
 }) {
-  const basePortName = baseOutputName(binDuration);
-  const baseRendererId = `${rendererIdPrefix}_base_${binDuration}`;
-
   return {
     type: 'SQL',
     id: seriesRendererID(rendererIdPrefix, rawSeriesKey, binDuration),
@@ -246,31 +174,22 @@ function makeSeriesRenderer({
           base.device_no,
           base.thread,
           base.value
-        FROM {{table:${basePortName}}} AS base
-        WHERE base.key_type = ${keyType}
-          AND base.series_id = ${seriesId}
+        FROM (
+          SELECT *
+          FROM read_parquet(
+            {{path:${componentRelativePath}}},
+            hive_partitioning = true
+          )
+          UNION ALL BY NAME
+          -- Legacy capabilities do not record counter_class. Supply the
+          -- numeric column so an older activity file binds as an empty source
+          -- instead of preventing the whole run from rendering.
+          SELECT CAST(NULL AS DOUBLE) AS value
+          WHERE FALSE
+        ) AS base
+        WHERE base.value IS NOT NULL
       `,
-      inputs: [
-        {
-          name: basePortName,
-          description: `Timeline base scan input for ${binDuration}.`,
-          cardinality: 'one',
-          component_type: {
-            name: baseComponentTypeName(binDuration),
-            schema_version: '1.0',
-          },
-        },
-      ],
-      data_source: {
-        tables: {
-          [basePortName]: [
-            {
-              renderer_id: baseRendererId,
-              output: baseOutputName(binDuration),
-            },
-          ],
-        },
-      },
+      inputs: [],
       output: {
         name: seriesOutputName(binDuration, rawSeriesKey),
         description: `Compressed source ${rawSeriesKey} for bin duration ${binDuration}.`,
@@ -285,19 +204,16 @@ function makeSeriesRenderer({
 }
 
 /**
- * Build a static timeline SQL view family with one base and compressed-series chain per bin duration.
+ * Build one compressed timeline SQL source per counter parquet file.
  *
- * Contract by layer:
- * - Base scan: loads the source intervals without changing value semantics.
- * - Series sources: retain compressed intervals for one series and duration.
+ * Each source reads only its own parquet file. This avoids inspecting every
+ * parquet schema in a capture when activity and numeric counter schemas coexist.
  * - Provider-authored presentation queries filter and expand only the requested
  *   range before aggregation and chart projection.
  *
  * @param {Object} args
  * @param {string} [args.rendererId]
  * @param {{
- *   component: RunComponentDescription,
- *   componentPattern: string,
  *   componentRelativePath: string,
  *   rawSeriesKey: string,
  *   keyType: number,
@@ -324,26 +240,13 @@ function buildTimelineSQLRendererBundle(args) {
   }
   const renderers = [];
   const timelineSources = [];
-  const baseRenderersByDuration = new Set();
 
   for (const binding of bindings) {
-    if (!baseRenderersByDuration.has(binding.binDuration)) {
-      renderers.push(
-        makeBaseScanRenderer({
-          binDuration: binding.binDuration,
-          rendererIdPrefix: rendererId,
-          componentPattern: binding.componentPattern,
-        }),
-      );
-      baseRenderersByDuration.add(binding.binDuration);
-    }
-
     const seriesRenderer = makeSeriesRenderer({
       binDuration: binding.binDuration,
+      componentRelativePath: binding.componentRelativePath,
       rendererIdPrefix: rendererId,
       rawSeriesKey: binding.rawSeriesKey,
-      keyType: binding.keyType,
-      seriesId: binding.seriesId,
     });
     renderers.push(seriesRenderer);
 

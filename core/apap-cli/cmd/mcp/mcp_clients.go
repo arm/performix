@@ -23,7 +23,7 @@ import (
 	installerservice "github.com/Arm-Debug/apap-cli/apap-cli/service/mcpclientinstaller"
 	"github.com/Arm-Debug/apap-cli/apap-engine/mcpclientinstaller/clientids"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 // mcpClientDependencies keeps Cobra commands independent from the production
@@ -347,8 +347,21 @@ func operationOutcome(outcome, prefix string) string {
 	return strings.ToLower(strings.TrimPrefix(outcome, prefix))
 }
 
+// Older clients remain detected so we can report upgrade advice and remove
+// existing registrations. The compatibility error identifies these clients.
+func mcpClientDetectedButUnsupported(status *apapproto.MCPClientStatus) bool {
+	if !status.GetDetected() || status.GetError().GetRoot() == nil {
+		return false
+	}
+	return errorCode(status.GetError().GetRoot()) ==
+		string(message.EngineMcpRegistrationClientVersionUnsupported)
+}
+
 func isAvailableForInstall(status *apapproto.MCPClientStatus) bool {
+	// Bulk installation skips incompatible clients. Explicit installation still
+	// reaches the engine so it can report the installed version and upgrade advice.
 	return status.Detected &&
+		!mcpClientDetectedButUnsupported(status) &&
 		status.RegistrationState ==
 			apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_NOT_CONFIGURED
 }

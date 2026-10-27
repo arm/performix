@@ -3,21 +3,21 @@
 
 module github.com/Arm-Debug/apap-cli/apap-engine
 
-go 1.27.0
+go 1.27.2
 
 replace (
+	github.com/Arm-Debug/apap-cli/api => ../api
 	github.com/Arm-Debug/apap-cli/atperf-agent => ../atperf-agent
 	github.com/Arm-Debug/apap-cli/atperf-compatibility => ../atperf-compatibility
 	github.com/Arm-Debug/apap-cli/atperf-version => ../atperf-version
-	github.com/Arm-Debug/apap-cli/clients/go => ../clients/go
 )
 
 require (
 	github.com/ARM-software/golang-utils/utils v1.82.1
+	github.com/Arm-Debug/apap-cli/api v0.0.0-00010101000000-000000000000
 	github.com/Arm-Debug/apap-cli/atperf-agent v0.0.0
 	github.com/Arm-Debug/apap-cli/atperf-compatibility v0.0.0-00010101000000-000000000000
 	github.com/Arm-Debug/apap-cli/atperf-version v0.0.0
-	github.com/Arm-Debug/apap-cli/clients/go v0.0.0-00010101000000-000000000000
 	github.com/apache/arrow-go/v18 v18.5.1
 	github.com/benbjohnson/clock v1.3.5
 	github.com/bmatcuk/doublestar v1.3.4
@@ -28,7 +28,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
-	github.com/klauspost/compress v1.18.3
+	github.com/klauspost/compress v1.18.7
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/pkg/sftp v1.13.8
 	github.com/simukti/sqldb-logger v0.0.0-20230108155151-646c1a075551
@@ -37,13 +37,13 @@ require (
 	github.com/spf13/afero v1.14.0
 	github.com/spf13/afero/sftpfs v1.14.0
 	github.com/spf13/cast v1.7.1
-	github.com/spf13/viper v1.19.0
 	github.com/stretchr/testify v1.11.1
+	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f
 	go.uber.org/atomic v1.11.0
 	go.uber.org/goleak v1.3.0
-	golang.org/x/crypto v0.56.0
-	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/crypto v0.57.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/sys v0.48.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
@@ -99,6 +99,7 @@ require (
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.6 // indirect
+	github.com/spf13/viper v1.19.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
@@ -107,11 +108,11 @@ require (
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
-	golang.org/x/mod v0.38.0 // indirect
-	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/telemetry v0.0.0-20260708182218-49f421fb7959 // indirect
-	golang.org/x/text v0.41.0 // indirect
-	golang.org/x/tools v0.48.0 // indirect
+	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
+	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/tools v0.49.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

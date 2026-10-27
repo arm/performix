@@ -31,50 +31,8 @@ func (s *stubListener) Close() error {
 func (s *stubListener) Addr() net.Addr { return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0} }
 
 func TestGrpcServerAddressHelpers(t *testing.T) {
-	server := GrpcServer{Config: GrpcServerConfig{Host: "localhost", Port: 42, AuthPort: 43}}
+	server := GrpcServer{Config: GrpcServerConfig{Host: "localhost", Port: 42}}
 	require.Equal(t, "localhost:42", server.address())
-	require.Equal(t, "localhost:43", server.authAddress())
-}
-
-func TestGrpcServerRunServerValidatesAuthPort(t *testing.T) {
-	setTestDirs(t)
-	server := GrpcServer{
-		Config: GrpcServerConfig{
-			Host:            "127.0.0.1",
-			Port:            9000,
-			AuthPort:        0,
-			ConfigDirectory: t.TempDir(),
-			LogPath:         "stdout",
-			RunContext:      func() context.Context { return context.Background() },
-		},
-		Listen: func(string, string) (net.Listener, error) {
-			return &stubListener{}, nil
-		},
-	}
-
-	err := server.runServer()
-	require.EqualError(t, err, "auth port must be configured")
-	server.deletePidFile()
-}
-
-func TestGrpcServerRunServerRejectsMatchingPorts(t *testing.T) {
-	setTestDirs(t)
-	server := GrpcServer{
-		Config: GrpcServerConfig{
-			Host:            "127.0.0.1",
-			Port:            9100,
-			AuthPort:        9100,
-			ConfigDirectory: t.TempDir(),
-			LogPath:         "stdout",
-			RunContext:      func() context.Context { return context.Background() },
-		},
-		Listen: func(string, string) (net.Listener, error) {
-			return &stubListener{}, nil
-		},
-	}
-	err := server.runServer()
-	require.EqualError(t, err, "auth port must differ from main gRPC port")
-	server.deletePidFile()
 }
 
 func TestGrpcServerRunServerDoesNotDeleteExistingPidFileWhenListenFails(t *testing.T) {
@@ -89,7 +47,6 @@ func TestGrpcServerRunServerDoesNotDeleteExistingPidFileWhenListenFails(t *testi
 		Config: GrpcServerConfig{
 			Host:            host,
 			Port:            port,
-			AuthPort:        9001,
 			ConfigDirectory: t.TempDir(),
 			LogPath:         "stdout",
 			RunContext:      func() context.Context { return context.Background() },
@@ -107,32 +64,6 @@ func TestGrpcServerRunServerDoesNotDeleteExistingPidFileWhenListenFails(t *testi
 	require.Equal(t, existingPid, pid)
 }
 
-func TestGrpcServerRunServerClosesMainListenerWhenAuthListenFails(t *testing.T) {
-	setTestDirs(t)
-	mainListener := &stubListener{}
-	server := GrpcServer{
-		Config: GrpcServerConfig{
-			Host:            "127.0.0.1",
-			Port:            9000,
-			AuthPort:        9001,
-			ConfigDirectory: t.TempDir(),
-			LogPath:         "stdout",
-			RunContext:      func() context.Context { return context.Background() },
-		},
-		Listen: func(string, string) (net.Listener, error) {
-			return mainListener, nil
-		},
-		ListenTLS: func(string, string) (net.Listener, error) {
-			return nil, fmt.Errorf("address already in use")
-		},
-	}
-
-	err := server.runServer()
-
-	require.Error(t, err)
-	require.True(t, mainListener.closed)
-}
-
 func TestGrpcServerRunServerClosesListenersWhenPidFileCreationFails(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		homeDir := t.TempDir()
@@ -147,12 +78,10 @@ func TestGrpcServerRunServerClosesListenersWhenPidFileCreationFails(t *testing.T
 	}
 
 	mainListener := &stubListener{}
-	authListener := &stubListener{}
 	server := GrpcServer{
 		Config: GrpcServerConfig{
 			Host:            "127.0.0.1",
 			Port:            9000,
-			AuthPort:        9001,
 			ConfigDirectory: t.TempDir(),
 			LogPath:         "stdout",
 			RunContext:      func() context.Context { return context.Background() },
@@ -160,16 +89,12 @@ func TestGrpcServerRunServerClosesListenersWhenPidFileCreationFails(t *testing.T
 		Listen: func(string, string) (net.Listener, error) {
 			return mainListener, nil
 		},
-		ListenTLS: func(string, string) (net.Listener, error) {
-			return authListener, nil
-		},
 	}
 
 	err := server.runServer()
 
 	require.Error(t, err)
 	require.True(t, mainListener.closed)
-	require.True(t, authListener.closed)
 }
 
 func setTestDirs(t *testing.T) {

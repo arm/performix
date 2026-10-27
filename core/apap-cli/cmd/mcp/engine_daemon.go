@@ -14,15 +14,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 
 	log "github.com/sirupsen/logrus"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
+	"github.com/Arm-Debug/apap-cli/apap-cli/service/server"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 // engineDaemonRunner owns the engine and MCP protocol lifecycles for one
@@ -30,53 +30,20 @@ import (
 type engineDaemonRunner struct {
 	startAndConnect func(config grpcserver.GrpcServerConfig) (apapproto.ApapClient, error)
 	shutdown        func(client apapproto.ApapClient) error
-	allocatePorts   func() (serverPort int, authPort int, err error)
 	newProtocol     func(engine apapproto.ApapClient) MCPRunner
-}
-
-// allocateEngineDaemonPorts asks the OS for two distinct free ports. Both
-// listeners remain open until selection is complete, then close so the child
-// engine can bind the selected ports passed on its command line.
-func allocateEngineDaemonPorts() (serverPort int, authPort int, err error) {
-	listeners := make([]net.Listener, 0, 2)
-	defer func() {
-		for _, listener := range listeners {
-			_ = listener.Close()
-		}
-	}()
-
-	ports := make([]int, 0, 2)
-	for range 2 {
-		listener, listenErr := net.Listen("tcp", net.JoinHostPort(serverconfig.DefaultServerHostname, "0"))
-		if listenErr != nil {
-			return 0, 0, fmt.Errorf("failed to allocate engine daemon port: %w", listenErr)
-		}
-		listeners = append(listeners, listener)
-
-		address, ok := listener.Addr().(*net.TCPAddr)
-		if !ok {
-			return 0, 0, fmt.Errorf("unexpected engine daemon listener address %T", listener.Addr())
-		}
-		ports = append(ports, address.Port)
-	}
-
-	return ports[0], ports[1], nil
 }
 
 // isolatedEngineDaemonConfig creates a background-engine configuration on
 // fresh loopback ports. MCP commands use this instead of attaching to the
 // shared CLI daemon configured by the global port flags.
-func isolatedEngineDaemonConfig(
-	allocatePorts func() (int, int, error),
-) (grpcserver.GrpcServerConfig, error) {
-	serverPort, authPort, err := allocatePorts()
+func isolatedEngineDaemonConfig() (grpcserver.GrpcServerConfig, error) {
+	serverPort, err := server.AllocatePort(serverconfig.DefaultServerHostname)
 	if err != nil {
 		return grpcserver.GrpcServerConfig{}, err
 	}
 	config := serverconfig.FromViperForBackground()
 	config.Host = serverconfig.DefaultServerHostname
 	config.Port = serverPort
-	config.AuthPort = authPort
 	config.HttpPort = 0
 	return config, nil
 }
@@ -85,7 +52,7 @@ func isolatedEngineDaemonConfig(
 // then requests graceful engine shutdown. Cancellation of the command context
 // is a normal exit unless shutdown itself fails.
 func (r *engineDaemonRunner) Run(ctx context.Context, in io.ReadCloser, out io.Writer, errOut io.Writer) (runErr error) {
-	config, err := isolatedEngineDaemonConfig(r.allocatePorts)
+	config, err := isolatedEngineDaemonConfig()
 	if err != nil {
 		return err
 	}
@@ -132,7 +99,6 @@ func (r *engineDaemonRunner) Run(ctx context.Context, in io.ReadCloser, out io.W
 		"pid":         os.Getpid(),
 		"ppid":        os.Getppid(),
 		"server-port": config.Port,
-		"auth-port":   config.AuthPort,
 	}).Debug("Engine daemon configuration complete")
 
 	log.Debug("Engine daemon connection start")

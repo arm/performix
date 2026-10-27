@@ -5,6 +5,7 @@ package recipejstest
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -35,6 +36,8 @@ type neoprofSysutilSeriesFixture struct {
 	SeriesID        int64
 	Title           string
 	Name            string
+	CounterClass    *int
+	State           string
 	UsesValueColumn bool
 	Rows            []timelineCounterRowFixture
 }
@@ -87,6 +90,7 @@ func TestSystemUtilizationNeoprofConfiguration(t *testing.T) {
 		"activityName": ".MainActivity",
 	}
 	targetInfo := map[string]any{
+		"Os": map[string]any{"OSFamily": "Android"},
 		"CPUs": []any{
 			map[string]any{"CoreNumber": 1},
 			map[string]any{"CoreNumber": 0},
@@ -218,9 +222,20 @@ func testSystemUtilizationNeoprofTimeline(t *testing.T, reusedID bool) {
 		return config.ID == "timeline_csv"
 	})
 	timelineTable := findTableByComponentName(t, session.Manifest(), "flat_table")
+	var materialized bool
+	require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(),
+		`SELECT EXISTS (SELECT 1 FROM duckdb_tables() WHERE table_name = ?)`,
+		timelineTable).Scan(&materialized))
+	require.True(t, materialized, "NeoProf normalization should run once per session")
+	staleSchema := "stale_" + session.ID()
+	_, err := session.Database().Conn.ExecContext(context.Background(), fmt.Sprintf(
+		"CREATE SCHEMA %s; CREATE TABLE %s.%s AS SELECT * FROM %s",
+		staleSchema, staleSchema, timelineTable, timelineTable,
+	))
+	require.NoError(t, err)
 	if reusedID {
 		var swapTotal float64
-		err := session.Database().Conn.QueryRowContext(context.Background(),
+		err = session.Database().Conn.QueryRowContext(context.Background(),
 			fmt.Sprintf("SELECT MIN(swap_total_kb) FROM %s", timelineTable)).Scan(&swapTotal)
 		require.NoError(t, err)
 		require.InDelta(t, 2048.0, swapTotal, 1e-9)
@@ -231,7 +246,7 @@ func testSystemUtilizationNeoprofTimeline(t *testing.T, reusedID bool) {
 	var memoryTotalKB, memoryUsedKB, memoryUsedPercent float64
 	var contextSwitches, networkReceive, diskReadBandwidth float64
 	var firstTimestamp, lastTimestamp float64
-	err := session.Database().Conn.QueryRowContext(
+	err = session.Database().Conn.QueryRowContext(
 		context.Background(),
 		fmt.Sprintf(`
 			SELECT
@@ -280,6 +295,21 @@ func testSystemUtilizationNeoprofTimeline(t *testing.T, reusedID bool) {
 	require.InDelta(t, 1_000.0, networkReceive, 1e-9)
 	require.InDelta(t, 3_000.0, diskReadBandwidth, 1e-9)
 	require.InDelta(t, 0.1, lastTimestamp-firstTimestamp, 1e-9)
+
+	deepDive := output.Widgets[0].Config["deepDive"].([]any)
+	metrics := deepDive[0].(map[string]any)["metrics"].([]any)
+	summaryQuery := metrics[0].(map[string]any)["summaryQuery"].(map[string]any)
+	resolvedQuery := strings.ReplaceAll(
+		summaryQuery["query"].(string),
+		summaryQuery["tableNamePlaceholder"].(string),
+		fmt.Sprintf(`"%s"`, timelineTable),
+	)
+	var peak, average float64
+	require.NoError(t, session.Database().Conn.QueryRowContext(
+		context.Background(), resolvedQuery,
+	).Scan(&peak, &average))
+	require.InDelta(t, 1.4, peak, 1e-9)
+	require.InDelta(t, 1.3, average, 1e-9)
 
 	queryCount := 0
 	for _, widget := range output.Widgets {
@@ -373,6 +403,12 @@ func writeNeoprofSysutilTimelineFixture(t *testing.T, runRoot string, reusedSeri
 		{SeriesID: 12, Title: "Load Average", Name: "1 minute", Rows: twoNeoprofCounterRows(0, 150, 200)},
 		{SeriesID: 13, Title: "Disk Read Bandwidth", Name: "Read", UsesValueColumn: true, Rows: twoNeoprofCounterRows(0, 3000, 3600)},
 	}
+
+	return writeNeoprofSysutilSeriesFixture(t, runRoot, series, reusedSeriesID...)
+}
+
+func writeNeoprofSysutilSeriesFixture(t *testing.T, runRoot string, series []neoprofSysutilSeriesFixture, reusedSeriesID ...bool) cdf.ModelView {
+	t.Helper()
 
 	db, err := (&render.DuckDBFactory{}).Connect(t.Name() + "_neoprof_sysutil_fixture")
 	require.NoError(t, err)
@@ -492,4 +528,140 @@ func executeTimelineQueries(
 	default:
 		return 0
 	}
+}
+
+func TestSystemUtilizationLinuxDeclaresBothCollectors(t *testing.T) {
+	parsed := parseRecipeFile(t, "system_utilization.js")
+	for _, architecture := range []conductor.Architecture{conductor.AArch64, conductor.X86_64} {
+		platform := conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: architecture}
+		var tools []string
+		for _, deployment := range parsed.Deployments {
+			for _, filter := range deployment.AppliesTo {
+				if filter.MatchesPlatform(platform, deploymentsupport.MatchAll) {
+					for _, dependency := range deployment.Dependencies {
+						require.Equal(t, deploymentsupport.RequirementTypeAlways, dependency.RequiredWhen.Type)
+						tools = append(tools, dependency.Name)
+					}
+				}
+			}
+		}
+		require.ElementsMatch(t, []string{"neoprof", "sysutil-timeline"}, tools)
+	}
+}
+
+func TestSystemUtilizationSavedCollectorIgnoresFeatureFlag(t *testing.T) {
+	parsed := parseRecipeFile(t, "system_utilization.js")
+	neoprofModel := writeNeoprofSysutilTimelineFixture(t, t.TempDir())
+	pythonModel := cdf.NewOnDiskModel(t.TempDir(), &cdf.Manifest{}, cdf.Metadata{})
+	for _, enabled := range []bool{false, true} {
+		for _, collector := range []string{"", "sysutil-timeline", "neoprof"} {
+			t.Run(fmt.Sprintf("collector=%s/enabled=%t", collector, enabled), func(t *testing.T) {
+				var tools []cdf.ToolUsed
+				if collector != "" {
+					tools = []cdf.ToolUsed{{Tool: collector}}
+				}
+				var model cdf.ModelView = pythonModel
+				expectedType := "CSV"
+				if collector == "neoprof" {
+					model, expectedType = neoprofModel, "SQL"
+				}
+				output, err := executeRenderStageWithResolvedCapabilities(t,
+					parsed, []*run.RunDescription{{ToolsUsed: tools}},
+					[]cdf.ModelView{model}, map[string]any{}, []run.RunCapabilities{{}},
+					renderStageOptions{neoprofSystemUtilizationEnabled: enabled})
+				require.NoError(t, err)
+				require.Len(t, output.Renderers, 1)
+				require.Equal(t, expectedType, output.Renderers[0].Type)
+			})
+		}
+	}
+}
+
+func TestSystemUtilizationRejectsMixedCollectors(t *testing.T) {
+	_, err := executeRenderStage(t, parseRecipeFile(t, "system_utilization.js"),
+		[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "sysutil-timeline"}}}, {ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
+		nil, map[string]any{}, renderStageOptions{})
+	require.ErrorContains(t, err, "must use the same collector tool")
+}
+
+func TestSystemUtilizationNeoprofFillsOnlyCollectedDeltaCounterGaps(t *testing.T) {
+	runRoot := t.TempDir()
+	bin := neoprofSysutilBinDuration
+	// NeoProf's capability contract uses 0 for delta and 2 for absolute counters.
+	deltaClass, absoluteClass := 0, 2
+	series := []neoprofSysutilSeriesFixture{
+		// The sampled CPU timeline supplies timestamps throughout the run.
+		{SeriesID: 1, Title: "Proc Stat CPU Total", Name: "Utilization", CounterClass: &absoluteClass, State: "collected", Rows: []timelineCounterRowFixture{
+			{StartTimestamp: 0, EndTimestamp: 5 * bin, Value: 4000},
+		}},
+		{SeriesID: 2, Title: "Network", Name: "Receive", CounterClass: &deltaClass, State: "collected", UsesValueColumn: true, Rows: []timelineCounterRowFixture{
+			{StartTimestamp: bin, EndTimestamp: 2 * bin, Value: 50},
+		}},
+		{SeriesID: 3, Title: "Disk IOPS", Name: "Writes: idle", CounterClass: &deltaClass, State: "collected", UsesValueColumn: true},
+		{SeriesID: 4, Title: "Interrupts", Name: "Total", CounterClass: &deltaClass, State: "collected", UsesValueColumn: true, Rows: []timelineCounterRowFixture{
+			{StartTimestamp: bin, EndTimestamp: 2 * bin, DeviceNo: 0, Value: 7},
+		}},
+		// A compressed range must retain its existing per-bin value.
+		{SeriesID: 5, Title: "Disk I/O", Name: "Total Write", CounterClass: &deltaClass, State: "collected", UsesValueColumn: true, Rows: []timelineCounterRowFixture{
+			{StartTimestamp: bin, EndTimestamp: 4 * bin, Value: 30},
+		}},
+		{SeriesID: 6, Title: "Disk I/O", Name: "Total Read", CounterClass: &deltaClass, State: "unavailable", UsesValueColumn: true},
+		{SeriesID: 7, Title: "Swap", Name: "Used", CounterClass: &absoluteClass, State: "collected"},
+		{SeriesID: 8, Title: "Network", Name: "Transmit", CounterClass: nil, State: "collected", UsesValueColumn: true},
+	}
+	model := writeNeoprofSysutilSeriesFixture(t, runRoot, series)
+	capabilities := run.ToolCapabilities{}
+	for _, counter := range series {
+		capability := neoprofSysutilCounterCapability(counter.SeriesID, counter.Title, counter.Name)
+		capability.State = counter.State
+		if counter.CounterClass != nil {
+			capability.Payload["counter_class"] = *counter.CounterClass
+		}
+		capabilities[fmt.Sprintf("counter.%d", counter.SeriesID)] = capability
+	}
+	output := executeRenderStageWithCapabilities(t, parseRecipeFile(t, "system_utilization.js"),
+		[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
+		[]cdf.ModelView{model}, map[string]any{}, []run.RunCapabilities{{
+			CapabilitiesPerTool: map[string]run.ToolCapabilities{"tool/neoprof/0": capabilities},
+		}}, false)
+	session := newRenderSession(t, "neoprof-sparse-sysutil", runRoot, model)
+	initializeRenderers(t, session, output, func(config recipe.RendererConfig) bool { return config.ID == "timeline_csv" })
+	table := findTableByComponentName(t, session.Manifest(), "flat_table")
+	rows, err := session.Database().Conn.QueryContext(context.Background(), fmt.Sprintf(`
+		SELECT uptime_s, rx_bps_series_2, write_iops_series_3,
+		       irq_cpu0_per_s, irq_cpu1_per_s, write_bps_series_5,
+		       cpu_total_percent, read_bps_series_6, swap_used_kb,
+		       tx_bps_series_8, numa_hit_per_s, numa_remote_percent
+		FROM %s ORDER BY uptime_s`, table))
+	require.NoError(t, err)
+	defer rows.Close()
+	index := 0
+	for rows.Next() {
+		var timestamp, receive, idleDisk, irq0, irq1, diskWrite float64
+		var cpu, unavailable, swap, unknown, numaHit, numaRemote sql.NullFloat64
+		require.NoError(t, rows.Scan(&timestamp, &receive, &idleDisk, &irq0, &irq1, &diskWrite,
+			&cpu, &unavailable, &swap, &unknown, &numaHit, &numaRemote))
+		require.InDelta(t, float64(index)/10, timestamp, 1e-9)
+		expectedReceive, expectedIRQ, expectedDiskWrite := 0.0, 0.0, 0.0
+		if index == 1 {
+			expectedReceive, expectedIRQ = 50, 7
+		}
+		if index >= 1 && index <= 3 {
+			expectedDiskWrite = 30
+		}
+		require.Equal(t, expectedReceive, receive)
+		require.Zero(t, idleDisk)
+		require.Equal(t, expectedIRQ, irq0)
+		require.Zero(t, irq1)
+		require.Equal(t, expectedDiskWrite, diskWrite)
+		require.Equal(t, sql.NullFloat64{Float64: 40, Valid: true}, cpu)
+		require.False(t, unavailable.Valid)
+		require.False(t, swap.Valid)
+		require.False(t, unknown.Valid)
+		require.False(t, numaHit.Valid)
+		require.False(t, numaRemote.Valid)
+		index++
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, 5, index)
 }

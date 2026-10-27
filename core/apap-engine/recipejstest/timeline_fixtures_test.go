@@ -274,6 +274,13 @@ func newCodeHotspotsTimelineFixtureModel(
 			ComponentType: capability.ComponentType,
 		})
 	}
+	boundCapabilityIDs := make([]string, 0, len(fixture.CounterIdentities))
+	for _, identity := range fixture.CounterIdentities {
+		boundCapabilityIDs = append(boundCapabilityIDs, fmt.Sprintf("counter.key_type_%d.series_%d", identity.KeyType, identity.SeriesID))
+	}
+	cycles := cpuCyclesCapabilityFixture(t, "collected", boundCapabilityIDs...)
+	writeTimelineComponentFixture(t, runRoot, cycles)
+	manifestEntries = append(manifestEntries, cdf.ManifestEntry{Path: cycles.RelativePath, ComponentType: cycles.ComponentType})
 
 	return cdf.NewOnDiskModel(runRoot, &cdf.Manifest{Entries: manifestEntries}, cdf.Metadata{})
 }

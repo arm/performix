@@ -96,6 +96,7 @@ function discoverJfrComponents(context, ownerParquetRoot) {
     recordings: `${metadataPath}/jfr_recordings.parquet`,
     jvmInfo: `${eventsPath}/jfr_jvm_information.parquet`,
     systemProperties: `${eventsPath}/jfr_initial_system_property.parquet`,
+    flags: `${eventsPath}/jvm_flags.parquet`,
     heapSummary: `${eventsPath}/jfr_gc_heap_summary.parquet`,
     garbageCollection: `${eventsPath}/jfr_garbage_collection.parquet`,
   };
@@ -338,19 +339,26 @@ function buildJavaSummary(JFR_COMPONENTS, recordingPredicate, visible) {
       sort_order,
       section AS "Section",
       property AS "Property",
-      value AS "Value"
+      value AS "Value",
+      CAST(NULL AS VARCHAR) AS "Origin"
     FROM summary_rows
     WHERE value IS NOT NULL AND value <> ''
-    ORDER BY sort_order, property`,
+    UNION ALL
+    SELECT 300, 'JVM Flags', name, CAST(value AS VARCHAR), origin
+    FROM read_parquet({{path:${JFR_COMPONENTS.flags}}})
+    WHERE ${recordingPredicate}
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY recording_id, name ORDER BY event_start_epoch_ns DESC
+    ) = 1
+    ORDER BY sort_order, "Property"`,
   );
 
   const summaryVisualization = {
     type: 'java_analysis_summary',
     id: 'jvm_info',
     rendererId: 'java_summary',
-    title: 'JVM Info',
-    description:
-      'JVM information, initial system properties, and recording constants.',
+    title: 'JVM Internals',
+    description: 'Internal JVM information and configurations.',
     config: {
       visible,
       data_source: {
@@ -392,8 +400,7 @@ function buildHeapTimeline(JFR_COMPONENTS, recordingPredicate, visible) {
     id: 'timeline',
     rendererId: 'jvm_heap_timeline',
     title: 'Timeline',
-    description:
-      'Performance counters and JVM heap usage over the capture period.',
+    description: 'Performance counters over the capture period.',
     config: {
       visible,
       xAxisUnit: 's',
@@ -406,11 +413,10 @@ function buildHeapTimeline(JFR_COMPONENTS, recordingPredicate, visible) {
       groups: {
         heap_summary: {
           visible,
-          title: 'Heap Summary',
+          title: 'JVM Heap Usage',
           type: 'line',
           index: 0,
-          description:
-            'Point-in-time heap snapshots captured by JFR. Garbage collection duration events are not shown.',
+          description: 'Point-in-time heap snapshots captured by JFR.',
           config: {
             xAxisTitle: 'Time (s)',
             yAxisTitle: 'Heap size',

@@ -109,8 +109,6 @@ coverage/
 **/coverage/
 
 # GUI test results and generated data
-gui/assets/apx
-gui/assets/.apx-tmp
 gui/e2e-tests/performance-tests/performance-test-results.json
 gui/e2e-tests/soak-tests/soak-test-results.json
 **/e2e-test-results/
@@ -118,11 +116,12 @@ gui/e2e-tests/soak-tests/soak-test-results.json
 atp-e2e-log.txt
 
 # Ignore Robot Framework test results
-core/robot/results
+core/robot/results*
 core/robot/log.html
 core/robot/output.xml
 core/robot/report.html
 core/robot/resources/files/export
+core/robot/resources/files/prerecorded-runs
 core/robot/results/.gitkeep
 
 # Ignore Robot Framework target files
@@ -163,10 +162,13 @@ AGENTS.override.md
 
 # Don't check in auto-generated Go code
 core/apap-engine/message/codes.go
+/core/atperf-agent/systeminfo/armcpus/cpus.go
+/core/api/**/*.pb.go
+/core/api/mocks/
 
 # Temporary mockery generation files
-/core/clients/go/.mockery.boilerplate.*
-/core/clients/go/.mockery.generated.yaml.*
+/core/api/.mockery.boilerplate.*
+/core/api/.mockery.generated.yaml.*
 
 # License terms
 # They are generated during CI, but we don't want to check them in to avoid

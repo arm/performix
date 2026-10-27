@@ -22,7 +22,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/clijson"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/render"
 	"github.com/Arm-Debug/apap-cli/apap-engine/query"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type ChunkWriter interface {

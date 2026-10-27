@@ -6,7 +6,7 @@ package grpcserver
 import (
 	"context"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/healthproto"
+	"github.com/Arm-Debug/apap-cli/api/healthproto"
 )
 
 type HealthServer struct {

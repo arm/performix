@@ -16,7 +16,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/mcpclientinstaller"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type fakeMCPRegistrationManager struct {
@@ -52,6 +52,22 @@ func TestMCPUnknownClientErrorUsesCatalogueMessage(t *testing.T) {
 	require.NotNil(t, msg)
 	assert.Equal(t, message.EngineMcpRegistrationClientUnknown, msg.Code())
 	assert.Equal(t, "unknown-client", msg.Metadata()["client"])
+}
+
+func TestMCPUnsupportedClientVersionUsesCatalogueMessage(t *testing.T) {
+	err := mcpClientInstallerError(&mcpclientinstaller.InstallerError{
+		Kind:           mcpclientinstaller.ErrorClientVersionUnsupported,
+		ClientID:       "vscode",
+		ActualVersion:  "1.97.0",
+		MinimumVersion: "1.99.0",
+	})
+
+	msg := message.IsMessage(err)
+	require.NotNil(t, msg)
+	assert.Equal(t, message.EngineMcpRegistrationClientVersionUnsupported, msg.Code())
+	assert.Equal(t, "VS Code", msg.Metadata()["client"])
+	assert.Equal(t, "1.97.0", msg.Metadata()["version"])
+	assert.Equal(t, "1.99.0", msg.Metadata()["minimumVersion"])
 }
 
 func TestMCPConflictErrorIncludesCatalogueBackedDifferences(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/grpcserver/conversion"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 type LogBuffer struct {

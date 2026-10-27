@@ -14,8 +14,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/grpcserver/conversion"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 const logFieldID = "target"
@@ -88,7 +88,7 @@ func (a *agentLogger) runStream(stream targetagentproto.TargetAgent_StreamLogsCl
 
 		agentLog := a.logger.WithField(logFieldID, a.id)
 		level, msg := conversion.LogEntryFromProto(entry, agentLog)
-		agentLog.Log(level, "[Agent] "+msg)
+		agentLog.WithTime(agentLog.Time.Local()).Log(level, "[Agent] "+msg)
 	}
 }
 

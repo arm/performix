@@ -8,7 +8,7 @@ import (
 	"context"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/telemetry"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 func (s *ApapServer) GetTelemetrySpecification(

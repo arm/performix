@@ -5,7 +5,7 @@ package toolimpl
 
 import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/target"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 // ToolDependencies bundles the collaborators that MCP tools may use when handling

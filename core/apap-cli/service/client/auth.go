@@ -11,14 +11,12 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
-	"net"
 	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/utils"
@@ -26,7 +24,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tlsconfig"
 	"github.com/Arm-Debug/apap-cli/apap-engine/userdirs"
-	"github.com/Arm-Debug/apap-cli/clients/go/authproto"
+	"github.com/Arm-Debug/apap-cli/api/authproto"
 )
 
 const (
@@ -43,85 +41,46 @@ var (
 	clientCertRootFingerprint = make(map[string]string)
 )
 
-// EnsureAuthClientCertificates prepares the TLS client credentials used to talk to the AuthService.
-// It can be called multiple times; subsequent invocations reuse the in-memory certificate for the
-// current root authority.
-func EnsureAuthClientCertificates() error {
-	certDir, err := resolveConfigDir()
+func newTransportCredentials(host string, waitForAuthority bool) (credentials.TransportCredentials, error) {
+	certDir, err := userdirs.ConfigDir()
 	if err != nil {
-		return message.New(message.EngineTlsLoadRootCaFailed).WithCause(err)
+		return nil, message.New(message.EngineTlsLoadRootCaFailed).WithCause(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), credentialWaitTimeout)
-	defer cancel()
-	if err := tlsconfig.WaitForAuthority(ctx, certDir, credentialWaitInterval); err != nil {
-		return err
+	if waitForAuthority {
+		ctx, cancel := context.WithTimeout(context.Background(), credentialWaitTimeout)
+		defer cancel()
+		if err := tlsconfig.WaitForAuthority(ctx, certDir, credentialWaitInterval); err != nil {
+			return nil, err
+		}
 	}
 	manager, err := tlsconfig.NewManager(certDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	rootPEM, err := manager.RootCertificatePEM()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	rootCert, err := decodeCertificate(rootPEM)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = ensureCLIClientCertificate(manager, rootCert, certDir)
-	return err
+	clientCert, err := ensureCLIClientCertificate(manager, rootCert, certDir)
+	if err != nil {
+		return nil, err
+	}
+	return tlsconfig.NewClientCredentials(host, rootPEM, clientCert)
 }
 
 // AuthenticateWithAuthService establishes a mutual TLS connection to the AuthService and returns a ready-to-use client.
 // The caller is responsible for closing the returned connection when finished.
-func AuthenticateWithAuthService(host string, authPort int) (authproto.AuthClient, *grpc.ClientConn, error) {
-	if err := EnsureAuthClientCertificates(); err != nil {
-		return nil, nil, err
-	}
-	configDir, err := resolveConfigDir()
-	if err != nil {
-		return nil, nil, message.New(message.EngineTlsLoadRootCaFailed).WithCause(err)
-	}
-	manager, err := tlsconfig.NewManager(configDir)
+func AuthenticateWithAuthService(host string, port int) (authproto.AuthClient, *grpc.ClientConn, error) {
+	connector, err := newEngineConnector(host, true)
 	if err != nil {
 		return nil, nil, err
 	}
-	rootPEM, err := manager.RootCertificatePEM()
+	conn, err := connector.Connect(host, port, retryConnectionTimeout)
 	if err != nil {
-		return nil, nil, err
-	}
-	rootCert, err := decodeCertificate(rootPEM)
-	if err != nil {
-		return nil, nil, err
-	}
-	clientCert, err := ensureCLIClientCertificate(manager, rootCert, configDir)
-	if err != nil {
-		return nil, nil, err
-	}
-	rootPool := x509.NewCertPool()
-	if !rootPool.AppendCertsFromPEM(rootPEM) {
-		return nil, nil, message.New(message.EngineTlsLoadRootCaFailed)
-	}
-	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{clientCert},
-		RootCAs:      rootPool,
-		ServerName:   host,
-		MinVersion:   tls.VersionTLS12,
-	}
-	address := net.JoinHostPort(host, strconv.Itoa(authPort))
-	conn, err := grpc.NewClient(
-		address,
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
-		grpc.WithChainUnaryInterceptor(message.ErrorHandlingClientInterceptor()),
-		grpc.WithChainStreamInterceptor(message.ErrorHandlingClientStreamInterceptor()),
-	)
-	if err != nil {
-		return nil, nil, message.New(message.EngineGrpcconnectionCreateClient).WithMetadata(map[string]string{"serverAddress": address}).WithCause(err)
-	}
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), retryConnectionTimeout)
-	if err := waitForAuthReady(waitCtx, conn); err != nil {
-		waitCancel()
-		conn.Close()
 		username, userErr := utils.CurrentUsername()
 		if userErr != nil || username == "" {
 			username = "unknown"
@@ -132,31 +91,7 @@ func AuthenticateWithAuthService(host string, authPort int) (authproto.AuthClien
 		}
 		return nil, nil, message.New(message.CliServiceClientAuthServiceUnavailable).WithMetadata(metadata).WithCause(err)
 	}
-	waitCancel()
 	return authproto.NewAuthClient(conn), conn, nil
-}
-
-// resolveConfigDir returns the daemon configuration directory, falling back to the default userdirs logic.
-func resolveConfigDir() (string, error) {
-	resolved, err := userdirs.ConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return resolved, nil
-}
-
-// waitForAuthReady waits until the AuthService is ready to accept connections.
-func waitForAuthReady(ctx context.Context, conn *grpc.ClientConn) error {
-	conn.Connect()
-	for {
-		state := conn.GetState()
-		if state == connectivity.Ready {
-			return nil
-		}
-		if !conn.WaitForStateChange(ctx, state) {
-			return ctx.Err()
-		}
-	}
 }
 
 // ensureCLIClientCertificate loads the cached CLI client certificate signed by the current root authority or creates a

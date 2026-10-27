@@ -9,7 +9,7 @@ They should identify the relevant performance issue, connect it to evidence in
 the run, and suggest a useful next action.
 
 This is a pytest evaluation suite for AI Insights. For each test case it:
-1. Imports a pre-recorded Performix run of a workload with a known issue.
+1. Prepares the workload context, optionally importing a pre-recorded run for Pathways.
 2. Invokes the selected AI Insights implementation (via an MCP client such as codex) and records the response.
 3. Evaluates whether the answer matches the expected analysis for each testcase.
 
@@ -18,18 +18,19 @@ suite uses a separate LLM judge with private rubrics. The judge checks
 whether the response contains the required insight, evidence, and
 recommendation without exposing those rubrics to the model under test.
 
-The default Act 1 run uses REST, Hackathon MCP, and production
-Performix MCP modes; see README.md for the full local setup and
-reporting details.
+The default Act 1 run uses production Performix MCP; see README.md for the
+full local setup and reporting details.
 """
 
 from __future__ import annotations
 
 import json
+import ipaddress
 import logging
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -44,6 +45,9 @@ from typing import Any
 import pytest
 import truststore
 
+from performix_attempt import PerformixAttempt, performix_env
+from pathways_target_access import TargetAccessError
+
 # The internal API proxy can use enterprise certificate authorities which are
 # available through the operating-system trust store but not Python's CA bundle.
 truststore.inject_into_ssl()
@@ -52,25 +56,33 @@ from codex_session_metrics import (
     codex_session_log,
     collect_mcp_tool_metrics,
     iter_jsonl,
+    persist_codex_session_log,
 )
+from pathways_artifacts import load_pathways_judge_evidence
 from performance_quality import PERFORMIX_MCP_MODE
-from recipe_support import mode_supports_recipe, requires_source_archive, resolve_prerecord_config, resolve_recipe
+from recipe_support import mode_supports_recipe, requires_source_archive, resolve_evaluation_inputs
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from run_export_helper import sha256_file
-from rest_mode import REST_MODE, invoke_rest_mode
 
 DEFAULT_API_BASE = "https://openai-api-proxy.geo.arm.com/api/providers/openai/v1"
-HACKATHON_SERVER = "performix-hackathon"
-HACKATHON_TOOL = "atp_show_ai_insights"
 PERFORMIX_SERVER = "arm-performix"
 PERFORMIX_TOOL = "generate_ai_insights"
 RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
+DEFAULT_PATHWAYS_JUDGE_MAX_REQUEST_BYTES = 4 * 1024 * 1024
 FAILURE_RESPONSE_MAX_CHARS = 4000
 FAILURE_RESPONSE_MAX_LINES = 80
 FAILURE_TEXT_FALLBACK_WIDTH = 80
 MCP_RUN_ID_PLACEHOLDER = "{run_id}"
-DEFAULT_MCP_PROMPT = f"Show me AI Insights for Performix run {MCP_RUN_ID_PLACEHOLDER}. Use Markdown."
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+
+
+def read_prompt(name: str) -> str:
+    """Load prompt text; license metadata lives in sibling .license files."""
+    return (PROMPTS_DIR / name).read_text(encoding="utf-8").strip()
+
+
+DEFAULT_MCP_PROMPT = read_prompt("agent_ai_insights.md")
 LOGGER = logging.getLogger(__name__)
 CODEX_TRUNCATION_MARKER_RE = re.compile(
     rf"\N{{HORIZONTAL ELLIPSIS}}(\d+) tokens truncated\N{{HORIZONTAL ELLIPSIS}}"
@@ -88,34 +100,42 @@ class McpServer:
     id: str
     server: str
     tool: str
-    server_dir_key: str
-    command: str | None
     args: tuple[str, ...]
-    command_key: str | None = None
     extra_tools: tuple[str, ...] = ()
+    required_tools: tuple[str, ...] = ()
+    environment: tuple[tuple[str, str], ...] = ()
 
 
 MCP_MODES = {
-    "hackathon_mcp": McpServer(
-        id="hackathon_mcp",
-        server=HACKATHON_SERVER,
-        tool=HACKATHON_TOOL,
-        server_dir_key="hackathon_mcp_server_dir",
-        command="node",
-        args=("dist/index.js",),
-    ),
+    # Pin the control to curated mode so a caller's environment cannot change
+    # the baseline during a comparison.
     PERFORMIX_MCP_MODE: McpServer(
         id=PERFORMIX_MCP_MODE,
         server=PERFORMIX_SERVER,
         tool=PERFORMIX_TOOL,
-        server_dir_key="cli_dir",
-        command=None,
-        args=("mcp", "start"),
-        command_key="cli_bin",
+        args=("mcp", "start", "--acknowledge-source-sharing"),
         extra_tools=("read_ai_insights_payload_details",),
+        environment=(("APXD_CODE_HOTSPOTS_AI_INSIGHTS_MODE", "curated"),),
+    ),
+    # This candidate is limited to Code Hotspots by mode_supports_recipe().
+    "performix_mcp_run_query": McpServer(
+        id="performix_mcp_run_query",
+        server=PERFORMIX_SERVER,
+        tool=PERFORMIX_TOOL,
+        args=("mcp", "start", "--acknowledge-source-sharing"),
+        environment=(("APXD_CODE_HOTSPOTS_AI_INSIGHTS_MODE", "run_query"),),
     ),
 }
-NON_FATAL_TOOL_OUTPUT_TRUNCATION_MODES = {"hackathon_mcp"}
+PATHWAYS_EXECUTION_MODE = "host_ssh"
+DEFAULT_PATHWAYS_AGENT_TIMEOUT_SECONDS = 600
+CODEX_WORKSPACE_DIRNAME = "codex_workspace"
+TARGET_PROMPT_KEYS = (
+    "target_host",
+    "target_port",
+    "target_user",
+    "target_private_key_path",
+)
+UNSUPPLIED_PROMPT_VALUE = "not supplied"
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -129,6 +149,11 @@ def manifest_path(pytestconfig) -> Path:
 def selected_acts(pytestconfig) -> set[str]:
     raw = pytestconfig.getoption("--ai-act")
     return {act.strip() for act in str(raw).split(",") if act.strip()}
+
+
+def selected_recipes(pytestconfig) -> set[str]:
+    raw = pytestconfig.getoption("--ai-recipe")
+    return {recipe.strip() for recipe in str(raw).split(",") if recipe.strip()}
 
 
 def selected_modes(pytestconfig) -> list[str]:
@@ -161,24 +186,132 @@ def validate_selected_acts(acts: set[str], manifest: dict[str, Any]) -> None:
         )
 
 
+def pathways_config_mapping(value: Any, path: str, *, allowed: set[str]) -> dict[str, Any]:
+    """Return a credential-free pathways configuration mapping at *path*."""
+    if not isinstance(value, dict):
+        raise pytest.UsageError(f"pathways execution configuration {path} must be an object")
+    unknown = set(value) - allowed
+    if unknown:
+        raise pytest.UsageError(
+            f"pathways execution configuration {path} contains unsupported fields: "
+            f"{', '.join(sorted(unknown))}"
+        )
+    return value
+
+
+def pathways_config_string(value: dict[str, Any], key: str, path: str) -> str:
+    """Return a required non-empty string from a pathways configuration mapping."""
+    result = value.get(key)
+    if not isinstance(result, str) or not result.strip():
+        raise pytest.UsageError(f"pathways execution configuration {path}.{key} must be a non-empty string")
+    return result
+
+
+def pathways_agent_timeout_seconds(test_case: dict[str, Any]) -> int:
+    """Return the positive time limit for the agent's Pathways investigation."""
+    timeout = test_case["pathways_execution"].get(
+        "agent_timeout_seconds", DEFAULT_PATHWAYS_AGENT_TIMEOUT_SECONDS,
+    )
+    if type(timeout) is not int or timeout <= 0:
+        raise pytest.UsageError(
+            f"testcase {test_case.get('id', '<unknown>')} "
+            "pathways_execution.agent_timeout_seconds must be a positive integer"
+        )
+    return timeout
+
+
+def validate_pathways_execution_config(test_case: dict[str, Any]) -> None:
+    """Validate the declarative, credential-free host-over-SSH configuration."""
+    config = test_case.get("pathways_execution")
+    if config is None:
+        return
+
+    test_id = test_case.get("id", "<unknown>")
+    prefix = f"testcase {test_id} pathways_execution"
+    config = pathways_config_mapping(
+        config,
+        prefix,
+        allowed={"mode", "workload_source", "agent_timeout_seconds"},
+    )
+    pathways_agent_timeout_seconds(test_case)
+    if pathways_config_string(config, "mode", prefix) != PATHWAYS_EXECUTION_MODE:
+        raise pytest.UsageError(
+            f"{prefix}.mode must be {PATHWAYS_EXECUTION_MODE!r}"
+        )
+
+    workload_source = pathways_config_mapping(
+        config.get("workload_source"),
+        f"{prefix}.workload_source",
+        allowed={"repository", "branch"},
+    )
+    for key in ("repository", "branch"):
+        pathways_config_string(workload_source, key, f"{prefix}.workload_source")
+    if workload_source["branch"] != "main":
+        raise pytest.UsageError(f"{prefix}.workload_source.branch must be 'main'")
+    if "run_artifact" in test_case:
+        pathways_config_string(test_case, "run_artifact", f"testcase {test_id}")
+    else:
+        prompt = pathways_config_string(test_case, "mcp_prompt", f"testcase {test_id}")
+        if MCP_RUN_ID_PLACEHOLDER in prompt:
+            raise pytest.UsageError(f"testcase {test_id} mcp_prompt cannot use {{run_id}} without run_artifact")
+
+
+def validate_selected_recipes(recipes: set[str], manifest: dict[str, Any]) -> None:
+    if not recipes:
+        return
+
+    defaults = manifest.get("defaults", {})
+    available = set()
+    for test_case in manifest.get("tests", []):
+        recipe = resolve_evaluation_inputs(test_case, defaults).get("recipe")
+        if recipe:
+            available.add(recipe)
+    unknown = recipes - available
+    if unknown:
+        requested_text = ", ".join(sorted(recipes))
+        unknown_text = ", ".join(sorted(unknown))
+        available_text = ", ".join(sorted(available)) if available else "none"
+        raise pytest.UsageError(
+            f"Unknown AI Insights recipe selection: {unknown_text}. "
+            f"Requested recipes: {requested_text}. Available recipes: {available_text}."
+        )
+
+
 def iter_manifest_parameters(pytestconfig, manifest: dict[str, Any]) -> list[dict[str, Any]]:
     defaults = manifest.get("defaults", {})
     cli_modes = selected_modes(pytestconfig)
-    default_modes = defaults.get("modes") or [REST_MODE, "hackathon_mcp", PERFORMIX_MCP_MODE]
+    default_modes = defaults.get("modes") or [PERFORMIX_MCP_MODE]
     modes = cli_modes or default_modes
     acts = selected_acts(pytestconfig)
+    recipes = selected_recipes(pytestconfig)
     validate_selected_acts(acts, manifest)
+    validate_selected_recipes(recipes, manifest)
     params: list[dict[str, Any]] = []
     for test_case in manifest.get("tests", []):
         if acts and not acts.intersection(test_case.get("acts", [])):
             continue
-        test_case = {
-            **test_case,
-            "recipe": resolve_recipe(test_case, defaults),
-            "prerecord": resolve_prerecord_config(test_case, defaults),
-        }
+        validate_pathways_execution_config(test_case)
+        test_case = resolve_evaluation_inputs(test_case, defaults)
+        if recipes and test_case.get("recipe") not in recipes:
+            continue
+        allowed_modes = test_case.get("evaluation_modes")
+        if allowed_modes is not None:
+            if (
+                not isinstance(allowed_modes, list)
+                or not allowed_modes
+                or any(not isinstance(mode, str) or not mode for mode in allowed_modes)
+            ):
+                raise ValueError(f"invalid evaluation_modes for {test_case['id']}")
+            for allowed_mode in allowed_modes:
+                if not mode_supports_recipe(allowed_mode, test_case["recipe"]):
+                    raise ValueError(
+                        f"evaluation mode {allowed_mode!r} does not support recipe "
+                        f"{test_case['recipe']!r} for testcase {test_case['id']!r}"
+                    )
         for mode in modes:
-            if not mode_supports_recipe(mode, test_case["recipe"]):
+            if allowed_modes is not None and mode not in allowed_modes:
+                continue
+            if "recipe" in test_case and not mode_supports_recipe(mode, test_case["recipe"]):
                 continue
             params.append({"test_case": test_case, "mode": mode})
     return params
@@ -235,13 +368,10 @@ def should_xfail_final_label(final_label: str, *, expected_failure: bool) -> boo
 
 
 def should_fail_on_tool_output_truncation(mode: str, invoke_meta: dict[str, Any]) -> bool:
-    """Return whether a curated AI Insights tool call was truncated."""
+    """Return whether a one-shot AI Insights evidence call was truncated."""
     marker_count = tool_output_truncation_markers(invoke_meta)
     if marker_count <= 0:
         return False
-    if mode in NON_FATAL_TOOL_OUTPUT_TRUNCATION_MODES:
-        return False
-
     details = invoke_meta.get("truncation_details")
     if not isinstance(details, list) or len(details) != marker_count:
         return True
@@ -249,11 +379,11 @@ def should_fail_on_tool_output_truncation(mode: str, invoke_meta: dict[str, Any]
     if mode_config is None:
         return True
     expected_namespace = codex_mcp_namespace(mode_config.server)
-    curated_tools = {mode_config.tool, *mode_config.extra_tools}
+    one_shot_evidence_tools = {mode_config.tool, *mode_config.extra_tools}
     return any(
         isinstance(detail, dict)
         and detail.get("namespace") == expected_namespace
-        and detail.get("tool") in curated_tools
+        and detail.get("tool") in one_shot_evidence_tools
         for detail in details
     )
 
@@ -280,13 +410,58 @@ def slugify_test_name(value: str) -> str:
     return slug or "unspecified"
 
 
-def resolve_mcp_prompt(test_case: dict[str, Any], run_id: str) -> str:
-    """Resolve the testcase's MCP prompt for an imported Performix run."""
-    prompt = test_case.get("mcp_prompt", DEFAULT_MCP_PROMPT)
+def target_prompt_values(pytestconfig) -> dict[str, str]:
+    """Return optional target values for pathways prompt rendering."""
+    return {
+        key: str(pytestconfig.getoption(f"--ai-{key.replace('_', '-')}") or "").strip()
+        for key in TARGET_PROMPT_KEYS
+    }
+
+
+def target_network_domain(target_host: str) -> str | None:
+    """Return a literal target host for the Codex network allowlist."""
+    value = target_host.strip()
+    if not value:
+        return None
+    ip_literal = value[1:-1] if value.startswith("[") and value.endswith("]") else value
+    try:
+        return str(ipaddress.ip_address(ip_literal))
+    except ValueError:
+        pass
+    # Protect the network allowlist from patterns, URLs, ports and whitespace;
+    # SSH and name resolution handle whether the destination is valid/reachable.
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+        raise AiInsightsConfigError(
+            "--ai-target-host must be a literal hostname or IP address without a port"
+        )
+    return value.lower()
+
+
+def resolve_mcp_prompt(
+    test_case: dict[str, Any],
+    run_id: str | None,
+    target_values: dict[str, str] | None = None,
+    *,
+    ssh_command: str = UNSUPPLIED_PROMPT_VALUE,
+) -> str:
+    """Resolve the investigation prompt, substituting a fixture ID when supplied."""
+    prompt = test_case.get("mcp_prompt", DEFAULT_MCP_PROMPT if run_id else None)
     test_id = test_case.get("id", "<unknown>")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError(f"testcase {test_id} mcp_prompt must be a non-empty string")
-    resolved = prompt.replace(MCP_RUN_ID_PLACEHOLDER, run_id)
+    if not run_id and MCP_RUN_ID_PLACEHOLDER in prompt:
+        raise ValueError(f"testcase {test_id} mcp_prompt cannot use {{run_id}} without a supplied run")
+    resolved = prompt.replace(MCP_RUN_ID_PLACEHOLDER, run_id) if run_id else prompt
+    target_values = {
+        key: (target_values or {}).get(key, "").strip() or UNSUPPLIED_PROMPT_VALUE
+        for key in TARGET_PROMPT_KEYS
+    }
+    for key, value in target_values.items():
+        resolved = resolved.replace(f"{{{key}}}", value)
+    if is_pathways_execution(test_case):
+        resolved = resolved.rstrip() + "\n\n" + read_prompt("agent_pathways.md").format(
+            ssh_command=ssh_command, run_id=run_id or UNSUPPLIED_PROMPT_VALUE, **target_values,
+        )
     return resolved if resolved.endswith("\n") else f"{resolved}\n"
 
 
@@ -338,15 +513,6 @@ def required_path(name: str, value: str | None) -> Path:
     return Path(value).expanduser().resolve()
 
 
-def required_option_path(option: str, env_var: str, value: str | None) -> Path:
-    if not value:
-        raise AiInsightsConfigError(f"{option} is required. Set {option} or {env_var}.")
-    path = Path(value).expanduser().resolve()
-    if not path.is_dir():
-        raise AiInsightsConfigError(f"{option} path does not exist or is not a directory: {path}")
-    return path
-
-
 def required_openai_api_key(value: str | None) -> str:
     api_key = (value or "").strip()
     if not api_key:
@@ -363,7 +529,6 @@ def resolve_config(pytestconfig) -> dict[str, Any]:
     path = manifest_path(pytestconfig)
     manifest = load_json(path)
     defaults = manifest.get("defaults", {})
-    modes = selected_modes(pytestconfig)
     run_base = pytestconfig.getoption("--ai-prerecorded-run-cache")
     model_configs = manifest.get("model_configs") or [{"id": "default", "model": "gpt-5.5"}]
     model_config = model_configs[0]
@@ -376,41 +541,23 @@ def resolve_config(pytestconfig) -> dict[str, Any]:
         raise AiInsightsConfigError("reasoning_effort is required")
     attempts = pytestconfig.getoption("--ai-attempts") or int(defaults.get("attempts", 1))
     openai_api_key = required_openai_api_key(pytestconfig.getoption("--ai-openai-api-key"))
-    hackathon_mcp_server_dir = None
-    if "hackathon_mcp" in modes:
-        hackathon_mcp_server_dir = required_option_path(
-            "--ai-hackathon-mcp-server-dir",
-            "AI_INSIGHTS_HACKATHON_MCP_SERVER_DIR",
-            pytestconfig.getoption("--ai-hackathon-mcp-server-dir"),
-        )
     LOGGER.info("Loaded AI Insights evaluation manifest: %s", path)
     return {
         "manifest_path": path,
         "manifest": manifest,
-        "modes": modes,
-        "run_artifact_base": required_path("prerecorded_run_cache", run_base),
+        "run_artifact_base": required_path("prerecorded_run_cache", run_base) if run_base else None,
         "cli_bin": Path(pytestconfig.getoption("--ai-cli-bin")).expanduser().resolve(),
-        "cli_dir": Path(pytestconfig.getoption("--ai-cli-bin")).expanduser().resolve().parent,
         "results_dir": Path(pytestconfig.getoption("--ai-results-dir")).expanduser().resolve(),
-        "hackathon_mcp_server_dir": hackathon_mcp_server_dir,
         "model": model,
         "model_config_id": model_config.get("id", model),
         "reasoning_effort": reasoning_effort,
         "judge_model": pytestconfig.getoption("--ai-judge-model"),
+        "judge_reasoning_effort": pytestconfig.getoption("--ai-judge-reasoning-effort"),
         "openai_api_key": openai_api_key,
         "attempts": attempts,
+        "target_prompt_values": target_prompt_values(pytestconfig),
         "defaults": defaults,
     }
-
-
-def run_info_succeeds(cli_bin: Path, run_id: str) -> bool:
-    process = subprocess.run(
-        [str(cli_bin), "run", "info", run_id, "--json"],
-        cwd=cli_bin.parent,
-        capture_output=True,
-        text=True,
-    )
-    return process.returncode == 0
 
 
 def extract_source_archive(
@@ -429,13 +576,10 @@ def extract_source_archive(
     return source_root
 
 
-def import_run_cached(pytestconfig, test_case: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
-    """Return the run imported by the serial pytest setup phase.
-
-    The test body may run in parallel across modes for the same testcase. It
-    therefore treats run import and source extraction as completed setup work,
-    and fails clearly if the controller did not populate the cache first.
-    """
+def import_attempt_run(test_case, cfg, performix):
+    """Import this attempt's fixture, or return no run for a live-only case."""
+    if is_pathways_execution(test_case) and "run_artifact" not in test_case:
+        return {"run_id": None}
     archive = cfg["run_artifact_base"] / test_case["run_artifact"]
     if not archive.is_file():
         raise FileNotFoundError(
@@ -462,18 +606,7 @@ def import_run_cached(pytestconfig, test_case: dict[str, Any], cfg: dict[str, An
                 test_case["id"],
             )
         )
-    cache_key = f"ai_insights/imports/{test_case['id']}/{archive_sha}"
-    cached = pytestconfig.cache.get(cache_key, None)
-    if not isinstance(cached, dict) or not isinstance(cached.get("run_id"), str):
-        raise FileNotFoundError(
-            f"pre-recorded run archive was not imported during setup for {test_case['id']}: {archive}"
-        )
-    run_id = cached["run_id"]
-    if not run_info_succeeds(cfg["cli_bin"], run_id):
-        raise RuntimeError(
-            f"pre-recorded run import prepared during setup is not available for {test_case['id']}: {run_id}"
-        )
-    LOGGER.info("Using setup-imported run for %s: %s", test_case["id"], run_id)
+    run_id = performix.import_fixture(cfg["cli_bin"], archive, source_root)
     run_meta = {
         "run_id": run_id,
         "archive_sha256": archive_sha,
@@ -490,38 +623,84 @@ def import_run_cached(pytestconfig, test_case: dict[str, Any], cfg: dict[str, An
     return run_meta
 
 
+def run_workload_git(command: list[str], failure_context: str) -> str:
+    """Run one host-side Git command for a harness-prepared checkout."""
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=1800)
+    except OSError as exc:
+        raise RuntimeError(f"{failure_context}: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise RuntimeError(f"{failure_context}: {detail or f'exit code {result.returncode}'}")
+    return result.stdout.strip()
+
+
+def prepare_agent_workspace(attempt_dir: Path, test_case: dict[str, Any]) -> tuple[Path, dict[str, Any] | None]:
+    """Create the agent workspace, cloning the workloads repository for pathways."""
+    workspace = attempt_dir / CODEX_WORKSPACE_DIRNAME
+    if workspace.exists():
+        raise RuntimeError(f"agent workspace already exists: {workspace}")
+
+    if not is_pathways_execution(test_case):
+        workspace.mkdir(parents=True)
+        return workspace, None
+    if shutil.which("git") is None:
+        raise RuntimeError("missing required command: git")
+
+    # Collection validates the configuration; normalize checkout inputs only here.
+    workload_source = {
+        key: test_case["pathways_execution"]["workload_source"][key].strip()
+        for key in ("repository", "branch")
+    }
+    run_workload_git(
+        ["git", "clone", "--branch", workload_source["branch"], "--single-branch", workload_source["repository"], str(workspace)],
+        "workload checkout clone failed",
+    )
+    commit = run_workload_git(
+        ["git", "-C", str(workspace), "rev-parse", "HEAD"],
+        "workload checkout revision lookup failed",
+    )
+    if not commit:
+        raise RuntimeError("workload checkout revision lookup returned no commit")
+    initial_status = run_workload_git(
+        ["git", "-C", str(workspace), "status", "--porcelain"],
+        "workload checkout status lookup failed",
+    )
+    if initial_status:
+        raise RuntimeError("workload checkout is not clean after clone")
+    return workspace, {
+        "repository": workload_source["repository"],
+        "branch": workload_source["branch"],
+        "commit": commit,
+        "initial_status": "clean",
+        "workspace": str(workspace),
+    }
+
+
+def is_pathways_execution(test_case: dict[str, Any]) -> bool:
+    """Return whether a testcase uses the pathways execution configuration."""
+    return test_case.get("pathways_execution") is not None
+
+
 def toml_string(value: str) -> str:
     return json.dumps(value)
 
 
-def mcp_mode_env(mode: McpServer, cfg: dict[str, Any]) -> dict[str, str]:
-    """Return environment passed to the selected MCP server."""
-    if mode.id == "hackathon_mcp":
-        # These ATP_* names are the current Hackathon MCP server contract.
-        return {
-            "ATP_CLI_PATH": str(cfg["cli_bin"]),
-            "ATP_ENGINE_PORT": os.environ.get("ATP_ENGINE_PORT", "9000"),
-        }
-    if mode.id == PERFORMIX_MCP_MODE:
-        return {"APXD_ENABLE_EXPERIMENTAL_RECIPES": "true"}
-    raise ValueError(f"unsupported AI Insights mode: {mode.id}")
-
-
-def mcp_mode_command(mode: McpServer, cfg: dict[str, Any]) -> str:
-    if mode.command_key:
-        return str(cfg[mode.command_key])
-    if mode.command is None:
-        raise ValueError(f"unsupported AI Insights mode command: {mode.id}")
-    return mode.command
-
-
-def write_codex_home(attempt_dir: Path, workspace: Path, cfg: dict[str, Any], mode: McpServer) -> Path:
+def write_codex_home(
+    attempt_dir: Path,
+    workspace: Path,
+    cfg: dict[str, Any],
+    mode: McpServer,
+    pathways_execution: bool,
+    performix_state: dict[str, Any],
+) -> Path:
     """Create the isolated Codex configuration used for one MCP attempt.
 
     The model under test should obtain AI Insights through the configured
     MCP server, not through the developer's normal Codex configuration or
     arbitrary filesystem/network access. Each attempt therefore gets a
-    generated CODEX_HOME with one MCP server and narrow permissions.
+    generated CODEX_HOME with one MCP server and a profile appropriate to its
+    manifest contract.
     """
     codex_home = attempt_dir / "codex_home"
     LOGGER.debug("Preparing isolated Codex home: %s", codex_home)
@@ -529,26 +708,53 @@ def write_codex_home(attempt_dir: Path, workspace: Path, cfg: dict[str, Any], mo
         shutil.rmtree(codex_home)
     codex_home.mkdir(parents=True)
 
-    (codex_home / "auth.json").write_text(
-        json.dumps(
-            {"auth_mode": "apikey", "OPENAI_API_KEY": cfg["openai_api_key"]},
-            indent=2,
-        ),
-        encoding="utf-8",
+    server_env = {
+        "APXD_ENABLE_EXPERIMENTAL_RECIPES": "true",
+        **dict(mode.environment),
+        **performix_env(performix_state),
+    }
+    env_lines = "\n".join(f"{key} = {toml_string(value)}" for key, value in server_env.items())
+    LOGGER.debug("Using %s MCP server from: %s", mode.id, cfg["cli_bin"].parent)
+    shell_tool = "true" if pathways_execution else "false"
+    workspace_access = "write" if pathways_execution else "read"
+    target_domain = None
+    if pathways_execution:
+        target_domain = target_network_domain(
+            cfg["target_prompt_values"]["target_host"]
+        )
+    network_enabled = "true" if target_domain else "false"
+    network_proxy = "true" if target_domain else "false"
+    shell_comment = (
+        "# Pathways may use the prepared checkout and SSH to the supplied target."
+        if pathways_execution
+        else "# The model under test obtains Performix evidence through MCP only."
     )
-    (codex_home / "auth.json").chmod(0o600)
-
-    server_dir = cfg[mode.server_dir_key]
-    server_env = mcp_mode_env(mode, cfg)
-    env_section = ""
-    if server_env:
-        env_lines = "\n".join(f"{key} = {toml_string(value)}" for key, value in server_env.items())
-        env_section = f"""
-[mcp_servers.{mode.server}.env]
-# Pass only the environment needed by this MCP mode.
-{env_lines}
+    network_comment = (
+        "# Only the supplied SSH target is reachable from pathway commands."
+        if target_domain
+        else "# The model under test obtains Performix evidence through MCP only."
+    )
+    network_domain_section = ""
+    runtime_read_section = ""
+    if pathways_execution:
+        # To run commands in its Linux sandbox, Codex starts another copy of itself.
+        # Our filesystem restrictions hide the installed Codex binary, so we must
+        # allow access to it here; otherwise sandbox commands cannot start.
+        # Also allow Python and its libraries so the SSH proxy helper can run.
+        runtime_paths = {Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()}
+        codex_bin = shutil.which("codex")
+        if codex_bin:
+            runtime_paths.add(Path(codex_bin).resolve())
+        runtime_read_section = "\n".join(
+            f"{toml_string(str(path))} = \"read\"" for path in sorted(runtime_paths)
+        )
+        if performix_state and performix_state.get("home_dir"):
+            runtime_read_section += f'\n{toml_string(performix_state["home_dir"])} = "write"'
+    if target_domain:
+        network_domain_section = f"""
+[permissions.ai-insights.network.domains]
+{toml_string(target_domain)} = "allow"
 """
-    LOGGER.debug("Using %s MCP server from: %s", mode.id, server_dir)
     config = f"""# Use the same OpenAI-compatible proxy path as developer Codex runs.
 model_provider = "proxy"
 
@@ -556,48 +762,65 @@ model_provider = "proxy"
 disable_response_storage = true
 
 # Keep Codex confined to the prompt workspace and the configured MCP server.
-default_permissions = "ai-insights-mcp"
+default_permissions = "ai-insights"
 
 # Treat the generated workspace as the project root instead of loading project
 # instructions from parent directories in the Performix checkout.
 project_root_markers = []
 
 [features]
-# The model under test should obtain Performix evidence through MCP, not by
-# running local shell commands during evaluation.
-shell_tool = false
+{shell_comment}
+shell_tool = {shell_tool}
+
+# Route command networking through the profile policy when a target is supplied.
+network_proxy = {network_proxy}
 
 # Marketplace plugins are not part of the evaluation and would otherwise be
 # downloaded into every attempt's isolated CODEX_HOME.
 plugins = false
 
+# Codex needs the API key; agent shell commands do not.
+[shell_environment_policy.filters]
+OPENAI_API_KEY = "exclude"
+OPENAI_PROXY_TOKEN = "exclude"
+
 [model_providers.proxy]
 name = "OpenAI"
 base_url = {toml_string(os.environ.get("OPENAI_API_BASE", DEFAULT_API_BASE).rstrip("/"))}
 wire_api = "responses"
+env_key = "OPENAI_API_KEY"
 
-[permissions.ai-insights-mcp.filesystem]
+[permissions.ai-insights.filesystem]
 # Minimal read access lets Codex read its prompt and generated workspace files
 # without inheriting access to the developer's normal filesystem.
 ":minimal" = "read"
+{runtime_read_section}
+# The MCP server launches outside the shell sandbox; agent commands must not
+# read, copy or execute its APX binary, even under an otherwise readable path.
+{toml_string(str(cfg["cli_bin"].resolve()))} = "deny"
 
-[permissions.ai-insights-mcp.filesystem.":workspace_roots"]
-# The generated workspace contains only per-attempt inputs and outputs.
-"." = "read"
+[permissions.ai-insights.filesystem.":workspace_roots"]
+# The generated workspace contains only per-attempt inputs and outputs. A
+# pathways attempt may modify only its harness-provided checkout.
+"." = "{workspace_access}"
 
-[permissions.ai-insights-mcp.network]
-# The model under test should obtain Performix evidence through MCP, not by
-# making arbitrary network calls during evaluation.
-enabled = false
+[permissions.ai-insights.network]
+{network_comment}
+enabled = {network_enabled}
+allow_local_binding = {network_enabled}
+{network_domain_section}
 
 [mcp_servers.{mode.server}]
-command = {toml_string(mcp_mode_command(mode, cfg))}
+command = {toml_string(str(cfg["cli_bin"]))}
 args = {json.dumps(list(mode.args))}
-cwd = {toml_string(str(server_dir))}
+cwd = {toml_string(str(cfg["cli_bin"].parent))}
 enabled = true
 # Allow the configured MCP server to be used non-interactively by pytest.
 default_tools_approval_mode = "approve"
-{env_section}
+
+[mcp_servers.{mode.server}.env]
+# Pass only the environment needed by this MCP mode.
+{env_lines}
 """
     (codex_home / "config.toml").write_text(config, encoding="utf-8")
     return codex_home
@@ -685,22 +908,18 @@ def validate_mcp_call(raw_jsonl: Path, mode: McpServer) -> dict[str, Any]:
             failure_rates,
             "; ".join(failed_messages),
         )
-    required_completed = completed_by_tool.get(mode.tool, 0)
-    if required_completed == 0:
-        raw_text = raw_jsonl.read_text(encoding="utf-8") if raw_jsonl.is_file() else ""
-        if (
-            f'"tool":"{mode.tool}"' in raw_text
-            and '"type":"mcp_tool_call"' in raw_text
-            and '"status":"completed"' in raw_text
-        ):
-            required_completed = 1
-            completed_by_tool[mode.tool] = max(completed_by_tool.get(mode.tool, 0), 1)
-        else:
-            raise RuntimeError(f"{mode.tool} did not complete successfully")
+    required_tools = (mode.tool, *mode.required_tools)
+    required_completed = 0
+    for required_tool in required_tools:
+        completed = completed_by_tool.get(required_tool, 0)
+        if completed <= 0:
+            raise RuntimeError(f"{required_tool} did not complete successfully")
+        required_completed += completed
     return {
         "server": mode.server,
         "tool": mode.tool,
         "extra_tools": list(mode.extra_tools),
+        "required_tools": list(mode.required_tools),
         "completed_calls": sum(completed_by_tool.values()),
         "required_completed_calls": required_completed,
         "completed_by_tool": completed_by_tool,
@@ -802,12 +1021,35 @@ def successful_external_commands(codex_home: Path) -> list[str]:
     return [cmd for cmd in dict.fromkeys(commands) if cmd not in ("pwd", "/bin/zsh -lc pwd")]
 
 
+def run_agent(argv, *, timeout=None, **kwargs):
+    """Run an agent with file-based stdio; allow graceful shutdown on cancellation."""
+    with subprocess.Popen(argv, start_new_session=True, **kwargs) as process:
+        try:
+            process.wait(timeout=timeout)
+        except BaseException:
+            try:
+                if process.poll() is None and os.name == "posix":
+                    process.send_signal(signal.SIGINT)
+                    try:
+                        process.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        pass
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
+            raise
+        return subprocess.CompletedProcess(argv, process.returncode)
+
+
 def invoke_mcp_mode(
     attempt_dir: Path,
     run_meta: dict[str, Any],
     test_case: dict[str, Any],
     cfg: dict[str, Any],
     mode: McpServer,
+    workspace: Path,
+    *, performix: PerformixAttempt,
 ) -> dict[str, Any]:
     """Run Codex against one AI Insights MCP mode and capture artefacts.
 
@@ -818,13 +1060,22 @@ def invoke_mcp_mode(
     if shutil.which("codex") is None:
         raise RuntimeError("missing required command: codex")
 
-    workspace = attempt_dir / "codex_workspace"
-    if workspace.exists():
-        shutil.rmtree(workspace)
-    workspace.mkdir(parents=True)
-    codex_home = write_codex_home(attempt_dir, workspace, cfg, mode)
+    if not workspace.is_dir():
+        raise RuntimeError(f"agent workspace does not exist: {workspace}")
+    pathways_execution = is_pathways_execution(test_case)
+    codex_home = write_codex_home(
+        attempt_dir,
+        workspace,
+        cfg,
+        mode,
+        pathways_execution,
+        performix.state,
+    )
 
-    prompt = resolve_mcp_prompt(test_case, run_meta["run_id"])
+    prompt = resolve_mcp_prompt(
+        test_case, run_meta["run_id"], cfg["target_prompt_values"],
+        ssh_command=cfg.get("pathways_ssh_command", UNSUPPLIED_PROMPT_VALUE),
+    )
     prompt_path = attempt_dir / "codex_prompt.txt"
     raw_jsonl = attempt_dir / "codex_exec.jsonl"
     last_message = attempt_dir / "codex_last_message.txt"
@@ -835,7 +1086,7 @@ def invoke_mcp_mode(
         "Invoking Codex for %s via %s, run %s",
         run_meta["test_id"],
         mode.tool,
-        run_meta["run_id"],
+        run_meta["run_id"] or "none supplied",
     )
 
     argv = ["codex", "exec", "--color", "never", "--json"]
@@ -852,16 +1103,26 @@ def invoke_mcp_mode(
         "-",
     ])
 
-    env = os.environ.copy()
+    env = performix.environment()
     env["CODEX_HOME"] = str(codex_home)
+    # Support the local proxy and CI's managed arm-openai provider. Only Codex
+    # receives these credentials; its shell policy excludes both names.
+    env["OPENAI_API_KEY"] = env["OPENAI_PROXY_TOKEN"] = cfg["openai_api_key"]
     version = subprocess.run(["codex", "--version"], capture_output=True, text=True)
     codex_version = version.stdout.strip() or version.stderr.strip()
     started = time.monotonic()
-    with prompt_path.open("r", encoding="utf-8") as stdin, raw_jsonl.open("w", encoding="utf-8") as stdout:
-        process = subprocess.run(argv, stdin=stdin, stdout=stdout, stderr=subprocess.PIPE, text=True, env=env)
+    with (prompt_path.open("r", encoding="utf-8") as stdin,
+          raw_jsonl.open("w", encoding="utf-8") as stdout,
+          (attempt_dir / "codex_stderr.txt").open("w", encoding="utf-8") as stderr):
+        timeout = pathways_agent_timeout_seconds(test_case) if pathways_execution else None
+        process = run_agent(argv, stdin=stdin, stdout=stdout, stderr=stderr, text=True, env=env, timeout=timeout)
     duration = time.monotonic() - started
     if process.returncode != 0:
-        raise RuntimeError(f"codex exec failed with exit code {process.returncode}: {process.stderr.strip()}")
+        detail = (attempt_dir / "codex_stderr.txt").read_text(encoding="utf-8", errors="replace").strip()[-4000:]
+        errors = [str(event.get("message") or event.get("error", {}).get("message", ""))
+                  for event in iter_jsonl(raw_jsonl) if event.get("type") in ("error", "turn.failed")]
+        detail = "\n".join([*errors[-2:], detail]).strip()
+        raise RuntimeError(f"codex exec failed with exit code {process.returncode}: {detail}")
     LOGGER.info("Codex invocation completed in %.1fs", duration)
 
     if not last_message.is_file() or last_message.stat().st_size == 0:
@@ -869,13 +1130,14 @@ def invoke_mcp_mode(
     response_md.write_text(last_message.read_text(encoding="utf-8"), encoding="utf-8")
     LOGGER.info("Captured Codex response: %s (%d bytes)", response_md, response_md.stat().st_size)
 
+    session_jsonl = persist_codex_session_log(codex_home, attempt_dir)
     mcp = validate_mcp_call(raw_jsonl, mode)
     mcp.update(collect_mcp_tool_metrics(codex_home, mode.server))
     truncation_details = codex_truncation_markers(codex_home, mode.server)
     truncation_token_counts = [detail["token_count"] for detail in truncation_details]
     truncation_markers = len(truncation_details)
     successful_commands = successful_external_commands(codex_home)
-    if successful_commands:
+    if successful_commands and not pathways_execution:
         raise RuntimeError(f"Codex successfully used external shell commands: {successful_commands}")
     return {
         "status": "ok",
@@ -890,6 +1152,7 @@ def invoke_mcp_mode(
         "truncation_details": truncation_details,
         "successful_external_commands": successful_commands,
         "codex_home": str(codex_home),
+        "session_jsonl": str(session_jsonl),
         "workspace": str(workspace),
         "prompt_path": str(prompt_path),
         "raw_jsonl": str(raw_jsonl),
@@ -897,6 +1160,27 @@ def invoke_mcp_mode(
         "response_markdown": str(response_md),
         "response_bytes": response_md.stat().st_size,
     }
+
+
+def write_score(attempt_dir: Path, test_case: dict[str, Any], score: dict[str, Any], *, failure_phase: str | None = None) -> None:
+    """Render both score files from structured results, including any cleanup errors."""
+    (attempt_dir / "score.json").write_text(json.dumps(score, indent=2), encoding="utf-8")
+    lines = [f"# Verdict: {score['final']['final_label'].upper()}", "", f"- Test: `{score['test_id']}`"]
+    judge = score["judge"]
+    details = score["response_observations"]["details"]
+    if judge:
+        lines.extend([
+            f"- Judge: `{judge['label']}` (confidence: `{judge['confidence']}`)", "",
+            "## Material Gaps", judge["material_gaps"], "",
+            "## Verdict Rationale", judge["verdict_rationale"],
+        ])
+        if is_pathways_execution(test_case) and details:
+            lines.extend(["", "## Evaluation Rule Failures", *details])
+    else:
+        lines.extend([f"- Phase: `{failure_phase}`", "", *details])
+    if score.get("cleanup_errors"):
+        lines.extend(["", "## Evidence collection error", *score["cleanup_errors"]])
+    (attempt_dir / "score.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def score_truncated_attempt(attempt_dir: Path, test_case: dict[str, Any], invoke_meta: dict[str, Any]) -> dict[str, Any]:
@@ -924,15 +1208,7 @@ def score_truncated_attempt(attempt_dir: Path, test_case: dict[str, Any], invoke
         "judge": judge,
         "final": {"final_label": "fail"},
     }
-    (attempt_dir / "score.json").write_text(json.dumps(score, indent=2), encoding="utf-8")
-    (attempt_dir / "score.md").write_text(
-        "# Verdict: FAIL\n\n"
-        f"- Test: `{test_case['id']}`\n"
-        "- Judge: `fail` (confidence: `high`)\n\n"
-        f"## Material Gaps\n{judge['material_gaps']}\n\n"
-        f"## Verdict Rationale\n{judge['verdict_rationale']}\n",
-        encoding="utf-8",
-    )
+    write_score(attempt_dir, test_case, score)
     return score
 
 
@@ -954,7 +1230,31 @@ def extract_json_object(text: str) -> dict[str, Any]:
     return value
 
 
-def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str, Any]) -> dict[str, Any]:
+def pathways_judge_transcript(raw: str) -> str:
+    """Keep readable investigation evidence with references to the original JSONL."""
+    evidence = []
+    for number, line in enumerate(raw.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            event = {"invalid_jsonl": line}
+        if not isinstance(event, dict):
+            evidence.append({"session_line": number, "event": event})
+            continue
+        payload = event.get("payload", {})
+        if event.get("type") == "event_msg" and payload.get("type") == "token_count":
+            continue
+        payload.pop("internal_chat_message_metadata_passthrough", None)
+        if payload.get("type") == "reasoning":
+            payload.pop("encrypted_content", None)  # Opaque ciphertext cannot be judged.
+        evidence.append({"session_line": number, "event": event})
+    return "\n".join(json.dumps(event, ensure_ascii=False, separators=(",", ":")) for event in evidence)
+
+
+def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str, Any],
+                   *, pathways_evidence: dict[str, Any] | None = None) -> dict[str, Any]:
     """Score one AI Insights response with a separate rubric-aware judge.
 
     Private rubrics are only sent to this direct judge call. They must not
@@ -962,32 +1262,70 @@ def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str,
     """
     api_key = cfg["openai_api_key"]
     LOGGER.info("Judging AI Insights response for %s with %s", test_id, cfg["judge_model"])
+    judge_file = "judge_pathways.md" if pathways_evidence is not None else "judge_ai_insights.md"
+    judge_task, *judge_instructions = read_prompt(judge_file).split("\n\n")
     prompt = {
-        "task": "Score an AI Insights response for one performance testcase.",
-        "instructions": [
-            "Return strict JSON only.",
-            "Use labels: pass or fail only.",
-            "Judge semantic correctness and usefulness, not keyword overlap.",
-            "Fail when the response misses the main testcase issue or gives only generic tuning advice.",
-        ],
+        "task": judge_task,
+        "instructions": judge_instructions,
         "test_id": test_id,
         "private_rubric": rubric,
         "response_under_test": response_text,
-        "output_schema": {
+    }
+    if pathways_evidence is not None:
+        prompt["pathways_evidence"] = {**pathways_evidence,
+            "session_jsonl": pathways_judge_transcript(pathways_evidence.get("session_jsonl", ""))}
+    else:
+        prompt["output_schema"] = {
             "label": "pass|fail",
             "confidence": "low|medium|high",
             "what_was_correct": "string",
             "material_gaps": "string",
             "verdict_rationale": "string",
-        },
-    }
+        }
     body = {
         "model": cfg["judge_model"],
+        "reasoning": {"effort": cfg["judge_reasoning_effort"]},
         "input": [{"role": "user", "content": [{"type": "input_text", "text": json.dumps(prompt)}]}],
     }
+    if pathways_evidence is not None:
+        properties = {
+            "label": {"type": "string", "enum": ["pass", "fail"]},
+            "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+            **{key: {"type": "string"} for key in ("what_was_correct", "material_gaps", "verdict_rationale")},
+            "mcp_policy": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "label": {"type": "string", "enum": ["pass", "fail"]},
+                    "violations": {"type": "array", "items": {
+                        "type": "object", "additionalProperties": False,
+                        "properties": {"session_line": {"type": "integer"}, "reason": {"type": "string"}},
+                        "required": ["session_line", "reason"],
+                    }},
+                    "rationale": {"type": "string"},
+                },
+                "required": ["label", "violations", "rationale"],
+            },
+        }
+        body["text"] = {"format": {"type": "json_schema", "name": "pathways_verdict", "strict": True,
+                                  "schema": {"type": "object", "additionalProperties": False,
+                                             "properties": properties, "required": list(properties)}}}
+    request_data = json.dumps(body).encode("utf-8")
+    if pathways_evidence is not None:
+        setting = "AI_INSIGHTS_PATHWAYS_JUDGE_MAX_REQUEST_BYTES"
+        try:
+            limit = int(os.environ.get(setting, DEFAULT_PATHWAYS_JUDGE_MAX_REQUEST_BYTES))
+            if limit <= 0:
+                raise ValueError
+        except ValueError:
+            raise AiInsightsConfigError(f"{setting} must be a positive integer byte count") from None
+        if len(request_data) > limit:
+            raise RuntimeError(
+                f"Pathways judge request is {len(request_data):,} bytes; limit is {limit:,} bytes "
+                f"({setting}). No request was sent and no evidence was truncated."
+            )
     request = urllib.request.Request(
         f"{os.environ.get('OPENAI_API_BASE', DEFAULT_API_BASE).rstrip('/')}/responses",
-        data=json.dumps(body).encode("utf-8"),
+        data=request_data,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         method="POST",
     )
@@ -997,6 +1335,8 @@ def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str,
             LOGGER.info("Judge attempt %d for %s", attempt, test_id)
             with urllib.request.urlopen(request, timeout=120) as response:
                 payload = json.loads(response.read().decode("utf-8"))
+            if payload.get("status") in {"incomplete", "failed", "cancelled"}:
+                raise RuntimeError(f"Judge response {payload['status']}: {payload.get('incomplete_details') or payload.get('error')}")
             fragments: list[str] = []
             for item in payload.get("output", []):
                 if item.get("type") != "message":
@@ -1005,22 +1345,45 @@ def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str,
                     if content.get("type") == "output_text":
                         fragments.append(str(content.get("text") or ""))
             parsed = extract_json_object("\n".join(fragments).strip())
-            return {
+            verdict = {
                 "label": str(parsed.get("label", "fail")).lower(),
                 "confidence": str(parsed.get("confidence", "medium")).lower(),
                 "what_was_correct": str(parsed.get("what_was_correct", "")).strip(),
                 "material_gaps": str(parsed.get("material_gaps", "")).strip(),
                 "verdict_rationale": str(parsed.get("verdict_rationale", "")).strip(),
             }
+            if pathways_evidence is not None:
+                verdict["mcp_policy"] = parsed.get("mcp_policy")
+            return verdict
         except urllib.error.HTTPError as exc:
-            last_exc = exc
+            # Keep the rejection reason without archiving request headers or bodies.
+            detail = exc.read(8192).decode("utf-8", errors="replace")
+            try:
+                error = json.loads(detail).get("error", {})
+                detail = json.dumps({key: error[key] for key in ("type", "code", "message", "param")
+                                     if key in error}) if isinstance(error, dict) else str(error)
+            except (ValueError, AttributeError):
+                pass
+            for secret in (api_key, os.environ.get("OPENAI_PROXY_TOKEN")):
+                if secret:
+                    detail = detail.replace(secret, "[REDACTED]")
+            last_exc = RuntimeError(f"Judge HTTP {exc.code}: {detail[:2048]}")
             if exc.code not in RETRYABLE_HTTP_STATUS:
-                raise
+                raise last_exc from None
         except (urllib.error.URLError, TimeoutError, socket.timeout, json.JSONDecodeError, ValueError) as exc:
             last_exc = exc
         if attempt < 3:
             time.sleep(attempt)
     raise RuntimeError(f"judge unavailable after 3 attempts: {last_exc}")
+
+
+def mcp_policy_passes(policy: Any) -> bool:
+    """Require an explicit policy pass with no reported violations."""
+    return (
+        isinstance(policy, dict)
+        and policy.get("label") == "pass"
+        and policy.get("violations") == []
+    )
 
 
 def score_attempt(attempt_dir: Path, test_case: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
@@ -1032,7 +1395,21 @@ def score_attempt(attempt_dir: Path, test_case: dict[str, Any], cfg: dict[str, A
         observations["details"].append("llm_response.md was empty")
     rubric_path = Path(__file__).resolve().parent / test_case["rubric"]
     rubric = rubric_path.read_text(encoding="utf-8")
-    judge = judge_response(test_case["id"], rubric, response_text, cfg)
+    if is_pathways_execution(test_case):
+        session = attempt_dir / "codex_session.jsonl"
+        run_meta_path = attempt_dir / "run_meta.json"
+        fixture_id = json.loads(run_meta_path.read_text(encoding="utf-8")).get("run_id") if run_meta_path.is_file() else None
+        evidence, transcript_error = load_pathways_judge_evidence(session, fixture_id)
+        if transcript_error:
+            observations["issues"].append("incomplete_pathways_transcript")
+            observations["details"].append(transcript_error)
+        judge = judge_response(test_case["id"], rubric, response_text, cfg, pathways_evidence=evidence)
+        policy = judge.get("mcp_policy")
+        if not mcp_policy_passes(policy):
+            observations["issues"].append("pathways_mcp_policy_failed")
+            observations["details"].append(json.dumps(policy) if policy else "Judge did not return an MCP policy verdict.")
+    else:
+        judge = judge_response(test_case["id"], rubric, response_text, cfg)
     final_label = "pass" if judge["label"] == "pass" and not observations["issues"] else "fail"
     LOGGER.info(
         "Judge result for %s: %s (confidence: %s)",
@@ -1051,15 +1428,7 @@ def score_attempt(attempt_dir: Path, test_case: dict[str, Any], cfg: dict[str, A
         "judge": judge,
         "final": {"final_label": final_label},
     }
-    (attempt_dir / "score.json").write_text(json.dumps(score, indent=2), encoding="utf-8")
-    (attempt_dir / "score.md").write_text(
-        f"# Verdict: {final_label.upper()}\n\n"
-        f"- Test: `{test_case['id']}`\n"
-        f"- Judge: `{judge['label']}` (confidence: `{judge['confidence']}`)\n\n"
-        f"## Material Gaps\n{judge['material_gaps']}\n\n"
-        f"## Verdict Rationale\n{judge['verdict_rationale']}\n",
-        encoding="utf-8",
-    )
+    write_score(attempt_dir, test_case, score)
     return score
 
 
@@ -1074,6 +1443,18 @@ def sum_token_usage(attempt_results: list[dict[str, Any]], key: str) -> int:
             if isinstance(usage, dict) and isinstance(usage.get(key), int):
                 total += usage[key]
     return total
+
+
+def non_reasoning_output_token_usage(attempt_results: list[dict[str, Any]]) -> int:
+    """Return output tokens with the reasoning-token subset removed."""
+    output_tokens = sum_token_usage(attempt_results, "output_tokens")
+    reasoning_tokens = sum_token_usage(attempt_results, "reasoning_output_tokens")
+    if reasoning_tokens > output_tokens:
+        raise ValueError(
+            "reasoning output token usage exceeds total output token usage: "
+            f"{reasoning_tokens} > {output_tokens}"
+        )
+    return output_tokens - reasoning_tokens
 
 
 def sum_tool_output_truncated_tokens(attempt_results: list[dict[str, Any]]) -> int:
@@ -1105,19 +1486,13 @@ def record_evaluation_properties(
         record_property("ai_expected_failure_reason", aggregate["expected_failure_reason"])
     record_property("ai_artifact_dir", aggregate["artifact_dir"])
     record_property("ai_artifact_rel_dir", aggregate["artifact_rel_dir"])
-    record_property("ai_aggregate_path", aggregate["aggregate_path"])
+    if "aggregate_path" in aggregate:
+        record_property("ai_aggregate_path", aggregate["aggregate_path"])
 
     run_ids = unique_values([result["run_meta"].get("run_id") for result in attempt_results])
     archive_shas = unique_values([result["run_meta"].get("archive_sha256") for result in attempt_results])
     judge_labels = unique_values([result["score"].get("judge", {}).get("label") for result in attempt_results])
     judge_confidences = unique_values([result["score"].get("judge", {}).get("confidence") for result in attempt_results])
-    rest_reasoning_efforts = unique_values(
-        [
-            result["invoke"].get("request_reasoning_effort") or result["invoke"].get("reasoning_effort")
-            for result in attempt_results
-            if result["invoke"].get("mode") == REST_MODE
-        ]
-    )
     artifact_paths = {
         "ai_llm_response_path": "llm_response.md",
         "ai_score_path": "score.md",
@@ -1125,7 +1500,16 @@ def record_evaluation_properties(
         "ai_invoke_metadata_path": "invoke_metadata.json",
         "ai_run_meta_path": "run_meta.json",
     }
-    attempt_dirs = [Path(result["attempt_dir"]) for result in attempt_results]
+    if any(result.get("pathways") for result in attempt_results):
+        artifact_paths.update({
+            "ai_session_path": "codex_session.jsonl",
+            "ai_performix_runs_path": "performix_runs.json",
+            "ai_codex_exec_path": "codex_exec.jsonl",
+            "ai_codex_stderr_path": "codex_stderr.txt",
+        })
+    for result in attempt_results:
+        if "timeout_seconds" in result["invoke"]:
+            record_property("ai_agent_timeout_seconds", result["invoke"]["timeout_seconds"])
     if run_ids:
         record_property("ai_run_ids", run_ids)
     if archive_shas:
@@ -1134,10 +1518,9 @@ def record_evaluation_properties(
         record_property("ai_judge_labels", judge_labels)
     if judge_confidences:
         record_property("ai_judge_confidences", judge_confidences)
-    if rest_reasoning_efforts:
-        record_property("ai_rest_reasoning_effort", rest_reasoning_efforts)
     for property_name, filename in artifact_paths.items():
-        paths = unique_values([attempt_dir / filename for attempt_dir in attempt_dirs])
+        paths = unique_values([result["attempt_dir"] / filename for result in attempt_results
+                               if not result.get("pathways") or (result["attempt_dir"] / filename).is_file()])
         if paths:
             record_property(property_name, paths)
 
@@ -1153,6 +1536,11 @@ def record_evaluation_properties(
     )
     mcp_tool_calls_failed = sum(
         result["invoke"].get("mcp", {}).get("tool_calls_failed", 0)
+        for result in attempt_results
+        if isinstance(result["invoke"].get("mcp"), dict)
+    )
+    mcp_tool_rounds = sum(
+        result["invoke"].get("mcp", {}).get("tool_rounds", 0)
         for result in attempt_results
         if isinstance(result["invoke"].get("mcp"), dict)
     )
@@ -1192,6 +1580,7 @@ def record_evaluation_properties(
     record_property("ai_agent_duration_seconds", round(agent_duration, 3))
     record_property("ai_mcp_tool_calls_succeeded", mcp_tool_calls_succeeded)
     record_property("ai_mcp_tool_calls_failed", mcp_tool_calls_failed)
+    record_property("ai_mcp_tool_rounds", mcp_tool_rounds)
     record_property(
         "ai_mcp_tool_duration_seconds_succeeded",
         round(mcp_tool_duration_seconds_succeeded, 3),
@@ -1210,8 +1599,13 @@ def record_evaluation_properties(
         )
     if truncation_severities:
         record_property("ai_tool_output_truncation_severity", truncation_severities)
-    for key in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"):
+    for key in ("input_tokens", "cached_input_tokens"):
         record_property(f"ai_{key}", sum_token_usage(attempt_results, key))
+    record_property("ai_output_tokens", non_reasoning_output_token_usage(attempt_results))
+    record_property(
+        "ai_reasoning_output_tokens",
+        sum_token_usage(attempt_results, "reasoning_output_tokens"),
+    )
 
 
 def record_evaluation_suite_properties(pytestconfig, record_testsuite_property, cfg: dict[str, Any]) -> None:
@@ -1223,12 +1617,14 @@ def record_evaluation_suite_properties(pytestconfig, record_testsuite_property, 
     if cfg["reasoning_effort"]:
         record_testsuite_property("ai_reasoning_effort", cfg["reasoning_effort"])
     record_testsuite_property("ai_judge_model", cfg["judge_model"])
+    record_testsuite_property("ai_judge_reasoning_effort", cfg["judge_reasoning_effort"])
     record_testsuite_property("ai_results_dir", str(cfg["results_dir"]))
     record_testsuite_property("ai_manifest_path", str(cfg["manifest_path"]))
     pytestconfig._ai_insights_suite_summary = {
         "model": cfg["model"],
         "reasoning_effort": cfg["reasoning_effort"],
         "judge_model": cfg["judge_model"],
+        "judge_reasoning_effort": cfg["judge_reasoning_effort"],
         "results_dir": str(cfg["results_dir"]),
         "manifest_path": str(cfg["manifest_path"]),
     }
@@ -1280,10 +1676,16 @@ def format_failure_artifacts(attempt_dir: Path, cfg: dict[str, Any]) -> list[str
         [
             "  full result directory:",
             *wrap_failure_text(str(attempt_dir), prefix="    ", break_long_words=True),
-            "  score: score.md",
-            "  generated response: llm_response.md",
+            *(["  agent record: codex_session.jsonl",
+               "  Performix runs: performix_runs.json", "  score: score.md",
+               "  generated response: llm_response.md"]
+              if (attempt_dir / "performix_runs.json").is_file()
+              else ["  score: score.md", "  generated response: llm_response.md"]),
         ]
     )
+    for name in ("codex_stderr.txt", "codex_exec.jsonl"):
+        if (attempt_dir / name).is_file():
+            lines.append(f"  diagnostics: {name}")
     return lines
 
 
@@ -1323,11 +1725,22 @@ def format_evaluation_failure(
     test_id = aggregate["test_id"]
     mode = aggregate["mode"]
     scores = ", ".join(aggregate["scores"])
+    timed_out = any("timeout_seconds" in result["invoke"] for result in attempt_results)
+    execution_error = "error" in aggregate["scores"]
+    if timed_out:
+        heading = "AI Insights execution: TIMEOUT"
+        explanation = "The agent exceeded its time limit. The judge was not run."
+    elif execution_error:
+        heading = "AI Insights execution: ERROR"
+        explanation = "Evaluation could not complete; this is not a judge verdict."
+    else:
+        heading = "AI Insights judge verdict: FAIL"
+        explanation = "The generated AI Insight did not satisfy the testcase rubric."
     lines = [
-        "AI Insights judge verdict: FAIL",
+        heading,
         "",
         f"Test: {test_id} / {mode} / attempt {aggregate['attempt']}/{aggregate['attempts_total']}",
-        "The generated AI Insight did not satisfy the testcase rubric.",
+        explanation,
         f"Failed requirement: {failed_requirement}",
         f"Scores: {scores}",
     ]
@@ -1345,58 +1758,123 @@ def format_evaluation_failure(
             [
                 "",
                 f"Attempt {attempt_label}",
-                f"  result: {final_label}",
-                f"  judge: {judge_label} (confidence: {judge_confidence})",
+                f"  result: {'timeout' if 'timeout_seconds' in result['invoke'] else final_label}",
+                ("  judge: not run" if "timeout_seconds" in result["invoke"]
+                 else f"  judge: {judge_label} (confidence: {judge_confidence})"),
             ]
         )
         lines.extend(format_failure_field("Material gaps", judge.get("material_gaps")))
         lines.extend(format_failure_field("Verdict rationale", judge.get("verdict_rationale")))
-        lines.extend(["", *format_failure_artifacts(attempt_dir, cfg), "", *format_response_excerpt(response_path)])
+        lines.extend(["", *format_failure_artifacts(attempt_dir, cfg)])
+        if result.get("pathways"):
+            lines.extend(format_failure_field("Attempt error", result["invoke"].get("error")))
+        lines.extend(["", *format_response_excerpt(response_path)])
 
     return "\n".join(lines)
 
 
-def run_attempt(pytestconfig, test_case: dict[str, Any], mode: str, cfg: dict[str, Any], attempt_num: int) -> dict[str, Any]:
-    if mode != REST_MODE and mode not in MCP_MODES:
+def run_attempt(test_case: dict[str, Any], mode: str, cfg: dict[str, Any], attempt_num: int) -> dict[str, Any]:
+    if mode not in MCP_MODES:
         raise ValueError(f"unsupported AI Insights mode: {mode}")
 
     LOGGER.info("Starting %s/%s attempt %03d", test_case["id"], mode, attempt_num)
-    run_meta = import_run_cached(pytestconfig, test_case, cfg)
+    pathways = is_pathways_execution(test_case)
     attempt_dir = cfg["results_dir"] / test_case["id"] / mode / "attempts" / f"{attempt_num:03d}"
-    if attempt_dir.exists():
+    if attempt_dir.exists() and not pathways:
         shutil.rmtree(attempt_dir)
-    attempt_dir.mkdir(parents=True)
-    full_run_meta = {
-        **run_meta,
-        "test_id": test_case["id"],
-        "mode": mode,
-        "cli_bin": str(cfg["cli_bin"]),
-        "recipe": test_case.get("recipe", cfg["defaults"].get("recipe")),
-        "target": test_case.get("target", cfg["defaults"].get("target")),
-        "model_config_id": cfg["model_config_id"],
-    }
-    (attempt_dir / "run_meta.json").write_text(json.dumps(full_run_meta, indent=2), encoding="utf-8")
+    attempt_dir.mkdir(parents=True)  # Pathways collisions must preserve old evidence.
+    pathways_attempt = None
+    if pathways:
+        from pathways_attempt import create_pathways_attempt
+        try:
+            pathways_attempt = create_pathways_attempt(cfg, attempt_dir)
+        except Exception as exc:
+            pytest.exit(f"Pathways attempt setup failed: {exc}", returncode=2)
+    performix = pathways_attempt.performix if pathways_attempt else PerformixAttempt(attempt_dir)
+    workspace = None
+    workload_checkout = None
+    full_run_meta = {"test_id": test_case["id"], "mode": mode}
+    invoke_meta = {"status": "not_started"}
+    phase = "setup"
     try:
-        if mode == REST_MODE:
-            invoke_meta = invoke_rest_mode(attempt_dir, full_run_meta, cfg)
-        else:
-            invoke_meta = invoke_mcp_mode(attempt_dir, full_run_meta, test_case, cfg, MCP_MODES[mode])
+        if not pathways_attempt:
+            performix.prepare()
+        workspace, workload_checkout = prepare_agent_workspace(attempt_dir, test_case)
+        full_run_meta["agent_workspace"] = str(workspace)
+        if workload_checkout is not None:
+            full_run_meta["workload_checkout"] = workload_checkout
+        if pathways_attempt:
+            connection, ssh_command = pathways_attempt.prepare_workspace(workspace, workload_checkout["commit"])
+            cfg = {**cfg,
+                   "target_prompt_values": {"target_host": connection["host"], "target_port": str(connection["port"]),
+                                            "target_user": connection["user"], "target_private_key_path": connection["private_key_path"]},
+                   "pathways_ssh_command": ssh_command}
+        full_run_meta["performix_state"] = performix.state.copy()
+        run_meta = import_attempt_run(test_case, cfg, performix)
+        full_run_meta.update({
+            **run_meta,
+            "cli_bin": str(cfg["cli_bin"]),
+            "recipe": test_case.get("recipe"),
+            "target": test_case.get("target", cfg["defaults"].get("target")),
+            "model_config_id": cfg["model_config_id"],
+        })
+        (attempt_dir / "run_meta.json").write_text(json.dumps(full_run_meta, indent=2), encoding="utf-8")
+        phase = "invocation"
+        invocation_started = time.monotonic()
+        invoke_meta = invoke_mcp_mode(
+            attempt_dir, full_run_meta, test_case, cfg, MCP_MODES[mode], workspace,
+            performix=performix,
+        )
+        phase = "judge"
         if should_fail_on_tool_output_truncation(mode, invoke_meta):
             score = score_truncated_attempt(attempt_dir, test_case, invoke_meta)
         else:
             score = score_attempt(attempt_dir, test_case, cfg)
-    except Exception as exc:
-        LOGGER.exception("%s/%s attempt %03d failed", test_case["id"], mode, attempt_num)
-        invoke_meta = {"status": "error", "error": str(exc)}
+    except BaseException as exc:
+        error = str(exc)
+        if phase == "invocation":
+            invoke_meta["duration_seconds"] = time.monotonic() - invocation_started
+        if pathways and phase == "invocation" and isinstance(exc, subprocess.TimeoutExpired):
+            limit = pathways_agent_timeout_seconds(test_case)
+            invoke_meta["timeout_seconds"] = limit
+            error = (f"Codex timed out: {limit}s agent time limit reached "
+                     f"(elapsed {invoke_meta['duration_seconds']:.1f}s). Judge not run. "
+                     "See codex_stderr.txt and codex_exec.jsonl for diagnostics.")
+            LOGGER.error("%s/%s attempt %03d: %s", test_case["id"], mode, attempt_num, error)
+        elif isinstance(exc, TargetAccessError):
+            LOGGER.error("%s/%s attempt %03d failed during %s: %s",
+                         test_case["id"], mode, attempt_num, phase, error)
+        else:
+            LOGGER.exception("%s/%s attempt %03d failed", test_case["id"], mode, attempt_num)
+        invoke_meta = {**invoke_meta, "status": "error", "error": error, "failure_phase": phase}
         score = {
             "test_id": test_case["id"],
-            "response_observations": {"issues": ["invocation_or_judge_error"], "details": [str(exc)]},
+            "response_observations": {"issues": [f"{phase}_error"], "details": [error]},
             "judge": {},
             "final": {"final_label": "error"},
         }
-        (attempt_dir / "score.json").write_text(json.dumps(score, indent=2), encoding="utf-8")
-    (attempt_dir / "invoke_metadata.json").write_text(json.dumps(invoke_meta, indent=2), encoding="utf-8")
-    return {"attempt_dir": attempt_dir, "run_meta": full_run_meta, "invoke": invoke_meta, "score": score}
+        write_score(attempt_dir, test_case, score, failure_phase=phase)
+        if not isinstance(exc, Exception):
+            raise  # Preserve cancellation/SystemExit after the finally capture.
+    finally:
+        (attempt_dir / "run_meta.json").write_text(json.dumps(full_run_meta, indent=2), encoding="utf-8")
+        (attempt_dir / "invoke_metadata.json").write_text(json.dumps(invoke_meta, indent=2), encoding="utf-8")
+        try:
+            if pathways_attempt:
+                pathways_attempt.collect_evidence_and_clean_host()
+            else:
+                performix.clean()
+        except Exception as exc:
+            error = f"Attempt cleanup or evidence collection failed: {exc}"
+            LOGGER.error("%s/%s attempt %03d: %s", test_case["id"], mode, attempt_num, error)
+            invoke_meta["status"] = "error"
+            invoke_meta.setdefault("failure_phase", "collection")
+            invoke_meta["error"] = "\n".join(filter(None, [invoke_meta.get("error"), error]))
+            score["cleanup_errors"] = [str(exc)]
+            score["final"]["final_label"] = "error"
+            write_score(attempt_dir, test_case, score, failure_phase=invoke_meta["failure_phase"])
+            (attempt_dir / "invoke_metadata.json").write_text(json.dumps(invoke_meta, indent=2), encoding="utf-8")
+    return {"attempt_dir": attempt_dir, "run_meta": full_run_meta, "invoke": invoke_meta, "score": score, "pathways": pathways}
 
 
 def test_ai_insights(
@@ -1424,7 +1902,7 @@ def test_ai_insights(
         attempts_total,
         cfg["model"],
     )
-    attempt_results = [run_attempt(pytestconfig, test_case, mode, cfg, attempt)]
+    attempt_results = [run_attempt(test_case, mode, cfg, attempt)]
     scores = [result["score"] for result in attempt_results]
     expectation = expected_failure_for_mode(test_case, mode)
     expected_failure = bool(expectation["expected_failure"])
@@ -1447,13 +1925,13 @@ def test_ai_insights(
         "expected_failure": expected_failure,
         "expected_failure_reason": expected_failure_reason,
     }
-    aggregate_path = cfg["results_dir"] / test_case["id"] / mode / "attempts" / f"{attempt:03d}" / "aggregate.json"
-    aggregate_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact_dir = aggregate_path.parent
+    artifact_dir = attempt_results[0]["attempt_dir"]
     aggregate["artifact_dir"] = str(artifact_dir)
     aggregate["artifact_rel_dir"] = str(artifact_dir.relative_to(cfg["results_dir"]))
-    aggregate["aggregate_path"] = str(aggregate_path)
-    aggregate_path.write_text(json.dumps(aggregate, indent=2), encoding="utf-8")
+    if not is_pathways_execution(test_case):
+        aggregate_path = artifact_dir / "aggregate.json"
+        aggregate["aggregate_path"] = str(aggregate_path)
+        aggregate_path.write_text(json.dumps(aggregate, indent=2), encoding="utf-8")
     record_evaluation_properties(record_property, aggregate, attempt_results)
     LOGGER.info(
         "Aggregate result for %s/%s: %d/%d pass, pass_rate=%.2f",

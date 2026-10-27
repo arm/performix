@@ -11,7 +11,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/recipe"
 	engine_recipe "github.com/Arm-Debug/apap-cli/apap-engine/recipe"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type MockReadyRecipe struct {

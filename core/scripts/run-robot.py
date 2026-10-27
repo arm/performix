@@ -22,8 +22,10 @@ Steps performed by this script:
      exclude tags, and test-suite path.
 
 Note on venv:
-You can use `make robot-test TARGET=<name>` from the apap-cli directory to run this script, which activates the Python virtual environment automatically.
-If you run this Python script directly, ensure a venv is activated that has required dependencies installed (see robot/requirements.txt).
+Use `task core:test:robot TARGET=<name>` from the repository root to run this
+script with the repository's Python virtual environment. If you run this
+Python script directly, ensure a venv is activated that has required
+dependencies installed (see robot/requirements.txt).
 
 Arguments:
   --target TARGET         Target JSON file <name> (without path or extension),
@@ -52,7 +54,9 @@ Arguments:
   --launch-workload PATH  Workload command or binary path passed to Robot as the
                           LAUNCH_WORKLOAD variable. Used by tests that launch a single
                           foreground workload process (e.g. neoprof tests).
-                          Overrides the default dd command. Optional.
+                          Overrides the launch workload selected by the runner. Optional.
+  --live-recipe-runs      Use live recipe runs for eligible tests instead of the
+                          default pre-recorded runs.
   --include-tags TAG      Robot tag to include. May be repeated.
   --exclude-tags TAG      Additional Robot tag to exclude. May be repeated.
                           Tests tagged mcp-functional are excluded by default;
@@ -116,8 +120,14 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from pathlib import Path
+
+import requests
+from robot.api import TestSuite
+from robot.errors import DataError
 
 from lib.goflags import go_build_tag_flag
+from lib.robot_prerecorded_runs import robot_prerecorded_run_ids as select_prerecorded_run_ids
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -141,13 +151,17 @@ PREPARED_WORKLOADS_STEM = "prepared_workloads"
 WORKLOAD_CONFIG_DIR = os.path.join(CORE_ROOT, "robot", "resources", "files", "workloads")
 WORKLOADS_CONFIG = os.path.join(WORKLOAD_CONFIG_DIR, "workloads.json")
 DOWNLOAD_WORKLOADS_SCRIPT = os.path.join(SCRIPT_DIR, "download_and_prepare_workloads.py")
-
+ROBOT_PRERECORDED_RUNS_DIR = Path(CORE_ROOT) / "robot" / "resources" / "files" / "prerecorded-runs"
+ROBOT_PRERECORDED_RUN_MANIFEST = (
+    Path(CORE_ROOT) / "scripts" / "ai-insights-evaluation" / "robot_prerecorded_runs.json"
+)
+ROBOT_PRERECORDED_RUN_ARTIFACTORY_BASE = "its.apx-prerecorded-runs/robot"
+ARTIFACTORY_BASE_URL = "https://artifactory.arm.com/artifactory"
+ROBOT_PRERECORDED_RUN_ARTIFACTS = ("latest.zip", "metadata.json")
 # Maps target arch (from target JSON) to the Go download arch identifier.
 _GO_ARCH_MAP = {
     "aarch64": "arm64",
     "arm64": "arm64",
-    "x86_64": "amd64",
-    "amd64": "amd64",
 }
 
 
@@ -199,6 +213,15 @@ def parse_args():
         "--launch-workload",
         default=None,
         help="Workload command or binary path passed to Robot as the LAUNCH_WORKLOAD variable.",
+    )
+    parser.add_argument(
+        "--live-recipe-runs",
+        action="store_true",
+        default=False,
+        help=(
+            "Use live recipe runs for eligible tests instead of pre-recorded runs. "
+            "Uses the target platform's default workload unless --launch-workload is supplied."
+        ),
     )
     parser.add_argument(
         "--run-remote-localhost",
@@ -307,12 +330,91 @@ def load_target_config(target_name):
     return config
 
 
-def run(cmd, dry_run=False, cwd=None):
+def run(cmd, dry_run=False, cwd=None, env=None):
     """Print and optionally execute *cmd*. Returns the process exit code, or 0 for dry-run."""
     print("Running:", " ".join(cmd), flush=True)
     if dry_run:
         return 0
-    return subprocess.run(cmd, cwd=cwd).returncode
+    return subprocess.run(cmd, cwd=cwd, env=env).returncode
+
+
+def should_download_prerecorded_runs(args):
+    """Return whether this invocation should cache the Robot run catalog."""
+    return not args.live_recipe_runs and not args.dry_run
+
+
+def selected_robot_suite_paths(suites, include_tags=None, exclude_tags=None):
+    """Find suites with selected tests using Robot's own tag filtering rules."""
+    paths = [os.path.join(CORE_ROOT, suite) for suite in suites]
+    try:
+        root = TestSuite.from_file_system(*paths)
+        root.filter(included_tags=include_tags or None, excluded_tags=exclude_tags or None)
+    except DataError as exc:
+        raise RuntimeError(f"Could not select Robot tests: {exc}") from exc
+
+    selected = []
+    pending = [root]
+    while pending:
+        suite = pending.pop()
+        if suite.tests:
+            selected.append(suite.source)
+        pending.extend(suite.suites)
+    return selected
+
+
+def robot_prerecorded_run_ids(target, suites=None, include_tags=None, exclude_tags=None):
+    """Select recordings needed by suites that will run, using the capture target."""
+    selected = selected_robot_suite_paths(
+        suites or ["robot/tests"], include_tags, exclude_tags
+    )
+    if not selected:
+        return []
+    # Suite setup imports recordings even when only some tests in that suite run.
+    return select_prerecorded_run_ids(target, selected, ROBOT_PRERECORDED_RUN_MANIFEST)
+
+
+def download_missing_prerecorded_runs(target, suites=None, include_tags=None, exclude_tags=None):
+    """Download missing Robot run archives and metadata into the Robot input tree."""
+    missing = [
+        (run_id, artifact)
+        for run_id in robot_prerecorded_run_ids(target, suites, include_tags, exclude_tags)
+        for artifact in ROBOT_PRERECORDED_RUN_ARTIFACTS
+        if not (ROBOT_PRERECORDED_RUNS_DIR / run_id / artifact).is_file()
+    ]
+    if not missing:
+        return
+
+    token = os.environ.get("ARTIFACTORY_API_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError(
+            "ARTIFACTORY_API_TOKEN is required to download Robot pre-recorded runs. "
+            "Set it, or use --live-recipe-runs."
+        )
+
+    print(
+        f"=== Downloading {len(missing)} missing Robot pre-recorded run input(s) "
+        f"to {ROBOT_PRERECORDED_RUNS_DIR} ==="
+    )
+    for run_id, artifact in missing:
+        destination = ROBOT_PRERECORDED_RUNS_DIR / run_id / artifact
+        source = f"{ROBOT_PRERECORDED_RUN_ARTIFACTORY_BASE}/{run_id}/{artifact}"
+        url = f"{ARTIFACTORY_BASE_URL}/{source}"
+        temporary_destination = destination.with_name(f".{artifact}.tmp")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            response = requests.get(
+                url,
+                headers={"X-JFrog-Art-Api": token},
+                timeout=120,
+            )
+            response.raise_for_status()
+            temporary_destination.write_bytes(response.content)
+            temporary_destination.replace(destination)
+        except requests.RequestException as exc:
+            temporary_destination.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Failed to download Robot pre-recorded run input from Artifactory: {source}"
+            ) from exc
 
 
 def run_remote(ssh_key, port, user_at_host, command, dry_run=False):
@@ -425,9 +527,10 @@ def setup_remote_localhost(target, dry_run=False, force=False):
                 # rel is "" for the root "." entry — always include.
                 if not rel:
                     return tarinfo
+
                 parts = rel.split("/")
                 # Exclude dependencies, Python environments, and Git metadata at any depth.
-                if any(p in {"node_modules", "__pycache__", ".git", ".venv"} for p in parts):
+                if any(part in {"node_modules", "__pycache__", ".git", ".venv"} for part in parts):
                     return None
                 # The remote build does not use the GUI or root dist variants.
                 if parts[0] == "gui" or parts[0].startswith("dist"):
@@ -435,8 +538,14 @@ def setup_remote_localhost(target, dry_run=False, force=False):
                 # Exclude core dist variants at the core root only.
                 if len(parts) > 1 and parts[0] == "core" and parts[1].startswith("dist"):
                     return None
-                # Exclude generated Robot output.
+                # Robot imports and exports recordings on the CI host.
                 if parts[:3] == ["core", "robot", "results"]:
+                    return None
+                if (
+                    parts[:4] == ["core", "robot", "resources", "files"]
+                    and len(parts) > 4
+                    and parts[4] in {"export", "prerecorded-runs"}
+                ):
                     return None
                 # Exclude virtual environments created by setup-venv.sh.
                 if (
@@ -453,6 +562,21 @@ def setup_remote_localhost(target, dry_run=False, force=False):
                     and parts[2].startswith(
                         ("tools-linux-", "tools-darwin-", "tools-windows-")
                     )
+                ):
+                    return None
+                # Only Linux Arm64 tool bundles can be deployed by this Linux Arm64 setup.
+                if (
+                    parts[:3] == ["core", "apap-cli", "tools"]
+                    and rel.endswith(".tar.gz")
+                    and not rel.endswith("-Linux-aarch64.tar.gz")
+                ):
+                    return None
+                # apx runs sl-analyze from its host-tools directory. The remote
+                # host is always Linux Arm64, so the other host binaries are unused.
+                if (
+                    parts[:3] == ["core", "apap-cli", "sl-analyze-host-tools"]
+                    and len(parts) > 3
+                    and parts[3] != "linux-arm64"
                 ):
                     return None
                 # Exclude compiled bytecode.
@@ -472,8 +596,15 @@ def setup_remote_localhost(target, dry_run=False, force=False):
         print(f"Archive created: {tmp_path} ({size_mb:.1f} MB)")
         return tmp_path
 
+    target_os = str(target.get("os", ""))
+    arch = str(target.get("arch", ""))
+    if target_os.casefold() != "linux" or arch.casefold() not in {"aarch64", "arm64"}:
+        raise RuntimeError(
+            "remote-localhost setup supports only Linux Arm64 targets; "
+            f"detected os={target_os!r}, arch={arch!r}"
+        )
+
     remote_host = RemoteHost(target["key"], target["port"], target["user"], target["host"], dry_run)
-    arch = target["arch"]
     go_arch = _GO_ARCH_MAP.get(arch)
     if go_arch is None:
         sys.exit(f"error: unsupported target arch for Go installation: {arch}")
@@ -540,8 +671,8 @@ def setup_remote_localhost(target, dry_run=False, force=False):
 
     print("=== Generating required Go source on target ===")
     remote_host.run(
-        f"{go_env} && cd {REMOTE_REPO}/core/apap-engine && "
-        "go generate ./message"
+        f"{go_env} && cd {REMOTE_REPO}/core/apap-engine/message-gen && "
+        "go run gen_codes.go"
     )
 
     print("=== Marking pre-bundled tools as fetched on target ===")
@@ -611,13 +742,8 @@ def prepare_workloads(names, target, dry_run=False):
     return PREPARED_WORKLOADS_STEM
 
 
-def build_robot_command(args, target):
-    """Return the robot CLI command as a list of strings.
-
-    Exclude tags are composed as a single OR-joined expression mirroring the
-    convention already used in the CI workflows:
-      disabledORdisabled-{os}[ORremote-localhost][OR<extra>...]
-    """
+def robot_exclude_expression(args):
+    """Use the same exclusions for recording downloads and Robot execution."""
     os_lower = args.runner_os.lower()
     exclude_expr = f"disabledORdisabled-{os_lower}"
 
@@ -629,7 +755,27 @@ def build_robot_command(args, target):
 
     for tag in args.exclude_tags:
         exclude_expr += f"OR{tag}"
+    return exclude_expr
 
+
+def quote_launch_workload(workload):
+    """Encode a workload as one argument for the shell used by Robot on this host."""
+    if platform.system() == "Windows":
+        quoted = subprocess.list2cmdline([workload])
+        # Embedded quotes and shell operators need cmd.exe escaping as well as
+        # Windows argv quoting. Escape the quotes too so cmd cannot reinterpret them.
+        metacharacters = '"%!^<>&|()'
+        if any(char in workload for char in metacharacters):
+            quoted = "".join("^" + char if char in metacharacters else char for char in quoted)
+        return quoted
+    # Keep the existing double-quoted representation used by recording validation.
+    for char in ('\\', '"', '$', '`'):
+        workload = workload.replace(char, "\\" + char)
+    return '"' + workload + '"'
+
+
+def build_robot_command(args, target):
+    """Return the robot CLI command as a list of strings."""
     results_dir = os.path.join(CORE_ROOT, args.results_dir)
     robot_cwd = os.path.join(CORE_ROOT, "robot")
 
@@ -645,13 +791,17 @@ def build_robot_command(args, target):
     for tag in args.include_tags:
         cmd += ["--include", tag]
 
-    cmd += ["--exclude", exclude_expr]
+    cmd += ["--exclude", robot_exclude_expression(args)]
 
     if args.workloads is not None:
         cmd += ["--variable", f"WORKLOADS:{args.workloads}"]
 
     if args.launch_workload is not None:
-        cmd += ["--variable", f"LAUNCH_WORKLOAD:{args.launch_workload}"]
+        workload = quote_launch_workload(args.launch_workload) if args.launch_workload else ""
+        cmd += ["--variable", f"LAUNCH_WORKLOAD:{workload}"]
+
+    if args.live_recipe_runs:
+        cmd += ["--variable", "USE_PRERECORDED_RUNS:False"]
 
     if args.run_remote_localhost:
         cmd += ["--variable", f"REMOTE_LOCALHOST_DIR:{REMOTE_CLI_DIR}"]
@@ -685,6 +835,17 @@ def main():
         print("WARNING: 'robot' not found in PATH: is your virtual environment activated?", flush=True)
 
     target = load_target_config(args.target)
+
+    if should_download_prerecorded_runs(args):
+        try:
+            download_missing_prerecorded_runs(
+                target,
+                args.test_suite or [args.tests_dir],
+                include_tags=args.include_tags,
+                exclude_tags=[robot_exclude_expression(args)],
+            )
+        except RuntimeError as exc:
+            sys.exit(f"error: {exc}")
 
     if args.run_remote_localhost:
         try:

@@ -5,7 +5,7 @@ syntax = "proto3";
 
 package tether;
 
-option go_package = "github.com/Arm-Debug/apap-cli/clients/go/tetherproto";
+option go_package = "github.com/Arm-Debug/apap-cli/api/tetherproto";
 
 service Tether {
   // Hold keeps the connection open, sending periodic pulses. The server

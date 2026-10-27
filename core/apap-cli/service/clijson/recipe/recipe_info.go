@@ -6,7 +6,7 @@ package recipe
 import (
 	"strings"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type ParameterBaseJSON struct {

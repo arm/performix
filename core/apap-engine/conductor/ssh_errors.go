@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"slices"
 	"strings"
@@ -25,6 +26,7 @@ const (
 	NetErr        SSHErrorType = "FailedNet"
 	DNSErr        SSHErrorType = "FailedDns"
 	TimeoutErr    SSHErrorType = "FailedTimeout"
+	ClosedErr     SSHErrorType = "FailedClosed"
 	AuthErr       SSHErrorType = "FailedAuth"
 	AlgsErr       SSHErrorType = "FailedAlgs"
 	UnknownErr    SSHErrorType = "FailedUnknown"
@@ -32,7 +34,7 @@ const (
 
 // This is a list of all errors which indicate that automatic key detection will not be possible. If any of these
 // errors are encountered while attempting to find an authorized key, the process should immediately fail.
-var keyDetectionNotPossibleErrs = []SSHErrorType{NetErr, DNSErr, TimeoutErr, AlgsErr, KnownHostsErr}
+var keyDetectionNotPossibleErrs = []SSHErrorType{NetErr, DNSErr, TimeoutErr, ClosedErr, AlgsErr, KnownHostsErr}
 
 const (
 	authFailureUnknown  = ""
@@ -100,6 +102,8 @@ func consolidateDirectErrs(errs []error, host string, port int32) message.Messag
 		return message.New(message.EngineConductorSshDirectConnFailedNet).WithCause(lastErr).WithMetadata(metadata)
 	case DNSErr:
 		return message.New(message.EngineConductorSshDirectConnFailedDns).WithCause(lastErr).WithMetadata(metadata)
+	case ClosedErr:
+		return message.New(message.EngineConductorSshDirectConnFailedClosed).WithCause(lastErr).WithMetadata(metadata)
 	case TimeoutErr:
 		metadata["address"] = fmt.Sprintf("%s:%d", host, port)
 		metadata["portNum"] = fmt.Sprintf("%d", port)
@@ -153,6 +157,8 @@ func consolidateJumpErrs(errs []error, prevHost string, host string, port int32)
 		return message.New(message.EngineConductorSshJumpConnFailedNet).WithCause(lastErr).WithMetadata(metadata)
 	case DNSErr:
 		return message.New(message.EngineConductorSshJumpConnFailedDns).WithCause(lastErr).WithMetadata(metadata)
+	case ClosedErr:
+		return message.New(message.EngineConductorSshJumpConnFailedClosed).WithCause(lastErr).WithMetadata(metadata)
 	case TimeoutErr:
 		metadata["nextAddress"] = fmt.Sprintf("%s:%d", host, port)
 		metadata["nextPort"] = fmt.Sprintf("%d", port)
@@ -245,6 +251,9 @@ func getErrType(err error) SSHErrorType {
 	// Context deadline exceeded (timeout)
 	if errors.Is(err, context.DeadlineExceeded) {
 		return TimeoutErr
+	}
+	if errors.Is(err, connectionResetErrno) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return ClosedErr
 	}
 
 	// No response from target: target offline, nothing on port, not using necessary VPN etc

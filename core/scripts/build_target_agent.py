@@ -4,19 +4,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-GORELEASER_INSTALL_PATH = "github.com/goreleaser/goreleaser/v2@latest"
-REQUIRED_TOOLCHAIN = "go1.27.0+auto"
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Ensure goreleaser v2 is installed and run a release."
+        description="Run a GoReleaser v2 release."
     )
     parser.add_argument(
         "--snapshot",
@@ -40,78 +37,21 @@ def parse_args():
     )
     return parser.parse_args()
 
-def go_install_dirs():
-    """
-    Directories where `go install` may drop binaries, in priority order:
-      1) GOBIN (if set)
-      2) <path>/bin for the first path in GOPATH
-    """
-    try:
-        out = subprocess.check_output(["go", "env", "-json", "GOBIN", "GOPATH"], text=True)
-        info = json.loads(out)
-    except Exception:
-        info = {"GOBIN": "", "GOPATH": ""}
 
-    dirs = []
-    gobin = info.get("GOBIN", "")
-    if gobin:
-        dirs.append(gobin)
-
-    gopath = info.get("GOPATH", "")
-    if gopath:
-        first = gopath.split(os.pathsep)[0]  # go install uses the first entry
-        if first:
-            dirs.append(os.path.join(first, "bin"))
-
-    return dirs
-
-def find_goreleaser():
-    """
-    Checks for goreleaser in PATH and common `go install` directories.
-    """
+def require_goreleaser():
+    """Return the GoReleaser path, or exit if it is not available."""
     exe = shutil.which("goreleaser")
     if exe:
         print(f"goreleaser found in PATH: {exe}")
         return exe
 
-    for d in go_install_dirs():
-        cand = os.path.join(d, "goreleaser")
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
-            print(f"goreleaser found at: {cand}")
-            return cand
-    return None
-
-def install_goreleaser_with_go():
-    """
-    Installs goreleaser via `go install`.
-    """
-    env = os.environ.copy()
-    env["GOTOOLCHAIN"] = REQUIRED_TOOLCHAIN
-    try:
-        subprocess.run(["go", "install", GORELEASER_INSTALL_PATH], check=True, env=env)
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to install goreleaser (exit code {e.returncode})", file=sys.stderr)
-        return None
-    return find_goreleaser()
-
-def ensure_goreleaser_installed():
-    """
-    Returns the path to the goreleaser executable, installing it if needed.
-    """
-    exe = find_goreleaser()
-    if exe:
-        return exe
-    print("goreleaser not found - attempting install via `go install`")
-    if not shutil.which("go"):
-        print("go not found. Please install go and ensure it's on your PATH", file=sys.stderr)
-        sys.exit(1)
-    exe = install_goreleaser_with_go()
-    if exe:
-        print(f"goreleaser installed to {exe}")
-        return exe
-    print("goreleaser still not found. Please manually install goreleaser \
-           and ensure it's on your PATH or a 'go install' directory", file=sys.stderr)
+    print(
+        "goreleaser not found in PATH. Install the repository tools with "
+        "`mise install`, or install GoReleaser separately.",
+        file=sys.stderr,
+    )
     sys.exit(1)
+
 
 def run_goreleaser(executable_path, config_path, snapshot, no_inject, no_sign):
     """
@@ -143,9 +83,10 @@ def run_goreleaser(executable_path, config_path, snapshot, no_inject, no_sign):
         print(f"goreleaser failed (exit code {e.returncode})", file=sys.stderr)
         sys.exit(e.returncode)
 
+
 def main():
     args = parse_args()
-    goreleaser_path = ensure_goreleaser_installed()
+    goreleaser_path = require_goreleaser()
     run_goreleaser(
         executable_path=goreleaser_path,
         config_path=args.config,
@@ -153,6 +94,7 @@ def main():
         no_inject=args.no_inject,
         no_sign=args.no_sign,
     )
+
 
 if __name__ == "__main__":
     main()

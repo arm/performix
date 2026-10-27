@@ -302,6 +302,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ssh-target")
     parser.add_argument("--ssh-key", type=Path)
     parser.add_argument("--target-workload-root", type=Path)
+    parser.add_argument("--source-root", type=Path, help="Optional host directory for workload source mapping.")
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument(
         "--artifactory-run-base",
@@ -342,6 +343,11 @@ def parse_prerecord_config(raw_config: str) -> dict[str, Any]:
     if not isinstance(mode, str) or mode not in PRERECORD_MODES:
         raise ValueError(f"unsupported prerecord mode: {mode}")
     config["mode"] = mode
+
+    enable_jfr_capture = config.get("enable_jfr_capture", False)
+    if not isinstance(enable_jfr_capture, bool):
+        raise ValueError("prerecord enable_jfr_capture must be a boolean")
+    config["enable_jfr_capture"] = enable_jfr_capture
 
     timeout_seconds = config.get("timeout_seconds")
     if timeout_seconds is not None and (
@@ -441,6 +447,7 @@ def build_recipe_run_command(
     profiling_target: ProfilingTarget,
     timeout: str | None,
     recipe_params: list[str],
+    source_root: Path | None = None,
 ) -> list[str]:
     """Build a recipe command for one profiling target."""
 
@@ -451,6 +458,8 @@ def build_recipe_run_command(
         cmd.extend(["--timeout", timeout])
     for param in recipe_params:
         cmd.extend(["--param", param])
+    if source_root is not None:
+        cmd.extend(["--source", str(source_root.expanduser().resolve())])
     return cmd
 
 
@@ -541,6 +550,7 @@ def main() -> int:
             profiling_target,
             str(timeout) if timeout is not None else None,
             recipe_params,
+            args.source_root,
         )
         process = run_cli(cmd, cli_bin.parent)
     finally:
@@ -580,6 +590,7 @@ def main() -> int:
         "recipe": args.recipe,
         "target": args.target,
         "profile_mode": profile_mode,
+        "enable_jfr_capture": prerecord["enable_jfr_capture"],
         "workload_command": (
             profiling_target.command if isinstance(profiling_target, Launch) else None
         ),

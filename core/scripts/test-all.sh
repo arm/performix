@@ -8,13 +8,13 @@
 
 set -euo pipefail
 
-script_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 
 # Run Go unit tests
-$script_dir/go/test-all.sh $@
+"$script_dir/go/test.sh" $("$script_dir/go/all-modules.sh") "$@"
 
 # Run Python unit tests
-$script_dir/python/test-all.sh $@
+"$script_dir/python/test-all.sh" "$@"
 
 echo "Unit test run completed for all Go and Python modules tracked by Git!"
 

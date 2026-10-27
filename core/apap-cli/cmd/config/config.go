@@ -12,13 +12,6 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/grouping"
 )
 
-type CommandFlag struct {
-	CobraCommand *cobra.Command
-	FlagName     string
-}
-
-var configurableOptions []CommandFlag
-
 func ViperBindPFlag(cobraCommand *cobra.Command, flagName string, persistent bool) {
 	var flag *pflag.Flag
 	if persistent {
@@ -28,9 +21,7 @@ func ViperBindPFlag(cobraCommand *cobra.Command, flagName string, persistent boo
 	}
 	err := viper.BindPFlag(flagName, flag)
 
-	if err == nil {
-		configurableOptions = append(configurableOptions, CommandFlag{CobraCommand: cobraCommand, FlagName: flagName})
-	} else {
+	if err != nil {
 		log.Errorf("Unable to bind configuration for `%s`, values set using files or env vars might be incorrect.", flagName)
 	}
 }

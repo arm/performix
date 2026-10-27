@@ -10,9 +10,9 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/systeminfo"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 // AgentCollector defines the interface for collecting target information via the target agent

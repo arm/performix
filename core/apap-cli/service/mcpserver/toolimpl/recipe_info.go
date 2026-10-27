@@ -17,7 +17,7 @@ import (
 	recipejson "github.com/Arm-Debug/apap-cli/apap-cli/service/clijson/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type RecipeInfoTool struct{}

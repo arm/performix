@@ -22,7 +22,6 @@ tasks:
     desc: Install dependencies, generate sources, and build project components
     cmds:
       - task: deps
-      - task: generate
       - task: build
 
   build:
@@ -37,11 +36,4 @@ tasks:
     cmds:
       - task: core:deps
       - task: internal:deps
-        if: test -f Taskfile.internal.yml
-
-  generate:
-    desc: Generate project generated files (protobuf, codegen, etc.)
-    cmds:
-      - task: core:generate
-      - task: internal:generate
         if: test -f Taskfile.internal.yml

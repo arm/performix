@@ -5,7 +5,9 @@ package recipe
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
@@ -213,4 +215,23 @@ func (r *RecipeFileCollector) AddComponent(outputEntityDir string, componentType
 		return "", err
 	}
 	return componentPath, nil
+}
+
+// PublishCapabilityComponent keeps incomplete capability files out of the manifest.
+func (r *RecipeFileCollector) PublishCapabilityComponent(entity string, typ cdf.ComponentType, relative string, write func(string) error) error {
+	relative = filepath.Join(entity, relative)
+	updater := r.Collector.CollectionState.RunManifestUpdater
+	path := updater.ComponentPath(relative)
+	err := write(path)
+	if err == nil {
+		err = updater.AddComponent(relative, typ)
+	}
+	if err != nil {
+		removeErr := os.Remove(path)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+		return errors.Join(err, removeErr)
+	}
+	return nil
 }

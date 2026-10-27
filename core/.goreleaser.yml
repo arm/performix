@@ -16,7 +16,7 @@ env:
 
 before:
   hooks:
-    - bash ./core/scripts/go/generate-all.sh
+    - bash ./core/scripts/generate-all.sh
 
     # Local builds may not have generated release notes yet.
     - python3 ./core/scripts/ensure-changelog.py

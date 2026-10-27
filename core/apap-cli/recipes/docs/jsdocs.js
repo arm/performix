@@ -23,6 +23,8 @@
  * Converts recipe ready advice to a single recipe ready status.
  * @property {function(ToolConfigurationsArg, ProbeResult[]): RecipeReadyAdvice[]} collectToolAdvice
  * Normalizes advice returned by tool integration probes.
+ * @property {function(ReadyExecutionContext, string): (RecipeReadyAdvice | undefined)} getPartialCPUSupportAdvice
+ * Returns a warning with cpuNames and coreNumbers metadata when only some cores have telemetry specifications.
  */
 
 /**
@@ -39,6 +41,7 @@
 
 /**
  * @typedef {Object} ToolConfiguration
+ * @property {CapabilityRequest} [capabilityRequest] Requested capability IDs. Omit to use defaults; an empty selection disables selectable defaults.
  * @property {string} name                      The name of the tool to invoke. This should match the name defined in the tool integration.
  * @property {string} version                   The version of the tool to invoke. This should match the version defined in the tool integration.
  * @property {Object.<string, any>} params      A key-value mapping of parameters to pass to the tool when it's invoked.
@@ -184,6 +187,7 @@
  * @property {function(): Workload} getWorkload
  * @property {function(string): string | string[]} getParameter
  * @property {function(string, string): ToolProperties} getTool
+ * @property {function(ToolConfigurationsArg): ProbeResult[]} probeTools Stage-local discovery; successful results can be reused by runTools before collection starts.
  * @property {function(ToolConfigurationsArg): void} runTools
  * If a ToolConfigurationsArg is provided, the tools will be run concurrently. After the tools finish,
  * their output files will be reformatted concurrently. The running and reformating is defined by the tool integration.
@@ -199,8 +203,11 @@
  * @property {function(FileArg): void} retrieveFile
  * @property {function(PythonExec|Exec): RunCommandOutput} runCommand
  * @property {function(): boolean} isJfrCaptureEnabled
+ * @property {function(): boolean} isNeoprofSystemUtilizationEnabled
  * @property {function(): boolean} isFullCaptureSupportEnabled
  * Returns whether full capture support is enabled for the current run.
+ * @property {function(): boolean} isNeoprofTimelineEnabled
+ * Returns whether the neoprof timeline feature flag is enabled.
  * @description - The run execution context provides access to APIs available to the run stages.
  */
 
@@ -222,8 +229,11 @@
  * @property {function(): TargetInfoDescription} targetInfo
  * @property {function(PythonExec|Exec): RunCommandOutput} runCommand
  * @property {function(): boolean} isJfrCaptureEnabled
+ * @property {function(): boolean} isNeoprofSystemUtilizationEnabled
  * @property {function(): boolean} isFullCaptureSupportEnabled
  * Returns whether full capture support is enabled for the current run.
+ * @property {function(): boolean} isNeoprofTimelineEnabled
+ * Returns whether the neoprof timeline feature flag is enabled.
  * @description - The ready execution context provides access to APIs available to the ready stages.
  */
 
@@ -664,8 +674,12 @@
  * Create a file in the run directory and return a handle for writing.
  * @property {(absolutePath:string) => Promise<string>} readHostFile
  * Read the contents of a host file.
+ * Missing or permission-denied files reject with a GoError whose
+ * `value.unavailable` is true; other read failures are propagated unchanged.
  * @property {(level:("debug"|"info"|"warn"|"error"), message:string) => void} log
  * Write to the run log file
+ * @property {(code:string, metadata:Object.<string,string>) => void} writeCatalogMessage
+ * Formats a catalog message with metadata and records it at its declared severity.
  * @property {(level:("info"|"warn"|"error"), message:string) => void} writeUserMessage
  * Records a message to display to the user.
  * @property {(id:string) => void} startProgressTracker
@@ -781,6 +795,8 @@
 /**
  * Context passed to your tool
  * @typedef {Object} ToolContext
+ * @property {CapabilityRequest} [capabilityRequest] Normalized requested capability IDs, saved before discovery or collection.
+ * @property {ProbeResult} [discovery] Current probe results for an explicit non-empty request. Resolve availability from this catalog.
  * @property {Object.<string, any>} params                               Parameters from the recipe/invocation.
  * @property {Workload} workload Launch/Android launch/attach/system-wide info (if any).
  * @property {string} workingdir                                         Working directory chosen by the engine/recipe.
@@ -801,6 +817,11 @@
  * Shape of the global `tool` object your script must define.
  * Field names are lower-camelcase in JS.
  * @typedef {Object} ToolIntegration
+ * @property {string} [capabilityInterfaceVersion] Set to "1.0" only when the integration implements capability requests, including empty selections, required/optional resolution and final outcomes.
+ * On recording or reformatting failure, the engine fills missing requested
+ * outcomes with incomplete/record_failed or incomplete/reformat_failed. It
+ * preserves published outcomes and adds no outcomes on cancellation. Successful
+ * invocations must still publish every requested outcome, including optional ones.
  * @property {string} name
  * @property {string} version
  * @property {Deployment[]} [deployments] // defines deployments required by the recipe
@@ -863,10 +884,38 @@
  */
 
 /**
+ * @typedef {Object} SlRecordProbeReport
+ * @property {{gpu_id: string, model: string}[]} [gpus]
+ * @property {boolean} [supports_strobing]
+ * @property {boolean} [supports_event_inherit]
+ * @property {{severity: string, message: string}[]} advice
+ */
+
+/**
  * @typedef {Object} CatalogMessage
  * @property {string} code // The code of the catalog message
  * @property {Object.<string, string>} [metadata] // The metadata to attach to the message
  * @property {string} [cause] // The cause to attach to the message
+ */
+
+/**
+ * @typedef {Object} CapabilityRequest
+ * @property {string[]} required IDs required for collection; unavailable capabilities block recording. Duplicates are removed.
+ * @property {string[]} optional IDs whose unavailability allows recording to continue with a warning; must not overlap required.
+ * Both fields are required. Null, unknown fields and unsupported IDs are rejected.
+ * Discovery and record/reformat failures fail the Run for both required and optional capabilities.
+ */
+
+/**
+ * @typedef {Object} CPUCounterCapability
+ * @property {{name: "tool_capabilities/cpu_counter", version: "1.0"}} componentType
+ * @property {"available"|"unavailable"|"collected"|"incomplete"} state
+ * @property {{title: "CPU Cycles", units: "cycles", bindings: Array<{seriesCapabilityId: string}>, reason?: string}} payload
+ * Probe states are available or unavailable. Saved outcomes are unavailable,
+ * collected or incomplete. Available/unavailable have no bindings. Collected requires
+ * bindings to saved collected tool_capabilities/counter v1.0 values from this invocation.
+ * Reason is required for unavailable (not_supported, ambiguous) and incomplete
+ * (record_failed, reformat_failed, output_unverified); it is absent otherwise.
  */
 
 export {};

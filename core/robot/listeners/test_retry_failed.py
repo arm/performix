@@ -227,6 +227,7 @@ class RunRobotRetryOptionTests(unittest.TestCase):
             workloads=None, launch_workload=None,
             fail_fast=True,
             retry_failed_count=retry_count,
+            live_recipe_runs=False,
             test_suite=None, tests_dir="robot/tests",
         )
 

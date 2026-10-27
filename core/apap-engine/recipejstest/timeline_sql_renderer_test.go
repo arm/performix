@@ -169,6 +169,72 @@ func TestTimelineSQLRendererDistinguishesKeyTypesWithTheSameSeriesID(t *testing.
 	}, timelineSources[1])
 }
 
+func TestTimelineSQLRendererReadsConcreteCounterFileBesideActivitySchema(t *testing.T) {
+	runRoot := t.TempDir()
+	fixture := writeTimelineBinnedDeltaParquetFixture(t, runRoot, []timelineCounterSeriesFixture{
+		{
+			SeriesID:    101,
+			BinDuration: timelinePrimaryBinDurationNs,
+			CounterRows: []timelineCounterRowFixture{{
+				StartTimestamp: 1_000_000,
+				EndTimestamp:   2_000_000,
+				DeviceNo:       3,
+				Thread:         7,
+				Value:          42,
+			}},
+		},
+		{
+			SeriesID:    102,
+			BinDuration: timelinePrimaryBinDurationNs,
+			CounterRowsSQL: `SELECT
+				1000000::BIGINT AS start_timestamp,
+				2000000::BIGINT AS end_timestamp,
+				3::UINTEGER AS device_no,
+				7::UINTEGER AS thread,
+				25::DOUBLE AS activity1,
+				75::DOUBLE AS activity2`,
+		},
+	})
+	model := newCodeHotspotsTimelineFixtureModel(t, runRoot, fixture)
+	parsedRecipe := parseTimelineWrapperRecipe(t, timelineCounterParquetPattern)
+	renderOutput, err := executeRenderStage(
+		t,
+		parsedRecipe,
+		[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
+		[]cdf.ModelView{model},
+		map[string]any{},
+		renderStageOptions{},
+	)
+	require.NoError(t, err)
+
+	session := newRenderSession(t, "timeline-mixed-schema-run", runRoot, model)
+	initializeRenderers(t, session, renderOutput, func(config recipe.RendererConfig) bool {
+		return config.Type == "SQL"
+	})
+
+	rows := queryTimelineSourceRows(
+		t,
+		session,
+		timelinePrimaryBinDurationNs,
+		"key_0_series_101",
+	)
+	require.Equal(t, []timelineSourceRow{{
+		StartTimestamp: 1_000_000,
+		EndTimestamp:   2_000_000,
+		SeriesID:       101,
+		BinDuration:    timelinePrimaryBinDurationNs,
+		DeviceNo:       3,
+		Thread:         7,
+		Value:          42,
+	}}, rows)
+	require.Empty(t, queryTimelineSourceRows(
+		t,
+		session,
+		timelinePrimaryBinDurationNs,
+		"key_0_series_102",
+	))
+}
+
 func TestTimelineSQLRendererRetainsCompressedRows(t *testing.T) {
 	env := setupTimelineSourceEnvironment(t, []timelineCounterSeriesFixture{{
 		SeriesID:    101,

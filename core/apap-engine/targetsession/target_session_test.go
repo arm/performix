@@ -22,7 +22,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
-	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 type liveADBRunner struct {

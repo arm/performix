@@ -15,7 +15,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/render"
 	run "github.com/Arm-Debug/apap-cli/apap-engine/run"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 // runSummaryBundleTextLimitBytes caps the total size of the run summaries produced
@@ -36,6 +36,12 @@ func (s *ApapServer) GetRunSummaryBundle(
 	if err != nil {
 		return nil, err
 	}
+	// Resolve the mode before rendering. In Code Hotspots SQL mode, the MCP
+	// server needs run details but not the curated summaries.
+	summarizers, err := insights.SummarizersForRecipeFromEnvironment(desc.RecipeName)
+	if err != nil {
+		return nil, err
+	}
 
 	return getRunSummaryBundle(
 		ctx,
@@ -43,7 +49,9 @@ func (s *ApapServer) GetRunSummaryBundle(
 		func(ctx context.Context, fn func(render.Session) error) error {
 			return s.withRenderedRunContent(ctx, req.GetRunId(), fn)
 		},
-		insights.SummarizersForRecipe,
+		func(string) insights.RecipeRunSummarizers {
+			return summarizers
+		},
 		runSummaryBundleTextLimitBytes,
 	)
 }

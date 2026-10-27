@@ -9,6 +9,7 @@
 # core/scripts Python helpers need.
 -r ../scripts/requirements.txt
 
+pip==26.1.2
 robotframework>=7.2.0
 robotframework-robocop<8.2.1
 robotframework-seleniumlibrary

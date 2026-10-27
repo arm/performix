@@ -14,7 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 func TestMCPInstallExplicitAndAll(t *testing.T) {
@@ -56,6 +57,29 @@ func TestMCPInstallSkipsClientsWithUnsafeConfigurations(t *testing.T) {
 			RegistrationState: apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_UNREADABLE,
 		},
 	)
+	service := &registrationTestService{listing: listing}
+	command := newMCPInstallCmd(registrationTestDeps(service))
+	command.SetOut(io.Discard)
+	command.SetArgs([]string{"--all"})
+
+	_, err := command.ExecuteC()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"cursor"}, service.installed)
+}
+
+func TestMCPInstallAllSkipsDetectedUnsupportedClients(t *testing.T) {
+	listing := registrationTestListing()
+	listing.Clients = append(listing.Clients, &apapproto.MCPClientStatus{
+		ClientId:          "vscode",
+		DisplayName:       "VS Code",
+		Detected:          true,
+		RegistrationState: apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_NOT_CONFIGURED,
+		Error: &apapproto.ErrorChain{Root: &apapproto.ErrorNode{
+			Message: &apapproto.MessageDetails{
+				Code: string(message.EngineMcpRegistrationClientVersionUnsupported),
+			},
+		}},
+	})
 	service := &registrationTestService{listing: listing}
 	command := newMCPInstallCmd(registrationTestDeps(service))
 	command.SetOut(io.Discard)

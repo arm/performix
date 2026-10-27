@@ -14,14 +14,6 @@ Arm Performix is a performance analysis toolkit for developers building on Arm-b
 
 Arm is gradually making source code for Arm Performix available to the public. Currently, you can build the Arm Performix CLI (`apx`) and use it to run the System Utilization recipe.
 
-The repository is organised into three product components:
-
-- [`core/`](core/) contains the CLI, engine, target-side agent, and generated
-  clients.
-- [`gui/`](gui/) contains the Electron desktop application.
-- [`plugin-system/`](plugin-system/) contains the host-independent framework
-  for visualisations and state-driven interactivity.
-
 ## How To Build
 
 > [!NOTE]
@@ -32,7 +24,7 @@ The repository is organised into three product components:
 Supported build platforms:
 
 | Platform | x86-64 | Arm64 |
-|----------|:------:|:-----:|
+| -------- | :----: | :---: |
 | Linux    |   ✅   |  ✅   |
 | macOS    |   ✅   |  ✅   |
 | Windows  |   ✅   |  ❌   |
@@ -71,7 +63,7 @@ pacman -Syu
 Install the required native build tools:
 
 ```bash
-pacman -S --needed mingw-w64-ucrt-x86_64-gcc make git curl unzip
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc git curl unzip
 ```
 
 > [!IMPORTANT]

@@ -75,8 +75,16 @@ func (u *RunManifestUpdater) AddToolOutput(toolName, version string, invocation 
 	})
 }
 
+func (u *RunManifestUpdater) RemoveToolOutput(toolName string, invocation int) error {
+	return u.update(func(builder *RunBuilder) {
+		builder.RemoveToolOutput(toolName, invocation)
+	})
+}
+
 // ComponentPath returns the absolute run path for a component (whether it exists or not).
 func (u *RunManifestUpdater) ComponentPath(relativePath string) string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	return filepath.Join(u.builder.runPath, cdf.NormalizePath(relativePath))
 }
 

@@ -195,11 +195,14 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer) loadCallPathFile(
 	session render.Session,
 	dataFieldOffset int,
 ) (CallpathTables, error) {
+	const rawDataTableName = "temp"
 	// Load all the data into one table; it's not a particularly friendly format for us to handle but DuckDB _can_ do it
-	err := ReadJSONAutoWithLargeObjectSize(filename, session.Database(), "temp")
+	err := ReadJSONAutoWithLargeObjectSize(filename, session.Database(), rawDataTableName)
 	if err != nil {
 		return CallpathTables{}, err
 	}
+
+	defer dropTempTable(session, rawDataTableName)
 
 	colsDataTableName := session.Manifest().AddTempTable()
 	rowsDataTableName := session.Manifest().AddTempTable()
@@ -209,7 +212,7 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer) loadCallPathFile(
 	//
 	// Count the non-empty columns, unnest the rows table, and sub-select non-null column parts from its values array in
 	// one step
-	query := fmt.Sprint(`CREATE TABLE `, colsDataTableName, ` AS SELECT UNNEST(columns, max_depth := 2) FROM temp;`)
+	query := fmt.Sprint(`CREATE TABLE `, colsDataTableName, ` AS SELECT UNNEST(columns, max_depth := 2) FROM `, rawDataTableName, `;`)
 	_, err = session.Database().Conn.ExecContext(context.Background(), query)
 	if err != nil {
 		return CallpathTables{}, err
@@ -244,7 +247,7 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer) loadCallPathFile(
 	}
 
 	query = fmt.Sprint(`CREATE TABLE `, rowsDataTableName, ` AS
-		SELECT call_frame_id, `, strings.Join(fieldSelectors, ", "), ` FROM (SELECT UNNEST(rows, max_depth := 2) FROM temp)`)
+		SELECT call_frame_id, `, strings.Join(fieldSelectors, ", "), ` FROM (SELECT UNNEST(rows, max_depth := 2) FROM `, rawDataTableName, `)`)
 	_, err = session.Database().Conn.ExecContext(context.Background(), query)
 	if err != nil {
 		return CallpathTables{}, err

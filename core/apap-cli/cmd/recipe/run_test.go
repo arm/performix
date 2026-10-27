@@ -24,8 +24,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
 	engine_recipe "github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 const testHost = "1.2.3.4"

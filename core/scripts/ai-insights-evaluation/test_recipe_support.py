@@ -24,17 +24,18 @@ def test_asct_does_not_require_a_source_archive() -> None:
     assert not requires_source_archive(ASCT_RECIPE)
 
 
+def test_code_hotspots_query_comparison_mode_is_limited_to_code_hotspots() -> None:
+    assert mode_supports_recipe("performix_mcp_run_query", CODE_HOTSPOTS_RECIPE)
+    assert not mode_supports_recipe("performix_mcp_run_query", CPU_MICROARCHITECTURE_RECIPE)
+
+
 def test_cpu_microarchitecture_requires_source_archive() -> None:
     assert requires_source_archive(CPU_MICROARCHITECTURE_RECIPE)
     assert mode_supports_recipe("performix_mcp", CPU_MICROARCHITECTURE_RECIPE)
-    assert not mode_supports_recipe("rest", CPU_MICROARCHITECTURE_RECIPE)
-    assert not mode_supports_recipe("hackathon_mcp", CPU_MICROARCHITECTURE_RECIPE)
 
 
 def test_cache_sharing_is_production_mcp_only() -> None:
     assert mode_supports_recipe("performix_mcp", CACHE_SHARING_RECIPE)
-    assert not mode_supports_recipe("rest", CACHE_SHARING_RECIPE)
-    assert not mode_supports_recipe("hackathon_mcp", CACHE_SHARING_RECIPE)
 
 
 def test_memory_access_requires_spe_and_sampled_source() -> None:
@@ -42,8 +43,6 @@ def test_memory_access_requires_spe_and_sampled_source() -> None:
     assert "spe.samples.count" in source_files_query(MEMORY_ACCESS_RECIPE)
     assert MEMORY_ACCESS_RECIPE in SPE_RECIPES
     assert mode_supports_recipe("performix_mcp", MEMORY_ACCESS_RECIPE)
-    assert not mode_supports_recipe("rest", MEMORY_ACCESS_RECIPE)
-    assert not mode_supports_recipe("hackathon_mcp", MEMORY_ACCESS_RECIPE)
 
 
 def test_instruction_mix_source_archive_requirement_depends_on_mode() -> None:
@@ -103,3 +102,11 @@ def test_prerecord_mode_is_required() -> None:
 def test_prerecord_mode_supports_system_wide() -> None:
     test_case = {"id": "test_case_32", "prerecord": {"mode": "system-wide"}}
     assert resolve_prerecord_config(test_case)["mode"] == "system-wide"
+
+
+def test_prerecord_jfr_flag_must_be_boolean() -> None:
+    with pytest.raises(ValueError, match="enable_jfr_capture"):
+        resolve_prerecord_config({
+            "id": "test_case_71",
+            "prerecord": {"mode": "launch", "enable_jfr_capture": "true"},
+        })

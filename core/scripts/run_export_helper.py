@@ -3,11 +3,12 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared helpers for running apx commands and exporting recorded runs."""
+"""Shared helpers for running apx commands and importing/exporting recorded runs."""
 
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -39,13 +40,49 @@ class CommandFailure(RuntimeError):
         )
 
 
-def run_cli(cmd: list[str], cwd: Path | None = None) -> CompletedProcess[str]:
+def run_cli(
+    cmd: list[str], cwd: Path | None = None, *,
+    env: dict[str, str] | None = None, timeout: float | None = None,
+) -> CompletedProcess[str]:
     """Run an apx command and raise CommandFailure if it fails."""
 
-    process = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    process = subprocess.run(cmd, cwd=cwd, env=env, timeout=timeout, capture_output=True, text=True)
     if process.returncode != 0:
         raise CommandFailure(process)
     return process
+
+
+def import_run(
+    cli_bin: Path, archive: Path, *,
+    env: dict[str, str] | None = None, timeout: float | None = None,
+) -> str:
+    """Import an archive and return its new run ID in the selected daemon's store."""
+    process = run_cli(
+        [str(cli_bin), "run", "import", str(archive), "--json"],
+        cli_bin.parent, env=env, timeout=timeout,
+    )
+    try:
+        payload = json.loads(process.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("apx run import --json output was not valid JSON") from exc
+    try:
+        run_id = payload["data"]["new_id"]["value"]
+    except (KeyError, TypeError):
+        run_id = None
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("apx run import --json output did not contain data.new_id.value")
+    return run_id
+
+
+def update_run_source(
+    cli_bin: Path, run_id: str, source_root: Path, *,
+    env: dict[str, str] | None = None, timeout: float | None = None,
+) -> None:
+    """Associate an imported or cached run with its extracted source tree."""
+    run_cli(
+        [str(cli_bin), "run", "update", run_id, "--source", str(source_root)],
+        cli_bin.parent, env=env, timeout=timeout,
+    )
 
 
 def parse_recipe_run_id(text: str) -> str:

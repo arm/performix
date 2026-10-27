@@ -21,12 +21,12 @@ import (
 
 	agentmocks "github.com/Arm-Debug/apap-cli/apap-engine/agent/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/api/healthproto"
+	"github.com/Arm-Debug/apap-cli/api/mocks"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/grpcserver/transport"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/ioutil"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
-	"github.com/Arm-Debug/apap-cli/clients/go/healthproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 type fakeTransport struct {

@@ -5,6 +5,7 @@ package recipe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
@@ -26,13 +28,15 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 // ExecutionContext is the minimal surface the script-side interface requires.
 //
 // Keep this list as short as possible; add methods only when new facilities demand it.
 type ExecutionContext interface {
+	// DiscoveryCacheContext identifies when target discovery can be reused; a zero value disables caching.
+	DiscoveryCacheContext() DiscoveryCacheContext
 	RunCommand(context context.Context, cmdState *cmdsync.CommandState, cmd conductor.RunCommandSpecificType) (conductor.RunCommandOutput, error)
 	QueueFileRetrieval(src, dst string, componentType cdf.ComponentType, transferOptions tool.TransferOptions) error
 	StoreComponent(dst string, componentType cdf.ComponentType) (string, error)
@@ -49,11 +53,15 @@ type ExecutionContext interface {
 	ToolsDir() string
 	RunToolIntegrations(context context.Context, cmdStateCh *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext) (func(), []error)
 	ProbeToolsFromIntegrations(context context.Context, cmdStateCh *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext) ([]tool.ProbeResult, []error)
-	IsFullCaptureSupportEnabled() bool
-	IsRerenderingEnabled() bool
-	IsJfrCaptureEnabled() bool
-	IsNeoprofTimelineEnabled() bool
+	GetFeatureFlags() featureflags.Flags
 	ToolVersions() map[string]string
+}
+
+// DiscoveryCacheContext holds the connection and execution settings that must
+// match before cached tool discovery can be reused. A zero value disables caching.
+type DiscoveryCacheContext struct {
+	Connection *agent.AgentConn
+	ToolsDir   string
 }
 
 // RunExecutionContext holds any information required when a run stage is executed.
@@ -74,11 +82,7 @@ type RunExecutionContext struct {
 	DeferredActions               *notifiers.DeferredActions
 	PackageManager                *packages.PackageManager
 	TargetSessions                targetsession.TargetSessionProvider
-	RootWorkerEnabled             bool
-	FullCaptureSupport            bool
-	RerenderingEnabled            bool
-	NeoprofTimelineEnabled        bool
-	JfrCaptureEnabled             bool
+	FeatureFlags                  featureflags.Flags
 	UsrMessageWriter              run.UserMessageWriter
 }
 
@@ -209,7 +213,7 @@ func (c *RunExecutionContext) ToolsDir() string {
 }
 
 // recordRunStopSupport records the support advertised by the tool factories
-// already selected for the current probe or collection operation.
+// selected for the current collection operation.
 func (c *RunExecutionContext) recordRunStopSupport(ctx context.Context, intCtxs []tool.IntegrationContext, tr *tool.Registry) error {
 	if c.Collector == nil ||
 		c.Collector.CollectionState == nil ||
@@ -219,7 +223,7 @@ func (c *RunExecutionContext) recordRunStopSupport(ctx context.Context, intCtxs 
 	}
 
 	// This summarizes only the selected batch. AccumulateSupportsStop combines
-	// it with the run's persisted result from any earlier probe or tool batch.
+	// it with the run's persisted result from any earlier tool batch.
 	supportsStop := true
 	for _, intCtx := range intCtxs {
 		factory := tr.FindTool(intCtx.Name, intCtx.Version)
@@ -249,6 +253,17 @@ func (c *RunExecutionContext) recordRunStopSupport(ctx context.Context, intCtxs 
 	return nil
 }
 
+func (c *RunExecutionContext) prepareAndRecordRunStopSupport(ctx context.Context, intCtxs []tool.IntegrationContext, tr *tool.Registry) (*tool.PreparedToolIntegrations, []error) {
+	prepared, errs := tool.PrepareToolIntegrations(intCtxs, tr)
+	if errors.Join(errs...) != nil {
+		return nil, errs
+	}
+	if err := c.recordRunStopSupport(ctx, intCtxs, tr); err != nil {
+		return nil, integrationErrors(len(intCtxs), err)
+	}
+	return prepared, errs
+}
+
 func integrationErrors(count int, err error) []error {
 	errs := make([]error, count)
 	for i := range errs {
@@ -262,10 +277,23 @@ func (c *RunExecutionContext) RunToolIntegrations(ctx context.Context, cmdStateC
 
 	for i := range intCtxs {
 		intCtxs[i].Ctx = sharedExecCtx
-		oe := c.RecipeCtx.GetNextOutputEntity(intCtxs[i].Name)
-		intCtxs[i].OutputEntityDir = oe.RelativePath
+		invocation := c.RecipeCtx.GetAndIncrementToolInvocationCount(intCtxs[i].Name)
+		intCtxs[i].OutputEntityDir = fmt.Sprintf("tool/%s/%d", intCtxs[i].Name, invocation)
+		intCtxs[i].InvocationIndex = invocation
 		intCtxs[i].DefaultEngineLocality = defaultLocality
 		intCtxs[i].ResolveLocality = localityResolver
+		intCtxs[i].FeatureFlags = c.FeatureFlags
+		if intCtxs[i].CapabilityRequest != nil {
+			if err := c.Collector.CollectionState.RunManifestUpdater.AddToolOutput(intCtxs[i].Name, intCtxs[i].Version, invocation); err != nil {
+				return engineCleanup, integrationErrors(len(intCtxs), err)
+			}
+		}
+		if err := tool.PersistCounterRequest(&intCtxs[i]); err != nil {
+			if intCtxs[i].CapabilityRequest != nil {
+				err = errors.Join(err, c.Collector.CollectionState.RunManifestUpdater.RemoveToolOutput(intCtxs[i].Name, invocation))
+			}
+			return engineCleanup, integrationErrors(len(intCtxs), err)
+		}
 	}
 	monitorStopCh, cleanup := c.setupWorkloadMonitor(sharedExecCtx, engineCleanup, intCtxs)
 	tr, err := c.PackageManager.FindToolIntegrations()
@@ -273,37 +301,25 @@ func (c *RunExecutionContext) RunToolIntegrations(ctx context.Context, cmdStateC
 		// Response expects an error for each integration context, replicate the error for all contexts
 		return cleanup, integrationErrors(len(intCtxs), err)
 	}
-	if err := c.recordRunStopSupport(ctx, intCtxs, tr); err != nil {
-		return cleanup, integrationErrors(len(intCtxs), err)
+	prepared, errs := c.prepareAndRecordRunStopSupport(ctx, intCtxs, tr)
+	if errors.Join(errs...) != nil {
+		return cleanup, errs
 	}
 
-	errs := tool.RunAndReformatToolIntegrations(
+	errs = tool.RunAndReformatPreparedToolIntegrations(
 		// Merge the monitor stop signal with the user stop request so either one
 		// interrupts the integrations.
 		mergeStopChannels(sharedExecCtx, cmdStateCh.StopChan, monitorStopCh),
 		cmdStateCh.CancelChan,
-		intCtxs,
-		tr,
+		prepared,
 		c.Collector.CollectionState.RunManifestUpdater,
 	)
 	// Ensure the monitor goroutine is cancelled and drained alongside the cleanup provided by the agent.
 	return cleanup, errs
 }
 
-func (c *RunExecutionContext) IsFullCaptureSupportEnabled() bool {
-	return c.FullCaptureSupport
-}
-
-func (c *RunExecutionContext) IsRerenderingEnabled() bool {
-	return c.RerenderingEnabled
-}
-
-func (c *RunExecutionContext) IsNeoprofTimelineEnabled() bool {
-	return c.NeoprofTimelineEnabled
-}
-
-func (c *RunExecutionContext) IsJfrCaptureEnabled() bool {
-	return c.JfrCaptureEnabled
+func (c *RunExecutionContext) GetFeatureFlags() featureflags.Flags {
+	return c.FeatureFlags
 }
 
 func (c *RunExecutionContext) ToolVersions() map[string]string {
@@ -314,30 +330,47 @@ func (c *RunExecutionContext) toolPaths() deployer.BaseToolDeploymentPaths {
 	return c.ToolPathsSupplier()
 }
 
-// ProbeToolsFromIntegrations will execute tool probes for all integration contexts received.
+// ProbeToolsFromIntegrations returns discovery without request-specific advice so it can be cached.
 // Upon cancellation request the probe will be ended prematurely with an error
 func (c *RunExecutionContext) ProbeToolsFromIntegrations(ctx context.Context, cmdStateCh *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext) ([]tool.ProbeResult, []error) {
-	sharedExecCtx, defaultLocality, localityResolver, cleanup := c.newEngineLocalities(ctx, false)
+	// Keep integration runtimes and localities alive while cancellation hooks
+	// settle. Parent and explicit cancellation are observed separately below.
+	cleanupCtx, cancelCleanup := context.WithCancel(context.WithoutCancel(ctx))
+	sharedExecCtx, defaultLocality, localityResolver, cleanup := c.newEngineLocalities(cleanupCtx, false)
+	defer func() {
+		cancelCleanup()
+		cleanup()
+	}()
 
 	for i := range intCtxs {
 		intCtxs[i].Ctx = sharedExecCtx
+		intCtxs[i].FeatureFlags = c.FeatureFlags
 		intCtxs[i].DefaultEngineLocality = defaultLocality
 		intCtxs[i].ResolveLocality = localityResolver
 	}
-
-	defer cleanup()
 
 	tr, err := c.PackageManager.FindToolIntegrations()
 	if err != nil {
 		// Response expects an error for each integration context, replicate the error for all contexts
 		return nil, integrationErrors(len(intCtxs), err)
 	}
-	if err := c.recordRunStopSupport(ctx, intCtxs, tr); err != nil {
-		return nil, integrationErrors(len(intCtxs), err)
+	var cancelCh <-chan struct{}
+	if cmdStateCh != nil {
+		cancelCh = cmdStateCh.CancelChan
 	}
-	return tool.ProbeTools(
+	probeCancelled := make(chan struct{})
+	go func() {
+		defer close(probeCancelled)
+		select {
+		case <-ctx.Done():
+		case <-cancelCh:
+		case <-cleanupCtx.Done():
+		}
+	}()
+	return tool.ProbeToolDiscovery(
 		intCtxs,
 		tr,
+		probeCancelled,
 	)
 }
 
@@ -424,19 +457,21 @@ func (c *RunExecutionContext) newEngineLocality(
 		c.StageNotifier,
 		c.UsrMessageWriter,
 		preserveTemporaryDirs,
-		c.RootWorkerEnabled,
+		c.FeatureFlags,
 		targetPlatform.PlatformConfiguration,
 	)
 
+	fileCollector := NewRecipeFileCollector(
+		c.Collector,
+		*targetPlatform,
+		func() *agent.AgentConn { return agentConn },
+	)
 	return tool.EngineLocality{
-		Name:   localityName,
-		Engine: engine,
-		FileCollector: NewRecipeFileCollector(
-			c.Collector,
-			*targetPlatform,
-			func() *agent.AgentConn { return agentConn },
-		),
-		ToolsRoot: toolsRoot,
+		Name:                localityName,
+		Engine:              engine,
+		FileCollector:       fileCollector,
+		CapabilityPublisher: fileCollector,
+		ToolsRoot:           toolsRoot,
 		CopyFrom: func(sourceLocality string, sourcePath string, destinationPath string) error {
 			return c.copyFile(sourceLocality, localityName, sourcePath, destinationPath)
 		},
@@ -634,4 +669,17 @@ func closedChannel() chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
 	return ch
+}
+
+// DiscoveryCacheContext identifies the target connection and deployed tools directory.
+// The recipe API also limits cache reuse to the same stage and tool configuration.
+func (c *RunExecutionContext) DiscoveryCacheContext() DiscoveryCacheContext {
+	if c.AgentSupplier == nil {
+		return DiscoveryCacheContext{}
+	} // Render-only contexts have no target session.
+	conn := c.AgentSupplier()
+	if conn.AgentContext().Err() != nil {
+		return DiscoveryCacheContext{}
+	}
+	return DiscoveryCacheContext{Connection: conn, ToolsDir: c.ToolsDir()}
 }

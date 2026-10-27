@@ -134,6 +134,9 @@ func TestGenerateClientCertificateVerifiesAgainstAuthority(t *testing.T) {
 
 	rootPEM, err := manager.RootCertificatePEM()
 	require.NoError(t, err)
+	clientCredentials, err := NewClientCredentials("localhost", rootPEM, clientCert)
+	require.NoError(t, err)
+	require.NotNil(t, clientCredentials)
 	block, _ := pem.Decode(rootPEM)
 	require.NotNil(t, block)
 	rootCert, err := x509.ParseCertificate(block.Bytes)
@@ -311,19 +314,12 @@ func TestWaitForAuthority(t *testing.T) {
 }
 
 func writeAuthorityMaterial(configDir string) error {
-	tlsDir := filepath.Join(configDir, tlsDirectoryName)
-	if err := os.MkdirAll(tlsDir, perms.LocalDirPerm); err != nil {
+	manager, err := NewManager(configDir)
+	if err != nil {
 		return err
 	}
-	certPath := filepath.Join(tlsDir, rootCACertName)
-	if err := os.WriteFile(certPath, []byte("cert"), perms.RootCACertPerm); err != nil {
-		return err
-	}
-	keyPath := filepath.Join(tlsDir, rootCAKeyName)
-	if err := os.WriteFile(keyPath, []byte("key"), perms.RootCAKeyPerm); err != nil {
-		return err
-	}
-	return nil
+	_, err = manager.GenerateServerCredentials("127.0.0.1")
+	return err
 }
 
 func TestGenerateClientCertificateFailsWithoutAuthority(t *testing.T) {

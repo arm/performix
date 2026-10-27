@@ -14,15 +14,19 @@ import (
 	"strings"
 
 	"golang.org/x/term"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/encoding"
 
+	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/client"
+	"github.com/Arm-Debug/apap-cli/apap-cli/service/daemonstate"
 	promptsvc "github.com/Arm-Debug/apap-cli/apap-cli/service/prompt"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/authproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/authproto"
 )
 
 type SecretPrompter func(prompt string) ([]byte, error)
@@ -62,9 +66,17 @@ func (c *targetLoginService) LoginToTarget(ctx context.Context, target engine_ta
 		return message.New(message.CommonUnknownError).
 			WithCause(errors.New("TargetLoginService is missing required dependencies"))
 	}
+	if config.Port == serverconfig.AutomaticPort {
+		daemon, err := daemonstate.FindRunningDaemon(ctx)
+		if err != nil {
+			return err
+		}
+		config.Host = daemon.Host
+		config.Port = daemon.ServerPort
+	}
 
 	// Dial the Auth service
-	authClient, authCloser, err := c.authConnector(config.Host, config.AuthPort)
+	authClient, authCloser, err := c.authConnector(config.Host, config.Port)
 	if err != nil {
 		return err
 	}
@@ -73,7 +85,7 @@ func (c *targetLoginService) LoginToTarget(ctx context.Context, target engine_ta
 	}
 
 	// Establish the TargetLogin stream
-	stream, err := authClient.TargetLogin(ctx)
+	stream, err := authClient.TargetLogin(ctx, grpc.UseCompressor(encoding.Identity))
 	if err != nil {
 		return message.New(message.CliServiceTargetloginStreamFailure).WithCause(err)
 	}

@@ -34,7 +34,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type QueryConfig struct {
@@ -43,12 +43,25 @@ type QueryConfig struct {
 	SQL            string `json:"sql"`
 }
 
+type FunctionCSVAssertionConfig struct {
+	ImportedRunAlias string                       `json:"importedRunAlias"`
+	CSVPath          string                       `json:"csvPath"`
+	OutputTable      string                       `json:"outputTable"`
+	Metrics          []FunctionCSVMetricAssertion `json:"metrics"`
+}
+
+type FunctionCSVMetricAssertion struct {
+	CSVColumn             string `json:"csvColumn"`
+	MeasurementIdentifier string `json:"measurementIdentifier"`
+}
+
 type RendererRegressionTestConfigurationList struct {
-	ImportedRuns     []ImportedRunRegressionTestConfiguration     `json:"importedRuns"`
-	Renderers        []RendererRegressionTestConfiguration        `json:"renderers"`
-	Queries          []QueryConfig                                `json:"queries"`
-	Visualizations   []VisualisationRegressionTestConfiguration   `json:"visualizations"`
-	ToolIntegrations []ToolIntegrationRegressionTestConfiguration `json:"toolIntegrations"`
+	ImportedRuns          []ImportedRunRegressionTestConfiguration     `json:"importedRuns"`
+	Renderers             []RendererRegressionTestConfiguration        `json:"renderers"`
+	Queries               []QueryConfig                                `json:"queries"`
+	FunctionCSVAssertions []FunctionCSVAssertionConfig                 `json:"functionCSVAssertions"`
+	Visualizations        []VisualisationRegressionTestConfiguration   `json:"visualizations"`
+	ToolIntegrations      []ToolIntegrationRegressionTestConfiguration `json:"toolIntegrations"`
 }
 
 type VisualisationRegressionTestConfiguration struct {
@@ -484,6 +497,8 @@ func RunRendererTest(resources *rendererTestResources, regen bool, t *testing.T)
 	}
 	assert.NotNil(t, session)
 	defer sessionStorage.CloseAllRenderSessions()
+
+	checkFunctionCSVAssertions(resources, session, t)
 
 	if regen {
 		err := clearPreviousOutput(dirCurrentTruth)

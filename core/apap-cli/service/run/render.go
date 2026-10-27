@@ -12,7 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 func ParseRecipeSelectionPolicy(input string) (apapproto.RecipeSelectionPolicyType, error) {
@@ -37,10 +37,9 @@ func RecipeSelectionPolicyHelp() string {
 }
 
 type RenderPreparationParams struct {
-	RecipeSelectionPolicy        *apapproto.RecipeSelectionPolicyType
-	OverrideRecipeName           string
-	RenderParameterValues        map[string]*structpb.Value
-	VisualizationParameterValues map[string]*structpb.Value
+	RecipeSelectionPolicy *apapproto.RecipeSelectionPolicyType
+	OverrideRecipeName    string
+	RenderParameterValues map[string]*structpb.Value
 }
 
 type RenderInvocationParams struct {
@@ -140,10 +139,6 @@ func (s RenderService) PrepareRender(client apapproto.ApapClient, content *apapp
 	if len(params.RenderParameterValues) > 0 {
 		request.RenderParameters = params.RenderParameterValues
 	}
-	if len(params.VisualizationParameterValues) > 0 {
-		request.VisualizationParameters = params.VisualizationParameterValues
-	}
-
 	return client.PrepareRender(context.Background(), &request)
 }
 

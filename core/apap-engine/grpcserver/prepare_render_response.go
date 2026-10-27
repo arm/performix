@@ -5,9 +5,7 @@ package grpcserver
 
 import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
-	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
-	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 // buildRenderParameterDetails converts bound render parameters into proto-ready details.
@@ -34,16 +32,4 @@ func buildRenderParameterDetails(bound parameters.BoundRenderParameters) (map[st
 	}
 
 	return out, nil
-}
-
-// buildVisualizationParameterBindings flattens per-visualization bindings into "vizId.paramId" keys.
-func buildVisualizationParameterBindings(visualizations []recipe.WidgetConfig) map[string]string {
-	out := map[string]string{}
-	for _, visualization := range visualizations {
-		for paramID, renderParamID := range visualization.ParameterBindings {
-			key := util.MakeVisualizationParameterKey(visualization.ID, paramID)
-			out[key] = renderParamID
-		}
-	}
-	return out
 }

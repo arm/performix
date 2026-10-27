@@ -1,0 +1,10 @@
+{
+  "counter.cpu_cycles": {
+    "componentType": {
+      "name": "tool_capabilities/cpu_counter",
+      "version": "1.0"
+    },
+    "title": "CPU Cycles",
+    "units": "cycles"
+  }
+}

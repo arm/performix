@@ -34,6 +34,7 @@ ${PYTHON_PID}  ${EMPTY}
 ${YES_PID}  ${EMPTY}
 ${RUN_ID}  ${EMPTY}
 ${PROC_NAME}  ${EMPTY}
+${RENDER_TARGET_ADDED}  ${False}
 
 
 *** Test Cases ***
@@ -243,10 +244,9 @@ A Localhost Code Hotspots Run Can Be Rendered
   ...  AND  Restore Remote Test Target
 
 ### Render tests for multiple runs ###
-# These are validating that comparison renderers work without errors. We currently use the same
-# run ID for both runs, since we're not validating the comparison results here, just that the
-# rendering is successful. This essentially validates the renderers as well as the JS recipes,
-# without the overhead of creating multiple runs.
+# These tests check that comparison rendering succeeds with two separate runs.
+# They do not check differences in the recorded data, so identical data is sufficient.
+# Live mode captures two runs; pre-recorded mode imports the same recording twice.
 
 The Two CPU Microarchitecture Runs Render Successfully
   [Documentation]  Check that two CPU Microarchitecture runs can be rendered.
@@ -288,14 +288,49 @@ The Two Memory Access Runs Render Successfully
 
 *** Keywords ***
 Run Recipes For Suite
-  Generate Code Hotspots Runs
+  IF  '${USE_PRERECORDED_RUNS}' == 'True'
+    Import Prerecorded Render Runs
+  ELSE
+    Generate Code Hotspots Runs
+    ${cpu_microarchitecture_supported} =  CPU Microarchitecture Is Supported On Target
+    IF  ${cpu_microarchitecture_supported}  Generate CPU Microarchitecture Runs
+    ${instruction_mix_supported} =  Instruction Mix Is Supported On Target
+    IF  ${instruction_mix_supported}  Generate Instruction Mix Runs
+    # Generate Memory Access Run // temporary disabled to unblock integration (also disabled deletion in Render Suite Teardown)
+    ${system_utilization_supported} =  System Utilization Is Supported On Target
+    IF  ${system_utilization_supported}  Generate System Utilization Run
+  END
+
+Import Prerecorded Render Runs
+  # Import each recording used for comparison twice to create two separate run IDs.
+  # Identical data is sufficient: the tests check that comparison rendering succeeds.
+  Import Prerecorded Runs  code-hotspots-baseline
+  ...  CODE_HOTSPOTS_RUN_ID_1  CODE_HOTSPOTS_RUN_ID_2
   ${cpu_microarchitecture_supported} =  CPU Microarchitecture Is Supported On Target
-  IF  ${cpu_microarchitecture_supported}  Generate CPU Microarchitecture Runs
+  IF  ${cpu_microarchitecture_supported}
+    Import Prerecorded Runs  cpu-microarchitecture-baseline
+    ...  CPU_MICROARCH_RUN_ID_1  CPU_MICROARCH_RUN_ID_2
+  END
   ${instruction_mix_supported} =  Instruction Mix Is Supported On Target
-  IF  ${instruction_mix_supported}  Generate Instruction Mix Runs
-  # Generate Memory Access Run // temporary disabled to unblock integration (also disabled deletion in Render Suite Teardown)
+  IF  ${instruction_mix_supported}
+    Import Prerecorded Runs  instruction-mix-dynamic-baseline
+    ...  INSTRUCTION_MIX_DYNAMIC_RUN_ID_1  INSTRUCTION_MIX_DYNAMIC_RUN_ID_2
+    Import Prerecorded Runs  instruction-mix-static-baseline
+    ...  INSTRUCTION_MIX_STATIC_RUN_ID_1  INSTRUCTION_MIX_STATIC_RUN_ID_2
+  END
   ${system_utilization_supported} =  System Utilization Is Supported On Target
-  IF  ${system_utilization_supported}  Generate System Utilization Run
+  IF  ${system_utilization_supported}
+    Import Prerecorded Runs  system-utilization-baseline  SYSTEM_UTILIZATION_RUN_ID
+  END
+
+Import Prerecorded Runs
+  [Documentation]  Import one copy of a pre-recorded run for each named suite variable.
+  [Arguments]  ${logical_run_id}  @{variable_names}
+  # Robocop does not recognise variable_name in the dynamic VAR name below.
+  FOR  ${variable_name}  IN  @{variable_names}  # robocop: off=unused-variable
+    ${run_id} =  Import Prerecorded Run  ${logical_run_id}
+    VAR  ${${variable_name}} =  ${run_id}  scope=SUITE
+  END
 
 Generate CPU Microarchitecture Runs
   ${run_id} =  Run CPU Microarchitecture Recipe And Extract Run ID
@@ -337,15 +372,14 @@ Generate System Utilization Run
 
 Render Suite Setup
   Common Setup
-  The Test Target Is Added Successfully
-  The Target Is Set To Default Successfully  ${G_TARGET_NAME}
+  IF  '${USE_PRERECORDED_RUNS}' == 'False'  Prepare Render Capture Target
   Run Recipes For Suite
   Populate Render Session Tables
   Set Long Comparison Renderer Configs
   Set Long Source Code Renderer Configs
 
 Render Suite Teardown
-  The Test Target Is Removed Successfully
+  IF  ${RENDER_TARGET_ADDED}  The Test Target Is Removed Successfully
   Common Teardown
 
 Set Long Comparison Renderer Configs
@@ -382,8 +416,17 @@ Set Long Source Code Renderer Configs
   VAR  ${slanalyze_render_config} =  --renderer=SlAnalyzeRenderer="{\\"filter_pid\\": __PID__}"
   VAR  ${SLANALYZE_RENDER_CONFIG_TEMPLATE} =  ${slanalyze_render_config}  scope=SUITE
 
+Prepare Render Capture Target
+  [Documentation]  Register the remote target for live capture and set it as default.
+  ...  Do nothing if this suite has already added the target.
+  IF  ${RENDER_TARGET_ADDED}  RETURN
+  The Test Target Is Added Successfully
+  The Target Is Set To Default Successfully  ${G_TARGET_NAME}
+  VAR  ${RENDER_TARGET_ADDED} =  ${True}  scope=SUITE
+
 Run Busy Loop Process On Target And Capture PID
   [Documentation]  Start a busy-loop process and a yes process on the target, capture PIDs and process name.
+  Prepare Render Capture Target
   ${python_pid} =  Start Process On Target And Capture PID  python3 -c "for i in range(10**9): i*i"  python3 -c
   VAR  ${PYTHON_PID} =  ${python_pid}  scope=TEST
   ${proc_name} =  Get Process Command Name On Target  ${PYTHON_PID}

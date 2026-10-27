@@ -118,6 +118,8 @@ Jitdump-JVM Is Killed For A Stopped Run
   And Start Code Hotspots Recipe
   ...  --timeout 5 --workload ${JAVA_WORKLOAD_CMD} --param collect_java_stacks=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   And Wait For Workload To Run On The Target  ${JITDUMP_JVM_PROCESS_NAME}  match_on_proc_name=${True}
+  # No need to check if "Stop Run" was successful as we care only about the Jitdump-JVM cleanup here.
+  # If "Stop Run" were to fail, the "Then" clause would be catching that anyway
   When Stop Run  ${G_LAST_PROCESS}
   Then No Processes Are Running On The Target  ${JITDUMP_JVM_PROCESS_NAME}  match_on_proc_name=${True}
 

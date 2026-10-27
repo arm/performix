@@ -6,6 +6,7 @@ package tool_goja
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/dop251/goja"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
+	"github.com/Arm-Debug/apap-cli/apap-engine/gojautils"
 	tool_mocks "github.com/Arm-Debug/apap-cli/apap-engine/tool/mocks"
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
 )
@@ -42,6 +44,67 @@ func newSysutilTimelineInstance(t *testing.T) *GojaToolInstance {
 	instance, ok := ti.(*GojaToolInstance)
 	require.True(t, ok)
 	return instance
+}
+
+func TestLaunchWorkloadOptionalProcessOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		fields          string
+		boundWorkload   *WorkloadLaunch
+		wantEnvironment map[string]string
+		wantDirectory   string
+		wantError       bool
+	}{
+		{name: "omitted options"},
+		{name: "Go-bound nil environment", boundWorkload: NewWorkloadLaunch("echo", []string{"echo"}, nil, "", false), wantEnvironment: map[string]string{}, wantDirectory: ""},
+		{name: "Go-bound supplied environment", boundWorkload: NewWorkloadLaunch("echo", []string{"echo"}, map[string]string{"KEY": "value"}, "/tmp", false), wantEnvironment: map[string]string{"KEY": "value"}, wantDirectory: "/tmp"},
+		{name: "undefined options", fields: "environment: undefined, workingDir: undefined"},
+		{name: "supplied options", fields: `environment: {KEY: "value"}, workingDir: "/tmp"`, wantEnvironment: map[string]string{"KEY": "value"}, wantDirectory: "/tmp"},
+		{name: "explicit null environment", fields: "environment: null", wantError: true},
+		{name: "explicit null directory", fields: "workingDir: null", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			instance := newSysutilTimelineInstance(t)
+			vm := instance.asyncHelper.Vm
+			var decoded ProcessOptions
+			var called bool
+			require.NoError(t, vm.Set("validateLaunchOptions", func(options goja.Value) {
+				called = true
+				if err := gojautils.ParseObjectFromJSStrictWithRegex(options, &decoded, []*regexp.Regexp{allowAllUnset}, nil); err != nil {
+					panic(vm.NewGoError(err))
+				}
+			}))
+			workloadExpression := `{type: "launch", command: ["echo"], rawCommand: "echo", ` + tc.fields + `}`
+			if tc.boundWorkload != nil {
+				boundContext, err := BindToolContext(vm, ToolContext{Workload: tc.boundWorkload})
+				require.NoError(t, err)
+				require.NoError(t, vm.Set("boundContext", boundContext))
+				workloadExpression = "boundContext.workload"
+			}
+			_, err := vm.RunString(`
+				var launchScenario = async () => launchWorkloadIfNeeded({
+					log: () => {},
+					startProcess: async (command, options) => {
+						validateLaunchOptions(options);
+						return {wait: () => new Promise(() => {})};
+					},
+				}, ` + workloadExpression + `, ".", {captureLogs: false});
+			`)
+			require.NoError(t, err)
+			instance.asyncHelper.StartLoop()
+			defer instance.asyncHelper.StopLoop()
+			run := vm.Get("launchScenario").Export().(func(goja.FunctionCall) goja.Value)
+			_, err = instance.asyncHelper.CallScriptedFunction(run, nil)
+			require.True(t, called)
+			if tc.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantEnvironment, decoded.Environment)
+			assert.Equal(t, tc.wantDirectory, decoded.WorkingDirectory)
+		})
+	}
 }
 
 func TestLoadSysutilTimelineIntegrationUsesEngineVersionedBundle(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	conductormocks "github.com/Arm-Debug/apap-cli/apap-engine/conductor/conductormocks"
@@ -20,10 +21,19 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/authproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/authproto"
+	"github.com/Arm-Debug/apap-cli/api/mocks"
 )
+
+func TestGetArrowToken(t *testing.T) {
+	server := NewAuthServer(context.Background(), nil, nil, "test-arrow-token")
+
+	response, err := server.GetArrowToken(context.Background(), &emptypb.Empty{})
+
+	require.NoError(t, err)
+	assert.Equal(t, "test-arrow-token", response.GetValue())
+}
 
 func TestTargetLogin(t *testing.T) {
 	connectOptsMatcher := mock.MatchedBy(func(opts targetsession.ConnectOptions) bool {
@@ -69,7 +79,7 @@ func TestTargetLogin(t *testing.T) {
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
 		provider.On("TargetSession", mock.Anything).Return(session, nil)
 
-		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{})
+		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{}, "test-arrow-token")
 		tgt := &apapproto.Target{Connection: &apapproto.Target_LocalConfig{LocalConfig: &apapproto.LocalConnectionConfig{}}}
 		req := &authproto.TargetLoginClientMessage{
 			Message: &authproto.TargetLoginClientMessage_Request{
@@ -95,7 +105,7 @@ func TestTargetLogin(t *testing.T) {
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
 		provider.On("TargetSession", mock.Anything).Return(session, nil)
 
-		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{})
+		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{}, "test-arrow-token")
 		tgt := &apapproto.Target{Connection: &apapproto.Target_LocalConfig{LocalConfig: &apapproto.LocalConnectionConfig{}}}
 		req := &authproto.TargetLoginClientMessage{
 			Message: &authproto.TargetLoginClientMessage_Request{
@@ -129,7 +139,7 @@ func TestTargetLogin(t *testing.T) {
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
 		provider.On("TargetSession", mock.Anything).Return(session, nil)
 
-		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{})
+		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{}, "test-arrow-token")
 		tgt := &apapproto.Target{Connection: &apapproto.Target_LocalConfig{LocalConfig: &apapproto.LocalConnectionConfig{}}}
 		req := &authproto.TargetLoginClientMessage{
 			Message: &authproto.TargetLoginClientMessage_Request{
@@ -152,7 +162,7 @@ func TestTargetLogin(t *testing.T) {
 		provider.AssertExpectations(t)
 	})
 	t.Run("errrors on stream EOF", func(t *testing.T) {
-		server := NewAuthServer(context.Background(), &targetsessionmocks.MockTargetSessionProvider{}, &target.TargetAccess{})
+		server := NewAuthServer(context.Background(), &targetsessionmocks.MockTargetSessionProvider{}, &target.TargetAccess{}, "test-arrow-token")
 		stream := mocks.NewAuthTargetLoginServer(t)
 		stream.On("Context").Return(context.Background())
 		stream.On("Recv").Return(nil, io.EOF).Once()
@@ -163,7 +173,7 @@ func TestTargetLogin(t *testing.T) {
 		stream.AssertExpectations(t)
 	})
 	t.Run("errors on missing target", func(t *testing.T) {
-		server := NewAuthServer(context.Background(), &targetsessionmocks.MockTargetSessionProvider{}, &target.TargetAccess{})
+		server := NewAuthServer(context.Background(), &targetsessionmocks.MockTargetSessionProvider{}, &target.TargetAccess{}, "test-arrow-token")
 		stream := mocks.NewAuthTargetLoginServer(t)
 		stream.On("Context").Return(context.Background())
 		stream.On("Recv").Return(&authproto.TargetLoginClientMessage{}, nil).Once()
@@ -184,7 +194,7 @@ func TestTargetLogin(t *testing.T) {
 		stream.AssertExpectations(t)
 	})
 	t.Run("errors on invalid target", func(t *testing.T) {
-		server := NewAuthServer(context.Background(), &targetsessionmocks.MockTargetSessionProvider{}, &target.TargetAccess{})
+		server := NewAuthServer(context.Background(), &targetsessionmocks.MockTargetSessionProvider{}, &target.TargetAccess{}, "test-arrow-token")
 		req := &authproto.TargetLoginClientMessage{
 			Message: &authproto.TargetLoginClientMessage_Request{
 				Request: &authproto.TargetLoginRequest{Target: nil},
@@ -213,7 +223,7 @@ func TestTargetLogin(t *testing.T) {
 		lock := targetAccess.LockTarget(&target.LocalTarget{}, "hold-lock")
 		defer lock.Unlock()
 
-		server := NewAuthServer(context.Background(), &targetsessionmocks.MockTargetSessionProvider{}, targetAccess)
+		server := NewAuthServer(context.Background(), &targetsessionmocks.MockTargetSessionProvider{}, targetAccess, "test-arrow-token")
 		tgt := &apapproto.Target{Connection: &apapproto.Target_LocalConfig{LocalConfig: &apapproto.LocalConnectionConfig{}}}
 		req := &authproto.TargetLoginClientMessage{
 			Message: &authproto.TargetLoginClientMessage_Request{
@@ -246,7 +256,7 @@ func TestTargetLogin(t *testing.T) {
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
 		provider.On("TargetSession", mock.Anything).Return((*targetsessionmocks.MockTargetSession)(nil), targetSessionErr).Once()
 
-		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{})
+		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{}, "test-arrow-token")
 		tgt := &apapproto.Target{Connection: &apapproto.Target_LocalConfig{LocalConfig: &apapproto.LocalConnectionConfig{}}}
 		req := &authproto.TargetLoginClientMessage{
 			Message: &authproto.TargetLoginClientMessage_Request{
@@ -274,7 +284,7 @@ func TestTargetLogin(t *testing.T) {
 	})
 	t.Run("transient SSH connection bypasses target session cache and closes the connection", func(t *testing.T) {
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
-		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{})
+		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{}, "test-arrow-token")
 		secureClient := &conductormocks.SecureClientMock{}
 		secureClient.On("Close").Return(nil).Once()
 		server.createSSHConnection = func(ctx context.Context, tgt *target.SSHTarget, pp conductor.PromptProviders) (conductor.SecureClient, error) {
@@ -322,7 +332,7 @@ func TestTargetLogin(t *testing.T) {
 	t.Run("transient SSH connection returns connect errors", func(t *testing.T) {
 		connectErr := errors.New("connect failed")
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
-		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{})
+		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{}, "test-arrow-token")
 		server.createSSHConnection = func(context.Context, *target.SSHTarget, conductor.PromptProviders) (conductor.SecureClient, error) {
 			return nil, connectErr
 		}
@@ -376,7 +386,7 @@ func TestTargetLogin(t *testing.T) {
 
 		provider := &targetsessionmocks.MockTargetSessionProvider{}
 		provider.On("TargetSession", mock.Anything).Return(session, nil).Once()
-		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{})
+		server := NewAuthServer(context.Background(), provider, &target.TargetAccess{}, "test-arrow-token")
 
 		tgt := &apapproto.Target{Connection: &apapproto.Target_LocalConfig{LocalConfig: &apapproto.LocalConnectionConfig{}}}
 		req := &authproto.TargetLoginClientMessage{

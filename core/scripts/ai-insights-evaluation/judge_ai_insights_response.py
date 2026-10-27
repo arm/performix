@@ -12,7 +12,8 @@ import json
 import os
 from pathlib import Path
 
-from test_ai_insights_evaluation import judge_response
+from test_ai_insights_evaluation import judge_response, mcp_policy_passes
+from pathways_artifacts import load_pathways_judge_evidence
 
 
 def main() -> int:
@@ -30,10 +31,20 @@ def main() -> int:
     )
     parser.add_argument(
         "--judge-model",
-        default=os.environ.get("AI_INSIGHTS_JUDGE_MODEL", "gpt-5-mini"),
+        default=os.environ.get("AI_INSIGHTS_JUDGE_MODEL", "gpt-5.6-luna"),
         help="Judge model (default: %(default)s)",
     )
+    parser.add_argument("--judge-reasoning-effort",
+                        default=os.environ.get("AI_INSIGHTS_JUDGE_REASONING_EFFORT", "medium"),
+                        help="Judge reasoning effort (default: %(default)s)")
+    parser.add_argument("--pathways-session", type=Path,
+                        help="Saved pathways JSONL to assess alongside a single final response")
+    parser.add_argument("--supplied-run-id", help="Initial fixture run ID, if the pathways attempt supplied one")
     args = parser.parse_args()
+    if args.supplied_run_id and not args.pathways_session:
+        parser.error("--supplied-run-id requires --pathways-session")
+    if args.pathways_session and len(args.responses) != 1:
+        parser.error("a pathways session requires exactly one final response")
 
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
@@ -41,6 +52,12 @@ def main() -> int:
 
     rubric = args.rubric.read_text(encoding="utf-8")
     test_id = args.test_id or args.rubric.stem
+    pathways_judge_options = {}
+    if args.pathways_session:
+        evidence, transcript_error = load_pathways_judge_evidence(args.pathways_session, args.supplied_run_id)
+        if transcript_error:
+            parser.error(transcript_error)
+        pathways_judge_options["pathways_evidence"] = evidence
     results = []
     for response_path in args.responses:
         result = judge_response(
@@ -49,13 +66,19 @@ def main() -> int:
             response_path.read_text(encoding="utf-8"),
             {
                 "judge_model": args.judge_model,
+                "judge_reasoning_effort": args.judge_reasoning_effort,
                 "openai_api_key": api_key,
             },
+            **pathways_judge_options,
         )
         results.append({"response": str(response_path), **result})
 
     print(json.dumps(results, indent=2))
-    return int(any(result["label"] != "pass" for result in results))
+    return int(any(
+        result["label"] != "pass"
+        or (args.pathways_session and not mcp_policy_passes(result.get("mcp_policy")))
+        for result in results
+    ))
 
 
 if __name__ == "__main__":

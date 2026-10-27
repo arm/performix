@@ -117,6 +117,7 @@ type ErrorKind uint8
 const (
 	ErrorUnknownClient ErrorKind = iota + 1
 	ErrorClientUnavailable
+	ErrorClientVersionUnsupported
 	ErrorConfigRead
 	ErrorConfigWrite
 	ErrorConflict
@@ -130,6 +131,8 @@ type InstallerError struct {
 	RegistrationDifferences []RegistrationDifference
 	CommandError            string
 	CommandOutput           string
+	ActualVersion           string
+	MinimumVersion          string
 	Err                     error
 }
 
@@ -303,9 +306,15 @@ func (m *Manager) status(ctx context.Context, id string, implementation client) 
 	status := statusFor(id, implementation, resolved, state, differences)
 	if stateErr != nil {
 		status.State = RegistrationStateUnreadable
+	}
+	// An unsupported client needs an upgrade before it can use MCP.
+	// Give Doctor the compatibility error and retain the registration state.
+	if isDetectedButUnsupported(resolved, detectErr) {
+		status.Err = detectionInstallerError(id, detectErr)
+	} else if stateErr != nil {
 		status.Err = installerError(ErrorConfigRead, id, stateErr)
 	} else if detectErr != nil {
-		status.Err = installerError(ErrorClientUnavailable, id, detectErr)
+		status.Err = detectionInstallerError(id, detectErr)
 	}
 	return status
 }
@@ -325,7 +334,7 @@ func (m *Manager) Status(ctx context.Context, id string) (ClientStatus, error) {
 // Install adds the server to the selected automatically discovered client and
 // verifies the resulting registration state.
 func (m *Manager) Install(ctx context.Context, id string) (*InstallResult, error) {
-	implementation, resolved, state, err := m.prepareOperation(ctx, id)
+	implementation, resolved, state, err := m.prepareOperation(ctx, id, false)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +364,7 @@ func (m *Manager) Install(ctx context.Context, id string) (*InstallResult, error
 // Uninstall removes the exact server entry from the automatically discovered
 // client.
 func (m *Manager) Uninstall(ctx context.Context, id string) (*UninstallResult, error) {
-	implementation, resolved, state, err := m.prepareOperation(ctx, id)
+	implementation, resolved, state, err := m.prepareOperation(ctx, id, true)
 	if err != nil {
 		return nil, err
 	}
@@ -385,9 +394,13 @@ func (m *Manager) Uninstall(ctx context.Context, id string) (*UninstallResult, e
 // prepareOperation performs the checks shared by installation and removal.
 // The caller remains responsible for the client-specific mutation and for
 // verifying its resulting registration state.
+// Uninstall allows older clients so users can remove existing registrations.
+// Installation requires a supported version. Both operations reject other
+// detection failures.
 func (m *Manager) prepareOperation(
 	ctx context.Context,
 	id string,
+	allowUnsupportedVersion bool,
 ) (client, resolvedClient, RegistrationState, error) {
 	implementation, ok := m.clients[id]
 	if !ok {
@@ -397,12 +410,10 @@ func (m *Manager) prepareOperation(
 		}
 	}
 	resolved, err := implementation.Detect(ctx)
-	if err != nil || !resolved.detected {
-		return nil, resolvedClient{}, 0, installerError(
-			ErrorClientUnavailable,
-			id,
-			err,
-		)
+	detectedButUnsupported := isDetectedButUnsupported(resolved, err)
+	if !resolved.detected ||
+		(err != nil && (!allowUnsupportedVersion || !detectedButUnsupported)) {
+		return nil, resolvedClient{}, 0, detectionInstallerError(id, err)
 	}
 	state, differences, err := implementation.RegistrationState(
 		ctx,
@@ -460,7 +471,24 @@ func installerError(kind ErrorKind, id string, err error) error {
 		result.CommandError = commandFailure.CommandError()
 		result.CommandOutput = commandFailure.CommandOutput()
 	}
+	var unsupportedVersion *unsupportedClientVersionError
+	if errors.As(err, &unsupportedVersion) {
+		result.ActualVersion = unsupportedVersion.actual
+		result.MinimumVersion = unsupportedVersion.minimum
+	}
 	return result
+}
+
+func detectionInstallerError(id string, err error) error {
+	kind := ErrorClientUnavailable
+	if isUnsupportedClientVersionError(err) {
+		kind = ErrorClientVersionUnsupported
+	}
+	return installerError(kind, id, err)
+}
+
+func isDetectedButUnsupported(resolved resolvedClient, err error) bool {
+	return resolved.detected && isUnsupportedClientVersionError(err)
 }
 
 func mutationInstallerError(id string, err error) error {

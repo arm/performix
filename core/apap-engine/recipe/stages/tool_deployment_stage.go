@@ -16,6 +16,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
+	"github.com/Arm-Debug/apap-cli/apap-engine/progress"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
@@ -32,7 +33,7 @@ func NewToolDeploymentStage(machineTypeSupplier recipe.PlatformConfigurationSupp
 		locality:                 locality,
 		deploymentMode:           deployMode,
 		packageManager:           packageManager,
-		ProgressCallback:         func(int64, int64, time.Time) {},
+		ProgressCallback:         func(notifiers.StageProgress) {},
 	}
 }
 
@@ -47,7 +48,7 @@ type ToolDeploymentStage struct {
 	packageManager           *packages.PackageManager
 
 	Result           deployer.ReconcileResult
-	ProgressCallback conductor.ReportProgress
+	ProgressCallback func(notifiers.StageProgress)
 	ToolsToDeploy    []tool.ToolInfo
 }
 
@@ -60,6 +61,15 @@ func (t *ToolDeploymentStage) ErrorType() run.RunResult {
 }
 
 func (t *ToolDeploymentStage) Execute(ctx *recipe.StageContext) (func(), error) {
+	// Match the CLI's stage-wide tracker: start when execution begins and retain
+	// elapsed time and cumulative bytes through listing, unpacking and every bundle.
+	eta := progress.NewStartedETAEstimator()
+	reportProgress := func(sent, total int64) {
+		t.ProgressCallback(notifiers.StageProgress{
+			Sent: sent, Max: total, Unit: notifiers.UnitBytes,
+			EstimatedRemainingSeconds: eta.Update(sent, total),
+		})
+	}
 	bundles := t.toolBundlesSupplier()
 
 	// Return early for host deployments if there are no specified host bundles
@@ -98,7 +108,7 @@ func (t *ToolDeploymentStage) Execute(ctx *recipe.StageContext) (func(), error) 
 
 	totalBytesTransferred := int64(0)
 
-	t.ProgressCallback(totalBytesTransferred, totalBytesToTransfer, time.Time{})
+	reportProgress(totalBytesTransferred, totalBytesToTransfer)
 
 	// Deploy each tool
 	for i, toolInfo := range t.ToolsToDeploy {
@@ -120,8 +130,8 @@ func (t *ToolDeploymentStage) Execute(ctx *recipe.StageContext) (func(), error) 
 
 		if t.ProgressCallback != nil {
 			handleCLIProgress := conductor.ReportProgressRequest{
-				Callback: func(sent int64, max int64, ti time.Time) {
-					t.ProgressCallback(totalBytesTransferred+sent, totalBytesToTransfer, ti)
+				Callback: func(sent int64, _ int64, _ time.Time) {
+					reportProgress(totalBytesTransferred+sent, totalBytesToTransfer)
 				},
 				Interval: notifiers.ClientFileStreamUpdateInterval,
 			}
@@ -137,7 +147,7 @@ func (t *ToolDeploymentStage) Execute(ctx *recipe.StageContext) (func(), error) 
 		}
 
 		totalBytesTransferred += toolSizes[i]
-		t.ProgressCallback(totalBytesTransferred, totalBytesToTransfer, time.Time{})
+		reportProgress(totalBytesTransferred, totalBytesToTransfer)
 		reconcileResults = append(reconcileResults, result)
 	}
 

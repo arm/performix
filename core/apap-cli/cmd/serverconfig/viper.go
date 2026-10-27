@@ -24,12 +24,10 @@ func getLogPath() string {
 // FromViper returns GrpcServerConfig built from viper configuration.
 func FromViper() grpcserver.GrpcServerConfig {
 	serverPort := viper.GetInt("server-port")
-	if err := ValidatePort("server", serverPort); err != nil {
-		panic(err)
-	}
-	authPort := viper.GetInt("auth-port")
-	if err := ValidatePort("auth", authPort); err != nil {
-		panic(err)
+	if serverPort != AutomaticPort {
+		if err := ValidatePort("server", serverPort); err != nil {
+			panic(err)
+		}
 	}
 	httpPort := viper.GetInt("http-port")
 	if httpPort != 0 {
@@ -40,28 +38,19 @@ func FromViper() grpcserver.GrpcServerConfig {
 	dataDirectory := resolvepath.ResolvePath(viper.GetString("data-dir"))
 
 	return grpcserver.GrpcServerConfig{
-		Host:                      viper.GetString("server-hostname"),
-		Port:                      serverPort,
-		AuthPort:                  authPort,
-		HttpPort:                  httpPort,
-		HttpChunkBytes:            viper.GetInt("http-chunk-bytes"),
-		ParallelJobs:              uint(viper.GetInt("jobs")), //nolint:gosec // jobs is expected to be a small positive value
-		DataDirectory:             dataDirectory,
-		LogPath:                   getLogPath(),
-		LogLevel:                  viper.GetString("log-level"),
-		SrcToolsDirectory:         viper.GetString("source-tools-dir"),
-		DeploymentToolsDir:        viper.GetString("deployment-tools-dir"),
-		ADBPath:                   viper.GetString("adb-path"),
-		IsRootWorkerEnabled:       viper.GetBool("enable-on-demand-privilege"),
-		EnableFullCaptureSupport:  viper.GetBool("enable-full-capture-support"),
-		EnableRerendering:         viper.GetBool("enable-rerendering"),
-		EnableExperimentalRecipes: viper.GetBool("enable-experimental-recipes"),
-		EnableSecondaryRunPaths:   viper.GetBool("enable-secondary-run-paths"),
-		EnableGPURecipe:           viper.GetBool(EnableGPURecipeConfigKey),
-		EnableRenderDBSandbox:     viper.GetBool("enable-render-db-sandbox"),
-		EnableNeoprofTimeline:     viper.GetBool("enable-neoprof-timeline"),
-		EnableJfrCapture:          viper.GetBool("enable-jfr-capture"),
-		ConfigDirectory:           DefaultConfigDir,
+		Host:               viper.GetString("server-hostname"),
+		Port:               serverPort,
+		HttpPort:           httpPort,
+		HttpChunkBytes:     viper.GetInt("http-chunk-bytes"),
+		ParallelJobs:       uint(viper.GetInt("jobs")), //nolint:gosec // jobs is expected to be a small positive value
+		DataDirectory:      dataDirectory,
+		LogPath:            getLogPath(),
+		LogLevel:           viper.GetString("log-level"),
+		SrcToolsDirectory:  viper.GetString("source-tools-dir"),
+		DeploymentToolsDir: viper.GetString("deployment-tools-dir"),
+		ADBPath:            viper.GetString("adb-path"),
+		FeatureFlags:       LoadFeatureFlags(viper.GetViper()),
+		ConfigDirectory:    DefaultConfigDir,
 	}
 }
 

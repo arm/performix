@@ -4,11 +4,13 @@
 package run
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 
 	log "github.com/sirupsen/logrus"
 
+	cpucap "github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
@@ -58,6 +60,12 @@ func LoadRunCapabilities(entries []cdf.ModelView) ([]RunCapabilities, error) {
 		}
 
 		for _, comp := range components {
+			// CDF also lists files without manifest entries as unknown components.
+			// Such files may be remnants of interrupted publication, not outcomes.
+			if comp.Type == (cdf.ComponentType{Name: "unknown"}) {
+				continue
+			}
+
 			invocationPath, capabilityId, parsed := getCapabilityDetails(comp.RelativePath)
 			if !parsed {
 				continue
@@ -81,6 +89,19 @@ func LoadRunCapabilities(entries []cdf.ModelView) ([]RunCapabilities, error) {
 				return nil, fmt.Errorf("nil capability")
 			}
 			capability.ComponentType = comp.Type
+			if comp.Type.Name == cpucap.CPUCounter {
+				var envelope map[string]any
+				if err := json.Unmarshal(contents, &envelope); err != nil {
+					return nil, err
+				}
+				if _, exists := envelope["componentType"]; exists {
+					return nil, fmt.Errorf("CPU component type belongs in the manifest")
+				}
+				envelope["componentType"] = map[string]any{"name": comp.Type.Name, "version": comp.Type.SchemaVersion}
+				if _, err := cpucap.ParseCPUCounterValue(capabilityId, envelope, true); err != nil {
+					return nil, err
+				}
+			}
 			if _, ok := capabilitiesForRun[invocationPath]; !ok {
 				capabilitiesForInvocation := ToolCapabilities{capabilityId: *capability}
 				capabilitiesForRun[invocationPath] = capabilitiesForInvocation
@@ -91,6 +112,26 @@ func LoadRunCapabilities(entries []cdf.ModelView) ([]RunCapabilities, error) {
 			}
 		}
 
+		for _, invocation := range capabilitiesForRun {
+			for id, capability := range invocation {
+				if capability.ComponentType.Name != cpucap.CPUCounter {
+					continue
+				}
+				value, err := cpucap.ParseCPUCounterValue(id, map[string]any{"componentType": cpucap.ComponentType{Name: capability.ComponentType.Name, Version: capability.ComponentType.SchemaVersion}, "state": capability.State, "payload": capability.Payload}, true)
+				if err != nil {
+					return nil, err
+				}
+				for _, binding := range value.Payload.Bindings {
+					series, exists := invocation[binding.SeriesCapabilityID]
+					if !exists {
+						return nil, fmt.Errorf("CPU binding %q is missing from its tool invocation", binding.SeriesCapabilityID)
+					}
+					if err := cpucap.ValidateCPUCounterSeries(cpucap.ComponentType{Name: series.ComponentType.Name, Version: series.ComponentType.SchemaVersion}, series.State, series.Payload); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
 		capabilities[i] = RunCapabilities{
 			CapabilitiesPerTool: capabilitiesForRun,
 			Migrations:          entry.Migrations(),

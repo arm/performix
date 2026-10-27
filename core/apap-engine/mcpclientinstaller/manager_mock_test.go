@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tailscale/hujson"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/mcpclientinstaller/clientids"
 )
@@ -37,13 +38,22 @@ func mockExecutable(name string) string {
 	return filepath.Join(string(filepath.Separator), "mock", "bin", name)
 }
 
+func assertJSONCEqual(t *testing.T, expected string, actual []byte) {
+	t.Helper()
+	// Standardize mutates its input, so compare a copy and retain the original
+	// bytes for the comment-preservation assertions.
+	standard, err := hujson.Standardize(append([]byte(nil), actual...))
+	require.NoError(t, err)
+	assert.JSONEq(t, expected, string(standard))
+}
+
 type fakeClients struct {
 	paths            map[string]bool
 	pathModes        map[string]os.FileMode
 	server           ServerDefinition
 	claudeConfigured bool
 	codexConfigured  bool
-	vscodeConfigPath string
+	vscodeVersion    string
 	commandsMutex    sync.Mutex
 	commands         [][]string
 }
@@ -65,6 +75,13 @@ func (f *fakeClients) run(_ context.Context, command string, args ...string) ([]
 	if len(args) == 1 && args[0] == "--version" {
 		if commandName == "claude" {
 			return []byte("Claude Code 2.0"), nil
+		}
+		if commandName == "code" {
+			version := f.vscodeVersion
+			if version == "" {
+				version = "1.99.0"
+			}
+			return []byte(version), nil
 		}
 		return []byte("codex-cli 1.0"), nil
 	}
@@ -100,24 +117,6 @@ func (f *fakeClients) run(_ context.Context, command string, args ...string) ([]
 	}
 	if commandName == "codex" && len(args) >= 2 && args[0] == "mcp" && args[1] == "remove" {
 		f.codexConfigured = false
-	}
-	if commandName == "code" && len(args) == 2 && args[0] == "--add-mcp" {
-		var definition struct {
-			Name    string   `json:"name"`
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
-		}
-		if err := json.Unmarshal([]byte(args[1]), &definition); err != nil {
-			return nil, err
-		}
-		server := ServerDefinition{
-			Name:    definition.Name,
-			Command: definition.Command,
-			Args:    definition.Args,
-		}
-		if err := installJSON(f.vscodeConfigPath, "servers", server, true); err != nil {
-			return nil, err
-		}
 	}
 	return nil, nil
 }
@@ -496,7 +495,13 @@ func TestWindowsDefaultClientPaths(t *testing.T) {
 		"WindowsApps",
 		"claude.exe",
 	)
-	vscodeExecutable := filepath.Join(localAppData, "Programs", "Microsoft VS Code", "Code.exe")
+	vscodeExecutable := filepath.Join(
+		localAppData,
+		"Programs",
+		"Microsoft VS Code",
+		"bin",
+		"code.cmd",
+	)
 	claudeExecutable := filepath.Join(home, ".local", "bin", "claude.exe")
 	codexExecutable := filepath.Join(
 		localAppData,
@@ -650,7 +655,7 @@ func TestWindowsAlternativeClientPaths(t *testing.T) {
 		{
 			"VS Code system",
 			"vscode",
-			filepath.Join(programFiles, "Microsoft VS Code", "Code.exe"),
+			filepath.Join(programFiles, "Microsoft VS Code", "bin", "code.cmd"),
 			"",
 		},
 	}
@@ -861,33 +866,200 @@ func TestAntigravityLifecycleUsesGlobalConfiguration(t *testing.T) {
 	assert.Equal(t, RegistrationStateNotConfigured, removed.Status.State)
 }
 
-func TestVSCodeLifecycleUsesNativeAddAndDirectRemoval(t *testing.T) {
+func TestVSCodeLifecycleUsesGlobalConfiguration(t *testing.T) {
 	fake := &fakeClients{paths: map[string]bool{
 		"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code": true,
 	}}
 	m := newTestManager(t, fake)
 	vscode := m.clients["vscode"].(*vscodeClient)
-	fake.vscodeConfigPath = vscode.configPath
+	require.NoError(t, os.MkdirAll(filepath.Dir(vscode.configPath), 0o700))
+	require.NoError(t, os.WriteFile(vscode.configPath, []byte(`{
+  // Preserve this input configuration.
+  "inputs": [{"id": "existing-input", "type": "promptString"}],
+  "servers": {
+    // Preserve this existing server.
+    "existing-server": {"command": "existing-command", "args": []},
+  },
+}`), 0o600))
 
 	installed, err := m.Install(context.Background(), "vscode")
 	require.NoError(t, err)
 	assert.Equal(t, RegistrationStateConfigured, installed.Status.State)
+	configuration, err := os.ReadFile(vscode.configPath)
+	require.NoError(t, err)
+	assertJSONCEqual(t, fmt.Sprintf(`{
+  "inputs": [{"id": "existing-input", "type": "promptString"}],
+  "servers": {
+    "existing-server": {"command": "existing-command", "args": []},
+    "test-server": {
+      "type": "stdio",
+      "command": %q,
+      "args": ["serve"]
+    }
+  }
+}`, fake.server.Command), configuration)
+	assert.Contains(t, string(configuration), "// Preserve this input configuration.")
+	assert.Contains(t, string(configuration), "// Preserve this existing server.")
+
+	configurationWithManagedComment := strings.Replace(
+		string(configuration),
+		`"args":["serve"]`,
+		`/* Managed stanza comment. */ "args":["serve"]`,
+		1,
+	)
+	require.NotEqual(t, string(configuration), configurationWithManagedComment)
+	require.NoError(t, os.WriteFile( // #nosec G703 -- config path is under t.TempDir.
+		vscode.configPath,
+		[]byte(configurationWithManagedComment),
+		0o600,
+	))
 
 	again, err := m.Install(context.Background(), "vscode")
 	require.NoError(t, err)
 	assert.Equal(t, InstallOutcomeAlreadyConfigured, again.Outcome)
+	configuration, err = os.ReadFile(vscode.configPath)
+	require.NoError(t, err)
+	assert.Equal(t, configurationWithManagedComment, string(configuration))
 
 	removed, err := m.Uninstall(context.Background(), "vscode")
 	require.NoError(t, err)
 	assert.Equal(t, RegistrationStateNotConfigured, removed.Status.State)
+	configuration, err = os.ReadFile(vscode.configPath)
+	require.NoError(t, err)
+	assertJSONCEqual(t, `{
+  "inputs": [{"id": "existing-input", "type": "promptString"}],
+  "servers": {
+    "existing-server": {"command": "existing-command", "args": []}
+  }
+}`, configuration)
+	assert.Contains(t, string(configuration), "// Preserve this input configuration.")
+	assert.Contains(t, string(configuration), "// Preserve this existing server.")
+	assert.NotContains(t, string(configuration), "Managed stanza comment")
 
-	var addCommands int
 	for _, command := range fake.commands {
-		if len(command) > 2 && command[1] == "--add-mcp" {
-			addCommands++
-		}
+		assert.NotContains(t, command, "--add-mcp")
 	}
-	assert.Equal(t, 1, addCommands)
+}
+
+func TestVSCodeBeforeMCPServerSupportIsRejected(t *testing.T) {
+	fake := &fakeClients{
+		paths: map[string]bool{
+			"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code": true,
+		},
+		vscodeVersion: "1.97.0",
+	}
+	m := newTestManager(t, fake)
+
+	status := clientStatus(t, m, "vscode")
+	assert.True(t, status.Detected)
+	var statusErr *InstallerError
+	require.ErrorAs(t, status.Err, &statusErr)
+	assert.Equal(t, ErrorClientVersionUnsupported, statusErr.Kind)
+
+	_, err := m.Install(context.Background(), "vscode")
+	var installerErr *InstallerError
+	require.ErrorAs(t, err, &installerErr)
+	assert.Equal(t, ErrorClientVersionUnsupported, installerErr.Kind)
+	assert.Equal(t, "1.97.0", installerErr.ActualVersion)
+	assert.Equal(t, minimumVSCodeMCPVersion, installerErr.MinimumVersion)
+}
+
+func TestVSCodeBeforeMCPServerSupportCanBeUninstalled(t *testing.T) {
+	fake := &fakeClients{
+		paths: map[string]bool{
+			"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code": true,
+		},
+		vscodeVersion: "1.97.0",
+	}
+	m := newTestManager(t, fake)
+	vscode := m.clients[clientids.VSCode].(*vscodeClient)
+	require.NoError(t, installVSCodeJSONC(vscode.configPath, m.server))
+
+	result, err := m.Uninstall(context.Background(), clientids.VSCode)
+	require.NoError(t, err)
+	assert.Equal(t, UninstallOutcomeRemoved, result.Outcome)
+	assert.Equal(t, RegistrationStateNotConfigured, result.Status.State)
+}
+
+func TestMalformedVSCodeVersionIsNotDetected(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		t.Run(fmt.Sprintf("configured=%t", configured), func(t *testing.T) {
+			fake := &fakeClients{
+				paths: map[string]bool{
+					"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code": true,
+				},
+				vscodeVersion: "not-a-version",
+			}
+			m := newTestManager(t, fake)
+			vscode := m.clients[clientids.VSCode].(*vscodeClient)
+			if configured {
+				require.NoError(t, installVSCodeJSONC(vscode.configPath, m.server))
+			}
+
+			status := clientStatus(t, m, clientids.VSCode)
+			assert.False(t, status.Detected)
+			var statusErr *InstallerError
+			require.ErrorAs(t, status.Err, &statusErr)
+			assert.Equal(t, ErrorClientUnavailable, statusErr.Kind)
+			if configured {
+				assert.Equal(t, RegistrationStateConfigured, status.State)
+			} else {
+				assert.Equal(t, RegistrationStateNotConfigured, status.State)
+			}
+		})
+	}
+}
+
+func TestUnsupportedVSCodeVersionTakesPrecedenceOverUnreadableConfiguration(t *testing.T) {
+	fake := &fakeClients{
+		paths: map[string]bool{
+			"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code": true,
+		},
+		vscodeVersion: "1.97.0",
+	}
+	m := newTestManager(t, fake)
+	vscode := m.clients[clientids.VSCode].(*vscodeClient)
+	require.NoError(t, os.MkdirAll(filepath.Dir(vscode.configPath), 0o700))
+	require.NoError(t, os.WriteFile(vscode.configPath, []byte(`{"servers":`), 0o600))
+
+	status := clientStatus(t, m, clientids.VSCode)
+	assert.True(t, status.Detected)
+	assert.Equal(t, RegistrationStateUnreadable, status.State)
+	var statusErr *InstallerError
+	require.ErrorAs(t, status.Err, &statusErr)
+	assert.Equal(t, ErrorClientVersionUnsupported, statusErr.Kind)
+}
+
+func TestVSCodeMCPVersionValidation(t *testing.T) {
+	for _, test := range []struct {
+		version   string
+		supported bool
+	}{
+		{version: "1.98.2", supported: false},
+		{version: "1.99.0", supported: true},
+		{version: "1.99.0-insider", supported: true},
+		{version: "1.100.0", supported: true},
+		{version: "2.0.0", supported: true},
+	} {
+		t.Run(test.version, func(t *testing.T) {
+			err := validateVSCodeVersion(test.version + "\ncommit\nx64\n")
+			if test.supported {
+				assert.NoError(t, err)
+				return
+			}
+			var unsupported *unsupportedClientVersionError
+			require.ErrorAs(t, err, &unsupported)
+			assert.Equal(t, test.version, unsupported.actual)
+			assert.Equal(t, minimumVSCodeMCPVersion, unsupported.minimum)
+		})
+	}
+
+	t.Run("malformed", func(t *testing.T) {
+		err := validateVSCodeVersion("not-a-version")
+		require.Error(t, err)
+		var unsupported *unsupportedClientVersionError
+		assert.False(t, errors.As(err, &unsupported))
+	})
 }
 
 func TestMalformedConfigurationIsUnreadable(t *testing.T) {

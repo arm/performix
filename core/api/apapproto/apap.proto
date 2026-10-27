@@ -5,7 +5,7 @@ syntax = "proto3";
 
 package apap;
 
-option go_package = "github.com/Arm-Debug/apap-cli/clients/go/apapproto";
+option go_package = "github.com/Arm-Debug/apap-cli/api/apapproto";
 
 import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
@@ -318,6 +318,9 @@ message RecipeSelectionPolicyOptions {
 
 // Request preparation of renderer and visualization config
 message PrepareRenderRequest {
+  reserved 4;
+  reserved "visualization_parameters";
+
   // The content to load from disk
   ContentSelection content = 1;
 
@@ -326,13 +329,13 @@ message PrepareRenderRequest {
 
   // Render parameters
   map<string, google.protobuf.Value> render_parameters = 3;
-
-  // Visualization parameters keyed by visualization parameter ID
-  map<string, google.protobuf.Value> visualization_parameters = 4;
 }
 
 // Prepared renderer/visualization config returned by the recipe
 message PrepareRenderResponse {
+  reserved 5;
+  reserved "visualization_parameters";
+
   // List of renderers; IDs are guaranteed to be non-empty and unique within this response
   repeated RendererConfig renderers = 1;
 
@@ -346,9 +349,6 @@ message PrepareRenderResponse {
 
   // Render parameter values with defaults and static options.
   map<string, RenderParameterDetails> render_parameters = 4;
-
-  // Mapping from visualization parameter IDs to recipe render parameter IDs.
-  map<string, string> visualization_parameters = 5;
 }
 
 message RenderParameterDetails {
@@ -766,6 +766,9 @@ message StageProgress {
   int64 max = 3;
   StageProgressUnit unit = 4; // unit type of progress e.g. B, %
   optional string message = 5; // description of the current progress state
+  // Estimate for this stage, not the whole run. Absent when unknown; zero does
+  // not replace StageFinish. Updated with progress, not a live countdown.
+  optional uint64 estimated_remaining_seconds = 6;
 }
 
 // Identifies the metadata field changed while a recipe is executing.

@@ -16,8 +16,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/run"
 	"github.com/Arm-Debug/apap-cli/apap-cli/test"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 type mockRenderInvoker struct {

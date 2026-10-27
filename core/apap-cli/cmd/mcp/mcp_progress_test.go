@@ -21,6 +21,31 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 )
 
+// writeNotifier tells the test when the progress message has been written. Its
+// buffered channel ensures that writing the message does not have to wait for
+// the test to receive the notification.
+type writeNotifier chan struct{}
+
+func (w writeNotifier) Write(p []byte) (int, error) {
+	select {
+	case w <- struct{}{}:
+	default:
+	}
+	return len(p), nil
+}
+
+// requireProgressRendered waits for the progress message before allowing the
+// fake client search to finish. A fixed delay can end before the background
+// code writes the message, particularly on a busy test machine.
+func requireProgressRendered(t *testing.T, rendered <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-rendered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "progress output was not rendered")
+	}
+}
+
 func TestConfigureMCPProgressWriter(t *testing.T) {
 	writer := progress.NewWriter()
 	configureMCPProgressWriter(writer, io.Discard, mcpProgressConfig{
@@ -53,7 +78,8 @@ func TestMCPStatusShowsProgressWhileListingClients(t *testing.T) {
 	command := newMCPStatusCmd(registrationTestDeps(service))
 	command.SetOut(io.Discard)
 	var progressOutput bytes.Buffer
-	command.SetErr(&progressOutput)
+	progressRendered := make(writeNotifier, 1)
+	command.SetErr(io.MultiWriter(&progressOutput, progressRendered))
 	done := make(chan error, 1)
 
 	go func() {
@@ -65,7 +91,7 @@ func TestMCPStatusShowsProgressWhileListingClients(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "MCP client listing did not start")
 	}
-	time.Sleep(2 * mcpProgressUpdateFrequency)
+	requireProgressRendered(t, progressRendered)
 	close(release)
 	require.NoError(t, <-done)
 
@@ -94,7 +120,8 @@ func TestMCPOperationShowsProgressWhileListingClients(t *testing.T) {
 			}
 			command := &cobra.Command{}
 			var progressOutput bytes.Buffer
-			command.SetErr(&progressOutput)
+			progressRendered := make(writeNotifier, 1)
+			command.SetErr(io.MultiWriter(&progressOutput, progressRendered))
 			done := make(chan error, 1)
 
 			go func() {
@@ -115,7 +142,7 @@ func TestMCPOperationShowsProgressWhileListingClients(t *testing.T) {
 			case <-time.After(time.Second):
 				require.FailNow(t, "MCP client listing did not start")
 			}
-			time.Sleep(2 * mcpProgressUpdateFrequency)
+			requireProgressRendered(t, progressRendered)
 			close(release)
 			require.NoError(t, <-done)
 

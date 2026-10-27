@@ -15,7 +15,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 // StageContextFailure allows us to maintain (for now) a single stage failure but continue to execute

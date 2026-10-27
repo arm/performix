@@ -5,6 +5,7 @@ package jstest
 
 import (
 	"flag"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -14,20 +15,28 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
 
-var resolveJSFilePath = resolveJSFilePathImpl
+var resolveSourceFilePath = resolveSourceFilePathImpl
 
-var jsSourceRoot = flag.String(
+var sourceRoot = flag.String(
 	"jstest.source-root",
 	"",
-	"absolute path to an alternative apap-cli JavaScript source tree",
+	"absolute path to an alternative apap-cli source tree",
 )
 
-func resolveJSFilePathImpl(t *testing.T, relativePath string) string {
+func ReadSourceFile(t *testing.T, relativePath string) []byte {
 	t.Helper()
 
-	require.True(t, filepath.IsLocal(relativePath), "JS file path must be relative to apap-cli")
+	data, err := os.ReadFile(resolveSourceFilePath(t, relativePath))
+	require.NoErrorf(t, err, "failed to read source file %q", relativePath)
+	return data
+}
 
-	root := *jsSourceRoot
+func resolveSourceFilePathImpl(t *testing.T, relativePath string) string {
+	t.Helper()
+
+	require.True(t, filepath.IsLocal(relativePath), "source file path must be relative to apap-cli")
+
+	root := *sourceRoot
 	if root == "" {
 		_, filename, _, ok := runtime.Caller(0)
 		require.True(t, ok, "failed to locate the jstest package")

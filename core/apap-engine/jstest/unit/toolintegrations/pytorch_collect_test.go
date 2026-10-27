@@ -119,7 +119,7 @@ func TestPytorchCollectProbe(t *testing.T) {
 		engine.AssertExpectations(t)
 	})
 
-	t.Run("uses Python from PATH for an empty python intrepreter", func(t *testing.T) {
+	t.Run("uses Python from PATH for an empty python interpreter", func(t *testing.T) {
 		h := jstest.LoadToolIntegration(t, "pytorch-collect")
 		engine := &mocks.MockToolEngine{}
 		expectLinux(engine)
@@ -155,6 +155,37 @@ func TestPytorchCollectProbe(t *testing.T) {
 		assert.False(t, result.Available)
 		require.Len(t, result.Advice, 1)
 		assert.Equal(t, "engine.recipeparser.js_recipe_stage.READINESS_MESSAGE", result.Advice[0].MessageCode)
+		engine.AssertExpectations(t)
+	})
+
+	t.Run("reports readiness advice when the configured Python cannot be started", func(t *testing.T) {
+		h := jstest.LoadToolIntegration(t, "pytorch-collect")
+		engine := &mocks.MockToolEngine{}
+		expectLinux(engine)
+		ctx := pytorchCollectContext()
+		python := ".venv/bin/python3"
+		execOptions := baseExecOptions("/work")
+		startError := errors.New("fork/exec .venv/bin/python3: no such file or directory")
+
+		engine.On("ExecCommand", []string{python, "-c", readPythonPathScript}, execOptions).
+			Return(h.ToJSValPromise(t, nil, startError)).Once()
+		engine.On("ExecCommand", []string{python, "--version"}, execOptions).
+			Return(h.ToJSValPromise(t, nil, startError)).Once()
+		expectCommand(t, h, engine, []string{"stat", pytorchCollectPackagePath()}, tool_goja.ExecOptions{}, 0)
+		expectCommand(t, h, engine, []string{"stat", parquetWriterModulePath(), parquetWriterBinaryPath()}, tool_goja.ExecOptions{}, 0)
+		expectCommand(t, h, engine, []string{"test", "-f", "model.py"}, execOptions, 0)
+
+		result, err := h.ToolProbe(t, engine, ctx)
+
+		require.NoError(t, err)
+		assert.False(t, result.Available)
+		require.Len(t, result.Advice, 1)
+		assert.Equal(t, "engine.recipeparser.js_recipe_stage.READINESS_MESSAGE", result.Advice[0].MessageCode)
+		assert.Equal(
+			t,
+			".venv/bin/python3 is not available on the target machine. Select an existing Python environment in order to run pytorch-collect.",
+			result.Advice[0].Metadata["message"],
+		)
 		engine.AssertExpectations(t)
 	})
 
@@ -244,8 +275,13 @@ func TestPytorchCollectRun(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("requires both outputs", func(t *testing.T) {
+	t.Run("requires call outputs", func(t *testing.T) {
 		err := runPytorchCollect(t, 130, true, true, nil, "operator_calls.parquet")
+		require.Error(t, err)
+	})
+
+	t.Run("requires collection timing output", func(t *testing.T) {
+		err := runPytorchCollect(t, 130, true, true, nil, "collection_timing.json")
 		require.Error(t, err)
 	})
 
@@ -449,6 +485,7 @@ func runPytorchCollect(t *testing.T, exitCode int, requestStop bool, completionM
 		}{
 			{name: "api_calls.parquet", component: tool_goja.OutputMetadata{ComponentType: "pytorch-api-calls-parquet", Version: "1.0"}},
 			{name: "operator_calls.parquet", component: tool_goja.OutputMetadata{ComponentType: "pytorch-operator-calls-parquet", Version: "1.0"}},
+			{name: "collection_timing.json", component: tool_goja.OutputMetadata{ComponentType: "pytorch-collection-timing-json", Version: "1.0"}},
 		} {
 			var rc int32
 			if missing[output.name] {

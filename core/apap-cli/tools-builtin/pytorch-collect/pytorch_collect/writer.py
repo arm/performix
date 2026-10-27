@@ -53,6 +53,9 @@ class Writer:
     def write_api_call(self, api_call: ApiCall):
         pass
 
+    def write_collection_timing(self, start_time_ns: int, end_time_ns: int):
+        pass
+
 
 class ParquetWriter(Writer):
     """
@@ -70,9 +73,11 @@ class ParquetWriter(Writer):
     @override
     def __enter__(self):
         from apx_parquet_writer import ParquetWriter as StreamParquetWriter
-        api_calls_path, operator_calls_path = self._output_paths()
+        api_calls_path, operator_calls_path, collection_timing_path = self._output_paths()
         api_calls_path.parent.mkdir(parents=True, exist_ok=True)
         operator_calls_path.parent.mkdir(parents=True, exist_ok=True)
+        collection_timing_path.parent.mkdir(parents=True, exist_ok=True)
+        self.collection_timing_path = collection_timing_path
 
         try:
             self.api_calls_writer = self._stack.enter_context(StreamParquetWriter(
@@ -120,17 +125,32 @@ class ParquetWriter(Writer):
                 self._to_json(operator_call.output),
             )
 
+    @override
+    def write_collection_timing(self, start_time_ns: int, end_time_ns: int):
+        with self.collection_timing_path.open("w") as output:
+            json.dump(
+                {
+                    "start_time_ns": str(start_time_ns),
+                    "end_time_ns": str(end_time_ns),
+                },
+                output,
+            )
+            output.write("\n")
+
     def _output_paths(self):
         if self.output.suffix == ".parquet":
             return (
                 self.output.with_name(
                     f"{self.output.stem}.api_calls.parquet"),
                 self.output,
+                self.output.with_name(
+                    f"{self.output.stem}.collection_timing.json"),
             )
 
         return (
             self.output / "api_calls.parquet",
             self.output / "operator_calls.parquet",
+            self.output / "collection_timing.json",
         )
 
     @staticmethod

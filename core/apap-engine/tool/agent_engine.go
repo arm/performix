@@ -12,21 +12,22 @@ import (
 	"sync"
 
 	log "github.com/sirupsen/logrus"
-	"github.com/spf13/viper"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
+	"github.com/Arm-Debug/apap-cli/apap-engine/progress"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/privilege"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 // NewAgentEngine creates a new AgentEngine instance.
@@ -37,7 +38,7 @@ func NewAgentEngine(
 	notifier notifiers.StageNotifier,
 	userMessageWriter run.UserMessageWriter,
 	preserveTempDirs bool,
-	rootWorkerEnabled bool,
+	featureFlags featureflags.Flags,
 	targetPlatform conductor.PlatformConfiguration,
 ) (*AgentEngine, func()) {
 	ps := privilege.NewPrivilegeSession(client, targetPlatform.OS)
@@ -49,9 +50,10 @@ func NewAgentEngine(
 		cleanupCtx:            cleanupCtx,
 		userMessageWriter:     userMessageWriter,
 		preserveTemporaryDirs: preserveTempDirs,
-		rootWorkerEnabled:     rootWorkerEnabled,
+		featureFlags:          featureFlags,
 		privilegeSession:      ps,
 		targetPlatform:        targetPlatform,
+		progressETAs:          make(map[string]*progress.ETAEstimator),
 	}
 	return ae, ae.Cleanup
 }
@@ -122,6 +124,8 @@ func (g *AgentEngine) CleanupStages() {
 		logx.FromContext(g.execCtx).Warnf("cleaning up unfinished stage: %s", id)
 		g.notifier.OnStageEnd(notifiers.StageInfo{Name: id}, errors.New("stage did not complete"))
 	}
+	clear(g.progressETAs)
+	g.stagesInFlight = nil
 }
 
 // selectCleanupContext returns the engine context for cleanup unless the agent
@@ -146,6 +150,13 @@ type FileCollector interface {
 	AddComponent(outputEntityDir string, componentType cdf.ComponentType, relativePath string) (string, error)
 }
 
+// CapabilityPublisher atomically publishes capability records and requests.
+// It is separate from FileCollector because this guarantee is specific to the
+// capability contract, not a general property of collected files.
+type CapabilityPublisher interface {
+	PublishCapabilityComponent(outputEntityDir string, componentType cdf.ComponentType, relativePath string, write func(string) error) error
+}
+
 // AgentEngine is a TargetAgent implementation of the engine
 type AgentEngine struct {
 	client                  targetagentproto.TargetAgentClient
@@ -153,18 +164,21 @@ type AgentEngine struct {
 	execCtx                 context.Context
 	cleanupCtx              context.Context
 	stagesInFlight          []string
+	progressETAs            map[string]*progress.ETAEstimator
 	tempDirsMu              sync.Mutex
 	tempDirs                []string
 	preserveTemporaryDirs   bool
+	hostFilesMu             sync.Mutex
 	hostFiles               []*hostFileHandle
 	userMessageWriter       run.UserMessageWriter
 	procsToRelease          []int32
 	privilegeProcsToRelease []int32
 	targetPlatform          conductor.PlatformConfiguration
 
+	featureFlags featureflags.Flags
+
 	// Privilege
-	rootWorkerEnabled bool
-	privilegeSession  privilege.PrivilegeSession
+	privilegeSession privilege.PrivilegeSession
 }
 
 func (g *AgentEngine) GetPlatform() conductor.PlatformConfiguration {
@@ -177,11 +191,29 @@ type hostFileHandle struct {
 	closeErr error
 }
 
+func validateLaunchCommand(command *process.LaunchCommand) error {
+	if err := process.ValidateLaunchCommand(command); err != nil {
+		switch {
+		case errors.Is(err, process.ErrMissingLaunchCommand):
+			return message.New(message.AgentApiMissingLaunchRequest)
+		case errors.Is(err, process.ErrMissingExecutable):
+			return message.New(message.AgentApiMissingCommand)
+		default:
+			return message.New(message.AgentApiInvalidLaunchRequest).WithCause(err)
+		}
+	}
+	return nil
+}
+
 func (h *hostFileHandle) isClosed() bool {
 	return h.file == nil
 }
 
 func (g *AgentEngine) ExecCommand(opts *process.LaunchCommand) (*process.CommandResult, error) {
+	if err := validateLaunchCommand(opts); err != nil {
+		return nil, err
+	}
+
 	req := &targetagentproto.ExecCommandRequest{
 		Command:          opts.Command,
 		AsPrivileged:     opts.AsPrivileged,
@@ -191,7 +223,7 @@ func (g *AgentEngine) ExecCommand(opts *process.LaunchCommand) (*process.Command
 	}
 
 	var resp *targetagentproto.CommandResult
-	wantsPrivilege := g.rootWorkerEnabled && opts.AsPrivileged
+	wantsPrivilege := opts.AsPrivileged
 	if wantsPrivilege {
 		// Privilege path
 		err := g.privilegeSession.Invoke(g.execCtx, "ExecCommand", func(ctx context.Context) error {
@@ -220,6 +252,17 @@ func (g *AgentEngine) ExecCommand(opts *process.LaunchCommand) (*process.Command
 }
 
 func (g *AgentEngine) StartProcess(opts *process.StartProcess) (ProcessHandle, error) {
+	if opts == nil {
+		return nil, message.New(message.AgentApiMissingLaunchRequest)
+	}
+	if err := validateLaunchCommand(&opts.LaunchCommand); err != nil {
+		return nil, err
+	}
+	processCtx := opts.Ctx
+	if processCtx == nil {
+		processCtx = g.execCtx
+	}
+
 	req := &targetagentproto.StartProcessRequest{
 		Command:          opts.LaunchCommand.Command,
 		AsPrivileged:     opts.LaunchCommand.AsPrivileged,
@@ -234,12 +277,11 @@ func (g *AgentEngine) StartProcess(opts *process.StartProcess) (ProcessHandle, e
 			//nolint:gosec
 			Redirect: targetagentproto.StreamRedirect_Mode(opts.Stderr.Mode), Path: opts.Stderr.FilePath,
 		},
-		UseGroupController: viper.GetBool("agent-use-group-controller"),
 	}
 
 	var resp *targetagentproto.StartProcessResponse
 
-	wantsPrivilege := g.rootWorkerEnabled && opts.LaunchCommand.AsPrivileged
+	wantsPrivilege := opts.LaunchCommand.AsPrivileged
 	if wantsPrivilege {
 		// Privilege path
 		err := g.privilegeSession.Invoke(g.execCtx, "StartProcess", func(ctx context.Context) error {
@@ -262,8 +304,8 @@ func (g *AgentEngine) StartProcess(opts *process.StartProcess) (ProcessHandle, e
 		g.procsToRelease = append(g.procsToRelease, resp.Pid)
 	}
 
-	return NewAgentProcessHandle(
-		opts.Ctx,
+	handle, err := NewAgentProcessHandle(
+		processCtx,
 		resp.Pid,
 		g.client,
 		opts.Stdout,
@@ -273,6 +315,19 @@ func (g *AgentEngine) StartProcess(opts *process.StartProcess) (ProcessHandle, e
 		wantsPrivilege,
 		g.privilegeSession,
 	)
+	if err != nil {
+		// StartProcess has already returned a PID. Roll back even when the
+		// operation context was canceled during stream setup.
+		if cleanupCtx := g.selectCleanupContext(); cleanupCtx != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(cleanupCtx), processCleanupTimeout)
+			defer cancel()
+			if killErr := killAgentProcess(cleanupCtx, resp.Pid, g.client, wantsPrivilege, g.privilegeSession); killErr != nil {
+				logx.FromContext(cleanupCtx).WithError(killErr).Warnf("failed to terminate process %d after stream setup failed", resp.Pid)
+			}
+		}
+		return nil, err
+	}
+	return handle, nil
 }
 
 func (g *AgentEngine) CreateTempDir() (string, error) {
@@ -367,22 +422,31 @@ func (g *AgentEngine) WriteUserMessage(level string, message string) {
 }
 
 func (g *AgentEngine) StartProgressTracker(id string) error {
+	if g.progressETAs[id] == nil {
+		g.progressETAs[id] = progress.NewStartedETAEstimator()
+	}
 	g.stagesInFlight = append(g.stagesInFlight, id)
 	g.notifier.OnStageStart(notifiers.StageInfo{Name: id})
 	return nil
 }
 
 func (g *AgentEngine) UpdateProgress(id, message string, percent float64) error {
+	var remaining *uint64
+	if eta := g.progressETAs[id]; eta != nil {
+		remaining = eta.Update(int64(percent), 100)
+	}
 	g.notifier.OnStageProgress(notifiers.StageInfo{Name: id}, notifiers.StageProgress{
-		Sent:    int64(percent),
-		Max:     100,
-		Unit:    notifiers.UnitPercent,
-		Message: message,
+		Sent:                      int64(percent),
+		Max:                       100,
+		Unit:                      notifiers.UnitPercent,
+		Message:                   message,
+		EstimatedRemainingSeconds: remaining,
 	})
 	return nil
 }
 
 func (g *AgentEngine) EndProgress(id string) error {
+	delete(g.progressETAs, id)
 	g.stagesInFlight = util.RemoveFirst(g.stagesInFlight, func(i int) bool { return g.stagesInFlight[i] == id })
 	g.notifier.OnStageEnd(notifiers.StageInfo{Name: id}, nil)
 	return nil
@@ -403,7 +467,9 @@ func (g *AgentEngine) CreateRunFile(path string) (FileHandle, error) {
 		file: file,
 	}
 
+	g.hostFilesMu.Lock()
 	g.hostFiles = append(g.hostFiles, handle)
+	g.hostFilesMu.Unlock()
 
 	return handle, nil
 }
@@ -417,7 +483,11 @@ func (g *AgentEngine) ReadHostFile(path string) (string, error) {
 }
 
 func (g *AgentEngine) closeHostFiles() {
-	for _, handle := range g.hostFiles {
+	g.hostFilesMu.Lock()
+	hostFiles := append([]*hostFileHandle(nil), g.hostFiles...)
+	g.hostFiles = nil
+	g.hostFilesMu.Unlock()
+	for _, handle := range hostFiles {
 		if err := handle.Close(); err != nil {
 			logx.FromContext(g.execCtx).Warnf("failed to close host file %s: %v", handle.path, err)
 		}
@@ -441,14 +511,12 @@ func (g *AgentEngine) rmTempDir(ctx context.Context, path string) error {
 	}
 
 	// Attempt 2. Privilege path
-	if g.rootWorkerEnabled {
-		commonPermissionErr := message.New(message.AgentFsutilCommonPermissionError)
-		if errors.Is(message.FromGRPCStatus(err), commonPermissionErr) {
-			err = g.privilegeSession.Invoke(ctx, "Rm", func(privCtx context.Context) error {
-				_, callErr := g.client.Rm(privCtx, req)
-				return callErr
-			})
-		}
+	commonPermissionErr := message.New(message.AgentFsutilCommonPermissionError)
+	if errors.Is(message.FromGRPCStatus(err), commonPermissionErr) {
+		err = g.privilegeSession.Invoke(ctx, "Rm", func(privCtx context.Context) error {
+			_, callErr := g.client.Rm(privCtx, req)
+			return callErr
+		})
 	}
 	return err
 }

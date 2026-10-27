@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
 
+	targetagentproto "github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/grpcserver"
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
-	targetagentproto "github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 func TestConcreteClientSupplier(t *testing.T) {

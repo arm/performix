@@ -13,6 +13,10 @@ const { buildJavaAnalysisRender } = require('./lib/java_analysis_render');
 const {
   NEOPROF_TIMELINE_BIN_DURATIONS_NS,
 } = require('../tool-integrations/neoprof_timeline');
+const {
+  CPU_CYCLES,
+  COUNTER_CAPABILITY_COMPONENT_TYPE,
+} = require('../tool-integrations/tool_capabilities');
 
 const TOOL_NEOPROF = { name: 'neoprof', version: '1.1.0' };
 const TOOL_WPERF = { name: 'wperf', version: '1.0.1' };
@@ -21,10 +25,7 @@ const NEOPROF_TIMELINE_COUNTER_PARQUET_PATTERN =
   'tool/neoprof/0/output/parquet/timeline/key_type=*/series_id=*/bin_duration=*/counter.parquet';
 const NEOPROF_TIMELINE_CAPTURE_METADATA_PATTERN =
   'tool/neoprof/0/output/parquet/metadata/capture_metadata.json';
-const COUNTER_CAPABILITY_COMPONENT_TYPE = {
-  name: 'tool_capabilities/counter',
-  version: '1.0',
-};
+const DELTA_COUNTER_CLASS = 0;
 const readinessMessageCode =
   'engine.recipeparser.js_recipe_stage.READINESS_MESSAGE';
 const telemetrySpecificationUnavailableMessageCode =
@@ -43,7 +44,7 @@ var recipe = {
   api_version: '1.0.2',
   status: 'stable',
   description:
-    'The Code Hotspots recipe shows which parts of your code consume the most CPU time. It helps you quickly find and fix performance bottlenecks by identifying the functions and lines where optimization will have the most impact.',
+    'Find the functions and source lines that consume the most CPU time.',
   deployments: [
     {
       appliesTo: [{ architecture: 'aarch64', os: 'Windows' }],
@@ -274,6 +275,39 @@ function buildNeoprofParams(context, samplingFreq) {
 }
 
 /**
+ * Windows keeps sample-only collection until its CPU counter support is delivered.
+ * @param {import("./docs/jsdocs").RunExecutionContext|import("./docs/jsdocs").ReadyExecutionContext} context
+ * @returns {import("./docs/jsdocs").CapabilityRequest|undefined}
+ */
+function getCPUCapabilityRequest(context) {
+  if (isWindowsTarget(context.targetInfo())) return undefined;
+  return context.isNeoprofTimelineEnabled()
+    ? { required: [CPU_CYCLES], optional: [] }
+    : { required: [], optional: [] };
+}
+
+/**
+ * Use the same invocation configuration and capability request in readiness and capture.
+ * @param {import("./docs/jsdocs").RunExecutionContext|import("./docs/jsdocs").ReadyExecutionContext} context
+ * @returns {import("./docs/jsdocs").ToolConfigurationsArg}
+ */
+function buildHotspotsToolConfig(context) {
+  const workload = context.getWorkload();
+  const samplingFreq = context.getParameter('sampling_freq');
+  const toolConfigurations = isWindowsTarget(context.targetInfo())
+    ? generateWperfConfig(workload, buildWperfParams(samplingFreq))
+    : generateNeoprofConfig(
+        workload,
+        buildNeoprofParams(context, samplingFreq),
+      );
+  const capabilityRequest = getCPUCapabilityRequest(context);
+  if (capabilityRequest !== undefined) {
+    toolConfigurations.toolConfigs[0].capabilityRequest = capabilityRequest;
+  }
+  return toolConfigurations;
+}
+
+/**
  * Build the wperf parameter set used by agent-mode invocations.
  * @param {string} samplingFreq
  * @returns {Object.<string, any>}
@@ -326,8 +360,6 @@ function addTelemetrySpecificationWarning(context, advice) {
  * @param {import("./docs/jsdocs").ReadyExecutionContext} context
  */
 function readyHotspots(context) {
-  const workload = context.getWorkload();
-  const samplingFreq = context.getParameter('sampling_freq');
   const targetInfo = context.targetInfo();
   const hostReformatEnabled = context.getParameter('reformat_on_host');
   const collectJavaStacks = context.getParameter('collect_java_stacks');
@@ -337,9 +369,9 @@ function readyHotspots(context) {
   const richDataCaptureEnabled = context.getParameter('rich_data_capture');
 
   if (isWindowsTarget(targetInfo)) {
-    const tools = generateWperfConfig(workload, buildWperfParams(samplingFreq));
-    const toolResponses = context.probeTools(tools);
-    const allAdvice = collectToolAdvice(tools, toolResponses);
+    const toolConfigurations = buildHotspotsToolConfig(context);
+    const toolResponses = context.probeTools(toolConfigurations);
+    const allAdvice = collectToolAdvice(toolConfigurations, toolResponses);
     if (collectJitDumpsEnabled) {
       allAdvice.push({
         ToolName: TOOL_WPERF.name,
@@ -386,16 +418,16 @@ function readyHotspots(context) {
     };
   }
 
-  const params = buildNeoprofParams(context, samplingFreq);
+  const toolConfigurations = buildHotspotsToolConfig(context);
+  const neoprofConfig = toolConfigurations.toolConfigs[0];
   // The GUI probes readiness before a workload has necessarily been selected.
   // Defer Java-specific tool checks until the workload type is known.
-  if (enableJavaAnalysis && !workload.Type) {
-    params.collect_java_stacks = false;
-    params.collect_jfr = false;
+  if (enableJavaAnalysis && !neoprofConfig.workload.Type) {
+    neoprofConfig.params.collect_java_stacks = false;
+    neoprofConfig.params.collect_jfr = false;
   }
-  const tools = generateNeoprofConfig(workload, params);
-  const toolResponses = context.probeTools(tools);
-  const allAdvice = collectToolAdvice(tools, toolResponses);
+  const toolResponses = context.probeTools(toolConfigurations);
+  const allAdvice = collectToolAdvice(toolConfigurations, toolResponses);
   if (enableJavaAnalysis) {
     if (isAndroidTarget(targetInfo)) {
       allAdvice.push(
@@ -458,21 +490,7 @@ function javaAnalysisUnsupportedAdvice(toolName, mode) {
  * @param {import("./docs/jsdocs").RunExecutionContext} context
  */
 function runHotspots(context) {
-  const samplingFreq = context.getParameter('sampling_freq');
-  const workload = context.getWorkload();
-  const targetInfo = context.targetInfo();
-  const windowsTarget = isWindowsTarget(targetInfo);
-
-  if (windowsTarget) {
-    context.runTools(
-      generateWperfConfig(workload, buildWperfParams(samplingFreq)),
-    );
-    return;
-  }
-
-  context.runTools(
-    generateNeoprofConfig(workload, buildNeoprofParams(context, samplingFreq)),
-  );
+  context.runTools(buildHotspotsToolConfig(context));
 }
 
 /**
@@ -528,7 +546,12 @@ function getRenderParameterIfExists(context, parameterId) {
  * invocation that produced the timeline components.
  *
  * @param {import("./docs/jsdocs").RenderExecutionContext} context
- * @returns {Map<string, {title: string, description: string, units: string}>}
+ * @returns {Map<string, {
+ *   title: string,
+ *   description: string,
+ *   units: string,
+ *   counterClass: number | null,
+ * }>}
  */
 function getTimelineCounterMetadata(context) {
   const capabilities = context
@@ -575,6 +598,15 @@ function getTimelineCounterMetadata(context) {
     if (typeof payload.units !== 'string') {
       throw new Error('Timeline counter capability units must be a string');
     }
+    if (
+      payload.counter_class !== undefined &&
+      (!Number.isSafeInteger(payload.counter_class) ||
+        payload.counter_class < 0)
+    ) {
+      throw new Error(
+        'Timeline counter capability counter_class must be a non-negative safe integer',
+      );
+    }
     const seriesKey = `key_${payload.key_type}_series_${payload.series_id}`;
     if (metadataBySeriesKey.has(seriesKey)) {
       throw new Error(`Duplicate timeline counter metadata for ${seriesKey}`);
@@ -584,10 +616,42 @@ function getTimelineCounterMetadata(context) {
       title: payload.title,
       description: payload.description,
       units: payload.units,
+      counterClass: payload.counter_class ?? null,
     });
   }
 
   return metadataBySeriesKey;
+}
+
+/**
+ * Use only concrete counter series bound by the saved logical CPU capability.
+ * @param {import("./docs/jsdocs").RenderExecutionContext} context
+ */
+function getHotspotsTimelineBindings(context) {
+  const capabilities = context
+    .getToolCapabilities(0, {
+      toolName: TOOL_NEOPROF.name,
+      invocationIndex: 0,
+    })
+    .list();
+  const cycles = capabilities[CPU_CYCLES];
+  if (!cycles || !['collected', 'incomplete'].includes(cycles.state)) {
+    return [];
+  }
+  const metadataBySeriesKey = getTimelineCounterMetadata(context);
+  const verifiedSeries = new Set();
+  // The engine validates saved bindings and their counter identities when loading
+  // Run capabilities. Here we select the timeline files for those bindings.
+  for (const binding of cycles.payload.bindings) {
+    const payload = capabilities[binding.seriesCapabilityId].payload;
+    const seriesKey = `key_${payload.key_type}_series_${payload.series_id}`;
+    if (metadataBySeriesKey.has(seriesKey)) verifiedSeries.add(seriesKey);
+  }
+  return findTimelineCounterBindings(
+    context,
+    0,
+    NEOPROF_TIMELINE_COUNTER_PARQUET_PATTERN,
+  ).filter((binding) => verifiedSeries.has(binding.rawSeriesKey));
 }
 
 const timeRangeFilter = {
@@ -1433,15 +1497,26 @@ function renderHotspots(context) {
         },
   ];
 
-  if (context.isNeoprofTimelineEnabled() && !isComparison) {
-    const timelineBindings = findTimelineCounterBindings(
-      context,
-      0,
-      NEOPROF_TIMELINE_COUNTER_PARQUET_PATTERN,
-    );
+  if (
+    tool.name === TOOL_NEOPROF.name &&
+    context.isNeoprofTimelineEnabled() &&
+    !isComparison
+  ) {
+    const timelineBindings = getHotspotsTimelineBindings(context);
     if (timelineBindings.length > 0) {
+      const metadataBySeriesKey = getTimelineCounterMetadata(context);
+      const supportedTimelineBindings = timelineBindings.filter((binding) => {
+        const counterClass = metadataBySeriesKey.get(
+          binding.rawSeriesKey,
+        )?.counterClass;
+        return (
+          counterClass === null ||
+          counterClass === undefined ||
+          counterClass === DELTA_COUNTER_CLASS
+        );
+      });
       const timelineSourceBundle = buildTimelineSQLRendererBundle({
-        bindings: timelineBindings,
+        bindings: supportedTimelineBindings,
       });
       if (timelineSourceBundle.renderers.length > 0) {
         const captureMetadataComponents = context.listRunComponents(
@@ -1465,7 +1540,7 @@ function renderHotspots(context) {
             captureMetadata,
             expectedBinDurations: NEOPROF_TIMELINE_BIN_DURATIONS_NS,
             incompleteCatalogueMessageCode: timelineDataIncompleteMessageCode,
-            metadataBySeriesKey: getTimelineCounterMetadata(context),
+            metadataBySeriesKey,
           });
 
           renderers.push(...timelineSourceBundle.renderers);
@@ -1496,6 +1571,14 @@ function renderHotspots(context) {
     'tool/neoprof/0/java/parquet',
     visualizations,
   );
+
+  // Code Hotspots uses the shared zoom bar as its only time-axis title.
+  for (const visualization of javaRender.ui.visualizations) {
+    if (visualization.type !== 'timeline') continue;
+    for (const group of Object.values(visualization.config.groups)) {
+      group.config.xAxisTitle = '';
+    }
+  }
 
   return {
     renderers: [...renderers, ...javaRender.renderers],

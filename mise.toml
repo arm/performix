@@ -2,8 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [tools]
-go = "1.27.0"
+go = "1.27.2"
+goreleaser = "2.18.1"
 python = "3.10"
 "github:go-task/task" = "v3.50.0"
-"github:protocolbuffers/protobuf" = "v23.4"
+mockery = "3.8.1"
 "npm:@modelcontextprotocol/inspector" = "2.6.0"
+protoc = "23.4"
+protoc-gen-go = "1.34.2"
+protoc-gen-go-grpc = "1.4.0"
+
+# DuckDB's prebuilt Windows libraries still reference the emulated TLS wrapper
+# symbols __emutls_v._ZSt11__once_call and __emutls_v._ZSt15__once_callable.
+# GCC 16 switched MinGW-w64 libstdc++ to native TLS and no longer supplies
+# those symbols, so Windows x86_64 builds require GCC 15.
+# See:
+# https://www.msys2.org/news/#2026-05-11-native-thread-local-storage-tls-with-gcc-16
+[tools."github:niXman/mingw-builds-binaries"]
+version = "15.2.0-rt_v13-rev1"
+os = ["windows/x64"]
+asset_pattern = "x86_64-15.2.0-release-posix-seh-ucrt-rt_v13-rev1.7z"
+bin_path = "mingw64/bin"

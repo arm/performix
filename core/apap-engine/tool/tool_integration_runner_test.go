@@ -18,11 +18,10 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
-	"github.com/Arm-Debug/apap-cli/apap-engine/run"
-	run_mocks "github.com/Arm-Debug/apap-cli/apap-engine/run/mocks"
 )
 
 /* ---------- Test Doubles ---------- */
@@ -41,6 +40,10 @@ type FakeToolInstance struct {
 	Cancelled                 atomic.Bool
 	immediateExit             bool
 	probeError                error
+	probeResult               ProbeResult
+	probeStarted              chan struct{}
+	probeRelease              chan struct{}
+	runtimeCleaned            chan struct{}
 	runError                  error
 	cancelError               error
 	stopError                 error
@@ -76,6 +79,18 @@ func WithProbeError(err error) FakeToolOption {
 	return func(f *FakeToolInstance) { f.probeError = err }
 }
 
+func WithProbeResult(result ProbeResult) FakeToolOption {
+	return func(f *FakeToolInstance) { f.probeResult = result }
+}
+
+func WithBlockingProbe(started, release, runtimeCleaned chan struct{}) FakeToolOption {
+	return func(f *FakeToolInstance) {
+		f.probeStarted = started
+		f.probeRelease = release
+		f.runtimeCleaned = runtimeCleaned
+	}
+}
+
 func WithCancelError(err error) FakeToolOption {
 	return func(f *FakeToolInstance) { f.cancelError = err }
 }
@@ -102,12 +117,20 @@ func (f *FakeToolInstance) Properties() IntegrationProperties {
 }
 
 func (f *FakeToolInstance) StartRuntime() (func(), error) {
-	return func() {}, nil
+	return func() {
+		if f.runtimeCleaned != nil {
+			close(f.runtimeCleaned)
+		}
+	}, nil
 }
 
 func (f *FakeToolInstance) Probe() (ProbeResult, error) {
 	f.ProbeCalled.Store(true)
-	return ProbeResult{}, f.probeError
+	if f.probeStarted != nil {
+		close(f.probeStarted)
+		<-f.probeRelease
+	}
+	return f.probeResult, f.probeError
 }
 
 func (f *FakeToolInstance) Run() error {
@@ -152,6 +175,14 @@ func (f *FakeToolInstance) NotifyCollectionFinished() {
 type FakeToolFactory struct {
 	createInstance func() *FakeToolInstance
 	createError    error
+}
+
+type capabilityFakeToolFactory struct {
+	*FakeToolFactory
+}
+
+func (*capabilityFakeToolFactory) CapabilityInterfaceVersion() string {
+	return capabilities.CPUCounterVersion
 }
 
 func (f *FakeToolFactory) NewIntegration(ctx *IntegrationContext) (ToolIntegration, error) {
@@ -231,16 +262,14 @@ func newMockFileCollector() *MockFileCollector {
 
 func runSync(tr *Registry) []error {
 	twoCtx := newTwoCtx()
-	dummyBuilder := &run.RunBuilder{}
 	setupMockFileCollector(twoCtx)
-	return RunAndReformatToolIntegrations(make(chan struct{}), make(chan struct{}), twoCtx, tr, newTestManifestUpdater(dummyBuilder))
+	return RunAndReformatToolIntegrations(make(chan struct{}), make(chan struct{}), twoCtx, tr, nil)
 }
 
 func runAsync(tr *Registry, stop, cancel bool, waitToCancel *sync.WaitGroup) []error {
 	stopCh := make(chan struct{})
 	cancelCh := make(chan struct{})
 	done := make(chan []error, 1)
-	dummyBuilder := &run.RunBuilder{}
 
 	if stop {
 		close(stopCh)
@@ -254,7 +283,7 @@ func runAsync(tr *Registry, stop, cancel bool, waitToCancel *sync.WaitGroup) []e
 	twoCtx := newTwoCtx()
 	setupMockFileCollector(twoCtx)
 	go func() {
-		done <- RunAndReformatToolIntegrations(stopCh, cancelCh, twoCtx, tr, newTestManifestUpdater(dummyBuilder))
+		done <- RunAndReformatToolIntegrations(stopCh, cancelCh, twoCtx, tr, nil)
 	}()
 
 	// Wait for signal before cancelling
@@ -266,14 +295,7 @@ func runAsync(tr *Registry, stop, cancel bool, waitToCancel *sync.WaitGroup) []e
 	return <-done
 }
 
-func newTestManifestUpdater(builder *run.RunBuilder) *run.RunManifestUpdater {
-	runWriter := &run_mocks.MockRunWriter{}
-	runWriter.On("WriteManifest", mock.Anything).Return(nil)
-	return run.NewRunManifestUpdater(builder, runWriter)
-}
-
 func TestRunTool(t *testing.T) {
-	dummyBuilder := &run.RunBuilder{}
 
 	t.Run("Integration creation fails is reflected", func(t *testing.T) {
 		tr := NewToolRegistry()
@@ -285,7 +307,7 @@ func TestRunTool(t *testing.T) {
 		)
 
 		// Run with one context expecting "fake-tool" but integration creation fails.
-		errs := RunAndReformatToolIntegrations(nil, nil, []IntegrationContext{{Name: "fake-tool", Version: "1.0"}}, tr, newTestManifestUpdater(dummyBuilder))
+		errs := RunAndReformatToolIntegrations(nil, nil, []IntegrationContext{{Name: "fake-tool", Version: "1.0"}}, tr, nil)
 
 		require.Len(t, errs, 1)
 		assert.ErrorContains(t, errs[0], "creation failed")
@@ -298,7 +320,7 @@ func TestRunTool(t *testing.T) {
 			make(chan struct{}),
 			[]IntegrationContext{{Name: "missing-tool", Version: "9.9"}},
 			NewToolRegistry(), // Empty registry — no tools registered.
-			newTestManifestUpdater(dummyBuilder),
+			nil,
 		)
 
 		require.Len(t, errs, 1)
@@ -356,7 +378,7 @@ func TestRunTool(t *testing.T) {
 					Ctx:                   ctx,
 					DefaultEngineLocality: EngineLocality{FileCollector: newMockFileCollector()},
 				},
-			}, tr, newTestManifestUpdater(dummyBuilder))
+			}, tr, nil)
 		}()
 		close(cancelCh)
 
@@ -398,7 +420,7 @@ func TestRunTool(t *testing.T) {
 					Ctx:                   ctx,
 					DefaultEngineLocality: EngineLocality{FileCollector: newMockFileCollector()},
 				},
-			}, tr, newTestManifestUpdater(dummyBuilder))
+			}, tr, nil)
 		}()
 		close(stopCh)
 
@@ -523,7 +545,7 @@ func TestProbeTool(t *testing.T) {
 		)
 
 		// Probe with one context expecting "fake-tool" but integration creation fails.
-		_, errs := ProbeTools([]IntegrationContext{{Name: "fake-tool", Version: "1.0"}}, tr)
+		_, errs := ProbeTools([]IntegrationContext{{Name: "fake-tool", Version: "1.0"}}, tr, nil)
 
 		require.Len(t, errs, 1)
 		assert.ErrorContains(t, errs[0], "creation failed")
@@ -534,6 +556,7 @@ func TestProbeTool(t *testing.T) {
 		_, errs := ProbeTools(
 			[]IntegrationContext{{Name: "missing-tool", Version: "9.9"}},
 			NewToolRegistry(), // Empty registry — no tools registered.
+			nil,
 		)
 
 		require.Len(t, errs, 1)
@@ -551,7 +574,7 @@ func TestProbeTool(t *testing.T) {
 		})
 
 		twoCtx := newTwoCtx()
-		_, errs := ProbeTools(twoCtx, tr)
+		_, errs := ProbeTools(twoCtx, tr, nil)
 		require.Len(t, errs, 2)
 		assert.NoError(t, errs[0])
 		assert.ErrorContains(t, errs[1], "probe failed")
@@ -559,6 +582,106 @@ func TestProbeTool(t *testing.T) {
 		require.Len(t, *inst, 2)
 		assert.True(t, (*inst)[0].ProbeCalled.Load())
 	})
+
+	t.Run("Cancellation waits for probe and runtime cleanup", func(t *testing.T) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		cleaned := make(chan struct{})
+		tr, instances := CreateFakeToolFactory(func() *FakeToolInstance {
+			return NewFakeToolInstance(WithBlockingProbe(started, release, cleaned))
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan []error, 1)
+		go func() {
+			_, errs := ProbeTools([]IntegrationContext{{Name: "fake-tool", Version: "1.0", Ctx: ctx}}, tr, nil)
+			done <- errs
+		}()
+
+		<-started
+		cancel()
+		require.Eventually(t, func() bool { return (*instances)[0].Cancelled.Load() }, time.Second, time.Millisecond)
+		select {
+		case <-done:
+			t.Fatal("ProbeTools returned before the active probe settled")
+		default:
+		}
+		close(release)
+		errs := <-done
+		require.ErrorIs(t, errs[0], context.Canceled)
+		select {
+		case <-cleaned:
+		default:
+			t.Fatal("ProbeTools returned before runtime cleanup completed")
+		}
+	})
+}
+
+func TestEngineEntryPointsNormalizeCapabilityRequests(t *testing.T) {
+	available := ProbeResult{
+		Available: true,
+		Capabilities: map[string]any{
+			"counter.cpu_cycles": capabilities.CPUCounterValue{
+				ComponentType: capabilities.ComponentType{Name: capabilities.CPUCounter, Version: capabilities.CPUCounterVersion},
+				State:         capabilities.CPUCounterStateAvailable,
+				Payload:       capabilities.CPUCounterPayload{Title: "CPU Cycles", Units: "cycles", Bindings: []capabilities.CPUCounterBinding{}},
+			},
+		},
+	}
+	registry := func() *Registry {
+		reg := NewToolRegistry()
+		reg.RegisterTool(&capabilityFakeToolFactory{FakeToolFactory: &FakeToolFactory{
+			createInstance: func() *FakeToolInstance {
+				return NewFakeToolInstance(WithProbeResult(available))
+			},
+		}})
+		return reg
+	}
+	request := func(required, optional []string) *capabilities.CapabilityRequest {
+		return &capabilities.CapabilityRequest{Required: required, Optional: optional}
+	}
+
+	for _, test := range []struct {
+		name    string
+		request func() *capabilities.CapabilityRequest
+		valid   bool
+	}{
+		{"nil_required", func() *capabilities.CapabilityRequest { return request(nil, []string{}) }, false},
+		{"nil_optional", func() *capabilities.CapabilityRequest { return request([]string{}, nil) }, false},
+		{"duplicate_ids", func() *capabilities.CapabilityRequest {
+			return request([]string{"counter.cpu_cycles", "counter.cpu_cycles"}, []string{})
+		}, true},
+		{"required_optional_overlap", func() *capabilities.CapabilityRequest {
+			return request([]string{"counter.cpu_cycles"}, []string{"counter.cpu_cycles"})
+		}, false},
+	} {
+		for _, entry := range []string{"prepare", "probe"} {
+			t.Run(entry+"_"+test.name, func(t *testing.T) {
+				ctx := IntegrationContext{
+					Name: "fake-tool", Version: "1.0", Ctx: context.Background(),
+					CapabilityRequest: test.request(), Discovery: &available,
+				}
+				if entry == "prepare" {
+					prepared, errs := PrepareToolIntegrations([]IntegrationContext{ctx}, registry())
+					if !test.valid {
+						require.ErrorContains(t, errors.Join(errs...), "engine.tool.COUNTER_COLLECTION_INVALID")
+						require.Nil(t, prepared)
+						return
+					}
+					require.NoError(t, errors.Join(errs...))
+					require.Equal(t, []string{"counter.cpu_cycles"}, prepared.contexts[0].CapabilityRequest.Required)
+					return
+				}
+
+				results, errs := ProbeTools([]IntegrationContext{ctx}, registry(), nil)
+				if !test.valid {
+					require.ErrorContains(t, errors.Join(errs...), "engine.tool.COUNTER_COLLECTION_INVALID")
+					return
+				}
+				require.NoError(t, errors.Join(errs...))
+				require.Len(t, results, 1)
+			})
+		}
+	}
 }
 
 // TestTimeoutFallback exercises the engine-level graceful timeout fallback added to
@@ -678,4 +801,117 @@ func TestCollectionFinishedTimeout(t *testing.T) {
 			assertFlags(t, inst, expectedFlags{ran: true, stopped: true})
 		})
 	}
+}
+
+func (m *MockFileCollector) PublishCapabilityComponent(entity string, typ cdf.ComponentType, relative string, write func(string) error) error {
+	args := m.Called(entity, typ, relative)
+	if err := args.Error(1); err != nil {
+		return err
+	}
+	return write(args.String(0))
+}
+
+// Hooks exercise cancellation at phase boundaries without timing-dependent sleeps.
+type capabilityPhaseTool struct {
+	*FakeToolInstance
+	runPhase      func() error
+	reformatPhase func() error
+}
+
+func (t *capabilityPhaseTool) Run() error      { return t.runPhase() }
+func (t *capabilityPhaseTool) Reformat() error { return t.reformatPhase() }
+
+func TestCapabilityCancellationDoesNotPublishOutcomes(t *testing.T) {
+	for _, phase := range []string{"record", "reformat"} {
+		for _, signal := range []string{"channel", "context", "error"} {
+			for _, staged := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/staged=%t", phase, signal, staged), func(t *testing.T) {
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					cancelCh := make(chan struct{})
+					contexts := []IntegrationContext{{Ctx: ctx, CapabilityRequest: &capabilities.CapabilityRequest{
+						Required: []string{}, Optional: []string{"counter.cpu_cycles"},
+					}}}
+					publications := 0
+					cancelPhase := func() error {
+						switch signal {
+						case "channel":
+							close(cancelCh)
+						case "context":
+							cancel()
+						case "error":
+							return context.Canceled
+						}
+						return nil // A tool can finish normally while cancellation arrives.
+					}
+					instance := &capabilityPhaseTool{FakeToolInstance: NewFakeToolInstance()}
+					instance.runPhase = func() error {
+						if staged {
+							contexts[0].StageCPUCounterOutcome("counter.cpu_cycles", capabilities.CPUCounterValue{State: "collected"}, func(capabilities.CPUCounterValue) error {
+								publications++
+								return nil
+							})
+						}
+						if phase == "record" {
+							return cancelPhase()
+						}
+						return nil
+					}
+					instance.reformatPhase = func() error {
+						assert.Equal(t, "reformat", phase, "cancelled recording must not reformat")
+						return cancelPhase()
+					}
+					prepared := &PreparedToolIntegrations{contexts: contexts, integrations: []ToolIntegration{instance}}
+					errs := RunAndReformatPreparedToolIntegrations(make(chan struct{}), cancelCh, prepared, nil)
+					require.ErrorIs(t, errs[0], errToolRunCancelled)
+					require.Zero(t, publications)
+					require.Empty(t, contexts[0].counterOutcomes.published)
+					require.Empty(t, contexts[0].counterOutcomes.staged)
+				})
+			}
+		}
+	}
+}
+
+func TestCapabilityFailurePreservesOriginalError(t *testing.T) {
+	original := errors.New("recording failed")
+	publication := errors.New("outcome publication failed")
+	ic := IntegrationContext{
+		Ctx:               context.Background(),
+		CapabilityRequest: &capabilities.CapabilityRequest{Required: []string{"counter.cpu_cycles"}},
+		counterOutcomes: &counterOutcomeSet{
+			published: map[string]capabilities.CPUCounterValue{},
+			staged: map[string]stagedCounterOutcome{
+				"counter.cpu_cycles": {
+					value:   capabilities.CPUCounterValue{State: "collected"},
+					publish: func(capabilities.CPUCounterValue) error { return publication },
+				},
+			},
+		},
+	}
+	err := finishCapabilityFailure(&ic, nil, original, capabilities.CPUCounterReasonRecordFailed)
+	require.ErrorIs(t, err, original)
+	require.ErrorIs(t, err, publication)
+	require.Empty(t, ic.counterOutcomes.published, "a failed write must not claim publication")
+	require.Len(t, ic.counterOutcomes.staged, 1, "do not replace a staged result after publication fails")
+
+	ic.counterOutcomes.staged["counter.cpu_cycles"] = stagedCounterOutcome{
+		value:   capabilities.CPUCounterValue{State: "collected"},
+		publish: func(capabilities.CPUCounterValue) error { return nil },
+	}
+	err = finishCapabilityFailure(&ic, nil, original, capabilities.CPUCounterReasonRecordFailed)
+	require.Same(t, original, err, "successful publication must return the original error unchanged")
+}
+
+func TestCapabilityFailureWithoutExecutionContext(t *testing.T) {
+	original := errors.New("recording failed")
+	ic := IntegrationContext{}
+	require.NoError(t, finishCapabilityFailure(&ic, nil, nil, capabilities.CPUCounterReasonRecordFailed))
+	require.Same(t, original, finishCapabilityFailure(&ic, nil, original, capabilities.CPUCounterReasonRecordFailed))
+
+	cancelCh := make(chan struct{})
+	close(cancelCh)
+	err := finishCapabilityFailure(&ic, cancelCh, original, capabilities.CPUCounterReasonRecordFailed)
+	require.ErrorIs(t, err, errToolRunCancelled)
+	require.ErrorIs(t, err, original)
 }

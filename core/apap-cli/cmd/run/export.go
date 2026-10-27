@@ -17,7 +17,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/clijson"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 var ExportCmd = NewExportCmd(client.NewAutostartClient(), run.ExportService{})

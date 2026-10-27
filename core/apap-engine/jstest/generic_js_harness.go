@@ -135,7 +135,20 @@ func (gh *GenericJSHarness) callFunction(
 	err := gh.asyncHelper.RunOnLoopBlock(func(vm *goja.Runtime) error {
 		jsArgs = make([]goja.Value, len(args))
 		for index, arg := range args {
-			jsArgs[index] = vm.ToValue(arg)
+			if ctx, ok := arg.(tool_goja.ToolContext); ok {
+				value, err := tool_goja.BindToolContext(vm, ctx)
+				if err != nil {
+					return err
+				}
+				// Keep the harness metadata map shared so tests can inspect state
+				// changes and pass them between separate lifecycle calls.
+				if err := value.Set("metadata", ctx.Metadata); err != nil {
+					return err
+				}
+				jsArgs[index] = value
+			} else {
+				jsArgs[index] = vm.ToValue(arg)
+			}
 		}
 
 		return nil
@@ -362,6 +375,7 @@ const (
 
 type loadOptions struct {
 	exposePerformixGlobal bool
+	registerXMLModule     bool
 }
 
 // LoadOption configures how a JavaScript file is loaded.
@@ -370,6 +384,11 @@ type LoadOption func(*loadOptions)
 // WithPerformixGlobal exposes Performix metadata through globalThis.performix.
 var WithPerformixGlobal LoadOption = func(options *loadOptions) {
 	options.exposePerformixGlobal = true
+}
+
+// WithXMLModule registers the bounded performix/xml parser used by tool helpers.
+var WithXMLModule LoadOption = func(options *loadOptions) {
+	options.registerXMLModule = true
 }
 
 // LoadJSModule loads a CommonJS module and resolves functions from its exports.
@@ -407,7 +426,7 @@ func loadJSFile(
 	}
 
 	// Load file
-	resolvedPath := resolveJSFilePath(t, relativePath)
+	resolvedPath := resolveSourceFilePath(t, relativePath)
 	sourceFileName := filepath.Base(resolvedPath)
 	data, err := os.ReadFile(resolvedPath)
 	require.NoError(t, err, "failed to read requested JS file")
@@ -436,6 +455,9 @@ func loadJSFile(
 		require.NoError(t, err, "failed to compile requested JS file")
 	default:
 		require.FailNow(t, fmt.Sprintf("unsupported JavaScript file type: %v", fileType))
+	}
+	if options.registerXMLModule {
+		gojautils.RegisterXML(registry)
 	}
 
 	// Create generic JS harness

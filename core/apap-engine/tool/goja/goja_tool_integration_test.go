@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -110,7 +111,7 @@ func integrationContext(engine tool.Engine, ic *tool.IntegrationContext) *tool.I
 		if name != locality.Target {
 			return tool.EngineLocality{}, errors.New("unsupported locality")
 		}
-		return tool.EngineLocality{Engine: engine, FileCollector: ic.DefaultEngineLocality.FileCollector, ToolsRoot: "/target/tools"}, nil
+		return tool.EngineLocality{Engine: engine, FileCollector: ic.DefaultEngineLocality.FileCollector, CapabilityPublisher: ic.DefaultEngineLocality.CapabilityPublisher, ToolsRoot: "/target/tools"}, nil
 	}
 	return ic
 }
@@ -361,6 +362,48 @@ let tool = {
 		assert.Equal(t, "some stdErr", cmdRes.Get("stderr").String())
 	})
 
+	t.Run("process bindings reject values with invalid types", func(t *testing.T) {
+		tests := []struct {
+			name string
+			call string
+		}{
+			{name: "numeric command argument", call: `engine.execCommand(["echo", 7], {})`},
+			{name: "numeric environment value", call: `engine.execCommand(["echo"], {environment: {KEY: 7}})`},
+			{name: "array environment value", call: `engine.execCommand(["echo"], {environment: {KEY: []}})`},
+			{name: "object working directory", call: `engine.execCommand(["echo"], {workingDirectory: {path: "/tmp"}})`},
+			{name: "numeric affinity value", call: `engine.startProcess(["echo"], {affinity: [0]})`},
+			{name: "boolean redirect mode", call: `engine.startProcess(["echo"], {stdout: {redirect: true}})`},
+			{name: "null command argument", call: `engine.execCommand(["echo", null], {})`},
+			{name: "null environment value", call: `engine.execCommand(["echo"], {environment: {KEY: null}})`},
+			{name: "null working directory", call: `engine.execCommand(["echo"], {workingDirectory: null})`},
+			{name: "null affinity value", call: `engine.startProcess(["echo"], {affinity: [null]})`},
+			{name: "null redirect mode", call: `engine.startProcess(["echo"], {stdout: {redirect: null}})`},
+			{name: "null redirect options", call: `engine.startProcess(["echo"], {stdout: null})`},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				runSource := fmt.Sprintf(`
+					run: async (engine, ctx) => {
+						await %s
+					},
+				`, tt.call)
+				toolSource := ToolSourceBegin + runSource + ToolSourceEnd
+				engine := &tool_mocks.MockEngineContext{}
+				integration, err := LoadFromSourceNoError(t, toolSource).NewIntegration(integrationContext(engine, nil))
+				require.NoError(t, err)
+
+				integration.(*GojaToolInstance).asyncHelper.StartLoop()
+				err = integration.Run()
+				integration.(*GojaToolInstance).asyncHelper.StopLoop()
+
+				require.Error(t, err)
+				engine.AssertNotCalled(t, "ExecCommand", mock.Anything)
+				engine.AssertNotCalled(t, "StartProcess", mock.Anything)
+			})
+		}
+	})
+
 	t.Run("ToolInstance run, stop, cancel and reformat can be called concurrently", func(t *testing.T) {
 		runSource := `
 			run: async (engine, ctx) => {
@@ -577,7 +620,7 @@ let tool = {
 	t.Run("Process streams (stdout/stderr) can be read", func(t *testing.T) {
 		runSource := `
 			run: async (engine, ctx) => {
-			  processHandle = await engine.startProcess("/bin/ls", {
+			  processHandle = await engine.startProcess(["/bin/ls"], {
 					asPrivileged: true,
 					affinity: [],
 					workingDirectory: "/tmp",
@@ -791,7 +834,7 @@ let tool = {
 		toolSource := ToolSourceBegin + runSource + ToolSourceEnd
 		mec := &tool_mocks.MockEngineContext{}
 		ic := integrationContext(mec, nil)
-		ic.IsFullCaptureSupportEnabled = true
+		ic.FeatureFlags.FullCaptureSupport = true
 		ti, err := LoadFromSourceNoError(t, toolSource).NewIntegration(ic)
 		require.NoError(t, err)
 
@@ -908,12 +951,37 @@ let tool = {
 		mrw.On("WriteManifest", mock.Anything).Return(nil)
 		mrw.On("WriteEntityDirs", mock.Anything).Return(nil)
 		ic := integrationContext(m, nil)
+		ic.FeatureFlags.RunComponentCompression = true
 		ic.DefaultEngineLocality.FileCollector = mockFileCollector
 		ti, err := LoadFromSourceNoError(t, src).NewIntegration(ic)
 		require.NoError(t, err)
 
 		ah := &ti.(*GojaToolInstance).asyncHelper
 
+		ah.StartLoop()
+		require.NoError(t, ti.Run())
+		ah.StopLoop()
+
+		m.AssertExpectations(t)
+	})
+
+	t.Run("ToolInstance emitOutput disables requested compression when the engine feature is disabled", func(t *testing.T) {
+		const suffix = `
+			run: async (engine, ctx) => {
+				engine.emitOutput("out/file", "relPath", {name: "log", version: "0.1"}, {compressed: true})
+			},
+		`
+		mockFileCollector := &tool_mocks.MockFileCollector{}
+		mockFileCollector.On("QueueFileRetrieval", "", "out/file", "relPath", cdf.ComponentType{Name: "log", SchemaVersion: "0.1"}, tool.TransferOptions{}).Return(nil)
+
+		src := ToolSourceBegin + suffix + ToolSourceEnd
+		m := &tool_mocks.MockEngineContext{}
+		ic := integrationContext(m, nil)
+		ic.DefaultEngineLocality.FileCollector = mockFileCollector
+		ti, err := LoadFromSourceNoError(t, src).NewIntegration(ic)
+		require.NoError(t, err)
+
+		ah := &ti.(*GojaToolInstance).asyncHelper
 		ah.StartLoop()
 		require.NoError(t, ti.Run())
 		ah.StopLoop()
@@ -982,9 +1050,9 @@ let tool = {
 			ResolveLocality: func(name string) (tool.EngineLocality, error) {
 				switch name {
 				case "target":
-					return tool.EngineLocality{Engine: targetEngine, FileCollector: targetCollector, ToolsRoot: "/target/tools"}, nil
+					return tool.EngineLocality{Engine: targetEngine, FileCollector: targetCollector, CapabilityPublisher: targetCollector, ToolsRoot: "/target/tools"}, nil
 				case "host":
-					return tool.EngineLocality{Engine: hostEngine, FileCollector: hostCollector, ToolsRoot: "/host/tools"}, nil
+					return tool.EngineLocality{Engine: hostEngine, FileCollector: hostCollector, CapabilityPublisher: hostCollector, ToolsRoot: "/host/tools"}, nil
 				default:
 					return tool.EngineLocality{}, errors.New("unsupported locality")
 				}
@@ -1359,7 +1427,7 @@ let tool = {
 		src := ToolSourceBegin + suffix + ToolSourceEnd
 		m := &tool_mocks.MockEngineContext{}
 		ic := integrationContext(m, nil)
-		ic.IsNeoprofTimelineEnabled = true
+		ic.FeatureFlags.NeoprofTimeline = true
 		ti, err := LoadFromSourceNoError(t, src).NewIntegration(ic)
 		require.NoError(t, err)
 
@@ -1448,6 +1516,7 @@ func TestAddToolCapability(t *testing.T) {
 		integrationCtx := integrationContext(engine, nil)
 		integrationCtx.OutputEntityDir = outputEntityDir
 		integrationCtx.DefaultEngineLocality.FileCollector = fileCollector
+		integrationCtx.DefaultEngineLocality.CapabilityPublisher = fileCollector.(tool.CapabilityPublisher)
 		integration, err := LoadFromSourceNoError(t, source).NewIntegration(integrationCtx)
 		require.NoError(t, err)
 		return integration
@@ -1465,7 +1534,7 @@ func TestAddToolCapability(t *testing.T) {
 		runFilePath := filepath.Join(t.TempDir(), "cpu.json")
 		fileCollector := &tool_mocks.MockFileCollector{}
 		fileCollector.
-			On("AddComponent", outputEntityDir, cdf.ComponentType{Name: "tool-capability", SchemaVersion: "1.0"}, capabilityPath).
+			On("PublishCapabilityComponent", outputEntityDir, cdf.ComponentType{Name: "tool-capability", SchemaVersion: "1.0"}, capabilityPath).
 			Return(runFilePath, nil).
 			Once()
 
@@ -1490,7 +1559,7 @@ func TestAddToolCapability(t *testing.T) {
 
 		targetCollector := &tool_mocks.MockFileCollector{}
 		targetCollector.
-			On("AddComponent", outputEntityDir, cdf.ComponentType{Name: "tool-capability", SchemaVersion: "1.0"}, capabilityPath).
+			On("PublishCapabilityComponent", outputEntityDir, cdf.ComponentType{Name: "tool-capability", SchemaVersion: "1.0"}, capabilityPath).
 			Return(runFilePath, nil).
 			Once()
 		hostCollector := &tool_mocks.MockFileCollector{}
@@ -1520,11 +1589,12 @@ func TestAddToolCapability(t *testing.T) {
 		integrationCtx := integrationContext(targetEngine, nil)
 		integrationCtx.OutputEntityDir = outputEntityDir
 		integrationCtx.DefaultEngineLocality.FileCollector = targetCollector
+		integrationCtx.DefaultEngineLocality.CapabilityPublisher = targetCollector
 		integrationCtx.ResolveLocality = func(name string) (tool.EngineLocality, error) {
 			if name != locality.Host {
 				return tool.EngineLocality{}, errors.New("unsupported locality")
 			}
-			return tool.EngineLocality{Engine: hostEngine, FileCollector: hostCollector}, nil
+			return tool.EngineLocality{Engine: hostEngine, FileCollector: hostCollector, CapabilityPublisher: hostCollector}, nil
 		}
 		integration, err := LoadFromSourceNoError(t, source).NewIntegration(integrationCtx)
 		require.NoError(t, err)
@@ -1533,7 +1603,7 @@ func TestAddToolCapability(t *testing.T) {
 		targetCollector.AssertExpectations(t)
 		targetEngine.AssertExpectations(t)
 		fileHandle.AssertExpectations(t)
-		hostCollector.AssertNotCalled(t, "AddComponent", mock.Anything, mock.Anything, mock.Anything)
+		hostCollector.AssertNotCalled(t, "PublishCapabilityComponent", mock.Anything, mock.Anything, mock.Anything)
 		hostEngine.AssertNotCalled(t, "CreateRunFile", mock.Anything)
 	})
 
@@ -1555,7 +1625,7 @@ func TestAddToolCapability(t *testing.T) {
 
 		fileCollector := &tool_mocks.MockFileCollector{}
 		fileCollector.
-			On("AddComponent", outputEntityDir, cdf.ComponentType{Name: "tool-capability", SchemaVersion: "1.0"}, capabilityPath).
+			On("PublishCapabilityComponent", outputEntityDir, cdf.ComponentType{Name: "tool-capability", SchemaVersion: "1.0"}, capabilityPath).
 			Return(runFilePath, nil).
 			Once()
 
@@ -1584,13 +1654,14 @@ func TestAddToolCapability(t *testing.T) {
 		engine := &tool_mocks.MockEngineContext{}
 		fileCollector := &tool_mocks.MockFileCollector{}
 		fileCollector.
-			On("AddComponent", outputEntityDir, cdf.ComponentType{Name: "tool-capability", SchemaVersion: "1.0"}, filepath.Join("capabilities", capabilityID+".json")).
+			On("PublishCapabilityComponent", outputEntityDir, cdf.ComponentType{Name: "tool-capability", SchemaVersion: "1.0"}, filepath.Join("capabilities", capabilityID+".json")).
 			Return("", internalErr).
 			Once()
 		bound := NewBoundEngineContext(
 			engine,
 			nil,
 			&tool.IntegrationContext{OutputEntityDir: outputEntityDir},
+			fileCollector,
 			fileCollector,
 			registry,
 		)
@@ -1644,7 +1715,7 @@ func TestAddToolCapability(t *testing.T) {
 		vm := goja.New()
 		engine := &tool_mocks.MockEngineContext{}
 		fileCollector := &tool_mocks.MockFileCollector{}
-		bound := NewBoundEngineContext(engine, nil, nil, fileCollector, newCapabilityIDRegistry())
+		bound := NewBoundEngineContext(engine, nil, nil, fileCollector, fileCollector, newCapabilityIDRegistry())
 
 		err := bound.AddToolCapability(
 			"../outside",
@@ -1653,7 +1724,7 @@ func TestAddToolCapability(t *testing.T) {
 		)
 
 		require.ErrorContains(t, err, `addToolCapability: invalid capability ID "../outside"`)
-		fileCollector.AssertNotCalled(t, "AddComponent", mock.Anything, mock.Anything, mock.Anything)
+		fileCollector.AssertNotCalled(t, "PublishCapabilityComponent", mock.Anything, mock.Anything, mock.Anything)
 		engine.AssertNotCalled(t, "CreateRunFile", mock.Anything)
 	})
 
@@ -1662,7 +1733,7 @@ func TestAddToolCapability(t *testing.T) {
 		internalErr := errors.New("create run file failed")
 		fileCollector := &tool_mocks.MockFileCollector{}
 		fileCollector.
-			On("AddComponent", outputEntityDir, cdf.ComponentType{Name: "tool-capability", SchemaVersion: "1.0"}, capabilityPath).
+			On("PublishCapabilityComponent", outputEntityDir, cdf.ComponentType{Name: "tool-capability", SchemaVersion: "1.0"}, capabilityPath).
 			Return(runFilePath, nil).
 			Once()
 

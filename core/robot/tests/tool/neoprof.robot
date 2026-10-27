@@ -209,7 +209,9 @@ Run Code Hotspots Recipe And Kill Sl-Record
   [Arguments]  ${args}  ${killArgs}
   ${timed_args} =  Apply Default Recipe Timeout  --workload "sleep 15" ${args}
   ${process} =  Start ATPerf CLI Command  recipe run code_hotspots ${timed_args}
-  Wait For Matching Process And Kill With Timeout  [s]l-record.*sleep  20  ${killArgs}
+  # The capability probe also includes the workload; only the capture has --capture-log.
+  Wait For Matching Process And Kill With Timeout  [s]l-record.*--capture-log.*sleep  20  ${killArgs}
+  The Last Command Succeeded
   Wait For Process And Log  ${process}
 
 Wait For Matching Process And Kill With Timeout

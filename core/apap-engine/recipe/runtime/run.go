@@ -161,18 +161,14 @@ func (f *RunStageFactory) BuildStages(config *StageConfiguration, notifier notif
 
 			stageNum := i + 1
 			stageCount := len(s)
-			toolDeploymentStage.ProgressCallback = func(sent int64, max int64, _ time.Time) {
+			toolDeploymentStage.ProgressCallback = func(snapshot notifiers.StageProgress) {
 				notifier.OnStageProgress(
 					notifiers.StageInfo{
 						Name:  toolDeploymentStage.Name(),
 						Num:   stageNum,
 						Count: stageCount,
 					},
-					notifiers.StageProgress{
-						Sent: sent,
-						Max:  max,
-						Unit: notifiers.UnitBytes,
-					},
+					snapshot,
 				)
 			}
 			break

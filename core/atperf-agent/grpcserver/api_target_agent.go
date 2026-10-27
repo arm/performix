@@ -17,6 +17,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/android"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/filelock"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/filetransfer"
@@ -25,7 +26,6 @@ import (
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/systeminfo"
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 // gRPC metadata headers to pass privilege information
@@ -170,7 +170,7 @@ func (s *AgentServerAPI) StartProcess(ctx context.Context, req *targetagentproto
 	} else {
 		// Non-privilege path
 		platform, platformErr := systeminfo.GetPlatformType()
-		startProcess.UseGroupController = (platformErr == nil && platform.OS == systeminfo.LinuxType) && startProcess.UseGroupController
+		startProcess.UseGroupController = platformErr == nil && platform.OS == systeminfo.LinuxType
 
 		proc, startErr := s.Pm.StartProcess(startProcess)
 		pid := int32(-1)
@@ -198,7 +198,7 @@ func (s *AgentServerAPI) ExecCommand(ctx context.Context, req *targetagentproto.
 
 	launchCommand, err := LaunchCommandFromProto(req)
 	if err != nil {
-		return nil, message.New(message.CommonUnknownError).WithCause(err)
+		return nil, err
 	}
 
 	asPrivileged, token := s.extractMetadata(ctx)

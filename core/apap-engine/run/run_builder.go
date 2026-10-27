@@ -89,6 +89,15 @@ func (b *RunBuilder) AddToolOutput(toolName, version string, invocation int) {
 	})
 }
 
+func (b *RunBuilder) RemoveToolOutput(toolName string, invocation int) {
+	for i, used := range b.toolsUsed {
+		if used.Tool == toolName && used.Invocation == invocation {
+			b.toolsUsed = append(b.toolsUsed[:i], b.toolsUsed[i+1:]...)
+			return
+		}
+	}
+}
+
 // ContainsEntity returns whether an Entity already exists in the
 // RunBuilder with the specified relative path.
 func (b *RunBuilder) ContainsEntity(relativePath string) bool {

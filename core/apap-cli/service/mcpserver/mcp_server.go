@@ -13,8 +13,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/mcpserver/toolimpl"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
 )
 
 type MCPServer struct {
@@ -23,13 +23,22 @@ type MCPServer struct {
 	registry ToolRegistry
 }
 
+// MCPServerOptions controls capabilities exposed by the MCP server.
+type MCPServerOptions struct {
+	AndroidTargetsEnabled bool
+	// SourceSharingAcknowledged acknowledges sharing for this server process,
+	// skipping prompts and saved acknowledgement access. When false, the normal
+	// acknowledgement flow applies.
+	SourceSharingAcknowledged bool
+}
+
 // NewMCPServer creates an MCP protocol server using an already-connected
 // engine. The caller remains responsible for the engine lifecycle.
-func NewMCPServer(engine apapproto.ApapClient, targets target.TargetManagerService) *MCPServer {
+func NewMCPServer(engine apapproto.ApapClient, targets target.TargetManagerService, options MCPServerOptions) *MCPServer {
 	return &MCPServer{
 		engine:   engine,
 		targets:  targets,
-		registry: DefaultToolRegistry(),
+		registry: DefaultToolRegistry(options),
 	}
 }
 
@@ -73,7 +82,6 @@ func newServer(errOut io.Writer, toolDeps toolimpl.ToolDependencies, registry To
 		},
 	)
 
-	registerInstructionResources(server)
 	registry.Register(server, toolDeps)
 
 	return server

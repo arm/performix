@@ -17,6 +17,13 @@ Codex  codex  Codex
 Cursor  cursor  Cursor
 VS Code  vscode  VS Code
 
+Downlevel VS Code Is Rejected
+  [Template]  NONE
+  ${context} =  Given Create Downlevel VS Code Test Context
+  ${results} =  When Exercise Downlevel VS Code Install  ${context}[bin]  ${context}[fixture]
+  Then Downlevel VS Code Results Should Be Clear  ${results}
+  [Teardown]  Remove MCP Registration Fixture
+
 Install And Uninstall All Supported Clients
   [Template]  NONE
   ${context} =  Given Create All MCP Client Test Context

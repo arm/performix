@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"testing"
@@ -22,7 +23,39 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/Arm-Debug/apap-cli/atperf-agent/process/processcontracttest"
 )
+
+func TestRequestPathPreservesPermissionErrors(t *testing.T) {
+	probe := processcontracttest.ProbePath(t)
+	name := filepath.Base(probe)
+	deniedDirectory := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(deniedDirectory, name), nil, 0600))
+	missingDirectory := t.TempDir()
+	manager := NewProcessManager()
+	command := &LaunchCommand{
+		Command: []string{name},
+		Environment: map[string]string{
+			"PATH": deniedDirectory + string(os.PathListSeparator) + missingDirectory,
+			processcontracttest.EnvironmentKeysVariable: "[]",
+			processcontracttest.ExitCodeVariable:        "0",
+		},
+	}
+
+	result, err := manager.ExecCommand(command)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.ErrorContains(t, err, "error starting command")
+
+	// A denied candidate must not prevent a later executable from being used.
+	command.Environment["PATH"] += string(os.PathListSeparator) + filepath.Dir(probe)
+	result, err = manager.ExecCommand(command)
+	require.NoError(t, err)
+	require.Zero(t, result.Rc)
+	_, err = processcontracttest.DecodeReport(result.Stdout)
+	require.NoError(t, err)
+}
 
 // startDummySleepProcess starts a "sleep 2" process and returns the *os.Process and a channel for Wait() signals
 func startDummySleepProcess() (*os.Process, <-chan *os.ProcessState, error) {

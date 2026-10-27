@@ -31,6 +31,7 @@ var outputDir string
 var outputToStdout bool
 
 func newRootCmd() *cobra.Command {
+	var validateCounterSeries bool
 	cmd := &cobra.Command{
 		Use:          "parquet-to-json <input_file_path...>",
 		SilenceUsage: true,
@@ -49,9 +50,16 @@ Alternatively, if only one parquet file is being converted, use the --stdout fla
 				return err
 			}
 
+			if validateCounterSeries && !outputToStdout {
+				return fmt.Errorf("--validate-counter-series requires --stdout")
+			}
 			if outputToStdout {
+				converter := convertFunc
+				if validateCounterSeries {
+					converter = ConvertCounterSeries
+				}
 				for _, inputFilePath := range args {
-					if err := convertFunc(context.Background(), inputFilePath, cmd.OutOrStdout()); err != nil {
+					if err := converter(context.Background(), inputFilePath, cmd.OutOrStdout()); err != nil {
 						return err
 					}
 				}
@@ -108,6 +116,7 @@ Alternatively, if only one parquet file is being converted, use the --stdout fla
 	cmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "Specify the path to the directory in which the output JSON files will be written.")
 	cmd.Flags().BoolVarP(&outputToStdout, "stdout", "s", false, "Output the converted JSON directly to stdout, rather than writing to a file. This can only be used if only one file is to be converted.")
 
+	cmd.Flags().BoolVar(&validateCounterSeries, "validate-counter-series", false, "Check the CPU counter-series schema and row values; output a JSON validity and device summary instead of rows (requires --stdout).")
 	return cmd
 }
 

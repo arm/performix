@@ -15,7 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/pidfiles"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func TestShutdown(t *testing.T) {

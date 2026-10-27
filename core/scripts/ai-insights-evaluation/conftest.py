@@ -14,6 +14,13 @@ recorded pytest properties. This file deliberately stays at the pytest
 integration boundary: it defines how a user configures the suite and how those
 recorded properties are presented in normal pytest output.
 
+Pathways test cases use a disposable target supplied by CI or the developer.
+Only one Pathways attempt may execute per invocation; CI recruits a fresh target
+for every testcase/attempt. Local developers select one attempt and run with
+`-n 0`; collection rejects larger Pathways selections or xdist execution before
+setup. Ordinary Insights tests keep their configured pytest workers. There is
+no separate scheduling phase for Pathways inside the harness.
+
 The most important pytest concepts used here are:
 
 - `pytest_addoption`: called during pytest startup to register custom
@@ -34,10 +41,9 @@ import os
 import re
 import shutil
 import stat
-import subprocess
 import sys
+import uuid
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +57,7 @@ from performance_quality import (
     performance_thresholds_from_manifest,
     recorded_performance_properties,
 )
-from recipe_support import PRERECORD_MODES, requires_source_archive, resolve_prerecord_config, resolve_recipe
+from recipe_support import PRERECORD_MODES, requires_source_archive, resolve_evaluation_inputs, resolve_prerecord_config
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -59,8 +65,7 @@ CORE_DIR = ROOT / "core"
 SCRIPTS_DIR = CORE_DIR / "scripts"
 HARNESS_DIR = Path(__file__).resolve().parent
 AI_PROPERTY_PREFIX = "ai_"
-HACKATHON_MODE = "hackathon_mcp"
-DEFAULT_MODES = "rest,hackathon_mcp,performix_mcp"
+DEFAULT_MODES = "performix_mcp"
 DEFAULT_PRERECORDED_RUN_CACHE = (
     Path.home() / ".cache" / "performix" / "ai-insights-evaluation" / "pre-recorded-runs"
 )
@@ -71,7 +76,7 @@ AI_INSIGHTS_TEST_NODEID_MARKER = "::test_ai_insights["
 
 sys.path.append(str(SCRIPTS_DIR))
 from junit_attempts import attempts_from_junit
-from run_export_helper import run_cli, sha256_file
+from run_export_helper import sha256_file
 
 
 def get_artifactory_url() -> str:
@@ -91,7 +96,7 @@ def get_artifactory_url() -> str:
 OPENAI_API_KEY_OPT = {
     "option": "--ai-openai-api-key",
     "env_var": "OPENAI_API_KEY",
-    "help": "OpenAI API key used by REST mode, the Codex coding agent, and the judge.",
+    "help": "OpenAI API key used by the Codex coding agent and the judge.",
 }
 PRERECORDED_RUN_CACHE_OPT = {
     "option": "--ai-prerecorded-run-cache",
@@ -107,11 +112,25 @@ ARTIFACTORY_RUN_BASE_OPT = {
     "default": DEFAULT_ARTIFACTORY_RUN_BASE,
     "help": "Artifactory path containing pre-recorded AI Insights run archives.",
 }
-HACKATHON_MCP_SERVER_DIR_OPT = {
-    "option": "--ai-hackathon-mcp-server-dir",
-    "env_var": "AI_INSIGHTS_HACKATHON_MCP_SERVER_DIR",
-    "help": "Hackathon MCP server checkout directory (https://github.com/Arm-Debug/atp-mcp-server-hackathon).",
-    "mode": HACKATHON_MODE,
+TARGET_HOST_OPT = {
+    "option": "--ai-target-host",
+    "env_var": "AI_INSIGHTS_TARGET_HOST",
+    "help": "Target SSH hostname or IP address required for pathways attempts.",
+}
+TARGET_PORT_OPT = {
+    "option": "--ai-target-port",
+    "env_var": "AI_INSIGHTS_TARGET_PORT",
+    "help": "Target SSH port for pathways attempts (default: 22).",
+}
+TARGET_USER_OPT = {
+    "option": "--ai-target-user",
+    "env_var": "AI_INSIGHTS_TARGET_USER",
+    "help": "Target SSH username for pathways attempts; requires passwordless sudo.",
+}
+TARGET_PRIVATE_KEY_PATH_OPT = {
+    "option": "--ai-target-private-key-path",
+    "env_var": "AI_INSIGHTS_TARGET_PRIVATE_KEY_PATH",
+    "help": "Target SSH private-key path shared with the evaluated agent.",
 }
 
 
@@ -128,12 +147,14 @@ def pytest_addoption(parser) -> None:
         default=os.environ.get("AI_INSIGHTS_MANIFEST", str(HARNESS_DIR / "ai_insights_evaluation.json")),
     )
     group.addoption("--ai-act", default=os.environ.get("AI_INSIGHTS_ACT", "act1"))
+    group.addoption("--ai-recipe", default=os.environ.get("AI_INSIGHTS_RECIPE", ""))
     group.addoption(
         "--ai-modes",
         default=os.environ.get("AI_INSIGHTS_MODES", DEFAULT_MODES),
         help=(
             "Comma-separated AI Insights modes to run. Overrides manifest modes. "
-            "Supported modes are rest, hackathon_mcp, and performix_mcp. "
+            "Supported modes are performix_mcp and "
+            "performix_mcp_run_query. "
             f"Defaults to {DEFAULT_MODES}."
         ),
     )
@@ -147,12 +168,21 @@ def pytest_addoption(parser) -> None:
         "--ai-results-dir",
         default=os.environ.get("AI_INSIGHTS_RESULTS_DIR", str(HARNESS_DIR / "results")),
     )
-    _add_env_option(group, HACKATHON_MCP_SERVER_DIR_OPT)
+    _add_env_option(group, TARGET_HOST_OPT)
+    _add_env_option(group, TARGET_PORT_OPT)
+    _add_env_option(group, TARGET_USER_OPT)
+    _add_env_option(group, TARGET_PRIVATE_KEY_PATH_OPT)
     group.addoption("--ai-model", default=os.environ.get("AI_INSIGHTS_MODEL"))
     group.addoption("--ai-reasoning-effort", default=os.environ.get("AI_INSIGHTS_REASONING_EFFORT"))
-    group.addoption("--ai-judge-model", default=os.environ.get("AI_INSIGHTS_JUDGE_MODEL", "gpt-5-mini"))
+    group.addoption("--ai-judge-model", default=os.environ.get("AI_INSIGHTS_JUDGE_MODEL", "gpt-5.6-luna"))
+    group.addoption("--ai-judge-reasoning-effort", default=os.environ.get("AI_INSIGHTS_JUDGE_REASONING_EFFORT", "medium"),
+                    help="Reasoning effort for the judge model (default: medium).")
     _add_env_option(group, OPENAI_API_KEY_OPT)
     group.addoption("--ai-attempts", type=int, default=int(os.environ.get("AI_INSIGHTS_ATTEMPTS", "0")))
+    # Pathways CI collects exact test IDs (including repetition numbers) to build
+    # its job matrix. Each job replays one ID against its own disposable target.
+    group.addoption("--ai-collect-selection", help="Internal: write the filtered execution selection as JSON.")
+    group.addoption("--ai-selected-nodeids", help="Internal: execute exactly the selected JSON node IDs.")
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -172,8 +202,14 @@ def pytest_xdist_node_collection_finished(node, ids) -> None:
     if getattr(config, AI_XDIST_PREPARED_ATTR, False):
         return
 
+    testcases = _selected_testcases_from_nodeids(config, ids)
+    if any(case.get("pathways_execution") for case in testcases):
+        pytest.exit(
+            "Pathways attempts require serial execution. Select one attempt and pass -n 0.",
+            returncode=4,
+        )
     setattr(config, AI_XDIST_PREPARED_ATTR, True)
-    _prepare_selected_testcases(config, _selected_testcases_from_nodeids(config, ids))
+    _prepare_selected_testcases(config, testcases)
 
 
 def _add_env_option(group, option_spec: dict[str, str]) -> None:
@@ -206,8 +242,6 @@ def pytest_collection_modifyitems(config, items):
     The evaluation tests are parametrised by testcase, mode, and attempt. At
     this point pytest has already expanded the manifest into concrete test
     items, so we can validate only the inputs required by the selected items.
-    For example, the Hackathon MCP checkout is required only if a collected
-    test item uses `hackathon_mcp`.
 
     This hook runs after pytest has applied normal filtering, such as `-k`. In
     serial pytest, downloads can run here. In xdist workers, this hook only
@@ -216,26 +250,64 @@ def pytest_collection_modifyitems(config, items):
     """
     yield
 
+    selected_path = getattr(config.option, "ai_selected_nodeids", None)
+    if selected_path:
+        selected = set(json.loads(Path(selected_path).read_text(encoding="utf-8")))
+        available = {item.nodeid for item in items}
+        if selected - available:
+            raise pytest.UsageError("AI Insights selection changed between collection and execution")
+        deselected = [item for item in items if item.nodeid not in selected]
+        items[:] = [item for item in items if item.nodeid in selected]
+        config.hook.pytest_deselected(items=deselected)
+
+    selection_path = getattr(config.option, "ai_collect_selection", None)
+    if selection_path:
+        if not config.option.collectonly:
+            raise pytest.UsageError("--ai-collect-selection requires --collect-only")
+        Path(selection_path).write_text(json.dumps({
+            "items": [{"nodeid": item.nodeid} for item in items],
+        }), encoding="utf-8")
+
     if config.option.collectonly:
         return
+
+    pathways_count = sum(_is_pathways_item(item) for item in items)
+    if pathways_count and hasattr(config, "workerinput"):
+        # Let the xdist controller reject Pathways before scheduling any tests.
+        # Errors raised inside workers obscure the useful -n 0 message.
+        return
+    if pathways_count > 1:
+        raise pytest.UsageError(
+            "Each Pathways attempt requires a fresh disposable target. Select one "
+            "testcase and attempt (-k and --ai-attempts 1), or use Pathways Evaluation CI."
+        )
 
     if not _is_ai_insights_collection(item.nodeid for item in items):
         return
 
+    if pathways_count:
+        # Preserve earlier local evidence even when the same case is run again.
+        # Reports use the requested JUnit destination; attempt files use this root.
+        root = Path(config.getoption("--ai-results-dir")).expanduser().resolve()
+        invocation = root / "invocations" / uuid.uuid4().hex
+        invocation.mkdir(parents=True)
+        config.option.ai_results_dir = str(invocation)
+        _terminal_write_line(config)(f"AI Insights invocation results: {invocation}")
+
+    testcases = _selected_testcases(items)
+    needs_fixture = any(case.get("run_artifact") for case in testcases)
     missing = []
     for option_spec in (
         OPENAI_API_KEY_OPT,
         PRERECORDED_RUN_CACHE_OPT,
-        HACKATHON_MCP_SERVER_DIR_OPT,
     ):
-        if option_spec.get("mode") and not _has_mode(items, option_spec["mode"]):
+        if option_spec is PRERECORDED_RUN_CACHE_OPT and not needs_fixture:
             continue
         if not (config.getoption(option_spec["option"]) or "").strip():
             missing.append(option_spec)
 
     prerecorded_run_cache = config.getoption("--ai-prerecorded-run-cache")
     if prerecorded_run_cache:
-        testcases = _selected_testcases(items)
         if not missing and not os.environ.get("PYTEST_XDIST_WORKER"):
             # Serial pytest downloads here. xdist workers skip this because the
             # controller downloads after seeing the filtered worker collection.
@@ -245,12 +317,10 @@ def pytest_collection_modifyitems(config, items):
         raise pytest.UsageError(_format_missing_config(missing, []))
 
 
-def _has_mode(items, mode: str) -> bool:
-    for item in items:
-        callspec = getattr(item, "callspec", None)
-        if callspec and callspec.params.get("mode") == mode:
-            return True
-    return False
+def _is_pathways_item(item) -> bool:
+    callspec = getattr(item, "callspec", None)
+    test_case = callspec.params.get("test_case", {}) if callspec else {}
+    return bool(test_case.get("pathways_execution"))
 
 
 def _selected_testcases(items) -> list[dict[str, str]]:
@@ -262,8 +332,7 @@ def _selected_testcases(items) -> list[dict[str, str]]:
         if not isinstance(test_case, dict):
             continue
         test_id = test_case.get("id")
-        run_artifact = test_case.get("run_artifact")
-        if not test_id or not run_artifact or test_id in seen:
+        if not test_id or test_id in seen:
             continue
         testcases.append(test_case)
         seen.add(test_id)
@@ -281,12 +350,8 @@ def _selected_testcases_from_nodeids(config, nodeids) -> list[dict[str, str]]:
         if not isinstance(test_case, dict):
             continue
         test_id = test_case.get("id")
-        if test_id and test_case.get("run_artifact"):
-            manifest_by_id[test_id] = {
-                **test_case,
-                "recipe": resolve_recipe(test_case, defaults),
-                "prerecord": resolve_prerecord_config(test_case, defaults),
-            }
+        if test_id:
+            manifest_by_id[test_id] = resolve_evaluation_inputs(test_case, defaults)
 
     # xdist gives the controller node IDs, not pytest Items. Match the
     # parameter id back to the longest manifest id so ids such as
@@ -339,13 +404,16 @@ def _prepare_selected_testcases(
     testcases: list[dict[str, str]],
     write_line=None,
 ) -> None:
-    """Download, extract, and import selected run inputs once.
+    """Download and extract selected run inputs once.
 
-    These steps write to shared cache paths and APX run storage. Running them in
+    These steps write to shared input cache paths. Running them in
     one process avoids races when xdist runs modes for the same testcase on
     different workers.
     """
 
+    testcases = [case for case in testcases if case.get("run_artifact")]
+    if not testcases:
+        return
     if write_line is None:
         write_line = _terminal_write_line(config)
     run_cache = Path(config.getoption("--ai-prerecorded-run-cache")).expanduser().resolve()
@@ -355,16 +423,6 @@ def _prepare_selected_testcases(
         testcases,
         run_cache,
         artifactory_run_base,
-        results_dir,
-        write_line,
-    )
-
-    cli_bin = Path(config.getoption("--ai-cli-bin")).expanduser().resolve()
-    _prepare_imported_runs(
-        testcases,
-        config.cache,
-        cli_bin,
-        run_cache,
         results_dir,
         write_line,
     )
@@ -555,6 +613,13 @@ def _validate_prerecorded_metadata(
                 f"Pre-recorded profile mode mismatch for {test_case['id']}: "
                 f"manifest={expected_mode!r}, metadata={recorded_mode!r}"
             )
+        expected_jfr = test_case.get("prerecord", {}).get("enable_jfr_capture", False)
+        recorded_jfr = metadata.get("enable_jfr_capture", False)
+        if not isinstance(recorded_jfr, bool) or recorded_jfr != expected_jfr:
+            raise pytest.UsageError(
+                f"Pre-recorded JFR capture mismatch for {test_case['id']}: "
+                f"manifest={expected_jfr!r}, metadata={recorded_jfr!r}"
+            )
 
 
 def _requires_source_archive(test_case: dict[str, Any]) -> bool:
@@ -579,92 +644,6 @@ def _safe_extract_zip(archive: Path, destination: Path) -> None:
             if not target.is_relative_to(destination_root):
                 raise ValueError(f"refusing to extract unsafe archive member: {member.filename}")
         archive_zip.extractall(destination)
-
-
-def _prepare_imported_runs(
-    testcases: list[dict[str, str]],
-    cache,
-    cli_bin: Path,
-    prerecorded_run_cache: Path,
-    results_dir: Path,
-    write_line=None,
-) -> None:
-    """Import each selected run before tests start.
-
-    `apx run import` writes to shared APX run storage. If several workers
-    import the same archive at once, they can write the same run directory at
-    the same time. Import here once and cache the run id for the tests.
-    """
-    wrote_header = False
-    for test_case in testcases:
-        test_id = test_case["id"]
-        archive = prerecorded_run_cache / test_case["run_artifact"]
-        source_archive = archive.parent / "test_src.zip"
-        archive_sha = sha256_file(archive)
-        source_sha = ""
-        source_root = None
-        if _requires_source_archive(test_case):
-            source_sha = sha256_file(source_archive)
-            source_root = results_dir / "imported_sources" / test_id / source_sha / "test_src"
-        cache_key = f"ai_insights/imports/{test_id}/{archive_sha}"
-        cached = cache.get(cache_key, None)
-
-        run_id = ""
-        if isinstance(cached, dict):
-            cached_run_id = cached.get("run_id")
-            if isinstance(cached_run_id, str) and _run_info_succeeds(cli_bin, cached_run_id):
-                run_id = cached_run_id
-
-        if not run_id:
-            if write_line:
-                if not wrote_header:
-                    write_line("AI Insights evaluation: importing runs before test workers")
-                    wrote_header = True
-                write_line(f"AI Insights evaluation: {test_id}: latest.zip")
-            process = run_cli(
-                [str(cli_bin), "run", "import", str(archive), "--json"],
-                cli_bin.parent,
-            )
-            try:
-                payload = json.loads(process.stdout)
-            except json.JSONDecodeError as exc:
-                raise ValueError("apx run import --json output was not valid JSON") from exc
-            if isinstance(payload, dict):
-                value = payload.get("data", {}).get("new_id", {}).get("value")
-                if isinstance(value, str) and value:
-                    run_id = value
-            if not run_id:
-                raise ValueError("apx run import --json output did not contain data.new_id.value")
-
-        if source_root is not None:
-            run_cli([str(cli_bin), "run", "update", run_id, "--source", str(source_root)], cli_bin.parent)
-        cached_run = {
-            "run_id": run_id,
-            "archive_sha256": archive_sha,
-            "archive_path": str(archive),
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        }
-        if source_root is not None:
-            cached_run.update(
-                {
-                    "source_archive_sha256": source_sha,
-                    "source_archive_path": str(source_archive),
-                    "source_root": str(source_root),
-                }
-            )
-        cache.set(cache_key, cached_run)
-
-
-def _run_info_succeeds(cli_bin: Path, run_id: str) -> bool:
-    if not run_id:
-        return False
-    process = subprocess.run(
-        [str(cli_bin), "run", "info", run_id, "--json"],
-        cwd=cli_bin.parent,
-        capture_output=True,
-        text=True,
-    )
-    return process.returncode == 0
 
 
 def _artifactory_base_url() -> str:
@@ -841,8 +820,7 @@ def _generate_graph_report(config) -> dict[str, str | int] | None:
     if not any(attempt.get("ai_mode") for attempt in attempts_from_junit(junit_xml)):
         return None
 
-    results_dir = Path(config.getoption("--ai-results-dir")).expanduser().resolve()
-    output_dir = results_dir / "reporting" / "graphs"
+    output_dir = junit_xml.parent / "graphs"
     if output_dir.exists():
         shutil.rmtree(output_dir)
 
@@ -872,7 +850,8 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
         terminalreporter.write_line(_format_suite_summary(summary))
     terminalreporter.write_line("")
     terminalwriter = getattr(terminalreporter, "_tw", None)
-    width = getattr(terminalwriter, "fullwidth", None)
+    # Keep the width pytest recorded at startup for a consistent summary layout.
+    width = getattr(terminalreporter, "_screen_width", getattr(terminalwriter, "fullwidth", None))
     color = bool(getattr(terminalwriter, "hasmarkup", False))
     rendered_summary = render_console_summary(
         _ai_attempts_from_reports(reports),
@@ -992,6 +971,7 @@ def _format_suite_summary(summary: dict[str, str]) -> str:
         _format_key_value("model", summary.get("model")),
         _format_key_value("reasoning", summary.get("reasoning_effort")),
         _format_key_value("judge_model", summary.get("judge_model")),
+        _format_key_value("judge_reasoning", summary.get("judge_reasoning_effort")),
         _format_key_value("results", summary.get("results_dir")),
     ]
     return ", ".join(field for field in fields if field)

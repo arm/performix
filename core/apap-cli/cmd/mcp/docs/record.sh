@@ -21,15 +21,10 @@ free_port() {
 }
 
 server_port=$(free_port)
-auth_port=$(free_port)
-while [ "$auth_port" = "$server_port" ]; do
-  auth_port=$(free_port)
-done
 
 cleanup() {
   "$apx" \
     --server-port "$server_port" \
-    --auth-port "$auth_port" \
     daemon stop --json >/dev/null 2>&1 || true
   rm -rf "$fixture"
 }
@@ -61,7 +56,6 @@ export APAP_MCP_STUB_VSCODE_CONFIG="$HOME/Library/Application Support/Code/User/
 export PATH="$fixture/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export APX_DEMO_BIN="$apx"
 export APX_DEMO_SERVER_PORT="$server_port"
-export APX_DEMO_AUTH_PORT="$auth_port"
 export TERM=xterm-256color
 unset NO_COLOR
 export FORCE_COLOR=1

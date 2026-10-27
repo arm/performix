@@ -6,6 +6,7 @@ package tool_goja
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"regexp"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/dop251/goja_nodejs/eventloop"
 	"github.com/dop251/goja_nodejs/require"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/gojautils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
@@ -35,11 +37,15 @@ type ScriptedToolSource struct {
 	ToolDeployments []deploymentsupport.DeploymentDeclaration
 	Migrations      []tool.Migration
 
-	ToolSupportsStop bool
+	ToolSupportsStop               bool
+	ToolCapabilityInterfaceVersion string
 }
 
 func (sts *ScriptedToolSource) Name() string    { return sts.ToolName }
 func (sts *ScriptedToolSource) Version() string { return sts.ToolVersion }
+func (sts *ScriptedToolSource) CapabilityInterfaceVersion() string {
+	return sts.ToolCapabilityInterfaceVersion
+}
 func (sts *ScriptedToolSource) SupportsStop() bool {
 	return sts.ToolSupportsStop
 }
@@ -63,7 +69,9 @@ func (sts *ScriptedToolSource) GetMigrations() []tool.Migration {
 
 func loadToolObject(vm *goja.Runtime, program *goja.Program) (goja.Value, error) {
 	// Enable CommonJS require() support so integrations can import shared JS helpers (utils.js)
-	require.NewRegistry().Enable(vm)
+	registry := require.NewRegistry()
+	gojautils.RegisterXML(registry)
+	registry.Enable(vm)
 
 	if err := gojautils.SetPerformixGlobal(vm); err != nil {
 		return nil, fmt.Errorf("setting Performix JS metadata: %w", err)
@@ -104,12 +112,13 @@ func LoadFromSource(source string, fileName string) (*ScriptedToolSource, error)
 		Deployments []deploymentsupport.DeploymentDeclaration
 		Migrations  []tool.Migration
 
-		SupportsStop *bool `json:"supportsStop"`
+		SupportsStop               *bool  `json:"supportsStop"`
+		CapabilityInterfaceVersion string `json:"capabilityInterfaceVersion"`
 	}{}
 
 	// Setup regexs to capture permitted unset fields
 	var regErr error
-	regexs := util.Map([]string{`Deployments`, `Migrations`, `SupportsStop`, `supportsStop`}, func(src string) *regexp.Regexp {
+	regexs := util.Map([]string{`Deployments`, `Migrations`, `SupportsStop`, `supportsStop`, `capabilityInterfaceVersion`}, func(src string) *regexp.Regexp {
 		unsetRegex, err := regexp.Compile(src)
 		if err != nil {
 			regErr = errors.Join(regErr, err)
@@ -139,7 +148,8 @@ func LoadFromSource(source string, fileName string) (*ScriptedToolSource, error)
 		ToolDeployments: minimalTool.Deployments,
 		Migrations:      minimalTool.Migrations,
 
-		ToolSupportsStop: supportsStop,
+		ToolSupportsStop:               supportsStop,
+		ToolCapabilityInterfaceVersion: minimalTool.CapabilityInterfaceVersion,
 	}, nil
 }
 
@@ -151,16 +161,27 @@ type exposedFunction struct {
 
 // ToolContext contains the instance-specific data exposed to a tool integration.
 type ToolContext struct {
-	Params     map[string]any    `json:"params"`
-	Workload   ToolWorkload      `json:"workload"`
-	WorkingDir string            `json:"workingDir"`
-	Env        map[string]string `json:"env"`
-	Timeout    uint32            `json:"timeout"`
-	ToolsRoot  string            `json:"toolsRoot"`
-	Metadata   map[string]any    `json:"metadata"`
+	CapabilityRequest *capabilities.CapabilityRequest `json:"capabilityRequest,omitempty"`
+	Discovery         *tool.ProbeResult               `json:"discovery,omitempty"`
+	Params            map[string]any                  `json:"params"`
+	Workload          ToolWorkload                    `json:"workload"`
+	WorkingDir        string                          `json:"workingDir"`
+	Env               map[string]string               `json:"env"`
+	Timeout           uint32                          `json:"timeout"`
+	ToolsRoot         string                          `json:"toolsRoot"`
+	Metadata          map[string]any                  `json:"metadata"`
 }
 
-func bindToolContext(vm *goja.Runtime, ctx ToolContext) (*goja.Object, error) {
+// BindToolContext exposes the same context fields to production integrations and test harnesses.
+func BindToolContext(vm *goja.Runtime, ctx ToolContext) (*goja.Object, error) {
+	// Goja exports a nil map back to Go as nil, even when JavaScript sees a
+	// wrapped map object. Expose an empty environment for launch workloads
+	// without overrides so strict process decoding accepts the options.
+	if launch, ok := ctx.Workload.(*WorkloadLaunch); ok && launch.Environment == nil {
+		normalized := *launch
+		normalized.Environment = map[string]string{}
+		ctx.Workload = &normalized
+	}
 	metadata := vm.NewObject()
 	for name, value := range ctx.Metadata {
 		if err := metadata.Set(name, value); err != nil {
@@ -187,6 +208,24 @@ func bindToolContext(vm *goja.Runtime, ctx ToolContext) (*goja.Object, error) {
 		}
 	}
 
+	if ctx.CapabilityRequest != nil {
+		value, err := gojautils.GoObjectToJS(vm, ctx.CapabilityRequest)
+		if err != nil {
+			return nil, err
+		}
+		if err := toolContext.Set("capabilityRequest", value); err != nil {
+			return nil, err
+		}
+	}
+	if ctx.Discovery != nil {
+		value, err := gojautils.GoObjectToJS(vm, ctx.Discovery)
+		if err != nil {
+			return nil, err
+		}
+		if err := toolContext.Set("discovery", value); err != nil {
+			return nil, err
+		}
+	}
 	return toolContext, nil
 }
 
@@ -308,9 +347,24 @@ func (g *boundGojaEngine) createRunFile(relativePath string, meta goja.Value) go
 		return g.bec.CreateRunFile(relativePath, meta) // *BoundHostFile
 	})
 }
+
+// hostFileUnavailable lets scripts handle expected file availability failures
+// without swallowing unrelated engine errors. The original cause is retained.
+type hostFileUnavailable struct {
+	Cause       error `json:"-"`
+	Unavailable bool  `json:"unavailable"`
+}
+
+func (e *hostFileUnavailable) Error() string { return e.Cause.Error() }
+func (e *hostFileUnavailable) Unwrap() error { return e.Cause }
+
 func (g *boundGojaEngine) readHostFile(relativePath string) goja.Value {
 	return g.asyncHelper.AsyncVal(func() (any, error) {
-		return g.bec.ReadHostFile(relativePath) // string
+		contents, err := g.bec.ReadHostFile(relativePath)
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+			return nil, &hostFileUnavailable{Cause: err, Unavailable: true}
+		}
+		return contents, err
 	})
 }
 func (g *boundGojaEngine) mkDir(path string) goja.Value {
@@ -374,20 +428,21 @@ type Description struct {
 
 // GojaToolBinding mirrors the JS "tool" object.
 type GojaToolBinding struct {
-	Name                      string
-	Version                   string
-	Parameters                []parameters.ParameterDefinition
-	Deployments               []deploymentsupport.DeploymentDeclaration
-	Description               Description
-	Migrations                []tool.Migration
-	SupportsWorkloadLaunch    bool
-	SupportsStop              *bool `json:"supportsStop"`
-	ReportsCollectionFinished bool
-	Probe                     func(goja.FunctionCall) goja.Value
-	Run                       func(goja.FunctionCall) goja.Value
-	Reformat                  func(goja.FunctionCall) goja.Value
-	OnCancel                  func(goja.FunctionCall) goja.Value
-	OnStop                    func(goja.FunctionCall) goja.Value
+	CapabilityInterfaceVersion string `json:"capabilityInterfaceVersion"`
+	Name                       string
+	Version                    string
+	Parameters                 []parameters.ParameterDefinition
+	Deployments                []deploymentsupport.DeploymentDeclaration
+	Description                Description
+	Migrations                 []tool.Migration
+	SupportsWorkloadLaunch     bool
+	SupportsStop               *bool `json:"supportsStop"`
+	ReportsCollectionFinished  bool
+	Probe                      func(goja.FunctionCall) goja.Value
+	Run                        func(goja.FunctionCall) goja.Value
+	Reformat                   func(goja.FunctionCall) goja.Value
+	OnCancel                   func(goja.FunctionCall) goja.Value
+	OnStop                     func(goja.FunctionCall) goja.Value
 }
 
 // LoadBinding evaluates the tool integration in vm and returns its complete
@@ -401,6 +456,7 @@ func (s *ScriptedToolSource) LoadBinding(vm *goja.Runtime) (GojaToolBinding, err
 	// Allow optional fields during parsing.
 	allowedUnset := []*regexp.Regexp{
 		regexp.MustCompile(`Parameters`),
+		regexp.MustCompile(`capabilityInterfaceVersion`),
 		regexp.MustCompile(`Deployments`),
 		regexp.MustCompile(`Migrations`),
 		regexp.MustCompile(`SupportsWorkloadLaunch`),
@@ -501,12 +557,14 @@ func (s *ScriptedToolSource) NewIntegration(
 	}
 
 	toolContext := ToolContext{
-		Params:     toolCtx.Params,
-		WorkingDir: toolCtx.WorkingDir,
-		Env:        toolCtx.Env,
-		Timeout:    toolCtx.Timeout,
-		ToolsRoot:  toolCtx.DefaultEngineLocality.ToolsRoot,
-		Metadata:   map[string]any{},
+		Params:            toolCtx.Params,
+		CapabilityRequest: toolCtx.CapabilityRequest,
+		Discovery:         toolCtx.Discovery,
+		WorkingDir:        toolCtx.WorkingDir,
+		Env:               toolCtx.Env,
+		Timeout:           toolCtx.Timeout,
+		ToolsRoot:         toolCtx.DefaultEngineLocality.ToolsRoot,
+		Metadata:          map[string]any{},
 	}
 
 	if toolCtx.Workload != nil {
@@ -542,7 +600,7 @@ func (s *ScriptedToolSource) NewIntegration(
 	if err != nil {
 		return nil, err
 	}
-	jsToolContext, err := bindToolContext(vm, toolContext)
+	jsToolContext, err := BindToolContext(vm, toolContext)
 	if err != nil {
 		return nil, fmt.Errorf("binding tool context: %w", err)
 	}
@@ -566,6 +624,7 @@ func (g *GojaToolInstance) newEngineObject(
 			&g.asyncHelper,
 			toolCtx,
 			locality.FileCollector,
+			locality.CapabilityPublisher,
 			g.registeredCapabilityIDs,
 		),
 		asyncHelper: &g.asyncHelper,
@@ -586,6 +645,25 @@ func (g *GojaToolInstance) newEngineObject(
 		{jsName: "chown", fn: vm.ToValue(bound.chown)},
 		{jsName: "log", fn: vm.ToValue(bound.locality.Engine.Log)},
 		{jsName: "writeUserMessage", fn: vm.ToValue(bound.locality.Engine.WriteUserMessage)},
+		{jsName: "writeCatalogMessage", fn: vm.ToValue(func(code string, metadata map[string]string) error {
+			if !message.CodeExists(code, message.LocaleEnglish) {
+				return fmt.Errorf("unknown message code %q", code)
+			}
+			catalogMessage := message.New(code).WithMetadata(metadata)
+			if err := message.ValidateMetadataPlaceholders(catalogMessage); err != nil {
+				return err
+			}
+			entry := catalogMessage.Lookup().Interpolate(metadata)
+			level := "info"
+			if entry.Severity == message.SeverityWarning {
+				level = "warn"
+			}
+			if entry.Severity == message.SeverityError {
+				level = "error"
+			}
+			bound.locality.Engine.WriteUserMessage(level, entry.Text())
+			return nil
+		})},
 		{jsName: "emitOutput", fn: vm.ToValue(bound.bec.EmitOutput)},
 		{jsName: "createRunFile", fn: vm.ToValue(bound.createRunFile)},
 		{jsName: "readHostFile", fn: vm.ToValue(bound.readHostFile)},

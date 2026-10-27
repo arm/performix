@@ -20,8 +20,8 @@ fi
 source "$SCRIPT_DIR/constants.sh"
 
 ASCT_NAME="asct"
-ASCT_VERSION="0.6.1"
-ASCT_RELEASE_COMMIT_ID="d2f4360"
+ASCT_VERSION="0.7.0"
+ASCT_RELEASE_COMMIT_ID="dbf3ee9"
 
 ARTIFACTORY_ARCHIVE_NAME="${ASCT_NAME}-${ASCT_VERSION}+${ASCT_RELEASE_COMMIT_ID}-release.tar.gz"   # archive name pulled from artifactory
 ARTIFACTORY_INTERNAL_PACKAGE_NAME="${ASCT_NAME}-${ASCT_VERSION}+${ASCT_RELEASE_COMMIT_ID}.tar.gz"   # package name pulled from artifactory
@@ -30,8 +30,8 @@ STATIC_ARCHIVE_NAME_X86_64="${ASCT_NAME}-Linux-x86_64.tar.gz"
 ASCT_DOCS_PAYLOAD_DIR="${ASCT_NAME}_docs"                                           # docs directory inside the top-level release archive
 TOOL_DST_DIR=${TOOL_DST_BASE}/${ASCT_NAME}/${ASCT_VERSION}
 
-# ASCT artifacts are currently downloaded from the internal tools host.
-ARTIFACTORY_URL="${ARTIFACTORY_INTERNAL_TOOLS_BASE_URL}/asct/dist/${ASCT_VERSION}"
+# ASCT artifacts are downloaded from the internal ASCT Artifactory repository.
+ARTIFACTORY_URL="${ARTIFACTORY_BASE_URL}/its.asct/dist/${ASCT_VERSION}"
 
 generate_target_directory() {
   mkdir -p ${TOOL_DST_DIR}
@@ -39,7 +39,8 @@ generate_target_directory() {
 
 fetch_tools_from_artifactory() {
   # Download the top-level ASCT release bundle.
-  curl_with_retry -LsSf -o "${TOOL_DST_DIR}/${ARTIFACTORY_ARCHIVE_NAME}" "${ARTIFACTORY_URL}/${ARTIFACTORY_ARCHIVE_NAME}"
+  curl_with_retry -LsSf -H "X-JFrog-Art-Api:$ARTIFACTORY_API_TOKEN" \
+    -o "${TOOL_DST_DIR}/${ARTIFACTORY_ARCHIVE_NAME}" "${ARTIFACTORY_URL}/${ARTIFACTORY_ARCHIVE_NAME}"
 }
 
 retrieve_license_terms() {

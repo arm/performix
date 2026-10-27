@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/eventloop"
@@ -48,6 +50,18 @@ func ParseObjectFromJS(arg goja.Value, dest interface{}) error {
 // allowedUnset defines fields that are allowed to be unset.
 // allowedUnused defines fields that are allowed to be unused.
 func ParseObjectFromJSWithRegex(arg goja.Value, dest interface{}, allowedUnset []*regexp.Regexp, allowedUnused []*regexp.Regexp) error {
+	return parseObjectFromJSWithRegex(arg, dest, allowedUnset, allowedUnused, true)
+}
+
+// ParseObjectFromJSStrictWithRegex parses a Goja value without converting
+// values between types. It is intended for interfaces such as process launch
+// requests where converting a number or boolean to text would change the
+// caller's request.
+func ParseObjectFromJSStrictWithRegex(arg goja.Value, dest interface{}, allowedUnset []*regexp.Regexp, allowedUnused []*regexp.Regexp) error {
+	return parseObjectFromJSWithRegex(arg, dest, allowedUnset, allowedUnused, false)
+}
+
+func parseObjectFromJSWithRegex(arg goja.Value, dest interface{}, allowedUnset []*regexp.Regexp, allowedUnused []*regexp.Regexp, weaklyTyped bool) error {
 	if arg == nil {
 		return fmt.Errorf("argument is nil")
 	}
@@ -55,15 +69,93 @@ func ParseObjectFromJSWithRegex(arg goja.Value, dest interface{}, allowedUnset [
 	if argValue == nil {
 		return fmt.Errorf("type mismatch")
 	}
+	if !weaklyTyped {
+		if err := rejectNilValues(reflect.ValueOf(argValue), make(map[strictValueIdentity]bool)); err != nil {
+			if errors.Is(err, errStrictNull) {
+				if field, expected, found := strictTypeMismatch(reflect.ValueOf(argValue), reflect.TypeOf(dest), ""); found {
+					return fmt.Errorf("type mismatch: %s expects %s", field, expected)
+				}
+			}
+			return err
+		}
+	}
 
-	return ParseObjectWithRegex(argValue, dest, allowedUnset, allowedUnused)
+	return parseObjectWithRegex(argValue, dest, allowedUnset, allowedUnused, weaklyTyped)
+}
+
+var errStrictNull = errors.New("type mismatch: null is not allowed")
+
+type strictValueIdentity struct {
+	typ     reflect.Type
+	pointer uintptr
+	length  int
+}
+
+func rejectNilValues(value reflect.Value, visiting map[strictValueIdentity]bool) error {
+	if !value.IsValid() {
+		return errStrictNull
+	}
+
+	// Track the active path, rather than all visited values: shared values are
+	// valid, but cycles cannot be decoded into process launch options.
+	switch value.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Pointer:
+		identity := strictValueIdentity{typ: value.Type(), pointer: uintptr(value.UnsafePointer())}
+		if value.Kind() == reflect.Slice {
+			identity.length = value.Len()
+		}
+		if visiting[identity] {
+			return errors.New("type mismatch: cyclic values are not allowed")
+		}
+		visiting[identity] = true
+		defer delete(visiting, identity)
+	}
+
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if value.IsNil() {
+			return errStrictNull
+		}
+		return rejectNilValues(value.Elem(), visiting)
+	case reflect.Map:
+		if value.IsNil() {
+			return errStrictNull
+		}
+		iterator := value.MapRange()
+		for iterator.Next() {
+			if err := rejectNilValues(iterator.Value(), visiting); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice:
+		if value.IsNil() {
+			return errStrictNull
+		}
+		for index := 0; index < value.Len(); index++ {
+			if err := rejectNilValues(value.Index(index), visiting); err != nil {
+				return err
+			}
+		}
+	case reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			if err := rejectNilValues(value.Index(index), visiting); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func ParseObjectWithRegex(val interface{}, dest interface{}, allowedUnset []*regexp.Regexp, allowedUnused []*regexp.Regexp) error {
+	return parseObjectWithRegex(val, dest, allowedUnset, allowedUnused, true)
+}
+
+func parseObjectWithRegex(val interface{}, dest interface{}, allowedUnset []*regexp.Regexp, allowedUnused []*regexp.Regexp, weaklyTyped bool) error {
 	config := &mapstructure.DecoderConfig{
 		Metadata:         &mapstructure.Metadata{Unset: []string{}},
 		DecodeHook:       nil,
-		WeaklyTypedInput: true,
+		WeaklyTypedInput: weaklyTyped,
 		ErrorUnused:      false,
 		ErrorUnset:       false,
 		Result:           &dest,
@@ -76,6 +168,16 @@ func ParseObjectWithRegex(val interface{}, dest interface{}, allowedUnset []*reg
 	}
 	err = decoder.Decode(val)
 	if err != nil {
+		if !weaklyTyped {
+			// Mapstructure errors include source values. Do not expose those
+			// values in logs or in errors that callers may log themselves.
+			field, expected, found := strictTypeMismatch(reflect.ValueOf(val), reflect.TypeOf(dest), "")
+			if found {
+				err = fmt.Errorf("type mismatch: %s expects %s", field, expected)
+			} else {
+				err = errors.New("type mismatch: invalid value type")
+			}
+		}
 		log.Warnf("unable to decode recipe properties: %v", err)
 		return err
 	}
@@ -116,6 +218,76 @@ func ParseObjectWithRegex(val interface{}, dest interface{}, allowedUnset []*reg
 	}
 
 	return err
+}
+
+// strictTypeMismatch inspects only destination-defined fields. Map keys and
+// source values never appear in the diagnostic because either may be private.
+func strictTypeMismatch(value reflect.Value, target reflect.Type, field string) (string, string, bool) {
+	for target.Kind() == reflect.Pointer {
+		target = target.Elem()
+	}
+	for value.IsValid() && (value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) {
+		if value.IsNil() {
+			return field, target.String(), true
+		}
+		value = value.Elem()
+	}
+	if !value.IsValid() || target.Kind() == reflect.Interface {
+		return "", "", false
+	}
+	switch target.Kind() {
+	case reflect.Struct:
+		if value.Kind() != reflect.Map || value.Type().Key().Kind() != reflect.String {
+			return field, target.String(), true
+		}
+		for index := 0; index < target.NumField(); index++ {
+			member := target.Field(index)
+			if !member.IsExported() {
+				continue
+			}
+			name := strings.Split(member.Tag.Get("json"), ",")[0]
+			if name == "-" {
+				continue
+			}
+			if name == "" {
+				name = member.Name
+			}
+			source := value.MapIndex(reflect.ValueOf(name).Convert(value.Type().Key()))
+			if !source.IsValid() {
+				continue
+			}
+			child := name
+			if field != "" {
+				child = field + "." + name
+			}
+			if path, expected, found := strictTypeMismatch(source, member.Type, child); found {
+				return path, expected, true
+			}
+		}
+	case reflect.Map:
+		if value.Kind() != reflect.Map {
+			return field, target.String(), true
+		}
+		for iterator := value.MapRange(); iterator.Next(); {
+			if path, expected, found := strictTypeMismatch(iterator.Value(), target.Elem(), field+" value"); found {
+				return path, expected, true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		if value.Kind() != reflect.Slice && value.Kind() != reflect.Array {
+			return field, target.String(), true
+		}
+		for index := 0; index < value.Len(); index++ {
+			if path, expected, found := strictTypeMismatch(value.Index(index), target.Elem(), field+" element"); found {
+				return path, expected, true
+			}
+		}
+	default:
+		if value.Kind() != target.Kind() {
+			return field, target.String(), true
+		}
+	}
+	return "", "", false
 }
 
 // GoObjectToJS converts a Go struct to a Goja value by serializing to JSON and back.
@@ -265,24 +437,46 @@ func (g *AsyncHelper) RegisterAsyncIterator(vm *goja.Runtime, reader io.Reader) 
 	// Keep a closed flag so 'return()' can stop iteration early.
 	closed := false
 
-	readBuffer := make([]byte, 4096) // Adjust buffer size as needed
+	readBuffer := make([]byte, 4096)
+	var pending []byte
+	var readErr error
 
 	// next(): Promise<{value, done}>
 	setErr := iter.Set("next", func(call goja.FunctionCall) goja.Value {
 		return g.AsyncVal(func() (any, error) {
-			read, err := reader.Read(readBuffer)
-			if err == io.EOF {
-				return map[string]interface{}{
-					"done": true,
-				}, nil
-			} else if err != nil {
-				return nil, err
-			}
+			for {
+				if readErr != nil && len(pending) == 0 {
+					if readErr == io.EOF {
+						return map[string]interface{}{"done": true}, nil
+					}
+					return nil, readErr
+				}
+				if readErr == nil {
+					var n int
+					n, readErr = reader.Read(readBuffer)
+					pending = append(pending, readBuffer[:n]...)
+				}
 
-			return map[string]interface{}{
-				"value": vm.ToValue(string(readBuffer[:read])), // or keep as ArrayBuffer if you prefer
-				"done":  false,
-			}, nil
+				// Keep incomplete UTF-8 characters until the next read. Once the
+				// reader ends, let Goja replace any trailing invalid bytes.
+				end := 0
+				for end < len(pending) && utf8.FullRune(pending[end:]) {
+					_, size := utf8.DecodeRune(pending[end:])
+					end += size
+				}
+				if readErr != nil {
+					end = len(pending)
+				}
+				if end == 0 {
+					continue
+				}
+				value := string(pending[:end])
+				pending = append(pending[:0], pending[end:]...)
+				return map[string]interface{}{
+					"value": vm.ToValue(value),
+					"done":  false,
+				}, nil
+			}
 		})
 	})
 	if setErr != nil {

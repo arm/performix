@@ -1,14 +1,33 @@
 // SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: Apache-2.0
 
-// This file integrates VS Code through its documented --add-mcp CLI command.
+// This file integrates VS Code through its user-level MCP configuration.
 package mcpclientinstaller
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
+
+// VS Code introduced MCP server support in 1.99. Installation requires this
+// version so VS Code can use the registration written to mcp.json.
+const minimumVSCodeMCPVersion = "1.99.0"
+
+type unsupportedClientVersionError struct {
+	actual  string
+	minimum string
+}
+
+func (e *unsupportedClientVersionError) Error() string {
+	return fmt.Sprintf(
+		"VS Code version %s does not support MCP servers; version %s or later is required",
+		e.actual,
+		e.minimum,
+	)
+}
 
 func vscodeExecutablePaths(dependencies clientDependencies) []string {
 	// VS Code documents code as the command-line entry point, including the
@@ -35,9 +54,15 @@ func vscodeExecutablePaths(dependencies clientDependencies) []string {
 				dependencies.getenv("LOCALAPPDATA"),
 				"Programs",
 				"Microsoft VS Code",
-				"Code.exe",
+				"bin",
+				"code.cmd",
 			),
-			filepath.Join(dependencies.getenv("ProgramFiles"), "Microsoft VS Code", "Code.exe"),
+			filepath.Join(
+				dependencies.getenv("ProgramFiles"),
+				"Microsoft VS Code",
+				"bin",
+				"code.cmd",
+			),
 		}
 	default:
 		return []string{"/usr/bin/code", "/usr/local/bin/code", "/snap/bin/code"}
@@ -88,13 +113,14 @@ func (c *vscodeClient) Detect(ctx context.Context) (resolvedClient, error) {
 	// The `code` shell command is optional, but packaged installations include
 	// the same launcher inside the application. The standard candidates cover
 	// both forms.
-	resolved, err := detectExecutable(
+	resolved, err := detectExecutableWithVersionValidator(
 		ctx,
 		c.dependencies,
 		[]string{"code"},
 		vscodeExecutablePaths(c.dependencies),
 		"",
 		true,
+		validateVSCodeVersion,
 	)
 	resolved.configurationPath = c.configPath
 	return resolved, err
@@ -105,7 +131,7 @@ func (*vscodeClient) RegistrationState(
 	server ServerDefinition,
 	resolved resolvedClient,
 ) (RegistrationState, []RegistrationDifference, error) {
-	return jsonRegistrationState(resolved.configurationPath, "servers", server, true)
+	return readVSCodeJSONCRegistrationState(resolved.configurationPath, server)
 }
 
 func (c *vscodeClient) Install(
@@ -113,25 +139,8 @@ func (c *vscodeClient) Install(
 	server ServerDefinition,
 	resolved resolvedClient,
 ) (RegistrationState, []RegistrationDifference, error) {
-	definition, err := json.Marshal(struct {
-		Name    string   `json:"name"`
-		Command string   `json:"command"`
-		Args    []string `json:"args"`
-	}{
-		Name:    server.Name,
-		Command: server.Command,
-		Args:    server.Args,
-	})
-	if err != nil {
-		return RegistrationStateUnreadable, nil, err
-	}
-	if err := runClientCommand(
-		ctx,
-		c.dependencies.run,
-		resolved.executablePath,
-		"--add-mcp", string(definition),
-	); err != nil {
-		return RegistrationStateUnreadable, nil, err
+	if err := installVSCodeJSONC(resolved.configurationPath, server); err != nil {
+		return RegistrationStateUnreadable, nil, configurationWriteError(err)
 	}
 	return c.RegistrationState(ctx, server, resolved)
 }
@@ -141,10 +150,50 @@ func (c *vscodeClient) Uninstall(
 	server ServerDefinition,
 	resolved resolvedClient,
 ) (RegistrationState, []RegistrationDifference, error) {
-	// VS Code provides --add-mcp but no corresponding non-interactive removal
-	// command. Remove only the exact entry from its user mcp.json file.
-	if err := uninstallJSON(resolved.configurationPath, "servers", server.Name); err != nil {
+	// Remove only the exact entry from the user mcp.json file.
+	if err := uninstallVSCodeJSONC(resolved.configurationPath, server); err != nil {
 		return RegistrationStateUnreadable, nil, configurationWriteError(err)
 	}
 	return c.RegistrationState(ctx, server, resolved)
+}
+
+func validateVSCodeVersion(output string) error {
+	actual, version, err := parseVSCodeVersion(output)
+	if err != nil {
+		return err
+	}
+	minimum := [3]int{1, 99, 0}
+	for index := range version {
+		if version[index] > minimum[index] {
+			return nil
+		}
+		if version[index] < minimum[index] {
+			return &unsupportedClientVersionError{
+				actual:  actual,
+				minimum: minimumVSCodeMCPVersion,
+			}
+		}
+	}
+	return nil
+}
+
+func parseVSCodeVersion(output string) (string, [3]int, error) {
+	// The launcher reports the version before the commit and architecture.
+	// Insider releases may add a suffix; their numeric version determines support.
+	firstLine, _, _ := strings.Cut(strings.TrimSpace(output), "\n")
+	actual := strings.TrimSpace(firstLine)
+	core, _, _ := strings.Cut(actual, "-")
+	parts := strings.Split(core, ".")
+	if len(parts) != 3 {
+		return actual, [3]int{}, fmt.Errorf("VS Code returned invalid version %q", actual)
+	}
+	var version [3]int
+	for index, part := range parts {
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			return actual, [3]int{}, fmt.Errorf("VS Code returned invalid version %q", actual)
+		}
+		version[index] = value
+	}
+	return actual, version, nil
 }

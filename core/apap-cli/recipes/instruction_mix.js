@@ -4,6 +4,7 @@
 // Instruction Mix Recipe Definition
 
 // @ts-check
+const { getComparisonFilters } = require('./lib/comparison_filters');
 
 const PY_IM_VERSION = '0.4.5';
 const CORE_TYPE_RENDER_PARAMETER = 'filter_core_type';
@@ -15,7 +16,11 @@ let tool_imix_version = '1.1.0';
 
 // Temporary fix until we support recipes defining whether they are custom or not
 let customRecipe = false;
-const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
+const {
+  collectToolAdvice,
+  toolStatusToRecipeStatus,
+  getPartialCPUSupportAdvice,
+} = recipeUtils;
 const telemetrySpecificationUnavailableMessageCode =
   'recipes.instruction_mix.TELEMETRY_SPECIFICATION_UNAVAILABLE';
 
@@ -29,7 +34,7 @@ var recipe = {
   api_version: '1.0.2',
   status: 'stable',
   description:
-    'The Instruction Mix recipe shows a breakdown of the types and proportions of instructions in your code. It helps you confirm that your code takes full advantage of Arm-specific features and is especially useful for checking compiler output when porting from x86.',
+    'See the types and proportions of instructions in your code, including vector instructions.',
   parameters: [
     {
       id: 'sampling_freq',
@@ -252,16 +257,24 @@ function getFirstSupportedCPUTelemetry(context) {
  * @param {import("./docs/jsdocs").ReadyExecutionContext} context
  * @param {import("./docs/jsdocs").RecipeReadyAdvice[]} advice
  */
-function addTelemetrySpecificationWarning(context, advice) {
+function addTelemetrySpecificationAdvice(context, advice) {
   const firstSupportedCPUTelemetry = getFirstSupportedCPUTelemetry(context);
   if (!firstSupportedCPUTelemetry.telemetrySpecification) {
     advice.push({
       ToolName: '',
-      AdviceSeverity: 'warning',
+      AdviceSeverity: 'error',
       MessageCode: telemetrySpecificationUnavailableMessageCode,
       Metadata: { cpuName: firstSupportedCPUTelemetry.cpuName },
       Cause: '',
     });
+  } else {
+    const partialCPUSupportAdvice = getPartialCPUSupportAdvice(
+      context,
+      'recipes.instruction_mix.PARTIAL_CPU_SUPPORT',
+    );
+    if (partialCPUSupportAdvice) {
+      advice.push(partialCPUSupportAdvice);
+    }
   }
 }
 
@@ -307,7 +320,7 @@ function readyInstructionMix(context) {
 
   let allAdvice = collectToolAdvice(tools, toolResponses);
   if (runDynamic) {
-    addTelemetrySpecificationWarning(context, allAdvice);
+    addTelemetrySpecificationAdvice(context, allAdvice);
   }
 
   return {
@@ -1276,7 +1289,10 @@ function renderInstructionMix(context) {
     renderers,
     ui: {
       visualizations,
-      side_panel_filters: filters,
+      side_panel_filters:
+        isComparison && renderDynamic && context.isRerenderingEnabled()
+          ? getComparisonFilters(context)
+          : filters,
     },
   };
 }

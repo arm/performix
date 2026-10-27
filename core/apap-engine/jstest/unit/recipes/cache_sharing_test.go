@@ -26,6 +26,11 @@ var speDiscoveryCommand = mocks.RunCommandArg{
 	Cmd:  "ls -d /sys/bus/event_source/devices/arm_spe_* 2>/dev/null",
 }
 
+var perfPeerHelpCommand = mocks.RunCommandArg{
+	Type: conductor.TypeExec,
+	Cmd:  "LC_ALL=C perf c2c report -h 2>&1",
+}
+
 func TestCacheSharingReady(t *testing.T) {
 	t.Run("returns readiness failures from tool", func(t *testing.T) {
 		harness := jstest.LoadRecipe(t, "cache_sharing")
@@ -68,6 +73,8 @@ func TestCacheSharingReady(t *testing.T) {
 		context.On("GetWorkload").Return(workload, nil)
 		context.On("ProbeTools", mock.Anything).
 			Return([]tool.ProbeResult{{Available: true, Advice: []tool.ProbeAdvice{}}}, nil)
+		context.On("RunCommand", perfPeerHelpCommand).
+			Return(conductor.RunCommandOutput{ReturnCode: 129, Stdout: "tot,lcl,rmt,peer"}, nil)
 		context.On("RunCommand", speDiscoveryCommand).
 			Return(conductor.RunCommandOutput{ReturnCode: 1}, nil)
 
@@ -91,6 +98,8 @@ func TestCacheSharingReady(t *testing.T) {
 		context.On("GetWorkload").Return(workload, nil)
 		context.On("ProbeTools", mock.Anything).
 			Return([]tool.ProbeResult{{Available: true, Advice: []tool.ProbeAdvice{}}}, nil)
+		context.On("RunCommand", perfPeerHelpCommand).
+			Return(conductor.RunCommandOutput{ReturnCode: 129, Stdout: "tot,lcl,rmt,peer"}, nil)
 		context.On("RunCommand", speDiscoveryCommand).
 			Return(conductor.RunCommandOutput{ReturnCode: 0}, nil)
 
@@ -115,6 +124,60 @@ func TestCacheSharingReady(t *testing.T) {
 		context.AssertNotCalled(t, "RunCommand", mock.Anything)
 		context.AssertExpectations(t)
 	})
+}
+
+func TestCacheSharingReadyPeerSnoopSupport(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		help       conductor.RunCommandOutput
+		wantStatus string
+	}{
+		{
+			name:       "peer advertised with normal help exit code",
+			help:       conductor.RunCommandOutput{ReturnCode: 129, Stdout: "-d, --display <Switch HITM output type>\n    tot,lcl,rmt,peer\n"},
+			wantStatus: recipe.ReadyStatusReady,
+		},
+		{
+			name:       "peer advertised with zero exit code",
+			help:       conductor.RunCommandOutput{ReturnCode: 0, Stdout: "tot,lcl,rmt,peer"},
+			wantStatus: recipe.ReadyStatusReady,
+		},
+		{
+			name:       "legacy help without peer",
+			help:       conductor.RunCommandOutput{ReturnCode: 129, Stdout: "-d, --display <Switch HITM output type>\n    lcl,rmt\n"},
+			wantStatus: recipe.ReadyStatusWarning,
+		},
+		{
+			name:       "unavailable help",
+			help:       conductor.RunCommandOutput{ReturnCode: 1},
+			wantStatus: recipe.ReadyStatusWarning,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			harness := jstest.LoadRecipe(t, "cache_sharing")
+			context := &mocks.MockReadyExecutionContext{}
+			context.On("GetWorkload").Return(recipeparser.WorkloadArg{Type: "systemWide"}, nil)
+			context.On("ProbeTools", mock.Anything).Return([]tool.ProbeResult{{Available: true}}, nil)
+			context.On("RunCommand", perfPeerHelpCommand).Return(tc.help, nil).Once()
+			context.On("RunCommand", speDiscoveryCommand).
+				Return(conductor.RunCommandOutput{ReturnCode: 0}, nil).Once()
+
+			output, err := harness.RecipeReady(t, context)
+
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantStatus, output.Status)
+			if tc.wantStatus == recipe.ReadyStatusWarning {
+				if assert.Len(t, output.Advice, 1) {
+					assert.Equal(t, "linux_perf", output.Advice[0].ToolName)
+					assert.Equal(t, recipe.AdviceSeverityWarning, output.Advice[0].AdviceSeverity)
+					assert.Equal(t, message.New(message.ToolIntegrationsLinuxPerfPeerSnoopUnavailable), output.Advice[0].AdviceMessage)
+				}
+			} else {
+				assert.Empty(t, output.Advice)
+			}
+			context.AssertExpectations(t)
+		})
+	}
 }
 
 func TestCacheSharingRun(t *testing.T) {

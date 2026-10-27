@@ -110,27 +110,14 @@ func runCodex(args []string) error {
 
 func runVSCode(args []string) error {
 	if len(args) == 1 && args[0] == "--version" {
-		fmt.Println("1.0")
+		version := os.Getenv("APAP_MCP_STUB_VSCODE_VERSION")
+		if version == "" {
+			version = "1.99.0"
+		}
+		fmt.Println(version)
 		return nil
 	}
-	if len(args) != 2 || args[0] != "--add-mcp" {
-		return fmt.Errorf("unsupported VS Code arguments: %v", args)
-	}
-	var request struct {
-		Name string `json:"name"`
-		serverDefinition
-	}
-	if err := json.Unmarshal([]byte(args[1]), &request); err != nil {
-		return err
-	}
-	request.Type = "stdio"
-	path := os.Getenv("APAP_MCP_STUB_VSCODE_CONFIG")
-	if path == "" {
-		return fmt.Errorf("APAP_MCP_STUB_VSCODE_CONFIG is not set")
-	}
-	return writeJSON(path, map[string]any{
-		"servers": map[string]serverDefinition{request.Name: request.serverDefinition},
-	})
+	return fmt.Errorf("unsupported VS Code arguments: %v", args)
 }
 
 func definitionFromAdd(args []string) (string, serverDefinition, error) {

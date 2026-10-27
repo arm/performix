@@ -17,7 +17,9 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 )
 
-type ListTargetsTool struct{}
+type ListTargetsTool struct {
+	AndroidTargetsEnabled bool
+}
 
 const defaultListTargetsLimit = 100
 const defaultListTargetsOffset = 0
@@ -110,7 +112,7 @@ var listTargetsOutputSchema = &jsonschema.Schema{
 	},
 }
 
-func (ListTargetsTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
+func (tool ListTargetsTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_targets",
 		Description: "Lists existing " + terminology.GetProductFullName() + " targets, sorted alphabetically (case sensitive) by name.",
@@ -125,15 +127,16 @@ func (ListTargetsTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 			return &mcp.CallToolResult{IsError: true}, listTargetsResult{Targets: []listedTarget{}, Error: newToolError(err)}, nil
 		}
 
-		return nil, newListTargetsResult(targetConfig.Targets, targetConfig.Default, input), nil
+		return nil, newListTargetsResult(targetConfig.Targets, targetConfig.Default, tool.AndroidTargetsEnabled, input), nil
 	})
 }
 
-func newListTargetsResult(targetsMap map[string]target.Target, defaultName string, input listTargetsInput) listTargetsResult {
-	totalTargets := len(targetsMap)
-
-	targets := make([]listedTarget, 0, totalTargets)
+func newListTargetsResult(targetsMap map[string]target.Target, defaultName string, androidTargetsEnabled bool, input listTargetsInput) listTargetsResult {
+	targets := make([]listedTarget, 0, len(targetsMap))
 	for name, tgt := range targetsMap {
+		if _, isAndroid := tgt.(*target.AndroidTarget); isAndroid && !androidTargetsEnabled {
+			continue
+		}
 		targets = append(targets, listedTarget{
 			Name:        name,
 			Type:        targetTypeName(tgt),
@@ -141,6 +144,7 @@ func newListTargetsResult(targetsMap map[string]target.Target, defaultName strin
 			DisplayHost: tgt.DisplayHost(),
 		})
 	}
+	totalTargets := len(targets)
 
 	// Sort targets alphabetically (case sensitive) by name to ensure deterministic output
 	slices.SortFunc(targets, func(targetA, targetB listedTarget) int {

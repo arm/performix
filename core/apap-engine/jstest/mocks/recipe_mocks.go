@@ -53,6 +53,8 @@ type ReadyExecutionContext interface {
 	RunCommand(command RunCommandArg) (conductor.RunCommandOutput, error)
 	IsFullCaptureSupportEnabled() (bool, error)
 	IsJfrCaptureEnabled() (bool, error)
+	IsNeoprofSystemUtilizationEnabled() (bool, error)
+	IsNeoprofTimelineEnabled() (bool, error)
 }
 
 type MockReadyExecutionContext struct {
@@ -124,8 +126,19 @@ func (m *MockReadyExecutionContext) IsJfrCaptureEnabled() (bool, error) {
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockReadyExecutionContext) IsNeoprofSystemUtilizationEnabled() (bool, error) {
+	args := m.Called()
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockReadyExecutionContext) IsNeoprofTimelineEnabled() (bool, error) {
+	args := m.Called()
+	return args.Bool(0), args.Error(1)
+}
+
 // RunExecutionContext defines the recipe API exposed to run stages.
 type RunExecutionContext interface {
+	ProbeTools(config recipeparser.RunToolConfigurationsArg) ([]tool.ProbeResult, error)
 	GetWorkload() (recipeparser.WorkloadArg, error)
 	GetParameter(id string) (any, error)
 	GetTool(name string, version string) (recipeparser.ToolProperties, error)
@@ -140,10 +153,21 @@ type RunExecutionContext interface {
 	RunCommand(command RunCommandArg) (conductor.RunCommandOutput, error)
 	IsFullCaptureSupportEnabled() (bool, error)
 	IsJfrCaptureEnabled() (bool, error)
+	IsNeoprofSystemUtilizationEnabled() (bool, error)
+	IsNeoprofTimelineEnabled() (bool, error)
 }
 
 type MockRunExecutionContext struct {
 	mock.Mock
+}
+
+func (m *MockRunExecutionContext) ProbeTools(config recipeparser.RunToolConfigurationsArg) ([]tool.ProbeResult, error) {
+	args := m.Called(config)
+	result := args.Get(0)
+	if result == nil {
+		return nil, args.Error(1)
+	}
+	return result.([]tool.ProbeResult), args.Error(1)
 }
 
 func (m *MockRunExecutionContext) GetWorkload() (recipeparser.WorkloadArg, error) {
@@ -214,12 +238,23 @@ func (m *MockRunExecutionContext) IsJfrCaptureEnabled() (bool, error) {
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockRunExecutionContext) IsNeoprofSystemUtilizationEnabled() (bool, error) {
+	args := m.Called()
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockRunExecutionContext) IsNeoprofTimelineEnabled() (bool, error) {
+	args := m.Called()
+	return args.Bool(0), args.Error(1)
+}
+
 // RenderExecutionContext defines the recipe API exposed to render stages.
 type RenderExecutionContext interface {
 	GetRunDescriptions() ([]recipeparser.RunDescription, error)
 	GetPrimaryCpuName(runIndex int) (string, error)
 	GetFirstSupportedCpuName(runIndex int) (goja.Value, error)
 	ListRunComponents(runIndex int, componentGlob string) ([]recipeparser.RunComponentDescription, error)
+	ReadRunComponent(runIndex int, componentPath string) (string, error)
 	GetToolCapabilities(runIndex int, toolInvocation recipeparser.ToolInvocation) (recipeparser.JSToolCapabilities, error)
 	GetRenderParameter(id string) (any, error)
 	GetRenderParameters() (map[string]any, error)
@@ -260,6 +295,11 @@ func (m *MockRenderExecutionContext) ListRunComponents(runIndex int, componentGl
 		return nil, args.Error(1)
 	}
 	return result.([]recipeparser.RunComponentDescription), args.Error(1)
+}
+
+func (m *MockRenderExecutionContext) ReadRunComponent(runIndex int, componentPath string) (string, error) {
+	args := m.Called(runIndex, componentPath)
+	return args.String(0), args.Error(1)
 }
 
 func (m *MockRenderExecutionContext) GetToolCapabilities(runIndex int, toolInvocation recipeparser.ToolInvocation) (recipeparser.JSToolCapabilities, error) {

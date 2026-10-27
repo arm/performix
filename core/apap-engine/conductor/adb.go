@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 )
 
 type ADBClient struct {
@@ -34,6 +37,9 @@ func NewADBClient(serialNumber string, deviceIPAddress *string, runner ADBRunner
 
 func (c *ADBClient) CheckHealth() error {
 	if _, _, err := c.adbDevice("get-state"); err != nil {
+		if adbError := message.IsMessage(err); adbError != nil && adbError.Code() == message.EngineConductorAdbAdbNotFound {
+			return adbError
+		}
 		return fmt.Errorf("health check for Android target failed: %w", err)
 	}
 	return nil
@@ -143,10 +149,16 @@ func (r *ExecADBRunner) Run(args ...string) (string, string, error) {
 	r.mu.RLock()
 	adb := r.executable
 	r.mu.RUnlock()
+	if adb == "" {
+		return "", "", message.Wrap(message.EngineConductorAdbAdbNotFound, exec.ErrNotFound)
+	}
 	cmd := exec.Command(adb, args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
+		err = message.Wrap(message.EngineConductorAdbAdbNotFound, err)
+	}
 	return stdout.String(), stderr.String(), err
 }
 

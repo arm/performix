@@ -143,17 +143,19 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) loadCallPathFile(
 	session render.Session,
 	measurementIDOffset int,
 ) (CallpathTables2, error) {
+	const rawDataTableName = "temp"
 	// Load all the data into one table; it's not a particularly friendly format for us to handle but DuckDB _can_ do it
-	err := ReadJSONAutoWithLargeObjectSize(filename, session.Database(), "temp")
+	err := ReadJSONAutoWithLargeObjectSize(filename, session.Database(), rawDataTableName)
 	if err != nil {
 		return CallpathTables2{}, err
 	}
+	defer dropTempTable(session, rawDataTableName)
 	var nrows, measurementCount int
 	err = session.Database().Conn.QueryRowContext(context.Background(), `
 	  SELECT
 		COALESCE(len(rows), 0) AS nrows,
 		COALESCE(len(columns), 0) AS ncolumns
-	  FROM temp
+	  FROM `+rawDataTableName+`
 	`).Scan(&nrows, &measurementCount)
 	if err != nil {
 		return CallpathTables2{}, err
@@ -173,7 +175,7 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) loadCallPathFile(
 					SELECT
 						UNNEST(columns, max_depth := 2),
 						`, strconv.Itoa(measurementIDOffset), ` + GENERATE_SUBSCRIPTS(columns, 1) AS measurement_id
-					FROM temp
+					FROM `, rawDataTableName, `
 				)
 			WHERE LEN(name) > 0;`,
 	)
@@ -204,7 +206,7 @@ func (renderer *StreamlineAnalyzeFunctionProfileRenderer2) loadCallPathFile(
 				CAST(unnest(column_data[:`, strconv.Itoa(measurementCount), `]) AS DOUBLE) as value,
 				generate_subscripts(column_data[:`, strconv.Itoa(measurementCount), `], 1) + `, strconv.Itoa(measurementIDOffset), ` AS measurement_id
 			FROM (
-				SELECT UNNEST(rows, max_depth := 2) FROM temp
+				SELECT UNNEST(rows, max_depth := 2) FROM `, rawDataTableName, `
 			)
 		)`,
 		)

@@ -124,20 +124,42 @@ The CPU Microarchitecture Run Rendered With Partial Time Filter Keeps Original T
 Time Range Filter Suite Setup
   Common Setup
   Skip Unless Target OS Is  ${OS_LINUX}
-  The Test Target Is Added Successfully
-  The Target Is Set To Default Successfully  ${G_TARGET_NAME}
+  IF  '${USE_PRERECORDED_RUNS}' == 'False'
+    The Test Target Is Added Successfully
+    The Target Is Set To Default Successfully  ${G_TARGET_NAME}
+  END
   Generate Time Range Filter Runs
 
 Time Range Filter Suite Teardown
-  The Test Target Is Removed Successfully
+  IF  '${USE_PRERECORDED_RUNS}' == 'False' and '${G_TARGET_OS}' == '${OS_LINUX}'
+    The Test Target Is Removed Successfully
+  END
   Common Teardown
 
 Generate Time Range Filter Runs
-  Generate Code Hotspots Run
+  IF  '${USE_PRERECORDED_RUNS}' == 'True'
+    Import Prerecorded Time Range Filter Runs
+  ELSE
+    Generate Code Hotspots Run
+    ${cpu_microarchitecture_supported} =  CPU Microarchitecture Is Supported On Target
+    IF  ${cpu_microarchitecture_supported}  Generate CPU Microarchitecture Run
+    ${instruction_mix_supported} =  Instruction Mix Is Supported On Target
+    IF  ${instruction_mix_supported}  Generate Instruction Mix Dynamic Run
+  END
+
+Import Prerecorded Time Range Filter Runs
+  ${run_id} =  Import Prerecorded Run  time-filter-code-hotspots
+  VAR  ${CODE_HOTSPOTS_RUN_ID_1} =  ${run_id}  scope=SUITE
   ${cpu_microarchitecture_supported} =  CPU Microarchitecture Is Supported On Target
-  IF  ${cpu_microarchitecture_supported}  Generate CPU Microarchitecture Run
+  IF  ${cpu_microarchitecture_supported}
+    ${run_id} =  Import Prerecorded Run  time-filter-cpu-microarchitecture
+    VAR  ${CPU_MICROARCH_RUN_ID_1} =  ${run_id}  scope=SUITE
+  END
   ${instruction_mix_supported} =  Instruction Mix Is Supported On Target
-  IF  ${instruction_mix_supported}  Generate Instruction Mix Dynamic Run
+  IF  ${instruction_mix_supported}
+    ${run_id} =  Import Prerecorded Run  time-filter-instruction-mix-dynamic
+    VAR  ${INSTRUCTION_MIX_DYNAMIC_RUN_ID_1} =  ${run_id}  scope=SUITE
+  END
 
 Generate Code Hotspots Run
   ${run_id} =  Run Time Range Filter Recipe And Extract Run ID

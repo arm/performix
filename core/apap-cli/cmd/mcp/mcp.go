@@ -18,7 +18,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/server"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 var RootCmd = newMCPCommand()
@@ -42,7 +42,7 @@ func newMCPCommandWithClients(registration mcpClientDependencies) *cobra.Command
 	}
 
 	mcpCmd.AddCommand(
-		newMCPStartCmd(defaultMCPRunner()),
+		newMCPStartCmd(defaultMCPRunner),
 		newMCPDoctorCmd(registration),
 		newMCPInstallCmd(registration),
 		newMCPStatusCmd(registration),
@@ -53,7 +53,7 @@ func newMCPCommandWithClients(registration mcpClientDependencies) *cobra.Command
 
 // defaultMCPRunner creates the production lifecycle owner. Each MCP server gets
 // its own engine daemon rather than attaching to the shared CLI daemon.
-func defaultMCPRunner() MCPRunner {
+func defaultMCPRunner(options mcpserver.MCPServerOptions) MCPRunner {
 	// Suppress the background runner's user-facing startup message because MCP
 	// stdout is reserved for protocol messages. Keep the engine in MCP's process
 	// group so client process-group signals stop both processes.
@@ -63,9 +63,8 @@ func defaultMCPRunner() MCPRunner {
 	return &engineDaemonRunner{
 		startAndConnect: connector.StartAndConnect,
 		shutdown:        shutter.Shutdown,
-		allocatePorts:   allocateEngineDaemonPorts,
 		newProtocol: func(engine apapproto.ApapClient) MCPRunner {
-			return mcpserver.NewMCPServer(engine, targets)
+			return mcpserver.NewMCPServer(engine, targets, options)
 		},
 	}
 }

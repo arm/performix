@@ -18,8 +18,13 @@ VERSION=$2
 ARCH=$3
 ARTIFACTORY_URL="https://eu-west-1.artifactory.aws.arm.com/artifactory/ste-apap.cli"
 
+# Use the same certificate validation on Linux and Windows. OpenSSL does not
+# perform revocation checks by default, so disable Schannel's additional
+# checks; the configured CA still verifies the certificate chain.
+CURL_OPTIONS=(--ssl-no-revoke -sSf)
+
 windows_sign() {
-    curl -sSf -X POST \
+    curl "${CURL_OPTIONS[@]}" -X POST \
         -d "{\"signer\":\"authenticode\",\"source\":\"${ARTIFACTORY_URL}/${VERSION}/${ARCH}/${BINARY_FILENAME}\",\"dest\":\"${ARTIFACTORY_URL}/${VERSION}/${ARCH}/signed/${BINARY_FILENAME}\"}" \
         -H "Content-Type: application/json" \
         -H "X-JFrog-Art-Api:$ARTIFACTORY_API_TOKEN" \
@@ -27,17 +32,17 @@ windows_sign() {
 }
 
 download_artifactory() {
-    curl -LsSf -H "X-JFrog-Art-Api:$ARTIFACTORY_API_TOKEN" \
+    curl "${CURL_OPTIONS[@]}" -L -H "X-JFrog-Art-Api:$ARTIFACTORY_API_TOKEN" \
         -O "${ARTIFACTORY_URL}/${VERSION}/${ARCH}/signed/${BINARY_FILENAME}"
 }
 
 upload_artifactory() {
-    curl -sSf -H "X-JFrog-Art-Api:$ARTIFACTORY_API_TOKEN" -X PUT -T ${BINARY_FILENAME} \
+    curl "${CURL_OPTIONS[@]}" -H "X-JFrog-Art-Api:$ARTIFACTORY_API_TOKEN" -X PUT -T ${BINARY_FILENAME} \
         "${ARTIFACTORY_URL}/${VERSION}/${ARCH}/${BINARY_FILENAME}"
 }
 
 delete_artifactory() {
-    curl -sSf -X DELETE \
+    curl "${CURL_OPTIONS[@]}" -X DELETE \
         -H "X-JFrog-Art-Api:$ARTIFACTORY_API_TOKEN" \
         "${ARTIFACTORY_URL}/${VERSION}/${ARCH}"
 }

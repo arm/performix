@@ -25,30 +25,50 @@ func TestGPUReady(t *testing.T) {
 		Name: "neoprof", Params: map[string]any{"mode": "gpu"}, Workload: workload, Env: map[string]string{},
 	}}}
 
-	t.Run("reports the detected GPU and available counter count", func(t *testing.T) {
+	t.Run("is ready when GPU counters resolve", func(t *testing.T) {
 		harness := jstest.LoadRecipe(t, "gpu")
 		context := &mocks.MockReadyExecutionContext{}
+		capabilities := map[string]any{
+			"platform": map[string]any{"payload": map[string]any{"gpu_name": "Mali-G720"}},
+		}
+		for _, alias := range []string{
+			"MaliGPUActiveCy",
+			"MaliGPUAnyQueueActiveCy",
+			"MaliCompQueuedCy",
+			"MaliCompQueueAssignStallCy",
+			"MaliBinningQueuedCy",
+			"MaliBinningQueueAssignStallCy",
+			"MaliMainQueuedCy",
+			"MaliMainQueueAssignStallCy",
+			"MaliTilerActiveCy",
+			"MaliGPUIRQActiveCy",
+			"MaliAnyActiveCy",
+			"MaliCompOrBinningActiveCy",
+			"MaliMainActiveCy",
+			"MaliFragStagingActiveCy",
+			"MaliCoreActiveCy",
+		} {
+			capabilities["counter."+alias] = map[string]any{
+				"componentType": map[string]any{"name": "tool_capabilities/counter"},
+				"state":         "available",
+				"payload": map[string]any{
+					"alias":   alias,
+					"counter": "ARM_" + alias,
+				},
+			}
+		}
 		context.On("GetWorkload").Return(workload, nil).Once()
 		context.On("ProbeTools", expectedConfig).Return([]tool.ProbeResult{{
-			Available: true,
-			Capabilities: map[string]any{
-				"platform":            map[string]any{"payload": map[string]any{"gpu_name": "Mali-G720"}},
-				"counter.available":   map[string]any{"componentType": map[string]any{"name": "tool_capabilities/counter"}, "state": "available"},
-				"counter.unavailable": map[string]any{"componentType": map[string]any{"name": "tool_capabilities/counter"}, "state": "unavailable"},
-				"other":               map[string]any{"componentType": map[string]any{"name": "tool_capabilities/other"}, "state": "available"},
-			},
-			Advice: []tool.ProbeAdvice{},
+			Available:    true,
+			Capabilities: capabilities,
+			Advice:       []tool.ProbeAdvice{},
 		}}, nil).Once()
 
 		output, err := harness.RecipeReady(t, context)
 
 		require.NoError(t, err)
 		assert.Equal(t, recipe.ReadyStatusReady, output.Status)
-		require.Len(t, output.Advice, 1)
-		assert.Equal(t, "neoprof", output.Advice[0].ToolName)
-		assert.Equal(t, recipe.AdviceSeverityMessage, output.Advice[0].AdviceSeverity)
-		assert.Equal(t, message.New(message.EngineRecipeparserJsRecipeStageReadinessMessage).
-			WithMetadata(map[string]string{"message": "Detected GPU: Mali-G720. Found 1 GPU counters."}), output.Advice[0].AdviceMessage)
+		assert.Empty(t, output.Advice)
 		context.AssertExpectations(t)
 	})
 
@@ -66,6 +86,27 @@ func TestGPUReady(t *testing.T) {
 		assert.Equal(t, recipe.AdviceSeverityError, output.Advice[0].AdviceSeverity)
 		assert.Equal(t, message.New(message.EngineRecipeparserJsRecipeStageReadinessMessage).
 			WithMetadata(map[string]string{"message": "The target GPU could not be identified."}), output.Advice[0].AdviceMessage)
+		context.AssertExpectations(t)
+	})
+
+	t.Run("warns when the tool is available but requested GPU counters are missing", func(t *testing.T) {
+		harness := jstest.LoadRecipe(t, "gpu")
+		context := &mocks.MockReadyExecutionContext{}
+		context.On("GetWorkload").Return(workload, nil).Once()
+		context.On("ProbeTools", expectedConfig).Return([]tool.ProbeResult{{
+			Available: true,
+			Capabilities: map[string]any{
+				"platform": map[string]any{"payload": map[string]any{"gpu_name": "Mali-G720"}},
+			},
+		}}, nil).Once()
+
+		output, err := harness.RecipeReady(t, context)
+
+		require.NoError(t, err)
+		assert.Equal(t, recipe.ReadyStatusWarning, output.Status)
+		assert.NotEmpty(t, output.Advice)
+		assert.Equal(t, recipe.AdviceSeverityWarning, output.Advice[0].AdviceSeverity)
+		assert.Contains(t, output.Advice[0].AdviceMessage.Metadata()["message"], "GPU metric is unavailable")
 		context.AssertExpectations(t)
 	})
 

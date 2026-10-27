@@ -103,11 +103,6 @@ func (p *AndroidTargetActions) RunCommandAsAdmin(cmd string) (RunCommandOutput, 
 	return RunCommandOutput{}, errors.New(androidAdminUnsupportedError)
 }
 
-func (p *AndroidTargetActions) HasAdminPerms() (bool, error) {
-	// TODO(android-root): Implement Android admin permission detection.
-	return false, errors.New(androidAdminUnsupportedError)
-}
-
 func NewAndroidTargetPlatform(cmdRunner CommandRunner, fs TargetFilesystem) *TargetPlatform {
 	return &TargetPlatform{
 		PlatformConfiguration: PlatformConfiguration{Architecture: AArch64, OS: Android},

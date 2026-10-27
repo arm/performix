@@ -73,6 +73,9 @@ type MetricGroup struct {
 
 // Payload is the telemetry JSON structure.
 type Payload struct {
+	ProductConfiguration struct {
+		ProductName string `json:"product_name"`
+	} `json:"product_configuration"`
 	Events  map[string]Event  `json:"events"`
 	Metrics map[string]Metric `json:"metrics"`
 	Groups  Groups            `json:"groups"`

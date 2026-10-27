@@ -7,18 +7,18 @@
 
 set -euo pipefail
 
-script_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 
 echo "Generating..."
-$script_dir/generate-all.sh $@
+"$script_dir/generate-all.sh"
 
 echo "Building..."
-$script_dir/build-all.sh $@
+"$script_dir/build-all.sh" "$@"
 
 echo "Linting..."
-$script_dir/lint-all.sh $@
+"$script_dir/lint-all.sh" "$@"
 
 echo "Testing..."
-$script_dir/test-all.sh $@
+"$script_dir/test-all.sh" "$@"
 
 echo "Success!"

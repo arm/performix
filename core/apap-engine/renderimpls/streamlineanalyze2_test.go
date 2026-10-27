@@ -65,6 +65,74 @@ func TestLoadCallTreeFileReadsCompressedComponent(t *testing.T) {
 	}, got)
 }
 
+func TestLoadCallPathFileDropsRawData(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		missingRows bool
+	}{
+		{name: "drops raw table after successful extraction"},
+		{name: "drops raw table when extraction fails because rows is missing", missingRows: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := newMockSession(t)
+			filename := filepath.Join(t.TempDir(), "metrics.json")
+			data := `{"columns": [{"name": "metric"}], "rows": [{"call_frame_id": 1, "column_data": [1]}]}`
+			if tc.missingRows {
+				// Loading succeeds, but extraction fails because rows is missing.
+				data = `{"columns": [{"name": "metric"}]}`
+			}
+			require.NoError(t, os.WriteFile(filename, []byte(data), perms.LocalFilePerm))
+
+			_, err := (&StreamlineAnalyzeFunctionProfileRenderer2{}).loadCallPathFile(filename, "self", session, 0)
+			if tc.missingRows {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			var tableCount int
+			require.NoError(t, session.Database().Conn.QueryRowContext(
+				context.Background(), "SELECT count(*) FROM duckdb_tables() WHERE table_name = 'temp'",
+			).Scan(&tableCount))
+			require.Zero(t, tableCount)
+		})
+	}
+}
+
+func TestLegacyLoadCallPathFileDropsRawData(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		missingRows bool
+	}{
+		{name: "drops raw table after successful extraction"},
+		{name: "drops raw table when extraction fails because rows is missing", missingRows: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := newMockSession(t)
+			filename := filepath.Join(t.TempDir(), "metrics.json")
+			data := `{"columns": [{"name": "metric"}], "rows": [{"call_frame_id": 1, "column_data": [1]}]}`
+			if tc.missingRows {
+				// Loading succeeds, but extraction fails because rows is missing.
+				data = `{"columns": [{"name": "metric"}]}`
+			}
+			require.NoError(t, os.WriteFile(filename, []byte(data), perms.LocalFilePerm))
+
+			_, err := (&StreamlineAnalyzeFunctionProfileRenderer{}).loadCallPathFile(filename, "self", session, 0)
+			if tc.missingRows {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			var tableCount int
+			require.NoError(t, session.Database().Conn.QueryRowContext(
+				context.Background(), "SELECT count(*) FROM duckdb_tables() WHERE table_name = 'temp'",
+			).Scan(&tableCount))
+			require.Zero(t, tableCount)
+		})
+	}
+}
+
 func TestLoadSymbolsFile(t *testing.T) {
 
 	t.Run("LoadSymbolsFile doesn't error when source data is missing", func(t *testing.T) {

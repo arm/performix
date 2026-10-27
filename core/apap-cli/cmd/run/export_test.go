@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func TestRunExportCommand(t *testing.T) {

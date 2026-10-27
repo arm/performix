@@ -264,7 +264,13 @@ func FindBestCatalogMatch(name string, affiliation string) string {
 func CreateMeasurementSpecFromName(name string, affiliation string, desc string, units string, source string, telemetryData *telemetry.Payload) render.MeasurementSpec {
 
 	// Use existing spec if found
-	spec, ok := LookupMeasurementSpec(name, affiliation, telemetryData)
+	var spec render.MeasurementSpec
+	var ok bool
+	if isC1Telemetry(telemetryData) {
+		spec, ok = createC1MeasurementSpec(name, affiliation, units, source, telemetryData)
+	} else {
+		spec, ok = LookupMeasurementSpec(name, affiliation, telemetryData)
+	}
 	if ok {
 		return spec
 	}
@@ -560,6 +566,11 @@ var catalogEntries = []catalogEntry{
 		ShortDescription: "Average instructions retired per cycle.",
 		Spec:             entry("instr.ipc", "count", nil, map[string]string{"legacy": "IPC"}),
 	},
+	{
+		Title:            "Retired Operations Percentage",
+		ShortDescription: "Percentage of speculated operations that retired.",
+		Spec:             entry("ops.retired.percent", "percent", nil, nil),
+	},
 	// MPKI
 	{
 		Title:            "Branch MPKI",
@@ -802,6 +813,26 @@ var catalogEntries = []catalogEntry{
 		Title:            "SVE Operations (Load/Store Inclusive) Percentage",
 		ShortDescription: "Percentage of speculated ops using SVE, including loads and stores.",
 		Spec:             entry("ops.mix.sve.percent", "percent", nil, nil),
+	},
+	{
+		Title:            "Load-Acquire Instructions Percentage",
+		ShortDescription: "Percentage of speculated instructions that were load-acquire instructions.",
+		Spec:             entry("instr.mix.load.acquire.percent", "percent", nil, nil),
+	},
+	{
+		Title:            "Load-Exclusive Instructions Percentage",
+		ShortDescription: "Percentage of speculated instructions that were load-exclusive instructions.",
+		Spec:             entry("instr.mix.load.exclusive.percent", "percent", nil, nil),
+	},
+	{
+		Title:            "Store-Exclusive Instructions Percentage",
+		ShortDescription: "Percentage of speculated instructions that were store-exclusive instructions.",
+		Spec:             entry("instr.mix.store.exclusive.percent", "percent", nil, nil),
+	},
+	{
+		Title:            "Store-Release Instructions Percentage",
+		ShortDescription: "Percentage of speculated instructions that were store-release instructions.",
+		Spec:             entry("instr.mix.store.release.percent", "percent", nil, nil),
 	},
 	// other
 	{

@@ -15,12 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func TestListRunsTool(t *testing.T) {
-	t.Run("advertises read-only hint", func(t *testing.T) {
+	t.Run("advertises read-only hint and group output", func(t *testing.T) {
 		ctx := context.Background()
 		engine := apapprotomocks.NewApapClient(t)
 		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine}, ListRunsTool{}.Register)
@@ -34,15 +34,31 @@ func TestListRunsTool(t *testing.T) {
 		assert.Equal(t, "list_runs", tools.Tools[0].Name)
 		require.NotNil(t, tools.Tools[0].Annotations)
 		assert.True(t, tools.Tools[0].Annotations.ReadOnlyHint)
+
+		outputSchemaJSON, err := json.Marshal(tools.Tools[0].OutputSchema)
+		require.NoError(t, err)
+		var outputSchema struct {
+			Properties map[string]struct {
+				Items struct {
+					Required   []string                   `json:"required"`
+					Properties map[string]json.RawMessage `json:"properties"`
+				} `json:"items"`
+			} `json:"properties"`
+		}
+		require.NoError(t, json.Unmarshal(outputSchemaJSON, &outputSchema))
+		assert.Contains(t, outputSchema.Properties["runs"].Items.Required, "group")
+		assert.Contains(t, outputSchema.Properties["runs"].Items.Properties, "group")
 	})
 
 	t.Run("returns run summary listing", func(t *testing.T) {
 		ctx := context.Background()
 		engine := apapprotomocks.NewApapClient(t)
+		newerRun := localListedRun("newer-run", "newer run", "2026-05-08T10:00:00Z")
+		newerRun.GetDescription().GetMetadata().Group = "compiler-runs"
 		engine.On("ListRuns", mock.Anything, &emptypb.Empty{}).Return(&apapproto.RunListing{
 			Runs: []*apapproto.ListedRun{
 				localListedRun("older-run", "older run", "2026-05-08T09:00:00Z"),
-				localListedRun("newer-run", "newer run", "2026-05-08T10:00:00Z"),
+				newerRun,
 			},
 		}, nil).Once()
 		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine}, ListRunsTool{}.Register)
@@ -70,7 +86,9 @@ func TestListRunsTool(t *testing.T) {
 		assert.Equal(t, "/path/to/newer run", content.Runs[0].Cmdline)
 		assert.Equal(t, "success", content.Runs[0].RunResult)
 		assert.Equal(t, "localhost", content.Runs[0].Target)
+		assert.Equal(t, "compiler-runs", content.Runs[0].Group)
 		assert.Equal(t, "older-run", content.Runs[1].ID)
+		assert.Empty(t, content.Runs[1].Group)
 
 		structured, ok := result.StructuredContent.(map[string]any)
 		require.True(t, ok)
@@ -80,8 +98,12 @@ func TestListRunsTool(t *testing.T) {
 		firstRun, ok := runs[0].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "/path/to/newer run", firstRun["cmdline"])
+		assert.Equal(t, "compiler-runs", firstRun["group"])
 		assert.NotContains(t, firstRun, "parameters")
 		assert.NotContains(t, firstRun, "target_name")
+		secondRun, ok := runs[1].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "", secondRun["group"])
 		assert.NotContains(t, structured, "has_more")
 	})
 

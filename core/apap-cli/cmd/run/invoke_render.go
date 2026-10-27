@@ -18,7 +18,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/client"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 var InvokeRenderCmd = NewInvokeRenderCmd(client.NewAutostartClient(), run.RenderService{})

@@ -15,7 +15,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/clierror"
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-cli/utils"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func TestCloseCommand_Fails(t *testing.T) {

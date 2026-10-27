@@ -21,6 +21,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/render"
 )
 
+const testArrowToken = "test-arrow-token"
+
 type stubQueryExecutor struct {
 	reader    io.ReadCloser
 	err       error
@@ -54,13 +56,17 @@ type trackingReadCloser struct {
 	closed bool
 }
 
+func authorizeHTTPQueryRequest(req *http.Request) {
+	req.Header.Set("Authorization", "Bearer "+testArrowToken)
+}
+
 func (t *trackingReadCloser) Close() error {
 	t.closed = true
 	return nil
 }
 
 func TestHTTPQueryHandlerOptions(t *testing.T) {
-	handler := newHTTPQueryHandler(&stubQueryExecutor{}, 0)
+	handler := newHTTPQueryHandler(&stubQueryExecutor{}, 0, testArrowToken)
 
 	req := httptest.NewRequest(http.MethodOptions, "/query", nil)
 	rec := httptest.NewRecorder()
@@ -74,10 +80,35 @@ func TestHTTPQueryHandlerOptions(t *testing.T) {
 	assert.Equal(t, corsExposeHeaders, rec.Header().Get("Access-Control-Expose-Headers"))
 }
 
+func TestHTTPQueryHandlerRejectsInvalidBearerToken(t *testing.T) {
+	tests := map[string]string{
+		"missing":       "",
+		"wrong scheme":  "Basic " + testArrowToken,
+		"wrong token":   "Bearer wrong-token",
+		"missing token": "Bearer ",
+	}
+	for name, authorization := range tests {
+		t.Run(name, func(t *testing.T) {
+			handler := newHTTPQueryHandler(&stubQueryExecutor{}, 0, testArrowToken)
+			req := httptest.NewRequest(http.MethodPost, "/query?session_id=session-1", bytes.NewBufferString("select 1"))
+			if authorization != "" {
+				req.Header.Set("Authorization", authorization)
+			}
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			assert.Equal(t, "Bearer", rec.Header().Get("WWW-Authenticate"))
+		})
+	}
+}
+
 func TestHTTPQueryHandlerMissingParams(t *testing.T) {
-	handler := newHTTPQueryHandler(&stubQueryExecutor{}, 0)
+	handler := newHTTPQueryHandler(&stubQueryExecutor{}, 0, testArrowToken)
 
 	req := httptest.NewRequest(http.MethodGet, "/query?sql=select+1", nil)
+	authorizeHTTPQueryRequest(req)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -87,9 +118,10 @@ func TestHTTPQueryHandlerMissingParams(t *testing.T) {
 }
 
 func TestHTTPQueryHandlerMethodNotAllowed(t *testing.T) {
-	handler := newHTTPQueryHandler(&stubQueryExecutor{}, 0)
+	handler := newHTTPQueryHandler(&stubQueryExecutor{}, 0, testArrowToken)
 
 	req := httptest.NewRequest(http.MethodPut, "/query", nil)
+	authorizeHTTPQueryRequest(req)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -98,9 +130,10 @@ func TestHTTPQueryHandlerMethodNotAllowed(t *testing.T) {
 }
 
 func TestHTTPQueryHandlerMissingSQLQuery(t *testing.T) {
-	handler := newHTTPQueryHandler(&stubQueryExecutor{}, 0)
+	handler := newHTTPQueryHandler(&stubQueryExecutor{}, 0, testArrowToken)
 
 	req := httptest.NewRequest(http.MethodGet, "/query?session_id=session-1", nil)
+	authorizeHTTPQueryRequest(req)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -109,9 +142,10 @@ func TestHTTPQueryHandlerMissingSQLQuery(t *testing.T) {
 }
 
 func TestHTTPQueryHandlerMissingSQLBody(t *testing.T) {
-	handler := newHTTPQueryHandler(&stubQueryExecutor{}, 0)
+	handler := newHTTPQueryHandler(&stubQueryExecutor{}, 0, testArrowToken)
 
 	req := httptest.NewRequest(http.MethodPost, "/query?session_id=session-1", bytes.NewBufferString("   "))
+	authorizeHTTPQueryRequest(req)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -121,9 +155,10 @@ func TestHTTPQueryHandlerMissingSQLBody(t *testing.T) {
 
 func TestHTTPQueryHandlerExecError(t *testing.T) {
 	executor := &stubQueryExecutor{err: errors.New("boom")}
-	handler := newHTTPQueryHandler(executor, 0)
+	handler := newHTTPQueryHandler(executor, 0, testArrowToken)
 
 	req := httptest.NewRequest(http.MethodGet, "/query?session_id=s1&sql=select+1", nil)
+	authorizeHTTPQueryRequest(req)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -136,7 +171,7 @@ func TestHTTPQueryHandlerClientCancellationStopsExecutor(t *testing.T) {
 		started: make(chan struct{}),
 		stopped: make(chan error, 1),
 	}
-	server := httptest.NewServer(newHTTPQueryHandler(executor, 0))
+	server := httptest.NewServer(newHTTPQueryHandler(executor, 0, testArrowToken))
 	t.Cleanup(server.Close)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -148,6 +183,7 @@ func TestHTTPQueryHandlerClientCancellationStopsExecutor(t *testing.T) {
 		bytes.NewBufferString("select 1"),
 	)
 	require.NoError(t, err)
+	authorizeHTTPQueryRequest(req)
 
 	requestDone := make(chan struct{})
 	go func() {
@@ -184,7 +220,7 @@ func TestHTTPQueryHandlerClientCancellationStopsExecutor(t *testing.T) {
 
 func TestHTTPQueryHandlerExecErrorLogging(t *testing.T) {
 	executor := &stubQueryExecutor{err: errors.New("boom")}
-	handler := newHTTPQueryHandler(executor, 0)
+	handler := newHTTPQueryHandler(executor, 0, testArrowToken)
 
 	logger := log.StandardLogger()
 	oldHooks := logger.ReplaceHooks(make(log.LevelHooks))
@@ -197,6 +233,7 @@ func TestHTTPQueryHandlerExecErrorLogging(t *testing.T) {
 	hook := logtest.NewLocal(logger)
 
 	req := httptest.NewRequest(http.MethodGet, "/query?session_id=session-1&sql=select+1", nil)
+	authorizeHTTPQueryRequest(req)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -228,9 +265,10 @@ func TestHTTPQueryHandlerSuccess(t *testing.T) {
 	payload := []byte{0x01, 0x02, 0x03}
 	reader := &trackingReadCloser{Reader: bytes.NewReader(payload)}
 	executor := &stubQueryExecutor{reader: reader}
-	handler := newHTTPQueryHandler(executor, 0)
+	handler := newHTTPQueryHandler(executor, 0, testArrowToken)
 
 	req := httptest.NewRequest(http.MethodGet, "/query?session_id=session-1&sql=select+1", nil)
+	authorizeHTTPQueryRequest(req)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -253,7 +291,7 @@ func TestHTTPQueryHandlerLogging(t *testing.T) {
 	payload := []byte{0x01, 0x02, 0x03}
 	reader := &trackingReadCloser{Reader: bytes.NewReader(payload)}
 	executor := &stubQueryExecutor{reader: reader}
-	handler := newHTTPQueryHandler(executor, 0)
+	handler := newHTTPQueryHandler(executor, 0, testArrowToken)
 
 	logger := log.StandardLogger()
 	oldHooks := logger.ReplaceHooks(make(log.LevelHooks))
@@ -266,6 +304,7 @@ func TestHTTPQueryHandlerLogging(t *testing.T) {
 	hook := logtest.NewLocal(logger)
 
 	req := httptest.NewRequest(http.MethodGet, "/query?session_id=session-1&sql=select+1", nil)
+	authorizeHTTPQueryRequest(req)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -295,9 +334,10 @@ func TestHTTPQueryHandlerSuccessPostBody(t *testing.T) {
 	payload := []byte{0x04, 0x05}
 	reader := &trackingReadCloser{Reader: bytes.NewReader(payload)}
 	executor := &stubQueryExecutor{reader: reader}
-	handler := newHTTPQueryHandler(executor, 0)
+	handler := newHTTPQueryHandler(executor, 0, testArrowToken)
 
 	req := httptest.NewRequest(http.MethodPost, "/query?session_id=session-2", bytes.NewBufferString("select 2"))
+	authorizeHTTPQueryRequest(req)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

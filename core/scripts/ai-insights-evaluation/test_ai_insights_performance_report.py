@@ -44,6 +44,7 @@ def build_payloads(attempts: list[dict[str, str]]):
     """Add the MCP properties recorded for every real pytest attempt."""
     return build_payloads_from_junit([
         {
+            "ai_mcp_tool_rounds": "0",
             "ai_mcp_tool_calls_succeeded": "0",
             "ai_mcp_tool_calls_failed": "0",
             "ai_mcp_tool_duration_seconds_succeeded": "0",
@@ -64,13 +65,13 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
                 {
                     "ai_test_id": "test_case_01",
                     "ai_mode": "performix_mcp",
+                    "ai_mcp_tool_rounds": "0",
                 }
             ])
 
     def test_only_performix_mcp_has_performance_evaluation(self):
         self.assertTrue(is_performance_evaluated_mode("performix_mcp"))
-        self.assertFalse(is_performance_evaluated_mode("rest"))
-        self.assertFalse(is_performance_evaluated_mode("hackathon_mcp"))
+        self.assertFalse(is_performance_evaluated_mode("other_mode"))
 
     def test_poor_and_indeterminable_metrics_are_performance_failures(self):
         thresholds = {
@@ -111,15 +112,7 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
         attempts = [
             {
                 "ai_test_id": "test_case_01",
-                "ai_mode": "rest",
-                "pytest_outcome": "passed",
-                "ai_agent_duration_seconds": "999",
-                "ai_input_tokens": "999999",
-                "ai_output_tokens": "999999",
-            },
-            {
-                "ai_test_id": "test_case_01",
-                "ai_mode": "hackathon_mcp",
+                "ai_mode": "performix_mcp",
                 "pytest_outcome": "passed",
                 "ai_agent_duration_seconds": "999",
                 "ai_input_tokens": "999999",
@@ -133,6 +126,7 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
                 "ai_input_tokens": "1000",
                 "ai_output_tokens": "1000",
                 "ai_reasoning_output_tokens": "123",
+                "ai_mcp_tool_rounds": "1",
                 "ai_mcp_tool_calls_succeeded": "1",
                 "ai_mcp_tool_calls_failed": "1",
                 "ai_mcp_tool_duration_seconds_succeeded": "1",
@@ -140,8 +134,8 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
             },
         ]
 
-        attempts[2] = with_performance_assessment(
-            attempts[2],
+        attempts[1] = with_performance_assessment(
+            attempts[1],
             {"duration_seconds": 60, "input_tokens": 1000, "output_tokens": 1000},
         )
         metadata, report = build_payloads(attempts)
@@ -154,16 +148,18 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
             },
             metadata["data_quality_distribution"],
         )
-        self.assertEqual(1, metadata["n_runs"])
-        self.assertEqual(3, len(report["rows"]))
+        self.assertEqual(2, metadata["n_runs"])
+        self.assertEqual(2, len(report["rows"]))
         ignored_col = report["headers"].index("ignored_for_quality")
-        self.assertEqual([True, True, False], [row[ignored_col] for row in report["rows"]])
+        self.assertEqual([True, False], [row[ignored_col] for row in report["rows"]])
         self.assertIn("attempt", report["headers"])
         self.assertIn("attempts_total", report["headers"])
-        rest_row = dict(zip(report["headers"], report["rows"][0]))
-        self.assertEqual(0, rest_row["mcp_tool_calls_succeeded"])
-        self.assertEqual(0, rest_row["mcp_tool_calls_failed"])
-        performix_row = dict(zip(report["headers"], report["rows"][2]))
+        unassessed_row = dict(zip(report["headers"], report["rows"][0]))
+        self.assertEqual(0, unassessed_row["mcp_tool_rounds"])
+        self.assertEqual(0, unassessed_row["mcp_tool_calls_succeeded"])
+        self.assertEqual(0, unassessed_row["mcp_tool_calls_failed"])
+        performix_row = dict(zip(report["headers"], report["rows"][1]))
+        self.assertEqual(1, performix_row["mcp_tool_rounds"])
         self.assertEqual(1, performix_row["mcp_tool_calls_succeeded"])
         self.assertEqual(1, performix_row["mcp_tool_calls_failed"])
         self.assertEqual(1, performix_row["mcp_tool_duration_seconds_succeeded"])
@@ -363,7 +359,7 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
         attempts = [
             {
                 "ai_test_id": "test_case_01",
-                "ai_mode": "rest",
+                "ai_mode": "other_mode",
                 "ai_attempt": "1",
                 "ai_attempts_total": "1",
                 "ai_agent_duration_seconds": "999",
@@ -378,6 +374,7 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
                 "ai_agent_duration_seconds": "12.345",
                 "ai_input_tokens": "456",
                 "ai_output_tokens": "78",
+                "ai_reasoning_output_tokens": "34",
             },
         ]
         _, report = build_payloads(attempts)
@@ -386,7 +383,16 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
             [
                 {"name": "test_case_01 wall-clock time", "unit": "s", "value": 12.345},
                 {"name": "test_case_01 input tokens", "unit": "tokens", "value": 456},
-                {"name": "test_case_01 output tokens", "unit": "tokens", "value": 78},
+                {
+                    "name": "test_case_01 non-reasoning output tokens",
+                    "unit": "tokens",
+                    "value": 78,
+                },
+                {
+                    "name": "test_case_01 reasoning output tokens",
+                    "unit": "tokens",
+                    "value": 34,
+                },
             ],
             build_dashboard_benchmarks(report),
         )
@@ -401,6 +407,7 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
                 "ai_agent_duration_seconds": "11",
                 "ai_input_tokens": "22",
                 "ai_output_tokens": "33",
+                "ai_reasoning_output_tokens": "11",
             },
             {
                 "ai_test_id": "test_case_01",
@@ -410,6 +417,7 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
                 "ai_agent_duration_seconds": "44",
                 "ai_input_tokens": "55",
                 "ai_output_tokens": "66",
+                "ai_reasoning_output_tokens": "22",
             },
         ]
         _, report = build_payloads(attempts)
@@ -417,7 +425,8 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
         names = [benchmark["name"] for benchmark in build_dashboard_benchmarks(report)]
 
         self.assertIn("test_case_01 attempt 1 wall-clock time", names)
-        self.assertIn("test_case_01 attempt 2 output tokens", names)
+        self.assertIn("test_case_01 attempt 2 non-reasoning output tokens", names)
+        self.assertIn("test_case_01 attempt 2 reasoning output tokens", names)
 
     def test_attempts_from_junit_reads_ai_properties_and_outcomes(self):
         junit = """<?xml version="1.0" encoding="utf-8"?>
@@ -441,7 +450,7 @@ class AiInsightsPerformanceReportTests(unittest.TestCase):
   <testcase classname="suite" name="failing">
     <properties>
       <property name="ai_test_id" value="test_case_05" />
-      <property name="ai_mode" value="rest" />
+      <property name="ai_mode" value="performix_mcp" />
     </properties>
     <failure message="failed" />
   </testcase>

@@ -10,11 +10,13 @@ import (
 	"io"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/grouping"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/clijson"
+	"github.com/Arm-Debug/apap-cli/apap-cli/service/mcpserver"
 )
 
 type fakeRunner struct {
@@ -25,6 +27,12 @@ type fakeRunner struct {
 func (f *fakeRunner) Run(ctx context.Context, in io.ReadCloser, out io.Writer, errOut io.Writer) error {
 	f.called = true
 	return f.err
+}
+
+func newTestMCPStartCmd(runner MCPRunner) *cobra.Command {
+	return newMCPStartCmd(func(mcpserver.MCPServerOptions) MCPRunner {
+		return runner
+	})
 }
 
 func TestRootCommand(t *testing.T) {
@@ -80,10 +88,40 @@ func TestRootCommand(t *testing.T) {
 	})
 }
 
+func TestMCPStartSourceSharingFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		args         []string
+		acknowledged bool
+	}{
+		{"default", []string{}, false},
+		{"enabled", []string{"--acknowledge-source-sharing"}, true},
+		{"disabled", []string{"--acknowledge-source-sharing=false"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &fakeRunner{}
+			var gotOptions mcpserver.MCPServerOptions
+			cmd := newMCPStartCmd(func(options mcpserver.MCPServerOptions) MCPRunner {
+				gotOptions = options
+				return runner
+			})
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(tc.args)
+
+			_, err := cmd.ExecuteC()
+
+			require.NoError(t, err)
+			require.True(t, runner.called)
+			assert.Equal(t, tc.acknowledged, gotOptions.SourceSharingAcknowledged)
+		})
+	}
+}
+
 func TestRun(t *testing.T) {
 	t.Run("create new MCP start command and call injectable fake runner", func(t *testing.T) {
 		f := &fakeRunner{}
-		cmd := newMCPStartCmd(f)
+		cmd := newTestMCPStartCmd(f)
 		cmd.SetOut(io.Discard)
 		cmd.SetErr(io.Discard)
 		cmd.SetArgs([]string{})
@@ -100,7 +138,7 @@ func TestRun(t *testing.T) {
 	})
 
 	t.Run("MCP start command writes no non-protocol output", func(t *testing.T) {
-		cmd := newMCPStartCmd(&fakeRunner{})
+		cmd := newTestMCPStartCmd(&fakeRunner{})
 
 		var buf bytes.Buffer
 		cmd.SetOut(&buf)
@@ -113,7 +151,7 @@ func TestRun(t *testing.T) {
 	})
 
 	t.Run("MCP start command accepts no arguments", func(t *testing.T) {
-		cmd := newMCPStartCmd(&fakeRunner{})
+		cmd := newTestMCPStartCmd(&fakeRunner{})
 		cmd.SetOut(io.Discard)
 		cmd.SetErr(io.Discard)
 		cmd.SetArgs([]string{})
@@ -124,7 +162,7 @@ func TestRun(t *testing.T) {
 	})
 
 	t.Run("MCP start command rejects unexpected arguments", func(t *testing.T) {
-		cmd := newMCPStartCmd(&fakeRunner{})
+		cmd := newTestMCPStartCmd(&fakeRunner{})
 		cmd.SetArgs([]string{"unexpected"})
 
 		_, err := cmd.ExecuteC()
@@ -134,7 +172,7 @@ func TestRun(t *testing.T) {
 
 	t.Run("MCP start command shows help without running server", func(t *testing.T) {
 		f := &fakeRunner{}
-		cmd := newMCPStartCmd(f)
+		cmd := newTestMCPStartCmd(f)
 
 		var buf bytes.Buffer
 		cmd.SetOut(&buf)
@@ -145,11 +183,12 @@ func TestRun(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, f.called)
 		assert.Contains(t, buf.String(), "Start")
+		assert.Contains(t, buf.String(), "--acknowledge-source-sharing")
 	})
 
 	t.Run("MCP start command wraps runner error", func(t *testing.T) {
 		expectedErr := errors.New("runner failed")
-		cmd := newMCPStartCmd(&fakeRunner{err: expectedErr})
+		cmd := newTestMCPStartCmd(&fakeRunner{err: expectedErr})
 		var outBuf bytes.Buffer
 		cmd.SetOut(&outBuf)
 		var errBuf bytes.Buffer

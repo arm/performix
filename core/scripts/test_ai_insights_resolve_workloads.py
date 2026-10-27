@@ -38,6 +38,12 @@ class ParseTestcaseIdsTests(unittest.TestCase):
 
 
 class ResolveWorkloadsTests(unittest.TestCase):
+    def test_prerecord_selection_skips_pathways_without_a_prerecorded_run(self):
+        tests = [{"id": "live", "acts": ["act4"], "pathways_execution": {"mode": "host_ssh"}},
+                 {"id": "recorded", "acts": ["act4"]}]
+        self.assertEqual([tests[1]], resolver.resolve_workloads(tests, "act4", []))
+        self.assertEqual([], resolver.resolve_workloads(tests, "act4", ["live"]))
+
     def test_preserves_requested_order(self):
         tests = [{"id": "test_case_21"}, {"id": "test_case_27"}]
 
@@ -84,6 +90,42 @@ class ResolveCaseConfigTests(unittest.TestCase):
 
         self.assertEqual(case["prerecord"]["mode"], "system-wide")
         self.assertEqual(case["workload"], "")
+
+    def test_resolves_platform_qualified_robot_workload_command(self):
+        case = resolver.resolve_case_config(
+            {
+                "id": "code-hotspots-baseline-windows-aarch64",
+                "logical_id": "code-hotspots-baseline",
+                "platform": "windows",
+                "arch": "aarch64",
+                "instance_os": "windows-11-pro-arm",
+                "workload_command": "python -c 10**10**10",
+                "recipe": "code_hotspots",
+            },
+            {"prerecord": {"mode": "launch"}},
+            catalog="robot",
+        )
+
+        self.assertEqual(case["workload"], "")
+        self.assertEqual(case["workload_command"], "python -c 10**10**10")
+        self.assertEqual(case["platform"], "windows")
+        self.assertEqual(case["logical_id"], "code-hotspots-baseline")
+
+    def test_rejects_mismatched_platform_qualified_robot_id(self):
+        with self.assertRaisesRegex(ValueError, "must be code-hotspots-baseline-linux-aarch64"):
+            resolver.resolve_case_config(
+                {
+                    "id": "code-hotspots-baseline-windows-aarch64",
+                    "logical_id": "code-hotspots-baseline",
+                    "platform": "linux",
+                    "arch": "aarch64",
+                    "instance_os": "Ubuntu 24.04 (arm64)",
+                    "workload_command": "dd if=/dev/zero of=/dev/null",
+                    "recipe": "code_hotspots",
+                },
+                {"prerecord": {"mode": "launch"}},
+                catalog="robot",
+            )
 
     def test_rejects_system_wide_lifecycle_commands(self):
         with self.assertRaisesRegex(ValueError, "system-wide prerecord cannot use"):

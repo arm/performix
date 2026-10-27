@@ -34,6 +34,12 @@ func TestQueryHandlesVariousTypes(t *testing.T) {
 			expectedRow: map[string]interface{}{"val": float64(42)},
 		},
 		{
+			name:        "UINTEGER column",
+			columnDef:   "val UINTEGER",
+			insertStmt:  "INSERT INTO test VALUES (42)",
+			expectedRow: map[string]interface{}{"val": float64(42)},
+		},
+		{
 			name:        "BIGINT[] array",
 			columnDef:   "val BIGINT[]",
 			insertStmt:  "INSERT INTO test VALUES (ARRAY[1, 2, 3])",

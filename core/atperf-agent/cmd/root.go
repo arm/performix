@@ -36,12 +36,11 @@ func NewRootCmd() *cobra.Command {
 }
 
 func HandleRootCmdError(err error) {
-	fmt.Println(err)
-
 	// Custom error handling to allow a GroupController process to mimic the exit status of its child process
 	if e, ok := err.(*process.ChildProcessExitError); ok {
 		os.Exit(e.ExitCode)
 	}
 
+	fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
 }

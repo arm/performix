@@ -4,10 +4,15 @@
 // CPU Microarchitecture Recipe Definition
 
 // @ts-check
+const { getComparisonFilters } = require('./lib/comparison_filters');
 let tool_name = 'neoprof';
 let tool_version = '1.1.0';
 const CORE_TYPE_RENDER_PARAMETER = 'filter_core_type';
-const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
+const {
+  collectToolAdvice,
+  toolStatusToRecipeStatus,
+  getPartialCPUSupportAdvice,
+} = recipeUtils;
 
 /**
  * @type {import("./docs/jsdocs").Recipe}
@@ -19,7 +24,7 @@ var recipe = {
   api_version: '1.0.2',
   status: 'stable',
   description:
-    'The CPU Microarchitecture recipe helps you explore Arm CPU performance step by step. It gives you a broad, structured view of any bottlenecks and hotspots. You can then focus on the areas where optimization will have the most impact.',
+    'Analyze CPU execution efficiency to identify bottlenecks, for example, pipeline stalls and branch mispredictions.',
   deployments: [
     {
       appliesTo: [{ architecture: 'aarch64', os: 'Linux' }],
@@ -446,6 +451,13 @@ function readyCPUMicroarchitecture(context) {
   let toolResponses = context.probeTools(tools);
 
   let allAdvice = collectToolAdvice(tools, toolResponses);
+  const partialCPUSupportAdvice = getPartialCPUSupportAdvice(
+    context,
+    'recipes.cpu_microarchitecture.PARTIAL_CPU_SUPPORT',
+  );
+  if (partialCPUSupportAdvice) {
+    allAdvice.push(partialCPUSupportAdvice);
+  }
   const softLockupRiskAdvice = getSoftLockupRiskAdvice(context, workload);
   if (softLockupRiskAdvice) {
     allAdvice.push(softLockupRiskAdvice);
@@ -1404,7 +1416,10 @@ function renderCPUMicroarchitecture(context) {
     renderers,
     ui: {
       visualizations,
-      side_panel_filters: filters,
+      side_panel_filters:
+        isComparison && context.isRerenderingEnabled()
+          ? getComparisonFilters(context)
+          : filters,
     },
   };
 }

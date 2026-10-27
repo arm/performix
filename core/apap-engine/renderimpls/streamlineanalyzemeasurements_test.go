@@ -187,13 +187,30 @@ func loadTelemetryForModel(t *testing.T, cpuModel string) *telemetry.Payload {
 	return tp
 }
 
-func TestLookupMeasurementSpec_HasEntriesForAllTelemetryMetrics(t *testing.T) {
+func TestCreateMeasurementSpec_HasEntriesForAllTelemetryMetrics(t *testing.T) {
 	for _, model := range telemetry.SupportedCPUModels() {
 		tp := loadTelemetryForModel(t, model)
 		for name, m := range tp.Metrics {
 			t.Run("model_"+model+"_metric_"+name, func(t *testing.T) {
 				modTitle := strings.ReplaceAll(m.Title, "Ratio", "Percentage")
 				_, ok := LookupMeasurementSpec(modTitle, "self", tp)
+				if strings.HasPrefix(model, "C1-") {
+					spec := CreateMeasurementSpecFromName(modTitle, "self", "collector description", "percent", "streamline-analyze", tp)
+					assert.Equal(t, modTitle+" (self)", spec.Name)
+					assert.Equal(t, name, spec.Aliases["telemetry"])
+					assert.Equal(t, modTitle, spec.Aliases["streamline-analyze"])
+					assert.Equal(t, m.Description, spec.ShortDescription)
+					assert.Contains(t, spec.Description, m.Formula)
+					assert.Contains(t, spec.Tags, "kind:metric")
+					assert.NotContains(t, spec.Tags, "kind:unknown")
+					for _, group := range tp.GetGroupNamesByMetricID(name) {
+						assert.Contains(t, spec.Tags, "group:"+group)
+					}
+					if !ok {
+						assert.Equal(t, render.SlugIdentifier("telemetry."+name+".self"), spec.Identifier)
+					}
+					return
+				}
 				require.True(t, ok, "missing catalog entry for telemetry metric %q in model %q", modTitle, model)
 			})
 		}

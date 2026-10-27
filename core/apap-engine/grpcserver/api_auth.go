@@ -9,13 +9,14 @@ import (
 	"strings"
 
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/authproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/authproto"
 )
 
 // AuthServer implements the TLS-protected authentication service.
@@ -24,6 +25,7 @@ type AuthServer struct {
 	shutdownCtx    context.Context
 	targetSessions targetsession.TargetSessionProvider
 	targetAccess   *target.TargetAccess
+	arrowToken     string
 	// createSSHConnection creates a one-off SSH connection for transient login
 	// requests, bypassing the target-session cache so host-key verification
 	// prompts can be re-evaluated.
@@ -31,16 +33,22 @@ type AuthServer struct {
 }
 
 // NewAuthServer creates a new AuthServer instance.
-func NewAuthServer(shutdownCtx context.Context, targetSessions targetsession.TargetSessionProvider, targetAccess *target.TargetAccess) *AuthServer {
+func NewAuthServer(shutdownCtx context.Context, targetSessions targetsession.TargetSessionProvider, targetAccess *target.TargetAccess, arrowToken string) *AuthServer {
 	return &AuthServer{
 		shutdownCtx:    shutdownCtx,
 		targetSessions: targetSessions,
 		targetAccess:   targetAccess,
+		arrowToken:     arrowToken,
 		createSSHConnection: func(ctx context.Context, s *target.SSHTarget, pp conductor.PromptProviders) (conductor.SecureClient, error) {
 			secureConnector := conductor.NewDefaultSecureConnector()
 			return secureConnector.SecureConnectNoRetry(ctx, s, pp)
 		},
 	}
+}
+
+// GetArrowToken returns the bearer token required by the Arrow HTTP query service
+func (s *AuthServer) GetArrowToken(context.Context, *emptypb.Empty) (*authproto.ArrowToken, error) {
+	return &authproto.ArrowToken{Value: s.arrowToken}, nil
 }
 
 // sendTargetLoginError sends a TargetLoginResponse with the provided error details to the client.

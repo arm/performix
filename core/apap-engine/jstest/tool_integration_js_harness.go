@@ -189,7 +189,7 @@ func LoadToolIntegration(t *testing.T, toolIntegrationName string) *ToolIntegrat
 	t.Helper()
 
 	// Load tool int
-	resolvedPath := resolveJSFilePath(t, filepath.Join("tool-integrations", toolIntegrationName+".js"))
+	resolvedPath := resolveSourceFilePath(t, filepath.Join("tool-integrations", toolIntegrationName+".js"))
 	data, err := os.ReadFile(resolvedPath)
 	require.NoError(t, err, "failed to read requested tool integration")
 

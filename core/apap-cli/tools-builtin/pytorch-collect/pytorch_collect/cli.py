@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import runpy
 import sys
+import time
 from pathlib import Path
 from .tracing import ApiCallTrace, OperatorCallTrace
 from .tracker import TraceTracker
@@ -81,12 +82,18 @@ def main() -> int:
     interrupted = False
     try:
         with writer:
+            collection_start_ns = time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
             try:
                 trace_module(writer, module, args.module[1:])
             except KeyboardInterrupt:
                 # If we're interrupted whilst running the subject module, we'll
                 # want the writer to finish writing...
                 interrupted = True
+            finally:
+                writer.write_collection_timing(
+                    collection_start_ns,
+                    time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW),
+                )
     except KeyboardInterrupt:
         # ... but if we're interrupted whilst that's happening then we can't
         # be sure of the state of the output.

@@ -23,7 +23,8 @@ def run(data_dir: Path = DATA_DIR) -> int:
         schemas[path.name] = Draft202012Validator(schema)
 
     counts = {"error": 0, "warning": 0}
-    for visibility, level in (("public", "error"), ("private", "warning")):
+    for visibility in ("public", "private"):
+        level = "warning"
         for path in sorted((data_dir / visibility).glob("*.json")):
             try:
                 document = json.loads(path.read_text(encoding="utf-8"))

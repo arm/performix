@@ -5,14 +5,18 @@ package recipe
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jedib0t/go-pretty/v6/progress"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -20,15 +24,16 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/Arm-Debug/apap-cli/apap-cli/service/client"
+	"github.com/Arm-Debug/apap-cli/apap-cli/service"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/target"
 	targetloginmocks "github.com/Arm-Debug/apap-cli/apap-cli/service/targetlogin/mocks"
+	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 type fakeRecipeIssueCommandClient struct {
@@ -89,6 +94,48 @@ func TestStreamProgressResponsesDetachedFinish(t *testing.T) {
 	}
 }
 
+func TestStreamProgressResponsesSkipsMetadataChangeJSONOutput(t *testing.T) {
+	previousJSONOutput := viper.GetBool("json")
+	viper.Set("json", true)
+	t.Cleanup(func() { viper.Set("json", previousJSONOutput) })
+
+	runID := &apapproto.RunId{Value: "run-id"}
+	supportsStop := false
+	client := apapprotomocks.NewApapClient(t)
+	client.On("GetRunDescription", mock.Anything, &apapproto.GetRunDescriptionRequest{Id: runID}).
+		Return(&apapproto.RunDescription{Metadata: &apapproto.RunMetadata{SupportsStop: &supportsStop}}, nil).Once()
+	stream := &fakeRecipeIssueCommandClient{responses: []*apapproto.RecipeResponse{
+		{
+			Id: runID,
+			SubMessage: &apapproto.RecipeResponse_RecipeStart{
+				RecipeStart: &apapproto.RecipeStart{},
+			},
+		},
+		{
+			Id: runID,
+			SubMessage: &apapproto.RecipeResponse_RunMetadataChanged{
+				RunMetadataChanged: &apapproto.RunMetadataChanged{
+					Reason: apapproto.RunMetadataChangeReason_RUN_METADATA_CHANGE_REASON_STOP_SUPPORT,
+				},
+			},
+		},
+		{
+			Id: runID,
+			SubMessage: &apapproto.RecipeResponse_RecipeFinish{
+				RecipeFinish: &apapproto.RecipeFinish{ReturnCode: apapproto.StatusCode_SUCCESS},
+			},
+		},
+	}}
+	out := &bytes.Buffer{}
+
+	response, err := streamProgressResponses(stream, "recipe", out, client)
+
+	require.NoError(t, err)
+	require.Equal(t, "Recipe completed: recipe", response.Stage)
+	assert.Equal(t, 1, strings.Count(out.String(), "\n"))
+	client.AssertExpectations(t)
+}
+
 func TestSendRecipeRunToEngineForwardsDetachBackgroundTransfers(t *testing.T) {
 	previousJSONOutput := viper.GetBool("json")
 	viper.Set("json", true)
@@ -120,6 +167,85 @@ func TestSendRecipeRunToEngineForwardsDetachBackgroundTransfers(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, response.BackgroundTransfersRemaining)
 	client.AssertExpectations(t)
+}
+
+func TestRecipeServiceStdinHandlerRespectsStopSupport(t *testing.T) {
+	supportsStop := func(value bool) *atomic.Bool {
+		state := &atomic.Bool{}
+		state.Store(value)
+		return state
+	}
+
+	t.Run("runs with Stop support stop gracefully from Ctrl-C or stdin", func(t *testing.T) {
+		client := apapprotomocks.NewApapClient(t)
+		client.On("RecipeIssueCommand", mock.Anything, mock.MatchedBy(func(command *apapproto.RecipeCommand) bool {
+			return command.GetStopCommand().GetId().GetValue() == "run-id"
+		})).Return(nil, nil).Once()
+
+		RecipeServiceStdinHandler(client, service.STOP, run.RunID{Value: "run-id"}, supportsStop(true))
+		client.AssertExpectations(t)
+	})
+
+	t.Run("runs without Stop support ignore Ctrl-C and stdin Stop", func(t *testing.T) {
+		client := apapprotomocks.NewApapClient(t)
+		RecipeServiceStdinHandler(client, service.STOP, run.RunID{Value: "run-id"}, supportsStop(false))
+		client.AssertExpectations(t)
+	})
+
+	t.Run("runs without Stop support cancel on their second Ctrl-C", func(t *testing.T) {
+		client := apapprotomocks.NewApapClient(t)
+		client.On("RecipeIssueCommand", mock.Anything, mock.MatchedBy(func(command *apapproto.RecipeCommand) bool {
+			return command.GetCancelCommand().GetId().GetValue() == "run-id"
+		})).Return(nil, nil).Once()
+
+		RecipeServiceStdinHandler(client, service.CANCEL, run.RunID{Value: "run-id"}, supportsStop(false))
+		client.AssertExpectations(t)
+	})
+}
+
+func TestRefreshRunStopSupport(t *testing.T) {
+	t.Run("updates from persisted explicit metadata", func(t *testing.T) {
+		client := apapprotomocks.NewApapClient(t)
+		supported := false
+		client.On("GetRunDescription", mock.MatchedBy(func(ctx context.Context) bool {
+			_, hasDeadline := ctx.Deadline()
+			return hasDeadline
+		}), &apapproto.GetRunDescriptionRequest{Id: &apapproto.RunId{Value: "run-id"}}).
+			Return(&apapproto.RunDescription{Metadata: &apapproto.RunMetadata{SupportsStop: &supported}}, nil).Once()
+
+		state := &atomic.Bool{}
+		state.Store(true)
+		refreshRunStopSupport(client, &apapproto.RunId{Value: "run-id"}, state)
+
+		assert.False(t, state.Load())
+		client.AssertExpectations(t)
+	})
+
+	t.Run("preserves legacy Stop behavior when metadata refresh times out", func(t *testing.T) {
+		client := apapprotomocks.NewApapClient(t)
+		client.On("GetRunDescription", mock.Anything, &apapproto.GetRunDescriptionRequest{Id: &apapproto.RunId{Value: "run-id"}}).
+			Return(nil, context.DeadlineExceeded).Once()
+
+		state := &atomic.Bool{}
+		state.Store(true)
+		refreshRunStopSupport(client, &apapproto.RunId{Value: "run-id"}, state)
+
+		assert.True(t, state.Load())
+		client.AssertExpectations(t)
+	})
+
+	t.Run("preserves legacy Stop behavior when metadata omits the capability", func(t *testing.T) {
+		client := apapprotomocks.NewApapClient(t)
+		client.On("GetRunDescription", mock.Anything, &apapproto.GetRunDescriptionRequest{Id: &apapproto.RunId{Value: "run-id"}}).
+			Return(&apapproto.RunDescription{Metadata: &apapproto.RunMetadata{}}, nil).Once()
+
+		state := &atomic.Bool{}
+		state.Store(true)
+		refreshRunStopSupport(client, &apapproto.RunId{Value: "run-id"}, state)
+
+		assert.True(t, state.Load())
+		client.AssertExpectations(t)
+	})
 }
 
 func TestParseInputParameters(t *testing.T) {
@@ -252,6 +378,14 @@ type MockRecipeReader struct {
 	mock.Mock
 }
 
+type testClientConnector struct {
+	client apapproto.ApapClient
+}
+
+func (c testClientConnector) ApapClient(grpcserver.GrpcServerConfig) (apapproto.ApapClient, error) {
+	return c.client, nil
+}
+
 func (s *MockRecipeReader) ReadRecipes(errHandler func(string, error)) (recipes map[string]recipe.Recipe, err error) {
 	mockArgs := s.Called(errHandler)
 	return mockArgs.Get(0).(map[string]recipe.Recipe), mockArgs.Error(1)
@@ -269,7 +403,7 @@ func (s *MockRecipeReader) IsRecipeValidFile(name string) bool {
 func TestProcessRunRecipe(t *testing.T) {
 	testError := errors.New("This is a test error!")
 
-	cc := client.NewAutostartClient()
+	cc := testClientConnector{client: apapprotomocks.NewApapClient(t)}
 
 	readerService := MockRecipeReader{}
 	readerService.On("ReadRecipe", recipeName).Return(recipe.Recipe{}, nil)
@@ -284,7 +418,7 @@ func TestProcessRunRecipe(t *testing.T) {
 		targetService.On("GetTarget", "test_target").Return(tgt, nil).Once()
 
 		runnerService := MockRecipeRunner{}
-		runnerService.On("SendRecipeRunToEngine", mock.AnythingOfType("*apapproto.apapClient"),
+		runnerService.On("SendRecipeRunToEngine", mock.Anything,
 			&recipe.Recipe{}, mock.AnythingOfType("*recipe.RecipeExecutionCtx"), out).Return(RunResponse{RunID: &apapproto.RunId{Value: runId}}, testError)
 
 		err := ProcessRunRecipe(cc, &readerService, &runnerService, recipeName, Workload{}, []string{}, out,
@@ -303,7 +437,7 @@ func TestProcessRunRecipe(t *testing.T) {
 		targetService.On("GetTarget", "test_target").Return(tgt, nil).Once()
 
 		runnerService := MockRecipeRunner{}
-		runnerService.On("SendRecipeRunToEngine", mock.AnythingOfType("*apapproto.apapClient"),
+		runnerService.On("SendRecipeRunToEngine", mock.Anything,
 			&recipe.Recipe{}, mock.AnythingOfType("*recipe.RecipeExecutionCtx"), out).Return(RunResponse{RunID: &apapproto.RunId{Value: runId}}, testError)
 
 		err := ProcessRunRecipe(cc, &readerService, &runnerService, recipeName, Workload{}, []string{}, out,
@@ -343,7 +477,7 @@ func TestProcessRunRecipe(t *testing.T) {
 		targetService.On("GetTarget", "test_target").Return(tgt, nil).Once()
 
 		runnerService := MockRecipeRunner{}
-		runnerService.On("SendRecipeRunToEngine", mock.AnythingOfType("*apapproto.apapClient"),
+		runnerService.On("SendRecipeRunToEngine", mock.Anything,
 			&recipe.Recipe{}, mock.AnythingOfType("*recipe.RecipeExecutionCtx"), out).Return(RunResponse{RunID: &apapproto.RunId{Value: runId}}, nil)
 
 		reader := MockRecipeReader{}
@@ -366,7 +500,7 @@ func TestProcessRunRecipe(t *testing.T) {
 		targetService.On("GetTarget", "default_target").Return(tgt, nil).Once()
 
 		runnerService := MockRecipeRunner{}
-		runnerService.On("SendRecipeRunToEngine", mock.AnythingOfType("*apapproto.apapClient"),
+		runnerService.On("SendRecipeRunToEngine", mock.Anything,
 			&recipe.Recipe{}, mock.AnythingOfType("*recipe.RecipeExecutionCtx"), out).Return(RunResponse{RunID: &apapproto.RunId{Value: runId}}, nil)
 
 		reader := MockRecipeReader{}
@@ -406,7 +540,7 @@ func TestProcessRunRecipe(t *testing.T) {
 		targetService := target.MockTargetManager{}
 		targetService.On("GetTarget", "test_target").Return(tgt, nil).Once()
 		runnerService := MockRecipeRunner{}
-		runnerService.On("SendRecipeRunToEngine", mock.AnythingOfType("*apapproto.apapClient"),
+		runnerService.On("SendRecipeRunToEngine", mock.Anything,
 			&recipe.Recipe{Status: recipe.RecipeStatusExperimental}, mock.AnythingOfType("*recipe.RecipeExecutionCtx"), out).Return(RunResponse{}, errors.New("recipe doesn't exist"))
 		reader := MockRecipeReader{}
 		reader.On("ReadRecipe", recipeName).Return(recipe.Recipe{Status: recipe.RecipeStatusExperimental}, nil)
@@ -423,7 +557,7 @@ func TestProcessRunRecipe(t *testing.T) {
 func TestProcessReadyRecipe(t *testing.T) {
 	testError := errors.New("This is a test error!")
 
-	cc := client.NewAutostartClient()
+	cc := testClientConnector{client: apapprotomocks.NewApapClient(t)}
 
 	t.Run("succeeds when ready succeeds", func(t *testing.T) {
 		tgt := &engine_target.SSHTarget{}
@@ -435,7 +569,7 @@ func TestProcessReadyRecipe(t *testing.T) {
 		targetService.On("GetTarget", "test_target").Return(tgt, nil).Once()
 
 		readyService := MockReadyService{}
-		readyService.On("ReadyRecipe", mock.AnythingOfType("*apapproto.apapClient"),
+		readyService.On("ReadyRecipe", mock.Anything,
 			&recipe.Recipe{}, mock.AnythingOfType("*recipe.RecipeExecutionCtx")).Return(
 			&RecipeReadyResponse{ReadyStatus: apapproto.ReadyStatus_READY_STATUS_READY}, nil).Once()
 
@@ -457,7 +591,7 @@ func TestProcessReadyRecipe(t *testing.T) {
 		targetService.On("GetTarget", "default_target").Return(tgt, nil).Once()
 
 		readyService := MockReadyService{}
-		readyService.On("ReadyRecipe", mock.AnythingOfType("*apapproto.apapClient"),
+		readyService.On("ReadyRecipe", mock.Anything,
 			&recipe.Recipe{}, mock.AnythingOfType("*recipe.RecipeExecutionCtx")).Return(
 			&RecipeReadyResponse{ReadyStatus: apapproto.ReadyStatus_READY_STATUS_READY}, nil).Once()
 
@@ -494,7 +628,7 @@ func TestProcessReadyRecipe(t *testing.T) {
 		targetService := target.MockTargetManager{}
 		targetService.On("GetTarget", "test_target").Return(tgt, nil).Once()
 		readyService := MockReadyService{}
-		readyService.On("ReadyRecipe", mock.AnythingOfType("*apapproto.apapClient"),
+		readyService.On("ReadyRecipe", mock.Anything,
 			&recipe.Recipe{Status: recipe.RecipeStatusExperimental}, mock.AnythingOfType("*recipe.RecipeExecutionCtx")).Return(
 			&RecipeReadyResponse{}, errors.New("recipe doesn't exist")).Once()
 		reader := MockRecipeReader{}
@@ -506,4 +640,92 @@ func TestProcessReadyRecipe(t *testing.T) {
 		assert.NoError(t, message.ValidateMetadataPlaceholders(err))
 		readyService.AssertExpectations(t)
 	})
+}
+
+func TestFormatStageProgressMessageUsesEngineETA(t *testing.T) {
+	for _, tc := range []struct {
+		seconds uint64
+		want    string
+	}{
+		{0, ""},
+		{1, "; ~1s remaining"},
+		{90, "; ~1m30s remaining"},
+		{3690, "; ~1h1m30s remaining"},
+		{1<<64 - 1, "; ~2562047h47m16s remaining"},
+	} {
+		t.Run(fmt.Sprint(tc.seconds), func(t *testing.T) {
+			message := "background"
+			stage := &apapproto.StageProgress{StageName: "Retrieving", Message: &message, EstimatedRemainingSeconds: &tc.seconds}
+			require.Equal(t, "Retrieving (background"+tc.want+")", formatStageProgressMessage(stage))
+			stage.EstimatedRemainingSeconds = nil
+			require.Equal(t, "Retrieving (background)", formatStageProgressMessage(stage))
+			stage.Message = nil
+			require.Equal(t, "Retrieving", formatStageProgressMessage(stage))
+		})
+	}
+	require.False(t, buildPrettyProgressWriter().Style().Visibility.ETA)
+}
+
+func TestStreamProgressResponsesForwardsETAInJSON(t *testing.T) {
+	previousJSONOutput := viper.GetBool("json")
+	viper.Set("json", true)
+	t.Cleanup(func() { viper.Set("json", previousJSONOutput) })
+	zero, remaining := uint64(0), uint64(45)
+	stream := &fakeRecipeIssueCommandClient{responses: []*apapproto.RecipeResponse{{
+		SubMessage: &apapproto.RecipeResponse_StageStart{StageStart: &apapproto.StageStart{StageName: "Retrieving"}},
+	}}}
+	for _, seconds := range []*uint64{&remaining, nil, &zero} {
+		stream.responses = append(stream.responses, &apapproto.RecipeResponse{
+			SubMessage: &apapproto.RecipeResponse_StageProgress{StageProgress: &apapproto.StageProgress{
+				StageName: "Retrieving", Count: 50, Max: 100, EstimatedRemainingSeconds: seconds,
+			}},
+		})
+	}
+	stream.responses = append(stream.responses, &apapproto.RecipeResponse{
+		SubMessage: &apapproto.RecipeResponse_StageFinish{StageFinish: &apapproto.StageFinish{StageName: "Retrieving"}},
+	})
+	var out bytes.Buffer
+	_, err := streamProgressResponses(stream, "recipe", &out, nil)
+	require.NoError(t, err)
+	decoder := json.NewDecoder(&out)
+	for _, seconds := range []*uint64{nil, &remaining, nil, &zero, nil} {
+		var response struct {
+			Data map[string]json.RawMessage `json:"data"`
+		}
+		require.NoError(t, decoder.Decode(&response))
+		raw, exists := response.Data["estimated_remaining_seconds"]
+		if seconds == nil {
+			require.False(t, exists)
+		} else {
+			require.True(t, exists)
+			require.Equal(t, fmt.Sprint(*seconds), string(raw))
+		}
+	}
+}
+
+func TestFinishedStageClearsETA(t *testing.T) {
+	for _, finish := range []func(string, map[string]*progress.Tracker){completeStageTracker, markStageTrackerError} {
+		tracker := &progress.Tracker{Message: "Retrieving (~45s remaining)"}
+		finish("Retrieving", map[string]*progress.Tracker{"Retrieving": tracker})
+		require.Equal(t, "Retrieving", tracker.Message)
+	}
+}
+
+func TestReadyReportShowsOptionalCapabilityWarning(t *testing.T) {
+	warning := message.New(message.EngineToolOptionalCapabilityUnavailable).
+		WithMetadata(map[string]string{"capability": "counter.cpu_cycles"})
+	require.NoError(t, message.ValidateMetadataPlaceholders(warning))
+	response := &RecipeReadyResponse{
+		ReadyStatus: apapproto.ReadyStatus_READY_STATUS_WARNING,
+		AdviceMessages: []*apapproto.Advice{{
+			ToolName:       "synthetic",
+			AdviceSeverity: apapproto.AdviceSeverity_ADVICE_SEVERITY_WARNING,
+			AdviceMessage:  message.BuildErrorChain(warning),
+		}},
+	}
+	var output bytes.Buffer
+	printReadyReport(&output, response)
+	require.Contains(t, output.String(), "ready to be run on your target machine, with the following warnings")
+	require.Contains(t, output.String(), "Tool: synthetic (Severity: Warning)")
+	require.Contains(t, output.String(), "Optional tool capability counter.cpu_cycles is unavailable; collection can continue without it.")
 }

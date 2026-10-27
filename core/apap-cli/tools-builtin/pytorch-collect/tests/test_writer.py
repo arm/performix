@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -85,12 +86,34 @@ def test_parquet_schema_version(tmp_path, pyarrow_parquet_writer):
     assert operator_calls[b"schema_version"] == b"1"
 
 
-def test_parquet_files_are_always_created(tmp_path, pyarrow_parquet_writer):
-    with ParquetWriter(tmp_path, 1024):
-        pass
+def test_output_files_are_created(tmp_path, pyarrow_parquet_writer):
+    with ParquetWriter(tmp_path, 1024) as writer:
+        writer.write_collection_timing(123456789, 223456789)
 
     assert os.path.exists(tmp_path / "api_calls.parquet")
     assert os.path.exists(tmp_path / "operator_calls.parquet")
+    assert json.loads(
+        (tmp_path / "collection_timing.json").read_text()
+    ) == {
+        "start_time_ns": "123456789",
+        "end_time_ns": "223456789",
+    }
+
+
+def test_collection_timing_path_when_output_is_a_parquet_file(
+    tmp_path, pyarrow_parquet_writer
+):
+    output = tmp_path / "trace.parquet"
+
+    with ParquetWriter(output, 1024) as writer:
+        writer.write_collection_timing(123456789, 223456789)
+
+    assert json.loads(
+        (tmp_path / "trace.collection_timing.json").read_text()
+    ) == {
+        "start_time_ns": "123456789",
+        "end_time_ns": "223456789",
+    }
 
 
 def test_parquet_rows_are_writen(tmp_path, pyarrow_parquet_writer):

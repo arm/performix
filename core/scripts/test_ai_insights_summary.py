@@ -14,16 +14,8 @@ from evaluation_summary import render_console_summary, render_markdown_summary
 
 SYNTHETIC_ATTEMPTS = [
     {
-        "ai_test_id": "test_case_03",
-        "ai_mode": "rest",
-        "ai_attempt": "1",
-        "pytest_outcome": "passed",
-        "ai_judge_confidences": "high",
-        "ai_agent_duration_seconds": "28.7",
-    },
-    {
-        "ai_test_id": "test_case_03",
-        "ai_mode": "hackathon_mcp",
+        "ai_test_id": "test_case_27",
+        "ai_mode": "performix_mcp",
         "ai_attempt": "1",
         "pytest_outcome": "passed",
         "ai_judge_confidences": "medium",
@@ -38,8 +30,8 @@ SYNTHETIC_ATTEMPTS = [
         "ai_tool_output_truncation_severity": "warning",
     },
     {
-        "ai_test_id": "test_case_03",
-        "ai_mode": "hackathon_mcp",
+        "ai_test_id": "test_case_27",
+        "ai_mode": "performix_mcp",
         "ai_attempt": "2",
         "pytest_outcome": "failed",
         "ai_judge_confidences": "high",
@@ -68,7 +60,7 @@ SYNTHETIC_ATTEMPTS = [
     },
     {
         "ai_test_id": "test_case_16",
-        "ai_mode": "rest",
+        "ai_mode": "performix_mcp",
         "ai_attempt": "1",
         "pytest_outcome": "passed",
         "ai_judge_confidences": "high",
@@ -79,11 +71,9 @@ SYNTHETIC_ATTEMPTS = [
 
 class AiInsightsSummaryRenderTests(unittest.TestCase):
     def test_render_console_summary_from_attempt_records(self):
-        summary = render_console_summary(SYNTHETIC_ATTEMPTS, width=240, color=False)
+        summary = render_console_summary(SYNTHETIC_ATTEMPTS, width=360, color=False)
 
         self.assertIn("Testcase", summary)
-        self.assertIn("REST", summary)
-        self.assertIn("Hackathon", summary)
         self.assertIn("Performix", summary)
         self.assertIn("test_case_03", summary)
         self.assertIn("test_case_16", summary)
@@ -91,7 +81,6 @@ class AiInsightsSummaryRenderTests(unittest.TestCase):
         self.assertIn("attempt 1 PASS, attempt 2 FAIL", summary)
         self.assertIn("(medium,high)", summary)
         self.assertIn("FAIL (high)", summary)
-        self.assertIn("28.7s", summary)
         self.assertIn("39.5s", summary)
         self.assertIn("121s", summary)
         self.assertIn("tokens in=87,426 out=2,000", summary)
@@ -119,15 +108,12 @@ class AiInsightsSummaryRenderTests(unittest.TestCase):
 
         self.assertIn("<table>", summary)
         self.assertIn('<th rowspan="2">Testcase</th>', summary)
-        self.assertIn('<th colspan="2">REST</th>', summary)
-        self.assertIn('<th colspan="3">Hackathon MCP</th>', summary)
         self.assertIn('<th colspan="3">Performix MCP</th>', summary)
         self.assertIn("<td>test_case_03</td>", summary)
         self.assertIn("<td>test_case_16</td>", summary)
         self.assertIn("✅ <strong>PASS</strong> (high)", summary)
         self.assertIn("❌ <strong>attempt 1 PASS, attempt 2 FAIL</strong> (medium,high)", summary)
         self.assertIn("❌ <strong>FAIL</strong> (high)", summary)
-        self.assertIn("<td>28.7s</td>", summary)
         self.assertIn("<td>39.5s</td>", summary)
         self.assertIn("<td>121s</td>", summary)
         self.assertIn(
@@ -138,20 +124,20 @@ class AiInsightsSummaryRenderTests(unittest.TestCase):
             "<td>tokens in=35,136 out=1,273 reason=587 calls=4<br>❌ Error: 4,096 tokens truncated</td>",
             summary,
         )
-        self.assertEqual(6, summary.count("<td>-</td>"))
+        self.assertEqual(1, summary.count("<td>-</td>"))
 
     def test_render_summary_lists_mixed_attempt_outcomes(self):
         attempts = [
             {
                 "ai_test_id": "test_case_99",
-                "ai_mode": "rest",
+                "ai_mode": "performix_mcp",
                 "ai_attempt": "1",
                 "pytest_outcome": "error",
                 "ai_agent_duration_seconds": "1.0",
             },
             {
                 "ai_test_id": "test_case_99",
-                "ai_mode": "rest",
+                "ai_mode": "performix_mcp",
                 "ai_attempt": "2",
                 "pytest_outcome": "skipped",
                 "ai_agent_duration_seconds": "2.0",
@@ -169,14 +155,14 @@ class AiInsightsSummaryRenderTests(unittest.TestCase):
         attempts = [
             {
                 "ai_test_id": "test_case_99",
-                "ai_mode": "rest",
+                "ai_mode": "performix_mcp",
                 "ai_attempt": "1",
                 "pytest_outcome": "xfailed",
                 "ai_agent_duration_seconds": "1.0",
             },
             {
                 "ai_test_id": "test_case_99",
-                "ai_mode": "rest",
+                "ai_mode": "performix_mcp",
                 "ai_attempt": "2",
                 "pytest_outcome": "xfailed",
                 "ai_agent_duration_seconds": "2.0",
@@ -197,28 +183,28 @@ class AiInsightsSummaryRenderTests(unittest.TestCase):
         attempts = [
             {
                 "ai_test_id": "test_case_98",
-                "ai_mode": "rest",
+                "ai_mode": "performix_mcp",
                 "ai_attempt": "1",
                 "pytest_outcome": "skipped",
                 "ai_agent_duration_seconds": "1.0",
             },
             {
                 "ai_test_id": "test_case_98",
-                "ai_mode": "rest",
+                "ai_mode": "performix_mcp",
                 "ai_attempt": "2",
                 "pytest_outcome": "skipped",
                 "ai_agent_duration_seconds": "2.0",
             },
             {
                 "ai_test_id": "test_case_99",
-                "ai_mode": "rest",
+                "ai_mode": "performix_mcp",
                 "ai_attempt": "1",
                 "pytest_outcome": "error",
                 "ai_agent_duration_seconds": "3.0",
             },
             {
                 "ai_test_id": "test_case_99",
-                "ai_mode": "rest",
+                "ai_mode": "performix_mcp",
                 "ai_attempt": "2",
                 "pytest_outcome": "error",
                 "ai_agent_duration_seconds": "4.0",
@@ -241,7 +227,7 @@ class AiInsightsSummaryRenderTests(unittest.TestCase):
         attempts = [
             {
                 "ai_test_id": "test_case_14",
-                "ai_mode": "rest",
+                "ai_mode": "performix_mcp",
                 "ai_attempt": "1",
                 "pytest_outcome": "skipped",
                 "ai_display_scores": "xfail",
@@ -249,7 +235,7 @@ class AiInsightsSummaryRenderTests(unittest.TestCase):
             },
             {
                 "ai_test_id": "test_case_15",
-                "ai_mode": "rest",
+                "ai_mode": "performix_mcp",
                 "ai_attempt": "1",
                 "pytest_outcome": "failed",
                 "ai_display_scores": "xpass",

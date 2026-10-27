@@ -9,9 +9,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
-	"strings"
 	"syscall"
 
 	log "github.com/sirupsen/logrus"
@@ -22,6 +19,9 @@ import (
 type UnixProcessManager struct {
 	common *processCommon
 }
+
+// Linux and Android apply affinity before exec; Darwin has no equivalent here.
+func (*UnixProcessManager) setCPUAffinityAfterStart(int, []string) error { return nil }
 
 // KillProcess sends SIGKILL to the given PID.
 func (*UnixProcessManager) KillProcess(pid int) error {
@@ -43,41 +43,17 @@ func (*UnixProcessManager) InterruptProcess(pid int) error {
 	return nil
 }
 
-// setCPUAffinityAfterStart is a no-op for Linux since CPU affinity is set via taskset before process start
-func (*UnixProcessManager) setCPUAffinityAfterStart(pid int, affinity []string) error {
-	// On Linux, CPU affinity is handled by taskset in buildCmd, so this is a no-op
-	return nil
-}
-
-// buildCmd creates the executable command, optionally using sudo and taskset directly.
-func (*UnixProcessManager) buildCmd(lc *LaunchCommand) (*exec.Cmd, error) {
-	var parts []string
-	// Darwin does not have an equivalent to taskset, so CPU affinity is ignored.
-	if len(lc.Affinity) > 0 && runtime.GOOS != "darwin" {
-		cpulist := strings.Join(lc.Affinity, ",")
-		parts = append(parts, "taskset", "-c", cpulist)
-	}
-	parts = append(parts, lc.Command...)
-
-	// We allow any command to execute here, so we suppress the linter security warning
-	//nolint:gosec
-	c := exec.Command(parts[0], parts[1:]...)
-
-	// Add env variables if present
-	if len(lc.Environment) > 0 {
-		c.Env = mergeEnv(lc.Environment)
-	}
-	if lc.WorkingDirectory != "" {
-		c.Dir = lc.WorkingDirectory
-	}
+// buildCmd creates a direct command. Linux applies affinity on its launch thread.
+func (*UnixProcessManager) buildCmd(lc *LaunchCommand) (*launchCommand, error) {
+	launch := newLaunchCommand(lc)
 
 	// This line ensures the command runs in its own process group, so we can then send
 	// signals (interrupt / kill) to the entire group.
-	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	launch.command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	log.WithField("cmd", strings.Join(c.Args, " ")).Info("Launch command")
+	log.WithFields(launchLogFields(lc)).Info("Launch command")
 
-	return c, nil
+	return launch, nil
 }
 
 // StartProcess launches the command asynchronously, returning the PID.

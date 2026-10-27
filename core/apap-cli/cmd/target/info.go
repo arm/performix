@@ -22,7 +22,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/targetlogin"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 type targetInfoCollector interface {

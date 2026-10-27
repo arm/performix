@@ -16,17 +16,19 @@ import (
 
 	targetservice "github.com/Arm-Debug/apap-cli/apap-cli/service/target"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 // mcpAddTargetResult decodes the add_target tool's JSON text output.
 type mcpAddTargetResult struct {
-	TargetName     string     `json:"target_name"`
-	Host           string     `json:"host"`
-	IsDefault      bool       `json:"is_default"`
-	ConnectivityOK bool       `json:"connectivity_ok"`
-	Error          *toolError `json:"error,omitempty"`
+	TargetName      string     `json:"target_name"`
+	Host            string     `json:"host"`
+	SerialNumber    string     `json:"serial_number"`
+	DeviceIPAddress string     `json:"device_ip_address"`
+	IsDefault       bool       `json:"is_default"`
+	ConnectivityOK  bool       `json:"connectivity_ok"`
+	Error           *toolError `json:"error,omitempty"`
 }
 
 // decodeAddTargetResult extracts the structured result from a tool call.
@@ -69,6 +71,68 @@ func TestAddTargetTool(t *testing.T) {
 		assert.False(t, tools.Tools[0].Annotations.ReadOnlyHint)
 	})
 
+	t.Run("advertises only enabled target types", func(t *testing.T) {
+		for _, test := range []struct {
+			name          string
+			tool          AddTargetTool
+			expectAndroid bool
+		}{
+			{name: "SSH only", tool: AddTargetTool{}},
+			{name: "SSH and Android", tool: AddTargetTool{AndroidTargetsEnabled: true}, expectAndroid: true},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				ctx := context.Background()
+				clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{}, test.tool.Register)
+				defer clientSession.Close()
+				defer serverSession.Close()
+
+				tools, err := clientSession.ListTools(ctx, nil)
+				require.NoError(t, err)
+				require.Len(t, tools.Tools, 1)
+
+				schemaJSON, err := json.Marshal(tools.Tools[0].InputSchema)
+				require.NoError(t, err)
+				var schema struct {
+					Required   []string                   `json:"required"`
+					Properties map[string]json.RawMessage `json:"properties"`
+					OneOf      []struct {
+						Required   []string                   `json:"required"`
+						Properties map[string]json.RawMessage `json:"properties"`
+					} `json:"oneOf"`
+				}
+				require.NoError(t, json.Unmarshal(schemaJSON, &schema))
+				outputSchemaJSON, err := json.Marshal(tools.Tools[0].OutputSchema)
+				require.NoError(t, err)
+				var outputSchema struct {
+					Properties map[string]json.RawMessage `json:"properties"`
+				}
+				require.NoError(t, json.Unmarshal(outputSchemaJSON, &outputSchema))
+				for _, field := range []string{"serial_number", "device_ip_address"} {
+					_, present := outputSchema.Properties[field]
+					assert.Equal(t, test.expectAndroid, present, field)
+				}
+
+				assert.Contains(t, schema.Properties, "ssh")
+				if test.expectAndroid {
+					assert.Contains(t, schema.Properties, "android")
+					require.Len(t, schema.OneOf, 2)
+					assert.ElementsMatch(t, []string{"ssh"}, schema.OneOf[0].Required)
+					assert.ElementsMatch(t, []string{"android"}, schema.OneOf[1].Required)
+					for _, variant := range schema.OneOf {
+						assert.Contains(t, variant.Properties, "name")
+						assert.Contains(t, variant.Properties, "set_default")
+						assert.Contains(t, variant.Properties, "ssh")
+						assert.Contains(t, variant.Properties, "android")
+					}
+				} else {
+					assert.NotContains(t, schema.Properties, "android")
+					assert.Equal(t, []string{"ssh"}, schema.Required)
+					assert.Empty(t, schema.OneOf)
+				}
+			})
+		}
+	})
+
 	t.Run("advertises added, added with connectivity error, or add error output schema", func(t *testing.T) {
 		ctx := context.Background()
 		targets := &targetservice.MockTargetManager{}
@@ -101,31 +165,29 @@ func TestAddTargetTool(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(schemaJSON, &outputSchema))
 		require.Len(t, outputSchema.OneOf, 3)
-		assert.ElementsMatch(t, []string{"target_name", "host", "is_default", "connectivity_ok"}, outputSchema.OneOf[0].Required)
-		assert.ElementsMatch(t, []string{"target_name", "host", "is_default", "connectivity_ok", "error"}, outputSchema.OneOf[1].Required)
+		assert.ElementsMatch(t, []string{"target_name", "is_default", "connectivity_ok"}, outputSchema.OneOf[0].Required)
+		assert.ElementsMatch(t, []string{"target_name", "is_default", "connectivity_ok", "error"}, outputSchema.OneOf[1].Required)
 		assert.ElementsMatch(t, []string{"error"}, outputSchema.OneOf[2].Required)
 		_, hasRemovedErrorField := outputSchema.Properties["connectivity"+"_"+"error"]
 		assert.False(t, hasRemovedErrorField)
 		assert.Equal(t, "object", outputSchema.Properties["error"].Type)
+		assert.Equal(t, "string", outputSchema.Properties["host"].Type)
 
-		resolved, err := addTargetOutputSchema.Resolve(nil)
+		resolved, err := addTargetOutputSchema(false).Resolve(nil)
 		require.NoError(t, err)
 		assert.NoError(t, resolved.Validate(map[string]any{
 			"target_name":     "myhost",
-			"host":            "10.0.0.1",
 			"is_default":      true,
 			"connectivity_ok": true,
 		}))
 		assert.NoError(t, resolved.Validate(map[string]any{
 			"target_name":     "myhost",
-			"host":            "10.0.0.1",
 			"is_default":      true,
 			"connectivity_ok": false,
 			"error":           map[string]any{"severity": "Error", "message": "connection to target failed"},
 		}))
 		assert.NoError(t, resolved.Validate(map[string]any{
 			"target_name": "myhost",
-			"host":        "10.0.0.1",
 			"error":       map[string]any{"severity": "Error", "message": "read failed"},
 		}))
 		assert.NoError(t, resolved.Validate(map[string]any{
@@ -182,8 +244,11 @@ func TestAddTargetTool(t *testing.T) {
 		defer serverSession.Close()
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
-			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice", "name": "myhost"},
+			Name: "add_target",
+			Arguments: map[string]any{
+				"name": "myhost",
+				"ssh":  map[string]any{"host": "10.0.0.1", "user": "alice"},
+			},
 		})
 
 		require.NoError(t, err)
@@ -191,11 +256,95 @@ func TestAddTargetTool(t *testing.T) {
 		decoded := decodeAddTargetResult(t, result)
 		assert.Equal(t, "myhost", decoded.TargetName)
 		assert.Equal(t, "10.0.0.1", decoded.Host)
+		assert.Empty(t, decoded.SerialNumber)
+		assert.Empty(t, decoded.DeviceIPAddress)
 		assert.False(t, decoded.IsDefault)
 		assert.True(t, decoded.ConnectivityOK)
 		assert.Nil(t, decoded.Error)
 		targets.AssertExpectations(t)
 		targets.AssertNotCalled(t, "SetDefaultTarget", mock.Anything)
+	})
+
+	t.Run("adds an Android target", func(t *testing.T) {
+		ctx := context.Background()
+		deviceIPAddress := "10.0.0.2:5555"
+		targets := &targetservice.MockTargetManager{}
+		targets.On("AddTarget", "phone", mock.MatchedBy(func(tgt engine_target.Target) bool {
+			android, ok := tgt.(*engine_target.AndroidTarget)
+			return ok && android.SerialNumber == "device-123" &&
+				android.DeviceIPAddress != nil && *android.DeviceIPAddress == deviceIPAddress
+		})).Return(nil).Once()
+		targets.On("ReadTargetConfig").Return(&engine_target.TargetConfig{
+			Default: "phone",
+			Targets: map[string]engine_target.Target{
+				"phone": &engine_target.AndroidTarget{SerialNumber: "device-123", DeviceIPAddress: &deviceIPAddress},
+			},
+		}, nil).Once()
+
+		engine := newTargetTestEngine(t, apapproto.ConnectionStatus_CONNECTION_STATUS_OK)
+		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine, Targets: targets}, AddTargetTool{AndroidTargetsEnabled: true}.Register)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "add_target",
+			Arguments: map[string]any{
+				"name": "phone",
+				"android": map[string]any{
+					"serial_number":     "device-123",
+					"device_ip_address": deviceIPAddress,
+				},
+			},
+		})
+
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+		decoded := decodeAddTargetResult(t, result)
+		assert.Equal(t, "phone", decoded.TargetName)
+		assert.Empty(t, decoded.Host)
+		assert.Equal(t, "device-123", decoded.SerialNumber)
+		assert.Equal(t, deviceIPAddress, decoded.DeviceIPAddress)
+		assert.True(t, decoded.IsDefault)
+		assert.True(t, decoded.ConnectivityOK)
+		assert.Nil(t, decoded.Error)
+		targets.AssertExpectations(t)
+	})
+
+	t.Run("rejects both target types", func(t *testing.T) {
+		ctx := context.Background()
+		targets := &targetservice.MockTargetManager{}
+		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Targets: targets}, AddTargetTool{AndroidTargetsEnabled: true}.Register)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "add_target",
+			Arguments: map[string]any{
+				"ssh":     map[string]any{"host": "10.0.0.1", "user": "alice"},
+				"android": map[string]any{"serial_number": "device-123"},
+			},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		targets.AssertNotCalled(t, "AddTarget", mock.Anything, mock.Anything)
+	})
+
+	t.Run("rejects Android input when disabled", func(t *testing.T) {
+		ctx := context.Background()
+		targets := &targetservice.MockTargetManager{}
+		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Targets: targets}, AddTargetTool{}.Register)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "add_target",
+			Arguments: map[string]any{"android": map[string]any{"serial_number": "device-123"}},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		targets.AssertNotCalled(t, "AddTarget", mock.Anything, mock.Anything)
 	})
 
 	t.Run("flows port and private key through", func(t *testing.T) {
@@ -224,11 +373,13 @@ func TestAddTargetTool(t *testing.T) {
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name: "add_target",
 			Arguments: map[string]any{
-				"host":             "10.0.0.1",
-				"user":             "alice",
-				"name":             "myhost",
-				"port":             2222,
-				"private_key_path": "/home/alice/.ssh/id_ed25519",
+				"name": "myhost",
+				"ssh": map[string]any{
+					"host":             "10.0.0.1",
+					"user":             "alice",
+					"port":             2222,
+					"private_key_path": "/home/alice/.ssh/id_ed25519",
+				},
 			},
 		})
 
@@ -274,12 +425,14 @@ func TestAddTargetTool(t *testing.T) {
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name: "add_target",
 			Arguments: map[string]any{
-				"host": "10.0.0.1",
-				"user": "alice",
 				"name": "myhost",
-				"jumps": []any{
-					map[string]any{"host": "jump1", "user": "jumper", "port": 2022, "private_key_path": "/keys/jump"},
-					map[string]any{"host": "jump2"},
+				"ssh": map[string]any{
+					"host": "10.0.0.1",
+					"user": "alice",
+					"jumps": []any{
+						map[string]any{"host": "jump1", "user": "jumper", "port": 2022, "private_key_path": "/keys/jump"},
+						map[string]any{"host": "jump2"},
+					},
 				},
 			},
 		})
@@ -303,10 +456,12 @@ func TestAddTargetTool(t *testing.T) {
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name: "add_target",
 			Arguments: map[string]any{
-				"host":  "10.0.0.1",
-				"user":  "alice",
-				"name":  "myhost",
-				"jumps": []any{map[string]any{"host": "jump1", "port": 70000}},
+				"name": "myhost",
+				"ssh": map[string]any{
+					"host":  "10.0.0.1",
+					"user":  "alice",
+					"jumps": []any{map[string]any{"host": "jump1", "port": 70000}},
+				},
 			},
 		})
 
@@ -331,7 +486,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice", "name": "myhost"},
+			Arguments: map[string]any{"name": "myhost", "ssh": map[string]any{"host": "10.0.0.1", "user": "alice"}},
 		})
 
 		require.NoError(t, err)
@@ -353,7 +508,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice", "name": "myhost"},
+			Arguments: map[string]any{"name": "myhost", "ssh": map[string]any{"host": "10.0.0.1", "user": "alice"}},
 		})
 
 		require.NoError(t, err)
@@ -370,7 +525,6 @@ func TestAddTargetTool(t *testing.T) {
 		assert.NotContains(t, fields, "connectivity_ok")
 		assert.NotContains(t, fields, "is_default")
 		assert.NotContains(t, fields, "target_name")
-		assert.NotContains(t, fields, "host")
 	})
 
 	t.Run("reports target details when reading config fails after adding", func(t *testing.T) {
@@ -385,7 +539,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice", "name": "myhost"},
+			Arguments: map[string]any{"name": "myhost", "ssh": map[string]any{"host": "10.0.0.1", "user": "alice"}},
 		})
 
 		require.NoError(t, err)
@@ -412,14 +566,13 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice", "name": "myhost", "set_default": true},
+			Arguments: map[string]any{"name": "myhost", "set_default": true, "ssh": map[string]any{"host": "10.0.0.1", "user": "alice"}},
 		})
 
 		require.NoError(t, err)
 		require.True(t, result.IsError)
 		decoded := decodeAddTargetResult(t, result)
 		assert.Equal(t, "myhost", decoded.TargetName)
-		assert.Equal(t, "10.0.0.1", decoded.Host)
 		assert.False(t, decoded.IsDefault)
 		assert.False(t, decoded.ConnectivityOK)
 		require.NotNil(t, decoded.Error)
@@ -449,7 +602,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice"},
+			Arguments: map[string]any{"ssh": map[string]any{"host": "10.0.0.1", "user": "alice"}},
 		})
 
 		require.NoError(t, err)
@@ -479,7 +632,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice", "name": "myhost", "set_default": true},
+			Arguments: map[string]any{"name": "myhost", "set_default": true, "ssh": map[string]any{"host": "10.0.0.1", "user": "alice"}},
 		})
 
 		require.NoError(t, err)
@@ -507,7 +660,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice", "name": "myhost"},
+			Arguments: map[string]any{"name": "myhost", "ssh": map[string]any{"host": "10.0.0.1", "user": "alice"}},
 		})
 
 		require.NoError(t, err)
@@ -529,7 +682,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice", "name": "dup"},
+			Arguments: map[string]any{"name": "dup", "ssh": map[string]any{"host": "10.0.0.1", "user": "alice"}},
 		})
 
 		require.NoError(t, err)
@@ -551,7 +704,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice", "name": "myhost", "port": 70000},
+			Arguments: map[string]any{"name": "myhost", "ssh": map[string]any{"host": "10.0.0.1", "user": "alice", "port": 70000}},
 		})
 
 		require.NoError(t, err)
@@ -573,7 +726,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"user": "alice"},
+			Arguments: map[string]any{"ssh": map[string]any{"user": "alice"}},
 		})
 
 		require.NoError(t, err)
@@ -591,7 +744,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1"},
+			Arguments: map[string]any{"ssh": map[string]any{"host": "10.0.0.1"}},
 		})
 
 		require.NoError(t, err)
@@ -615,7 +768,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice", "name": "myhost"},
+			Arguments: map[string]any{"name": "myhost", "ssh": map[string]any{"host": "10.0.0.1", "user": "alice"}},
 		})
 
 		require.NoError(t, err)
@@ -647,7 +800,7 @@ func TestAddTargetTool(t *testing.T) {
 
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "add_target",
-			Arguments: map[string]any{"host": "10.0.0.1", "user": "alice", "name": "myhost"},
+			Arguments: map[string]any{"name": "myhost", "ssh": map[string]any{"host": "10.0.0.1", "user": "alice"}},
 		})
 
 		require.NoError(t, err)
@@ -662,7 +815,7 @@ func TestAddTargetTool(t *testing.T) {
 
 func TestBuildSSHTarget(t *testing.T) {
 	t.Run("defaults the port to 22", func(t *testing.T) {
-		tgt, err := buildSSHTarget(addTargetInput{Host: "10.0.0.1", User: "alice"})
+		tgt, err := buildSSHTarget(addTargetSSHInput{Host: "10.0.0.1", User: "alice"})
 
 		require.NoError(t, err)
 		require.Len(t, tgt.Jumps, 1)
@@ -670,7 +823,7 @@ func TestBuildSSHTarget(t *testing.T) {
 	})
 
 	t.Run("hardcodes a strict host key policy and key auth", func(t *testing.T) {
-		tgt, err := buildSSHTarget(addTargetInput{Host: "10.0.0.1", User: "alice"})
+		tgt, err := buildSSHTarget(addTargetSSHInput{Host: "10.0.0.1", User: "alice"})
 
 		require.NoError(t, err)
 		require.Len(t, tgt.Jumps, 1)
@@ -679,7 +832,7 @@ func TestBuildSSHTarget(t *testing.T) {
 	})
 
 	t.Run("carries the supplied port and key path", func(t *testing.T) {
-		tgt, err := buildSSHTarget(addTargetInput{
+		tgt, err := buildSSHTarget(addTargetSSHInput{
 			Host:           "10.0.0.1",
 			User:           "alice",
 			Port:           2222,
@@ -693,21 +846,21 @@ func TestBuildSSHTarget(t *testing.T) {
 	})
 
 	t.Run("rejects an out-of-range port", func(t *testing.T) {
-		_, err := buildSSHTarget(addTargetInput{Host: "10.0.0.1", User: "alice", Port: 70000})
+		_, err := buildSSHTarget(addTargetSSHInput{Host: "10.0.0.1", User: "alice", Port: 70000})
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid port")
 	})
 
 	t.Run("rejects a negative port", func(t *testing.T) {
-		_, err := buildSSHTarget(addTargetInput{Host: "10.0.0.1", User: "alice", Port: -1})
+		_, err := buildSSHTarget(addTargetSSHInput{Host: "10.0.0.1", User: "alice", Port: -1})
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid port")
 	})
 
 	t.Run("prepends jump hosts before the destination", func(t *testing.T) {
-		tgt, err := buildSSHTarget(addTargetInput{
+		tgt, err := buildSSHTarget(addTargetSSHInput{
 			Host: "10.0.0.1",
 			User: "alice",
 			Jumps: []addTargetJumpInput{
@@ -730,7 +883,7 @@ func TestBuildSSHTarget(t *testing.T) {
 	})
 
 	t.Run("applies a strict host key policy and key auth to jump hosts", func(t *testing.T) {
-		tgt, err := buildSSHTarget(addTargetInput{
+		tgt, err := buildSSHTarget(addTargetSSHInput{
 			Host:  "10.0.0.1",
 			User:  "alice",
 			Jumps: []addTargetJumpInput{{Host: "jump1"}},
@@ -743,7 +896,7 @@ func TestBuildSSHTarget(t *testing.T) {
 	})
 
 	t.Run("rejects an out-of-range jump port", func(t *testing.T) {
-		_, err := buildSSHTarget(addTargetInput{
+		_, err := buildSSHTarget(addTargetSSHInput{
 			Host:  "10.0.0.1",
 			User:  "alice",
 			Jumps: []addTargetJumpInput{{Host: "jump1", Port: 70000}},
@@ -752,5 +905,30 @@ func TestBuildSSHTarget(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "jump host 1")
 		assert.Contains(t, err.Error(), "invalid port")
+	})
+}
+
+func TestBuildTarget(t *testing.T) {
+	t.Run("builds an Android target without a device address", func(t *testing.T) {
+		tgt, err := buildTarget(addTargetInput{
+			Android: &addTargetAndroidInput{SerialNumber: "device-123"},
+		})
+
+		require.NoError(t, err)
+		android, ok := tgt.(*engine_target.AndroidTarget)
+		require.True(t, ok)
+		assert.Equal(t, "device-123", android.SerialNumber)
+		assert.Nil(t, android.DeviceIPAddress)
+	})
+
+	t.Run("requires exactly one target type", func(t *testing.T) {
+		_, err := buildTarget(addTargetInput{})
+		require.EqualError(t, err, "either ssh or android must be provided")
+
+		_, err = buildTarget(addTargetInput{
+			SSH:     &addTargetSSHInput{Host: "10.0.0.1", User: "alice"},
+			Android: &addTargetAndroidInput{SerialNumber: "device-123"},
+		})
+		require.EqualError(t, err, "ssh and android cannot both be provided")
 	})
 }

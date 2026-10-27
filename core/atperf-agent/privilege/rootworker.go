@@ -20,11 +20,11 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/api/healthproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/grpcserver/conversion"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/grpcserver/transport"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
-	"github.com/Arm-Debug/apap-cli/clients/go/healthproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 type LaunchTiming struct {

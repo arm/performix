@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: ai-insights-eval-deps apx agent all build clean deps generate prebuild protobuf test robot-test tools FORCE
+.PHONY: ai-insights-eval-deps apx agent all build clean deps generate prebuild test robot-test tools FORCE
 
 ENGINE_DIR := ../apap-engine
 BINARY_DIR := ../apap-cli
@@ -83,8 +83,8 @@ clean:
 	@rm -rf ${TOOL_BUNDLE}
 
 generate:
-	@echo "Generating Go code, uses ../scripts/go/generate-all.sh, does not regenerate protobuf code (see 'make protobuf')"
-	@../scripts/go/generate-all.sh
+	@echo "Generating protobufs, mocks and Go code"
+	@../scripts/generate-all.sh
 
 lint:
 	@../scripts/lint-all.sh --fix
@@ -104,9 +104,6 @@ else
 		"$(BINARY)" daemon stop; \
 	fi
 endif
-
-protobuf:
-	@../scripts/protobuf/generate.sh
 
 # Runs all unit tests (Go and Python)
 test:

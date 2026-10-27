@@ -21,10 +21,18 @@ const {
   isPerfCapable,
   probeDeployment,
   posixTestWorkload,
+  assertWorkloadWorkingDirectory,
 } = require('./utils.js');
 const { getExecutableFromWorkload } = require('./workload');
-const { parseGPUCounters } = require('./gpu-counters');
+const {
+  parseGPUCounters,
+  parseGPUEventsXML,
+  matchGPUToMetricSet,
+  translateGPUCounters,
+} = require('./gpu-counters');
+const cpuCounters = require('./neoprof_cpu_counters');
 const { NEOPROF_TIMELINE_BIN_DURATIONS_NS } = require('./neoprof_timeline');
+const { COUNTER_CAPABILITY_COMPONENT_TYPE } = require('./tool_capabilities');
 
 let slAnalyzeVersion = '2.3.3-RC0';
 let slRecordVersion = '2.3.3.v20260929_0928-neoprof';
@@ -40,7 +48,7 @@ const neoprofPlatformCapabilityType = {
   version: '1.0',
 };
 
-const jitdumpJvmVersion = '1.0.0';
+const jitdumpJvmVersion = '1.1.0';
 const jitdumpJvmToolName = 'jitdump-jvm';
 
 const dotnetAgentVersion = '0.9.0';
@@ -69,6 +77,30 @@ function getNeoprofPaths(engine) {
 
   return paths;
 }
+/**
+ * Resolve the analyzer executable for the current engine locality.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @returns {string}
+ */
+function getSlAnalyzeFilename(engine) {
+  return engine.getPlatform().OS === 'Windows'
+    ? `${slAnalyzeToolName}.exe`
+    : slAnalyzeToolName;
+}
+
+/**
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @returns {Promise<import("../recipes/docs/jsdocs").ProbeAdvice>}
+ */
+async function probeSlAnalyzeDeployment(engine) {
+  const paths = getNeoprofPaths(engine);
+  return probeDeployment(
+    engine,
+    paths.slAnalyzeDeployPath + getSlAnalyzeFilename(engine),
+    slAnalyzeToolName,
+  );
+}
+
 /**
  * Resolve the file name of the parquet-to-json tool for the current engine locality.
  * @param {import("../recipes/docs/jsdocs").Engine} engine
@@ -113,11 +145,23 @@ function isTimelineExportEnabled(engine, ctx) {
   return engine.isNeoprofTimelineEnabled() || isSysUtilWorkflow(ctx);
 }
 
+function validateCPUCounterOptions(engine, ctx) {
+  cpuCounters.validateOptions(ctx);
+  if (cpuCounters.selected(ctx) && !isTimelineExportEnabled(engine, ctx)) {
+    throw {
+      code: 'tool_integrations.neoprof.CPU_COUNTER_OPTIONS_INVALID',
+      metadata: { capability: cpuCounters.ID },
+      cause: 'Explicit CPU counter selection requires timeline export',
+    };
+  }
+}
+
 /**
  * @type {import("../recipes/docs/jsdocs").ToolIntegration}
  */
 let tool = {
   name: 'neoprof',
+  capabilityInterfaceVersion: '1.0',
   version: '1.1.0',
   supportsWorkloadLaunch: true,
   reportsCollectionFinished: true,
@@ -155,10 +199,19 @@ let tool = {
           name: parquetToJsonName,
           version: parquetToJsonVersion,
           requiredWhen: {
-            type: 'param_is_set',
-            // Deployment resolves recipe parameters before collect_jfr is derived.
-            parameters: [{ collect_java_stacks: true }],
+            type: 'param_is_not_set',
+            parameters: [{ reformat_on_host: true }],
           },
+        },
+        {
+          type: 'tool_bundle',
+          name: parquetToJsonName,
+          version: parquetToJsonVersion,
+          requiredWhen: {
+            type: 'param_is_set',
+            parameters: [{ reformat_on_host: true }],
+          },
+          locality: 'host',
         },
         {
           type: 'tool_bundle',
@@ -193,6 +246,13 @@ let tool = {
           type: 'tool_bundle',
           name: slAnalyzeToolName,
           version: slAnalyzeVersion,
+          requiredWhen: { type: 'always' },
+          locality: 'host',
+        },
+        {
+          type: 'tool_bundle',
+          name: parquetToJsonName,
+          version: parquetToJsonVersion,
           requiredWhen: { type: 'always' },
           locality: 'host',
         },
@@ -359,6 +419,7 @@ let tool = {
   ],
 
   probe: async (engine, ctx) => {
+    validateCPUCounterOptions(engine, ctx);
     const neoprofAsPrivileged = await isPrivilegeRequired(engine, ctx);
     engine.log('info', `Neoprof privilege requirement: ${neoprofAsPrivileged}`);
     ctx.metadata.neoprofAsPrivileged = neoprofAsPrivileged;
@@ -366,20 +427,13 @@ let tool = {
     /** @type {import("../recipes/docs/jsdocs").ProbeResult} */
     const result = {
       available: false,
-      capabilities: {},
+      // Opted-in integrations always describe the CPU capability when discovery
+      // applies. Unsupported invocation configurations remain unavailable; an
+      // explicit-empty request skips enumeration and needs no descriptor.
+      capabilities: cpuCounters.initialProbeCapabilities(ctx),
       advice: [],
     };
 
-    if (ctx.params.mode === 'gpu') {
-      const gpuName = await queryGPUInfo(engine);
-      if (gpuName) {
-        result.capabilities.platform = {
-          componentType: neoprofPlatformCapabilityType,
-          state: 'available',
-          payload: { gpu_name: gpuName },
-        };
-      }
-    }
     const jfrValidation = validateNeoprofJfrMode(ctx);
     if (jfrValidation) {
       result.advice.push(jfrValidation);
@@ -412,17 +466,17 @@ let tool = {
       ? engine.withLocality('host')
       : engine;
     const localisedPaths = getNeoprofPaths(localisedEngine);
-    const analyzeDeploymentProbe = await probeDeployment(
-      localisedEngine,
-      localisedPaths.slAnalyzeDeployPath + slAnalyzeToolName,
-      slAnalyzeToolName,
-    );
+    const analyzeDeploymentProbe =
+      await probeSlAnalyzeDeployment(localisedEngine);
     const analyzeDeployed = analyzeDeploymentProbe.level === 'ready';
     if (!analyzeDeployed) {
       result.advice.push(analyzeDeploymentProbe);
     }
 
-    if (ctx.params.collect_jfr === true) {
+    if (
+      isTimelineExportEnabled(engine, ctx) ||
+      ctx.params.collect_jfr === true
+    ) {
       let parquetToJsonProbe = await probeDeployment(
         localisedEngine,
         localisedPaths.parquetToJsonDeployPath +
@@ -439,13 +493,20 @@ let tool = {
     if (recordDeployed) {
       // Generate the initial probe report using sl-record
       const slRecordProbe = await probeSlRecord(engine, ctx);
+      /** @type {import("../recipes/docs/jsdocs").SlRecordProbeReport} */
       const probeResponse = JSON.parse(slRecordProbe.stdout);
 
-      const gpuName = result.capabilities.platform?.payload.gpu_name;
-      if (ctx.params.mode === 'gpu' && gpuName) {
+      const gpuName =
+        ctx.params.mode === 'gpu' ? queryGPUInfo(probeResponse) : null;
+      if (gpuName) {
+        result.capabilities.platform = {
+          componentType: neoprofPlatformCapabilityType,
+          state: 'available',
+          payload: { gpu_name: gpuName },
+        };
         const gpuCounterProbe = await probeGPUCounters(engine, ctx, gpuName);
         if (gpuCounterProbe.level === 'ready') {
-          addProbeCapabilities(result, gpuCounterProbe.counters);
+          addProbeCapabilities(result, gpuCounterProbe.report.counters);
         } else {
           result.advice.push(gpuCounterProbe);
         }
@@ -482,6 +543,24 @@ let tool = {
           supports_event_inherit: probeResponse.supports_event_inherit,
         },
       };
+      if (
+        ctx.params.mode === 'samples' &&
+        cpuCounters.discoveryRequested(ctx)
+      ) {
+        await prepareWritableTargetFile(
+          engine,
+          paths.slRecordDeployPath + 'gator-log.txt',
+          'counter discovery log',
+        );
+        Object.assign(
+          result.capabilities,
+          await cpuCounters.discover(
+            engine,
+            ctx,
+            paths.slRecordDeployPath + slRecordToolName,
+          ),
+        );
+      }
       result.advice.push(
         ...probeResponse.advice.map((a) => {
           return {
@@ -512,6 +591,7 @@ let tool = {
   },
 
   run: async (engine, ctx) => {
+    validateCPUCounterOptions(engine, ctx);
     const jfrValidation = validateNeoprofJfrMode(ctx);
     if (jfrValidation) {
       throw {
@@ -548,6 +628,7 @@ let tool = {
       'capture log',
     );
 
+    const counterArgs = await cpuCounters.prepare(engine, ctx);
     let outputDirectory = await engine.createTempDir();
     ctx.metadata.outputDirectory = outputDirectory;
     let captureDirectory = outputDirectory + '/capture.apc';
@@ -590,6 +671,7 @@ let tool = {
       ctx.timeout.toString(),
       ...(ipcMetricName ? ['-C', ipcMetricName] : []),
       '--capture-log',
+      ...counterArgs,
     ];
 
     let recordArgs = buildRecordArgs(ctx);
@@ -865,6 +947,7 @@ let tool = {
 
     let runSlRecordErr = false;
     try {
+      ctx.metadata.cpuCounterAttempted = cpuCounters.selected(ctx);
       await runSlRecord(engine, ctx, processArgs);
     } catch (err) {
       runSlRecordErr = true;
@@ -883,6 +966,7 @@ let tool = {
   },
 
   reformat: async (engine, ctx) => {
+    validateCPUCounterOptions(engine, ctx);
     if (ctx.params.reformat_on_host) {
       const useTwoStageAnalyze = !isSysUtilWorkflow(ctx);
       return reformatOnHost(
@@ -891,7 +975,6 @@ let tool = {
         useTwoStageAnalyze,
       );
     }
-
     return reformatOnTarget(engine, ctx);
   },
 
@@ -922,30 +1005,18 @@ let tool = {
 };
 
 /**
- * @param {import("../recipes/docs/jsdocs").Engine} engine
- * @returns {Promise<string|null>}
+ * @param {import("../recipes/docs/jsdocs").SlRecordProbeReport} probeReport
+ * @returns {string|null}
  */
-async function queryGPUInfo(engine) {
-  engine.log('info', 'Searching for an Arm GPU.');
-
-  const result = await engine.execCommand(['dumpsys', 'SurfaceFlinger'], {});
-  if (result.rc !== 0) {
-    engine.log('warn', `Failed to query device: ${result.stderr}`);
-    return null;
-  }
-
-  const match = result.stdout.match(
-    /(Mali|Immortalis)-([TG][0-9]+)(-Immortalis)?/,
-  );
-  if (!match) {
-    engine.log('info', 'No Arm GPU found.');
-    return null;
-  }
-
-  const brand = match[3] ? 'Immortalis' : match[1];
-  const gpuName = `${brand}-${match[2]}`;
-  engine.log('info', `${gpuName} GPU found.`);
-  return gpuName;
+function queryGPUInfo(probeReport) {
+  // TODO(NEOPROF-1008): Replace model parsing with a gpu_id lookup in the
+  // metric catalogue once sl-record reports matching IDs.
+  const model = probeReport.gpus?.[0]?.model;
+  if (!model) return null;
+  const gpuName = model
+    .replace(/^Mali-G([12])-/, 'Mali G$1-')
+    .replace(/^Mali-(G\d+)-Immortalis$/, 'Immortalis-$1');
+  return matchGPUToMetricSet(gpuName) === undefined ? null : gpuName;
 }
 
 /**
@@ -954,32 +1025,38 @@ async function queryGPUInfo(engine) {
  * @param {import("../recipes/docs/jsdocs").Engine} engine
  * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
  * @param {string} gpuName
- * @returns {Promise<({level: 'ready', messageCode: '', counters: Array<{title: string, name: string, counter: string}>}|import("../recipes/docs/jsdocs").ProbeAdvice)>}
+ * @returns {Promise<({level: 'ready', messageCode: '', report: object}|import("../recipes/docs/jsdocs").ProbeAdvice)>}
  */
 async function probeGPUCounters(engine, ctx, gpuName) {
   const paths = getNeoprofPaths(engine);
   const slRecordPath = paths.slRecordDeployPath + slRecordToolName;
-  const result = await engine.execCommand(
-    [slRecordPath, '--print', 'counters'],
-    { asPrivileged: ctx.metadata.neoprofAsPrivileged },
-  );
+  // The full events.xml can exceed the engine's 4 MiB response limit.
+  const gpuEventsCommand = `set -o pipefail; "$1" --print events.xml | awk -v RS='>' '/<event / && /counter="ARM_Mali-/ { print $0 ">" }'`;
+  const [activeCounterResult, eventsCounterResult] = await Promise.all([
+    engine.execCommand([slRecordPath, '--print', 'counters'], {
+      asPrivileged: ctx.metadata.neoprofAsPrivileged,
+    }),
+    engine.execCommand(['sh', '-c', gpuEventsCommand, 'sh', slRecordPath], {
+      asPrivileged: ctx.metadata.neoprofAsPrivileged,
+    }),
+  ]);
 
-  if (result.rc !== 0) {
+  if (activeCounterResult.rc !== 0) {
     return {
       level: 'error',
       messageCode: readinessMessageCode,
       metadata: {
         message: 'The GPU counters available on the target could not be read.',
       },
-      cause: result.stderr,
+      cause: activeCounterResult.stderr,
     };
   }
 
-  const counters = parseGPUCounters(
-    `${result.stdout}\n${result.stderr}`,
-    gpuName,
+  const activeCounters = parseGPUCounters(
+    `${activeCounterResult.stdout}\n${activeCounterResult.stderr}`,
   );
-  if (counters.length === 0) {
+
+  if (activeCounters.length === 0) {
     return {
       level: 'error',
       messageCode: readinessMessageCode,
@@ -989,7 +1066,44 @@ async function probeGPUCounters(engine, ctx, gpuName) {
     };
   }
 
-  return { level: 'ready', messageCode: '', counters };
+  if (eventsCounterResult.rc !== 0) {
+    return {
+      level: 'error',
+      messageCode: readinessMessageCode,
+      metadata: {
+        message:
+          'The GPU counter information could not be read from the target.',
+      },
+      cause: eventsCounterResult.stderr,
+    };
+  }
+
+  const eventCounters = parseGPUEventsXML(
+    `${eventsCounterResult.stdout}\n${eventsCounterResult.stderr}`,
+  );
+
+  const metricSetId = matchGPUToMetricSet(gpuName);
+  const counters = translateGPUCounters(
+    eventCounters,
+    metricSetId,
+    activeCounters,
+  ).map((counter) => ({ name: counter.counter, alias: counter.alias }));
+
+  // Temporary NEOPROF-1007 workaround: construct the future sl-record shape.
+  // Replace this block with the native report once sl-record provides it.
+  const report = {
+    schemaVersion: 1,
+    capabilities: { supportsMultipleEbs: true },
+    counters,
+    spePmus: [],
+    warnings: { setup: [], other: [] },
+    topology: { clusters: [], cpus: [] },
+  };
+  return {
+    level: 'ready',
+    messageCode: '',
+    report,
+  };
 }
 
 async function reformatOnHost(engine, ctx, useTwoStageAnalyze) {
@@ -1019,7 +1133,8 @@ async function reformatOnHost(engine, ctx, useTwoStageAnalyze) {
     hostCaptureDirectory + '/**/*',
   );
 
-  const slAnalyzePath = paths.slAnalyzeDeployPath + slAnalyzeToolName;
+  const slAnalyzePath =
+    paths.slAnalyzeDeployPath + getSlAnalyzeFilename(engine);
   // The first pass discovers executable images needed for source and
   // disassembly output. When it is disabled, analysis goes straight to the
   // export pass below.
@@ -1062,7 +1177,7 @@ async function reformatOnHost(engine, ctx, useTwoStageAnalyze) {
   });
 
   if (isTimelineExportEnabled(engine, ctx)) {
-    await addToolCapabilities(engine, ctx, hostCaptureDirectory);
+    await finalizeCounterCapabilities(engine, ctx, hostCaptureDirectory, false);
   }
 
   engine.endProgress(progressTrackerId);
@@ -1075,7 +1190,7 @@ async function reformatOnTarget(engine, ctx) {
 
   await ensureDeployed(
     engine,
-    paths.slAnalyzeDeployPath + slAnalyzeToolName,
+    paths.slAnalyzeDeployPath + getSlAnalyzeFilename(engine),
     slAnalyzeToolName,
   );
   await engine.mkDir(ctx.metadata.analysisDirectory);
@@ -1098,7 +1213,7 @@ async function reformatOnTarget(engine, ctx) {
     );
   }
 
-  let slAnalyzePath = paths.slAnalyzeDeployPath + slAnalyzeToolName;
+  let slAnalyzePath = paths.slAnalyzeDeployPath + getSlAnalyzeFilename(engine);
   let args = buildAnalyzeArgs(engine, ctx, {
     slAnalyzePath,
     outputDirectory: ctx.metadata.analysisDirectory,
@@ -1114,7 +1229,7 @@ async function reformatOnTarget(engine, ctx) {
   });
 
   if (isTimelineExportEnabled(engine, ctx)) {
-    await addToolCapabilities(
+    await finalizeCounterCapabilities(
       engine,
       ctx,
       ctx.metadata.captureDirectory,
@@ -1474,7 +1589,7 @@ async function probeIpcMetric(engine, ctx) {
  */
 async function probeSlAnalyze(engine, ctx) {
   const paths = getNeoprofPaths(engine);
-  let slAnalyzePath = paths.slAnalyzeDeployPath + slAnalyzeToolName;
+  let slAnalyzePath = paths.slAnalyzeDeployPath + getSlAnalyzeFilename(engine);
   let args = [slAnalyzePath, '--help'];
 
   let slAnalyzeCheck = await engine.execCommand(args, {});
@@ -1926,6 +2041,7 @@ function buildRecordArgs(ctx) {
  * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
  * @param {string} stdErr - the neoprof stderr
  * @param {number} exitCode - the exit code of the process
+ * @param {string} tool
  */
 async function checkAndThrowNeoprofError(engine, ctx, exitCode, stdErr, tool) {
   // ERR_MAP maps stderr patterns to catalog errors.
@@ -2077,9 +2193,14 @@ async function checkAndThrowNeoprofError(engine, ctx, exitCode, stdErr, tool) {
     [
       /^Skipping symbols.json export because backtrace report is empty$/m,
       {
-        msgCode: 'tool_integrations.neoprof.NO_SAMPLES_COLLECTED',
+        msgCode: ctx.metadata.javaJarFileAccessFailure
+          ? 'tool_integrations.neoprof.NO_SAMPLES_COLLECTED_JAVA_JAR_FILE_NOT_FOUND'
+          : 'tool_integrations.neoprof.NO_SAMPLES_COLLECTED',
         throwOnZeroExit: true,
-        metadataProvider: (/** @type {any} */ match) => ({}),
+        metadataProvider: (/** @type {any} */ match) =>
+          ctx.metadata.javaJarFileAccessFailure
+            ? { jarFile: ctx.metadata.javaJarFileAccessFailure }
+            : {},
       },
     ],
     [
@@ -2118,11 +2239,24 @@ async function checkAndThrowNeoprofError(engine, ctx, exitCode, stdErr, tool) {
  * @param {import("../recipes/docs/jsdocs").Engine} engine
  * @param {string} stdErr
  * @param {string} stdOut
- * @returns {Promise<void>}
+ * @param {string|undefined} workloadExitContext
+ * @returns {void}
  */
-async function emitNeoprofWorkloadExitCode(engine, stdErr, stdOut) {
+function emitNeoprofWorkloadExitCode(
+  engine,
+  stdErr,
+  stdOut,
+  workloadExitContext,
+) {
   const exitCodeRegex = /^(?:ERROR: )?Command exited with code (\d+).*$/m;
   const stdErrExitCodeMatch = stdErr.match(exitCodeRegex);
+
+  if (workloadExitContext) {
+    engine.writeUserMessage(
+      'warn',
+      `Workload exit context: ${workloadExitContext}`,
+    );
+  }
 
   // Always surface the exit code if present (prefer stderr to avoid parsing stdOut).
   const exitCodeMatch = stdErrExitCodeMatch || stdOut.match(exitCodeRegex);
@@ -2131,21 +2265,8 @@ async function emitNeoprofWorkloadExitCode(engine, stdErr, stdOut) {
     const level = code === '0' ? 'info' : 'warn';
     engine.writeUserMessage(level, `Workload exit code: ${code}`);
 
-    // Surface the nearest context line when the workload exits non-zero.
-    if (stdErrExitCodeMatch && stdErrExitCodeMatch[1] !== '0') {
-      const lines = stdErr.split('\n');
-      const exitIdx = lines.findIndex(
-        (line) => line === stdErrExitCodeMatch[0],
-      );
-      let contextLine = '';
-      if (exitIdx > 0) {
-        for (let i = exitIdx - 1; i >= 0; i -= 1) {
-          if (lines[i].trim()) {
-            contextLine = lines[i].trim();
-            break;
-          }
-        }
-      }
+    if (!workloadExitContext) {
+      const contextLine = findWorkloadExitContext(stdErr, stdErrExitCodeMatch);
       if (contextLine) {
         engine.writeUserMessage(
           'warn',
@@ -2169,6 +2290,44 @@ async function emitNeoprofWorkloadExitCode(engine, stdErr, stdOut) {
 }
 
 /**
+ * Finds the non-empty log line immediately before a non-zero workload exit.
+ * @param {string} stdErr
+ * @param {RegExpMatchArray|null} stdErrExitCodeMatch
+ * @returns {string|undefined}
+ */
+function findWorkloadExitContext(stdErr, stdErrExitCodeMatch) {
+  if (!stdErrExitCodeMatch || stdErrExitCodeMatch[1] === '0') {
+    return undefined;
+  }
+
+  const lines = stdErr.split('\n');
+  const exitIdx = lines.findIndex((line) => line === stdErrExitCodeMatch[0]);
+  for (let i = exitIdx - 1; i >= 0; i -= 1) {
+    if (lines[i].trim()) {
+      return lines[i].trim();
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Detects when Java reports that it could not access a JAR file.
+ * @param {string} stdErr
+ * @param {string} stdOut
+ * @returns {{jarFile: string, workloadExitContext: string}|undefined}
+ */
+function detectJavaJarFileNotFound(stdErr, stdOut) {
+  const jarfileRegex = /^Error: Unable to access jarfile (.+)$/im;
+  const match = stdErr.match(jarfileRegex) || stdOut.match(jarfileRegex);
+  return match
+    ? {
+        jarFile: match[1],
+        workloadExitContext: match[0],
+      }
+    : undefined;
+}
+
+/**
  * Reads tool stderr/stdout, emits workload exit messages, and throws the relevant catalog error for tool failures.
  * @param {import("../recipes/docs/jsdocs").Engine} engine
  * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
@@ -2188,7 +2347,17 @@ async function checkToolFailureFromRun(
 ) {
   let stdErr = await readHostFile(engine, stdErrPath);
   let stdOut = stdOutPath ? await readHostFile(engine, stdOutPath) : '';
-  await emitNeoprofWorkloadExitCode(engine, stdErr, stdOut);
+
+  const javaJarFailure = detectJavaJarFileNotFound(stdErr, stdOut);
+  if (javaJarFailure) {
+    ctx.metadata.javaJarFileAccessFailure = javaJarFailure.jarFile;
+  }
+  emitNeoprofWorkloadExitCode(
+    engine,
+    stdErr,
+    stdOut,
+    javaJarFailure?.workloadExitContext,
+  );
   await checkAndThrowNeoprofError(engine, ctx, exitCode, stdErr, tool);
 }
 
@@ -2208,7 +2377,6 @@ async function createRunFile(engine, path, meta) {
     };
   }
 }
-
 /**
  * Creates a target file as the non-root user and makes it readable by all
  * users.
@@ -2994,6 +3162,10 @@ async function isPrivilegeRequired(engine, ctx) {
     return true;
   }
 
+  if (ctx.workload.type === 'launch') {
+    await assertWorkloadWorkingDirectory(engine, ctx.workload);
+  }
+
   // SPE physical-address capture currently requires privileged access.
   // TODO: Revisit this when adding PA support for the memory sharing recipe.
   if (ctx.params['mode'] === 'spe') {
@@ -3110,31 +3282,30 @@ function addProbeCapability(result, id, metadata, data) {
 
 /**
  * @param {import("../recipes/docs/jsdocs").ProbeResult} result
- * @param {import("./gpu-counters").GPUCounter[]} counters
+ * @param {Array<{name: string, alias: string}>} counters
  */
 function addProbeCapabilities(result, counters) {
   for (const counter of counters) {
     addProbeCapability(
       result,
-      `counter.${counter.counter}`,
-      { name: 'tool_capabilities/counter', version: '1.0' },
+      `counter.${counter.name}`,
+      COUNTER_CAPABILITY_COMPONENT_TYPE,
       {
         state: 'available',
-        payload: counter,
+        payload: { counter: counter.name, alias: counter.alias },
       },
     );
   }
 }
 
 /**
- * Reads the JSON counter metadata produced by `sl-analyze` and records capabilities
- * for this tool invocation in the run.
+ * Reads and validates the JSON counter metadata produced by `sl-analyze`.
  * @param {import("../recipes/docs/jsdocs").Engine} engine
  * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
  * @param captureDirectory The path to the root of the `capture.apc` dir
- * @returns {Promise<void>}
+ * @returns {Promise<object[]>}
  */
-async function addToolCapabilities(
+async function readToolCapabilityMetadata(
   engine,
   ctx,
   captureDirectory,
@@ -3206,6 +3377,10 @@ async function addToolCapabilities(
     throw { code: 'tool_integrations.neoprof.METADATA_INVALID', cause };
   }
 
+  return metadata;
+}
+
+async function publishToolCapability(engine, ctx, counter) {
   let timelineDeviceNumbers = [];
   try {
     const parsedDeviceNumbers = JSON.parse(ctx.params.timeline_device_numbers);
@@ -3216,25 +3391,24 @@ async function addToolCapabilities(
     timelineDeviceNumbers = [];
   }
 
-  for (const counter of metadata) {
-    await engine.addToolCapability(
-      metadataEntryToCapabilityID(counter),
-      { name: 'tool_capabilities/counter', version: '1.0' },
-      {
-        state: 'collected',
-        payload: {
-          title: `${counter.title}: ${counter.name}`,
-          counter_title: counter.title,
-          counter_name: counter.name,
-          description: counter.description,
-          units: counter.units,
-          key_type: counter.key_type,
-          series_id: counter.series_id,
-          device_numbers: timelineDeviceNumbers,
-        },
+  await engine.addToolCapability(
+    metadataEntryToCapabilityID(counter),
+    COUNTER_CAPABILITY_COMPONENT_TYPE,
+    {
+      state: 'collected',
+      payload: {
+        title: `${counter.title}: ${counter.name}`,
+        counter_title: counter.title,
+        counter_name: counter.name,
+        description: counter.description,
+        units: counter.units,
+        key_type: counter.key_type,
+        series_id: counter.series_id,
+        counter_class: counter.counter_class,
+        device_numbers: timelineDeviceNumbers,
       },
-    );
-  }
+    },
+  );
 }
 
 /**
@@ -3258,4 +3432,78 @@ function toCapabilityIDSegment(phrase) {
     .replaceAll(/\s/g, '_')
     .replaceAll(/[()]/g, '')
     .replaceAll(/[^a-z0-9._-]/g, '_');
+}
+
+async function finalizeCounterCapabilities(
+  engine,
+  ctx,
+  captureDirectory,
+  asPrivileged,
+) {
+  const metadata = await readToolCapabilityMetadata(
+    engine,
+    ctx,
+    captureDirectory,
+    asPrivileged,
+  );
+  if (ctx.capabilityRequest === undefined) {
+    for (const counter of metadata) {
+      await publishToolCapability(engine, ctx, counter);
+    }
+    return;
+  }
+  const converter =
+    getNeoprofPaths(engine).parquetToJsonDeployPath +
+    getParquetToJSONFilename(engine);
+  await ensureDeployed(engine, converter, parquetToJsonName);
+  const fileList = await cpuCounters.loadSeriesRegistry(
+    engine,
+    ctx,
+    captureDirectory,
+  );
+  if (!fileList) {
+    throw {
+      code: 'tool_integrations.neoprof.METADATA_INVALID',
+      cause: 'Timeline series registry could not be read',
+    };
+  }
+  const validMetadata = metadata.filter((series) =>
+    NEOPROF_TIMELINE_BIN_DURATIONS_NS.every((binDuration) => {
+      const relativePath = `report-new/apx/timeline/key_type=${series.key_type}/series_id=${series.series_id}/bin_duration=${binDuration}/counter.parquet`;
+      return (
+        fileList.filter(
+          (entry) =>
+            entry?.key_type === series.key_type &&
+            entry.series_id === series.series_id &&
+            entry.bin_duration === binDuration &&
+            entry.relative_path === relativePath,
+        ).length === 1
+      );
+    }),
+  );
+  if (validMetadata.length !== metadata.length) {
+    throw new Error(
+      'Timeline output is missing one or more required bin durations',
+    );
+  }
+  const cpuBound = new Set();
+  const emitSeries = async (series) => {
+    await publishToolCapability(engine, ctx, series);
+  };
+  await cpuCounters.verify(
+    engine,
+    ctx,
+    captureDirectory,
+    validMetadata,
+    metadataEntryToCapabilityID,
+    converter,
+    emitSeries,
+    (series) => cpuBound.add(metadataEntryToCapabilityID(series)),
+  );
+  for (const series of validMetadata) {
+    // CPU-bound series are owned by verification, including those that failed.
+    if (!cpuBound.has(metadataEntryToCapabilityID(series))) {
+      await publishToolCapability(engine, ctx, series);
+    }
+  }
 }

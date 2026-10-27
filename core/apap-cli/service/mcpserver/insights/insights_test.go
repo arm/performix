@@ -85,3 +85,44 @@ func TestRecipes(t *testing.T) {
 	_, ok = ForRecipe("unsupported_recipe")
 	assert.False(t, ok)
 }
+
+func TestCodeHotspotsModeFromEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		value   string
+		want    CodeHotspotsMode
+		wantErr string
+	}{
+		{name: "unset", want: CodeHotspotsModeCurated},
+		{name: "curated", value: "curated", want: CodeHotspotsModeCurated},
+		{name: "run query", value: "run_query", want: CodeHotspotsModeRunQuery},
+		{name: "invalid", value: "unexpected", wantErr: "APXD_CODE_HOTSPOTS_AI_INSIGHTS_MODE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(CodeHotspotsModeEnvironment, tc.value)
+			got, err := CodeHotspotsModeFromEnvironment()
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestForRecipeWithCodeHotspotsMode(t *testing.T) {
+	curated, ok := ForRecipeWithCodeHotspotsMode(CodeHotspotsRecipeName, CodeHotspotsModeCurated)
+	require.True(t, ok)
+	assert.Equal(t, MethodCuratedSummary, curated.Method)
+
+	query, ok := ForRecipeWithCodeHotspotsMode(CodeHotspotsRecipeName, CodeHotspotsModeRunQuery)
+	require.True(t, ok)
+	assert.Equal(t, MethodRunQuery, query.Method)
+	assert.Contains(t, query.Guidance, "Code Hotspots Query Guide")
+	assert.Contains(t, query.Guidance, "Common `run_query` Guidance")
+
+	asct, ok := ForRecipeWithCodeHotspotsMode(ASCTRecipeName, CodeHotspotsModeRunQuery)
+	require.True(t, ok)
+	assert.Equal(t, MethodRunQuery, asct.Method)
+}

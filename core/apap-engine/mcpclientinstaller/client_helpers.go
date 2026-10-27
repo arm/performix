@@ -29,6 +29,27 @@ func detectExecutable(
 	marker string,
 	validate bool,
 ) (resolvedClient, error) {
+	return detectExecutableWithVersionValidator(
+		ctx,
+		d,
+		names,
+		paths,
+		marker,
+		validate,
+		nil,
+	)
+}
+
+// Detection requires recognised version output. An older client remains
+// detected so callers can report upgrade advice and remove existing registrations.
+func detectExecutableWithVersionValidator(
+	ctx context.Context,
+	d clientDependencies,
+	names, paths []string,
+	marker string,
+	validate bool,
+	versionValidator func(string) error,
+) (resolvedClient, error) {
 	candidates := []string{}
 	for _, name := range names {
 		if path, err := d.lookupPath(name); err == nil {
@@ -37,6 +58,10 @@ func detectExecutable(
 	}
 	candidates = append(candidates, paths...)
 	var last error
+	// Keep an unsupported installation as a fallback while looking for a
+	// supported one in the remaining standard locations.
+	var versionRejected resolvedClient
+	var versionRejectedErr error
 	for _, path := range candidates {
 		info, err := d.stat(path)
 		if err != nil || !info.Mode().IsRegular() {
@@ -53,14 +78,37 @@ func detectExecutable(
 				last = err
 				continue
 			}
+			if versionValidator != nil {
+				if err := versionValidator(string(output)); err != nil {
+					if isUnsupportedClientVersionError(err) {
+						versionRejected = resolvedExecutable(d, path)
+						versionRejectedErr = err
+					} else {
+						last = err
+					}
+					continue
+				}
+			}
 		}
-		absolute := path
-		if d.goos == runtime.GOOS {
-			absolute, _ = filepath.Abs(path)
-		}
-		return resolvedClient{detected: true, executablePath: filepath.Clean(absolute)}, nil
+		return resolvedExecutable(d, path), nil
+	}
+	if versionRejectedErr != nil {
+		return versionRejected, versionRejectedErr
 	}
 	return resolvedClient{}, last
+}
+
+func isUnsupportedClientVersionError(err error) bool {
+	var unsupportedVersion *unsupportedClientVersionError
+	return errors.As(err, &unsupportedVersion)
+}
+
+func resolvedExecutable(d clientDependencies, path string) resolvedClient {
+	absolute := path
+	if d.goos == runtime.GOOS {
+		absolute, _ = filepath.Abs(path)
+	}
+	return resolvedClient{detected: true, executablePath: filepath.Clean(absolute)}
 }
 
 func anyPathExists(d clientDependencies, paths []string) bool {

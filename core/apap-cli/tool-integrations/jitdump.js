@@ -21,6 +21,10 @@ const dotnetInputRelativeDir = 'external/jitdump-dotnet';
 const defaultJfrSettings = 'profile';
 const { decodeXmlAttribute } = require('./utils');
 const jfrRecordingsParquetFile = 'metadata/jfr_recordings.parquet';
+// These collector handlers intentionally combine multiple events in one file.
+const sharedHandlerOutputs = new Map([
+  ['jvm_flags', 'events/jvm_flags.parquet'],
+]);
 
 function eventParquetPath(eventName) {
   const shortName = eventName.slice(eventName.lastIndexOf('.') + 1);
@@ -55,7 +59,8 @@ function parquetManifestFromJfrSchema(schema) {
   }
 
   const manifest = [jfrRecordingsParquetFile];
-  const paths = new Set(manifest);
+  const paths = new Map([[jfrRecordingsParquetFile, null]]);
+  const eventNames = new Set();
   for (const eventTag of eventTags) {
     const nameMatch = /\bname\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(eventTag);
     const eventName = decodeXmlAttribute(
@@ -65,11 +70,23 @@ function parquetManifestFromJfrSchema(schema) {
       throw new Error('JFR schema event does not have a name');
     }
 
-    const path = eventParquetPath(eventName);
+    if (eventNames.has(eventName)) {
+      throw new Error(`JFR schema defines duplicate event '${eventName}'`);
+    }
+    eventNames.add(eventName);
+    const handlerMatch = /\brust_handler\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(
+      eventTag,
+    );
+    const handler = decodeXmlAttribute(
+      handlerMatch?.[1] || handlerMatch?.[2] || '',
+    ).trim();
+    const sharedPath = sharedHandlerOutputs.get(handler);
+    const path = sharedPath ?? eventParquetPath(eventName);
     if (paths.has(path)) {
+      if (sharedPath !== undefined && paths.get(path) === handler) continue;
       throw new Error(`JFR schema defines duplicate output '${path}'`);
     }
-    paths.add(path);
+    paths.set(path, handler);
     manifest.push(path);
   }
 

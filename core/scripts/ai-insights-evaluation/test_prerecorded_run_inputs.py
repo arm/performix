@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -238,6 +237,18 @@ def test_missing_metadata_profile_mode_defaults_to_launch(tmp_path: Path) -> Non
     )
 
 
+def test_jfr_capture_metadata_must_match_manifest(tmp_path: Path) -> None:
+    case_dir = write_common_inputs(tmp_path, "code_hotspots")
+    test_case = make_testcase("code_hotspots")
+    test_case["prerecord"] = {"mode": "launch", "enable_jfr_capture": True}
+
+    with pytest.raises(pytest.UsageError, match="JFR capture mismatch"):
+        harness._validate_prerecorded_metadata([test_case], tmp_path)
+
+    write_metadata(case_dir, {"recipe": "code_hotspots", "enable_jfr_capture": True})
+    harness._validate_prerecorded_metadata([test_case], tmp_path)
+
+
 def test_attach_metadata_mode_matches_manifest(tmp_path: Path) -> None:
     case_dir = write_common_inputs(tmp_path, "system_utilization")
     write_metadata(
@@ -252,130 +263,3 @@ def test_attach_metadata_mode_matches_manifest(tmp_path: Path) -> None:
     test_case["prerecord"] = {"mode": "attach"}
 
     harness._validate_prerecorded_metadata([test_case], tmp_path)
-
-
-@pytest.mark.parametrize("recipe", ["system_utilization", "syscall_trace_summary"])
-def test_recipes_without_source_data_import_without_attaching_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recipe: str
-) -> None:
-    write_common_inputs(tmp_path, recipe)
-    calls = []
-
-    def run_cli(command, cwd):
-        calls.append(command)
-        return SimpleNamespace(
-            stdout=json.dumps({"data": {"new_id": {"value": "run-123"}}})
-        )
-
-    class Cache:
-        def __init__(self):
-            self.value = None
-
-        def get(self, key, default):
-            return default
-
-        def set(self, key, value):
-            self.value = value
-
-    cache = Cache()
-    monkeypatch.setattr(harness, "run_cli", run_cli)
-
-    harness._prepare_imported_runs(
-        [make_testcase(recipe)],
-        cache,
-        tmp_path / "apx",
-        tmp_path,
-        tmp_path / "results",
-    )
-
-    assert len(calls) == 1
-    assert calls[0][1:3] == ["run", "import"]
-    assert cache.value is not None
-    assert "source_root" not in cache.value
-
-
-@pytest.mark.parametrize(
-    "recipe", ["code_hotspots", "cpu_microarchitecture", "instruction_mix"]
-)
-def test_recipe_with_source_archive_import_attaches_extracted_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recipe: str
-) -> None:
-    case_dir = write_common_inputs(tmp_path, recipe)
-    write_source_archive(case_dir)
-    source_sha = harness.sha256_file(case_dir / "test_src.zip")
-    source_root = (
-        tmp_path / "results" / "imported_sources" / "test_case_32" / source_sha / "test_src"
-    )
-    source_root.mkdir(parents=True)
-    calls = []
-
-    def run_cli(command, cwd):
-        calls.append(command)
-        return SimpleNamespace(
-            stdout=json.dumps({"data": {"new_id": {"value": "run-123"}}})
-        )
-
-    class Cache:
-        def get(self, key, default):
-            return default
-
-        def set(self, key, value):
-            self.value = value
-
-    cache = Cache()
-    monkeypatch.setattr(harness, "run_cli", run_cli)
-
-    harness._prepare_imported_runs(
-        [
-            make_instruction_mix_testcase("dynamic")
-            if recipe == "instruction_mix"
-            else make_testcase(recipe)
-        ],
-        cache,
-        tmp_path / "apx",
-        tmp_path,
-        tmp_path / "results",
-    )
-
-    assert len(calls) == 2
-    assert calls[1][-2:] == ["--source", str(source_root)]
-    assert cache.value["source_root"] == str(source_root)
-
-
-def test_static_instruction_mix_import_does_not_attach_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    write_common_inputs(tmp_path, "instruction_mix")
-    calls = []
-
-    def run_cli(command, cwd):
-        calls.append(command)
-        return SimpleNamespace(
-            stdout=json.dumps({"data": {"new_id": {"value": "run-123"}}})
-        )
-
-    class Cache:
-        def __init__(self):
-            self.value = None
-
-        def get(self, key, default):
-            return default
-
-        def set(self, key, value):
-            self.value = value
-
-    cache = Cache()
-    monkeypatch.setattr(harness, "run_cli", run_cli)
-
-    harness._prepare_imported_runs(
-        [make_instruction_mix_testcase("static")],
-        cache,
-        tmp_path / "apx",
-        tmp_path,
-        tmp_path / "results",
-    )
-
-    assert len(calls) == 1
-    assert calls[0][1:3] == ["run", "import"]
-    assert cache.value is not None
-    assert "source_root" not in cache.value

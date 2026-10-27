@@ -7,7 +7,7 @@ import (
 	"context"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/clijson"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 // Info defines interfaces to display individual runs

@@ -22,8 +22,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func makeRequest(runID string) *apapproto.GetRunDescriptionRequest {
@@ -396,8 +396,12 @@ func TestInfoCommand(t *testing.T) {
 
 		err := cmd.Execute()
 		require.Error(t, err)
-		expectedErr := message.New(message.CliCmdCommonJsonMarshalFailed).WithCause(marshalCause)
-		assert.Equal(t, expectedErr, err)
+		var msg message.Message
+		require.ErrorAs(t, err, &msg)
+		assert.Equal(t, message.CliCmdCommonJsonMarshalFailed, msg.Code())
+		var cause *json.MarshalerError
+		require.ErrorAs(t, msg.Unwrap(), &cause)
+		assert.EqualError(t, cause, marshalCause.Error())
 	})
 
 	t.Run("prints inline error when target parse fails", func(t *testing.T) {

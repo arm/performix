@@ -27,7 +27,9 @@ ${G_RUNS_DIR}                   ${EMPTY}  # Global to track the runs directory p
 ${G_LAST_RESULT}                ${EMPTY}  # Global to track last command result (rc, stdout, stderr)
 ${G_LAST_PROCESS}               ${EMPTY}  # Global to track process handle of last launched process
 ${G_WORKLOADS}                  ${EMPTY}  # Global to track available workloads
-${LAUNCH_WORKLOAD}              ${EMPTY}  # Global default workload command
+${LAUNCH_WORKLOAD}              ${EMPTY}  # User override or resolved workload for the current target
+${G_LAUNCH_WORKLOAD_OVERRIDE}    ${None}  # Initial user override; None until the first workload selection
+${USE_PRERECORDED_RUNS}         True
 ${JSON_FLAG}                    --json
 ${CLI_BIN_DIR}                  ${CURDIR}${/}..${/}..${/}..${/}apap-cli
 ${ROBOT_FILES_DIR}              ${CURDIR}${/}..${/}files
@@ -35,6 +37,7 @@ ${ROBOT_EXPORT_DIR}             ${ROBOT_FILES_DIR}${/}export  # If you change th
 ${TARGET_CONFIG_DIR}            ${ROBOT_FILES_DIR}${/}targets
 ${WORKLOAD_CONFIG_DIR}          ${ROBOT_FILES_DIR}${/}workloads
 ${EXTERNAL_RECIPES_DIR}         ${ROBOT_FILES_DIR}${/}recipes
+${PRERECORDED_RUNS_DIR}         ${ROBOT_FILES_DIR}${/}prerecorded-runs
 ${ARCH_AARCH64}                 aarch64
 ${ARCH_ARM64}                   arm64  # Used by MacOS
 ${ARCH_X86_64}                  x86-64
@@ -238,9 +241,16 @@ Get Default Launch Workload
   RETURN  "dd if=/dev/zero of=/dev/null bs=1M count=102400"
 
 Set Default Launch Workload
-  [Documentation]  Resolve and store the default workload command for the configured target.
-  ${launch_workload} =  Get Default Launch Workload
-  VAR  ${LAUNCH_WORKLOAD} =  ${launch_workload}  scope=GLOBAL
+  [Documentation]  Resolve and store the workload command for the configured target.
+  ...  Preserve the initial user override; otherwise refresh the default when the target changes.
+  IF  $G_LAUNCH_WORKLOAD_OVERRIDE is None
+    VAR  ${G_LAUNCH_WORKLOAD_OVERRIDE} =  ${LAUNCH_WORKLOAD}  scope=GLOBAL
+  END
+  VAR  ${resolved_workload} =  ${G_LAUNCH_WORKLOAD_OVERRIDE}
+  IF  $resolved_workload == ''
+    ${resolved_workload} =  Get Default Launch Workload
+  END
+  VAR  ${LAUNCH_WORKLOAD} =  ${resolved_workload}  scope=GLOBAL
 
 Wait For Process And Log
   [Documentation]  Wait for a command in the background to finish
@@ -354,7 +364,7 @@ Parse Last JSON Stdout Line To Dictionary
 
 Parse JSON To Dictionary
   [Arguments]  ${json}
-  ${dict} =  Evaluate  json.loads(r'''${json}''')  json
+  ${dict} =  Evaluate  json.loads($json)  json
   RETURN  ${dict}
 
 Read JSON File Into Dictionary

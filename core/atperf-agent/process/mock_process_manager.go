@@ -7,12 +7,11 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
 
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 type MockProcessManager struct {
@@ -69,7 +68,7 @@ func (m *MockProcessManager) Shutdown(force bool) error {
 }
 
 // Stubs for internal functions added to satisfy interface; not mocked directly
-func (m *MockProcessManager) buildCmd(lc *LaunchCommand) (*exec.Cmd, error) {
+func (m *MockProcessManager) buildCmd(lc *LaunchCommand) (*launchCommand, error) {
 	return nil, nil
 }
 

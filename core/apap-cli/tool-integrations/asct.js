@@ -11,8 +11,8 @@ const {
 
 const TOOL_NAME = 'asct';
 const TOOL_DISPLAY_NAME = 'ASCT';
-const BUNDLE_VERSION = '0.6.1';
-const BUNDLE_HASH = 'd2f4360';
+const BUNDLE_VERSION = '0.7.0';
+const BUNDLE_HASH = 'dbf3ee9';
 const BUNDLE_DIR = `${TOOL_NAME}/${BUNDLE_VERSION}`;
 const BUNDLE_ARCHIVE_NAME = `${TOOL_NAME}-${BUNDLE_VERSION}+${BUNDLE_HASH}.tar.gz`;
 const INSTALL_DIR_NAME = `install-${BUNDLE_VERSION}+${BUNDLE_HASH}`;
@@ -1321,10 +1321,10 @@ let tool = {
   },
 
   /**
-   * Handle an explicit stop request by marking the run as cancelled and stopping the active process.
-   * We intentionally do not walk a list of remembered handles here; the active
-   * process helper centralizes graceful interrupt, kill fallback, tracker
-   * cleanup, and clearing whichever stage-specific slot still references it.
+   * ASCT cannot safely complete a user-requested graceful stop, so supportsStop: false
+   * makes the CLI ignore the first Ctrl-C. The engine also invokes onStop when its
+   * timeout or workload monitor needs to terminate the active process, so keep the
+   * shutdown path available for those engine-managed fallbacks.
    */
   onStop: async (engine, ctx) => {
     ctx.metadata.cancelRequested = true;

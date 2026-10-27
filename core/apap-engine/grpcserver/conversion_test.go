@@ -21,7 +21,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/ssh"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 func TestSSHConnectErrorToProto(t *testing.T) {

@@ -16,10 +16,10 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
+	targetagentproto "github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/filetransfer"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	targetagentproto "github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 func CreateFileInfoResponse(paths ...string) *targetagentproto.ListFilesResponse {

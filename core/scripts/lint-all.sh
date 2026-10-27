@@ -7,13 +7,13 @@
 
 set -euo pipefail
 
-script_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 
 echo "Linting Go code"
-$script_dir/go/lint-all.sh $@
+"$script_dir/go/lint.sh" $("$script_dir/go/all-modules.sh") "$@"
 
 echo "Linting JavaScript code"
-$script_dir/node/lint-all.py $@
+"$script_dir/node/lint-all.py" "$@"
 
 echo "Linting Robot code"
-$script_dir/python/lint-robot.sh
+"$script_dir/python/lint-robot.sh"

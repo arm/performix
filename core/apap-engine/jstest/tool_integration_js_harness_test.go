@@ -29,12 +29,12 @@ func loadTestToolIntegration(t *testing.T, source string) *ToolIntegrationJSHarn
 	toolPath := filepath.Join(t.TempDir(), "test.js")
 	require.NoError(t, os.WriteFile(toolPath, []byte(source), 0o600))
 
-	originalResolveJSFilePath := resolveJSFilePath
-	resolveJSFilePath = func(_ *testing.T, _ string) string {
+	originalResolveSourceFilePath := resolveSourceFilePath
+	resolveSourceFilePath = func(_ *testing.T, _ string) string {
 		return toolPath
 	}
 	t.Cleanup(func() {
-		resolveJSFilePath = originalResolveJSFilePath
+		resolveSourceFilePath = originalResolveSourceFilePath
 	})
 
 	return LoadToolIntegration(t, "test")

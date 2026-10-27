@@ -61,6 +61,18 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage: true,
 		Short:        fmt.Sprintf("%v CLI", terminology.GetProductFullName()),
 		Long:         fmt.Sprintf(`A command-line interface and gRPC server daemon for %v.`, terminology.GetProductFullName()),
+		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+			serverPort := viper.GetInt("server-port")
+			if serverPort == serverconfig.AutomaticPort {
+				host := viper.GetString("server-hostname")
+				if host != "" && host != serverconfig.DefaultServerHostname {
+					return message.New(message.CliCmdDaemonServerHostnameRequiresExplicitPort).WithMetadata(map[string]string{
+						"host": host,
+					})
+				}
+			}
+			return nil
+		},
 	}
 
 	cobra.OnInitialize(initConfig)
@@ -145,10 +157,10 @@ func initConfig() {
 		viper.SetConfigFile(resolvepath.ResolvePath(cfgFile))
 
 		// Defaults to be used when given setting is not specified
+		serverconfig.RegisterFeatureDefaults(viper.GetViper())
 		viper.SetDefault("jobs", serverconfig.Jobs)
 		viper.SetDefault("server-hostname", serverconfig.DefaultServerHostname)
 		viper.SetDefault("server-port", serverconfig.DefaultServerPort)
-		viper.SetDefault("auth-port", serverconfig.DefaultAuthPort)
 		viper.SetDefault("http-port", serverconfig.DefaultHTTPPort)
 		viper.SetDefault("http-chunk-bytes", serverconfig.DefaultHTTPChunkBytes)
 		viper.SetDefault("log-level", serverconfig.DefaultLogLevel)
@@ -156,17 +168,6 @@ func initConfig() {
 		viper.SetDefault("data-dir", serverconfig.DefaultDataDir)
 		viper.SetDefault("source-tools-dir", serverconfig.DefaultSrcToolsDirectory)
 		viper.SetDefault("deployment-tools-dir", serverconfig.DefaultToolsDeploymentDirectory)
-		viper.SetDefault("enable-on-demand-privilege", serverconfig.DefaultEnableOnDemandPrivilege)
-		viper.SetDefault("agent-use-group-controller", serverconfig.DefaultAgentUseGroupController)
-		viper.SetDefault("enable-full-capture-support", serverconfig.DefaultEnableFullCaptureSupport)
-		viper.SetDefault("enable-rerendering", serverconfig.DefaultEnableRerendering)
-		viper.SetDefault("enable-experimental-recipes", serverconfig.DefaultEnableExperimentalRecipes)
-		viper.SetDefault("enable-secondary-run-paths", serverconfig.DefaultEnableSecondaryRunPaths)
-		viper.SetDefault(serverconfig.EnableAndroidTargetsConfigKey, serverconfig.DefaultEnableAndroidTargets)
-		viper.SetDefault(serverconfig.EnableGPURecipeConfigKey, serverconfig.DefaultEnableGPURecipe)
-		viper.SetDefault("enable-render-db-sandbox", serverconfig.DefaultEnableRenderDBSandbox)
-		viper.SetDefault("enable-neoprof-timeline", serverconfig.DefaultEnableNeoprofTimeline)
-		viper.SetDefault("enable-jfr-capture", serverconfig.DefaultEnableJfrCapture)
 		viper.SetDefault(serverconfig.DaemonAutostartConfigKey, serverconfig.DefaultDaemonAutostart)
 		viper.SetDefault("adb-path", serverconfig.DefaultADBPath)
 

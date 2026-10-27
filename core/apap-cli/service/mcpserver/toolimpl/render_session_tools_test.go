@@ -20,8 +20,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func TestOpenRenderSessionTool(t *testing.T) {
@@ -95,7 +95,6 @@ func TestOpenRenderSessionTool(t *testing.T) {
 		engine.On("PrepareRender", mock.Anything, mock.MatchedBy(func(req *apapproto.PrepareRenderRequest) bool {
 			timeRange := req.GetRenderParameters()["time_range"].GetListValue().GetValues()
 			return req.GetRecipeSelectionPolicy() == nil &&
-				req.GetVisualizationParameters() == nil &&
 				len(req.GetContent().GetRuns()) == 1 &&
 				req.GetContent().GetRuns()[0].GetValue() == "run-1" &&
 				req.GetRenderParameters()["pid"].GetNumberValue() == 42 &&

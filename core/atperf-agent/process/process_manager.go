@@ -25,16 +25,8 @@ type ProcessManager interface {
 	Shutdown(force bool) error
 
 	// Platform-specific helper methods
-	buildCmd(lc *LaunchCommand) (*exec.Cmd, error)
+	buildCmd(lc *LaunchCommand) (*launchCommand, error)
 	setCPUAffinityAfterStart(pid int, affinity []string) error
-}
-
-type LaunchCommand struct {
-	Command          []string
-	AsPrivileged     bool
-	Affinity         []string
-	Environment      map[string]string
-	WorkingDirectory string
 }
 
 type StreamChunk struct {

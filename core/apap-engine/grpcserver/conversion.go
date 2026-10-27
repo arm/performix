@@ -26,7 +26,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 func SSHConnectErrorToProto(err error) *apapproto.TargetTestConnection {
@@ -708,8 +708,6 @@ func ConvertRendererOutputToGRPC(r recipe.RenderOutput, renderBound parameters.B
 		return nil, err
 	}
 	output.RenderParameters = renderDetails
-	output.VisualizationParameters = buildVisualizationParameterBindings(r.Widgets)
-
 	return output, nil
 }
 

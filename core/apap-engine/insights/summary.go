@@ -46,7 +46,7 @@ type BudgetedRunSummarizerConfig struct {
 // additionalSummarizersByRecipe maps recipe names to the recipe-specific
 // summarizers applied after the common run details summary.
 var additionalSummarizersByRecipe = map[string]RecipeRunSummarizers{
-	"code_hotspots": {
+	CodeHotspotsRecipeName: {
 		Budgeted: []BudgetedRunSummarizerConfig{
 			{BudgetedRunSummarizer: HotFunctionsSummarizer, Weight: 1},
 			{BudgetedRunSummarizer: CallTreeSummarizer, Weight: 1},
@@ -65,6 +65,28 @@ func SummarizersForRecipe(recipeName string) RecipeRunSummarizers {
 		Unbudgeted: append([]UnbudgetedRunSummarizer{RunDetailsSummarizer}, additional.Unbudgeted...),
 		Budgeted:   slices.Clone(additional.Budgeted),
 	}
+}
+
+// SummarizersForRecipeFromEnvironment selects Code Hotspots summaries for the
+// temporary mode. SQL mode returns only run details, so the engine does not
+// render data for curated summaries that the MCP server will not return.
+// Other recipes ignore this setting.
+func SummarizersForRecipeFromEnvironment(recipeName string) (RecipeRunSummarizers, error) {
+	summarizers := SummarizersForRecipe(recipeName)
+	if recipeName != CodeHotspotsRecipeName {
+		return summarizers, nil
+	}
+
+	mode, err := CodeHotspotsModeFromEnvironment()
+	if err != nil {
+		return RecipeRunSummarizers{}, err
+	}
+	if mode == CodeHotspotsModeRunQuery {
+		return RecipeRunSummarizers{
+			Unbudgeted: []UnbudgetedRunSummarizer{RunDetailsSummarizer},
+		}, nil
+	}
+	return summarizers, nil
 }
 
 // NewRunSummary creates a RunSummary with the given name, prompt fragment, and payload, marshaling the payload to JSON.

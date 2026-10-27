@@ -89,6 +89,102 @@ func TestEnsureDeployed(t *testing.T) {
 	})
 }
 
+func TestAssertWorkloadWorkingDirectory(t *testing.T) {
+	testCases := []struct {
+		name                string
+		workingDir          string
+		directoryResult     process.CommandResult
+		directoryErr        error
+		checkAccess         bool
+		accessResult        process.CommandResult
+		expectedMessage     bool
+		expectedErrorString string
+	}{
+		{
+			name: "skips an empty working directory",
+		},
+		{
+			name:        "accepts an accessible working directory",
+			workingDir:  "/work",
+			checkAccess: true,
+		},
+		{
+			name:            "rejects a path that is not a directory",
+			workingDir:      "/work",
+			directoryResult: process.CommandResult{Rc: 1},
+			expectedMessage: true,
+		},
+		{
+			name:            "rejects a directory the login user cannot enter",
+			workingDir:      "/work",
+			checkAccess:     true,
+			accessResult:    process.CommandResult{Rc: 1},
+			expectedMessage: true,
+		},
+		{
+			name:                "propagates a command execution failure",
+			workingDir:          "/work",
+			directoryErr:        errors.New("target agent disconnected"),
+			expectedErrorString: "target agent disconnected",
+		},
+	}
+
+	h := jstest.LoadJSModule(t, "tool-integrations/utils.js")
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := mocks.MockToolEngine{}
+			workload := tool_goja.NewWorkloadLaunch(
+				"sleep 5",
+				[]string{"sleep", "5"},
+				nil,
+				tc.workingDir,
+				false,
+			)
+
+			if tc.workingDir != "" {
+				engine.On(
+					"ExecCommand",
+					[]string{"test", "-d", tc.workingDir},
+					tool_goja.ExecOptions{},
+				).Return(h.ToJSValPromise(t, tc.directoryResult, tc.directoryErr)).Once()
+			}
+			if tc.checkAccess {
+				engine.On(
+					"ExecCommand",
+					[]string{"test", "-x", tc.workingDir},
+					tool_goja.ExecOptions{},
+				).Return(h.ToJSValPromise(t, tc.accessResult, nil)).Once()
+			}
+
+			_, err := h.CallAwait[any](t, "assertWorkloadWorkingDirectory", &engine, workload)
+
+			if tc.expectedMessage {
+				assertWorkingDirectoryError(t, err, tc.workingDir)
+			} else if tc.expectedErrorString != "" {
+				require.ErrorContains(t, err, tc.expectedErrorString)
+				var messageError *message.MessageImpl
+				assert.False(t, errors.As(err, &messageError))
+			} else {
+				require.NoError(t, err)
+			}
+			engine.AssertExpectations(t)
+		})
+	}
+}
+
+func assertWorkingDirectoryError(t *testing.T, err error, path string) {
+	t.Helper()
+
+	var messageError *message.MessageImpl
+	require.ErrorAs(t, err, &messageError)
+	assert.Equal(
+		t,
+		message.MessageCode("tool_integrations.common.WORKING_DIR_NOT_ACCESSIBLE"),
+		messageError.Code(),
+	)
+	assert.Equal(t, path, messageError.Metadata()["path"])
+}
+
 func TestIsElevatePrivilegeError(t *testing.T) {
 	testCases := []struct {
 		name     string

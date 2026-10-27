@@ -9,6 +9,11 @@ const TOOL_NEOPROF = { name: 'neoprof', version: '1.1.0' };
 const READINESS_MESSAGE_CODE =
   'engine.recipeparser.js_recipe_stage.READINESS_MESSAGE';
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
+const { resolveGPUCounterAliases } = require('./lib/gpu_metrics');
+const REQUESTED_GPU_METRICS = [
+  'GPUFront-end.GPUCycles',
+  'ShaderCoreFront-end.ShaderCoreCycles',
+];
 
 /**
  * @type {import("./docs/jsdocs").Recipe}
@@ -54,10 +59,13 @@ function readyGPU(context) {
   const toolResponses = context.probeTools(tools);
   const capabilities = toolResponses[0]?.capabilities ?? {};
   const gpuName = capabilities.platform?.payload.gpu_name;
-  const gpuCounters = Object.values(capabilities).filter(
-    (capability) =>
-      capability?.componentType?.name === 'tool_capabilities/counter' &&
-      capability.state === 'available',
+  const counterSelection = resolveGPUCounterAliases(
+    gpuName,
+    REQUESTED_GPU_METRICS,
+  );
+  const nativeCountersByAlias = getNativeGPUCounters(
+    capabilities,
+    new Set(counterSelection.aliases),
   );
   const advice = collectToolAdvice(tools, toolResponses);
 
@@ -67,17 +75,23 @@ function readyGPU(context) {
       'error',
       'The target GPU could not be identified.',
     );
+  } else {
+    const unresolvedCounters = new Set([
+      ...counterSelection.unresolvedSelectors,
+      ...counterSelection.aliases.filter(
+        (alias) => nativeCountersByAlias[alias] === undefined,
+      ),
+    ]);
+    for (const counter of unresolvedCounters) {
+      addReadinessMessage(
+        advice,
+        'warning',
+        `A GPU metric is unavailable on this target: ${JSON.stringify(counter)}. Results requiring this metric will be unavailable.`,
+      );
+    }
   }
 
   const status = toolStatusToRecipeStatus(advice);
-  if (gpuName && gpuCounters?.length) {
-    addReadinessMessage(
-      advice,
-      'message',
-      `Detected GPU: ${gpuName}. Found ${gpuCounters.length} GPU counters.`,
-    );
-  }
-
   return {
     status,
     advice,
@@ -85,8 +99,30 @@ function readyGPU(context) {
 }
 
 /**
+ * @param {Record<string, any>} probeCapabilities
+ * @param {Set<string>} counterAliases
+ * @returns {Record<string, string>}
+ */
+function getNativeGPUCounters(probeCapabilities, counterAliases) {
+  /** @type {Record<string, string>} */
+  const nativeCountersByAlias = {};
+  for (const capability of Object.values(probeCapabilities)) {
+    const alias = capability?.payload?.alias;
+    if (
+      capability?.componentType?.name === 'tool_capabilities/counter' &&
+      capability.state === 'available' &&
+      typeof alias === 'string' &&
+      counterAliases.has(alias)
+    ) {
+      nativeCountersByAlias[alias] = capability.payload.counter;
+    }
+  }
+  return nativeCountersByAlias;
+}
+
+/**
  * @param {Array} advice
- * @param {'error'|'message'} severity
+ * @param {'error'|'warning'|'message'} severity
  * @param {string} message
  */
 function addReadinessMessage(advice, severity, message) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
@@ -26,11 +27,7 @@ type StageConfiguration struct {
 	CollectionState          *recipe.CollectionState
 	TargetSessions           targetsession.TargetSessionProvider
 	OperationName            string
-	IsRootWorkerEnabled      bool
-	IsFullCaptureEnabled     bool
-	RerenderingEnabled       bool
-	NeoprofTimelineEnabled   bool
-	JfrCaptureEnabled        bool
+	FeatureFlags             featureflags.Flags
 	PackageManager           *packages.PackageManager
 	DeferredActions          notifiers.DeferredActions
 	UsrMessageWriter         *run.ConcreteUserMessageWriter
@@ -45,18 +42,14 @@ func (c *StageConfiguration) ConfigureRunManifestUpdater() {
 
 func (c *StageConfiguration) NewRunExecutionContext(hostFs afero.Fs) *recipe.RunExecutionContext {
 	return &recipe.RunExecutionContext{
-		RecipeCtx:              c.Ctx,
-		FileHandler:            conductor.FileHandler{HostFS: hostFs},
-		PackageManager:         c.PackageManager,
-		DeferredActions:        &c.DeferredActions,
-		TargetSessions:         c.TargetSessions,
-		RootWorkerEnabled:      c.IsRootWorkerEnabled,
-		FullCaptureSupport:     c.IsFullCaptureEnabled,
-		RerenderingEnabled:     c.RerenderingEnabled,
-		NeoprofTimelineEnabled: c.NeoprofTimelineEnabled,
-		JfrCaptureEnabled:      c.JfrCaptureEnabled,
-		UsrMessageWriter:       c.UsrMessageWriter,
-		RunModels:              c.RunModels,
+		RecipeCtx:        c.Ctx,
+		FileHandler:      conductor.FileHandler{HostFS: hostFs},
+		PackageManager:   c.PackageManager,
+		DeferredActions:  &c.DeferredActions,
+		TargetSessions:   c.TargetSessions,
+		FeatureFlags:     c.FeatureFlags,
+		UsrMessageWriter: c.UsrMessageWriter,
+		RunModels:        c.RunModels,
 	}
 }
 

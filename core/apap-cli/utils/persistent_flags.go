@@ -19,11 +19,8 @@ func SetPersistentFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringP("server-hostname", "s", serverconfig.DefaultServerHostname, "The gRPC host name for communication between the client (CLI) and the server (daemon).")
 	config.ViperBindPFlag(cmd, "server-hostname", true)
 
-	cmd.PersistentFlags().IntP("server-port", "p", serverconfig.DefaultServerPort, "The gRPC port number for communication between the client (CLI) and the server (daemon).")
+	cmd.PersistentFlags().IntP("server-port", "p", serverconfig.DefaultServerPort, "The gRPC port number for communication between the client (CLI) and the server (daemon). The default value 0 implies automatic port allocation.")
 	config.ViperBindPFlag(cmd, "server-port", true)
-
-	cmd.PersistentFlags().Int("auth-port", serverconfig.DefaultAuthPort, "The gRPC port number used for authentication between the client (CLI) and the server (daemon).")
-	config.ViperBindPFlag(cmd, "auth-port", true)
 
 	cmd.PersistentFlags().Bool(serverconfig.DaemonAutostartConfigKey, serverconfig.DefaultDaemonAutostart, "Automatically start the daemon if it is not already running.")
 	config.ViperBindPFlag(cmd, serverconfig.DaemonAutostartConfigKey, true)

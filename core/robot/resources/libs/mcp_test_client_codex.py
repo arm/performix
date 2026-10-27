@@ -25,6 +25,7 @@ CODEX_ENVIRONMENT_KEYS = (
     "APXD_CONFIG_DIR",
     "APXD_DATA_DIR",
     "APXD_LOG_FILE",
+    "APXD_ENABLE_ANDROID_TARGETS",
     "NO_COLOR",
 )
 
@@ -192,7 +193,7 @@ web_search = false
 
 [mcp_servers.{PERFORMIX_MCP_SERVER}]
 command = {json.dumps(apx_binary)}
-args = ["mcp", "start"]
+args = ["mcp", "start", "--acknowledge-source-sharing"]
 enabled = true
 default_tools_approval_mode = "approve"
 env_vars = {json.dumps(CODEX_ENVIRONMENT_KEYS)}

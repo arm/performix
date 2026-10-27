@@ -18,7 +18,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/mcpclientinstaller/clientids"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 func newMCPDoctorCmd(deps mcpClientDependencies) *cobra.Command {
@@ -73,13 +73,16 @@ func runMCPDoctor(cmd *cobra.Command, clientID string, deps mcpClientDependencie
 func doctorOutput(status *apapproto.MCPClientStatus) mcpClientDoctorOutput {
 	detection := doctorDetectionCheck(status)
 	checks := []mcpClientDoctorCheck{detection}
-	if status.Detected {
+	detectedButUnsupported := mcpClientDetectedButUnsupported(status)
+	// An unsupported client needs an upgrade before it can use MCP.
+	// Report the upgrade advice and skip the registration check.
+	if status.Detected && !detectedButUnsupported {
 		checks = append(checks, doctorRegistrationCheck(status))
 	}
 	return mcpClientDoctorOutput{
 		ClientID:   status.ClientId,
 		ClientName: status.DisplayName,
-		Ready: status.Detected && status.RegistrationState ==
+		Ready: status.Detected && !detectedButUnsupported && status.RegistrationState ==
 			apapproto.MCPClientRegistrationState_MCP_CLIENT_REGISTRATION_STATE_CONFIGURED,
 		Checks: checks,
 	}
@@ -166,6 +169,28 @@ func doctorCheckLine(check mcpClientDoctorCheck) string {
 
 func doctorDetectionCheck(status *apapproto.MCPClientStatus) mcpClientDoctorCheck {
 	check := mcpClientDoctorCheck{ID: "client_detection"}
+	if mcpClientDetectedButUnsupported(status) {
+		check.Status = "fail"
+		check.Message = mcpMessageTextWithMetadata(
+			message.CliCmdMcpDoctorClientIncompatible,
+			map[string]string{"client": status.DisplayName},
+		)
+		check.Diagnostic, _ = catalogMessagesFromChain(status.GetError())
+		if path := status.GetExecutablePath(); path != "" {
+			check.Details = append(check.Details, mcpMessageTextWithMetadata(
+				message.CliCmdMcpDoctorExecutableDetail,
+				map[string]string{"path": path},
+			))
+		}
+		if code := errorCode(status.GetError().GetRoot()); code != "" {
+			check.Details = append(check.Details, mcpMessageTextWithMetadata(
+				message.CliCmdMcpCommonErrorCodeDetail,
+				map[string]string{"code": code},
+			))
+		}
+		check.Remediation = catalogErrorAdvice(check.Diagnostic)
+		return check
+	}
 	if status.Detected {
 		check.Status = "pass"
 		check.Message = mcpMessageTextWithMetadata(

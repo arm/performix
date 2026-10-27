@@ -26,6 +26,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/collector"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpclogging"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/mcpclientinstaller"
@@ -52,33 +53,24 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
 	"github.com/Arm-Debug/apap-cli/apap-engine/userdirs"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 	"github.com/Arm-Debug/apap-cli/atperf-compatibility/compatibility"
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
 )
 
 type ApapServerConfig struct {
-	ParallelJobs              uint   `json:"jobs"`
-	DataDirectory             string `json:"data-dir"`
-	IsRootWorkerEnabled       bool   `json:"enable-on-demand-privilege"`
-	EnableRerendering         bool   `json:"enable-rerendering"`
-	EnableFullCaptureSupport  bool   `json:"enable-full-capture-support"`
-	EnableExperimentalRecipes bool   `json:"enable-experimental-recipes"`
-	EnableSecondaryRunPaths   bool   `json:"enable-secondary-run-paths"`
-	EnableGPURecipe           bool   `json:"enable-gpu-recipe"`
-	EnableRenderDBSandbox     bool   `json:"enable-render-db-sandbox"`
-	EnableNeoprofTimeline     bool   `json:"enable-neoprof-timeline"`
-	EnableJfrCapture          bool   `json:"enable-jfr-capture"`
-	ServerHostname            string `json:"server-hostname"`
-	ServerGRPCPort            int    `json:"server-port"`
-	ServerAuthPort            int    `json:"auth-port"`
-	ServerHTTPPort            int    `json:"http-port"`
-	ServerHTTPChunkBytes      int    `json:"http-chunk-bytes"`
-	LogLevel                  string `json:"log-level"`
-	LogFile                   string `json:"log-file"`
-	SourceToolsDir            string `json:"source-tools-dir"`
-	ConfigDirectory           string `json:"config-dir"`
-	ADBPath                   string `json:"adb-path"`
+	ParallelJobs         uint               `json:"jobs"`
+	DataDirectory        string             `json:"data-dir"`
+	FeatureFlags         featureflags.Flags `json:"-"`
+	ServerHostname       string             `json:"server-hostname"`
+	ServerGRPCPort       int                `json:"server-port"`
+	ServerHTTPPort       int                `json:"http-port"`
+	ServerHTTPChunkBytes int                `json:"http-chunk-bytes"`
+	LogLevel             string             `json:"log-level"`
+	LogFile              string             `json:"log-file"`
+	SourceToolsDir       string             `json:"source-tools-dir"`
+	ConfigDirectory      string             `json:"config-dir"`
+	ADBPath              string             `json:"adb-path"`
 }
 
 type ApapServer struct {
@@ -86,6 +78,7 @@ type ApapServer struct {
 	ctx                  context.Context
 	shutdownCb           func()
 	config               ApapServerConfig
+	featureFlags         featureflags.Flags // Resolved once; config retains requested values for diagnostics.
 	deploymentPaths      deployer.BaseToolDeploymentPaths
 	runs                 *run.RunCollection
 	databaseFactory      render.DatabaseFactory
@@ -116,10 +109,11 @@ type MCPClientInstaller interface {
 const gpuRecipeName = "gpu"
 
 func NewApapServer(ctx context.Context, config ApapServerConfig, deploymentPaths deployer.BaseToolDeploymentPaths, shutdownCb func()) (*ApapServer, error) {
+	featureFlags := featureflags.Resolve(config.FeatureFlags)
 	runDir := filepath.Join(config.DataDirectory, run.RunDirName)
 
 	secondaryPaths := []string{}
-	if config.EnableSecondaryRunPaths {
+	if featureFlags.SecondaryRunPaths {
 		secondaryPaths = make([]string, 0, len(userdirs.LegacyDaemonDirName))
 		for _, path := range userdirs.LegacyDaemonDirName {
 			dataDir, _ := userdirs.DefaultDataDir(path) // Ignore legacy path errors
@@ -167,6 +161,7 @@ func NewApapServer(ctx context.Context, config ApapServerConfig, deploymentPaths
 		ctx:              ctx,
 		shutdownCb:       shutdownCb,
 		config:           config,
+		featureFlags:     featureFlags,
 		runs:             rc,
 		databaseFactory:  &render.DuckDBFactory{},
 		rendererRegistry: renderimpls.NewRegistry(),
@@ -176,7 +171,6 @@ func NewApapServer(ctx context.Context, config ApapServerConfig, deploymentPaths
 		recipeCommandMap: cmdsync.NewCommandStateMap(),
 		targetSessions: targetsession.NewTargetSessionProvider(
 			deploymentPaths.DeployedToolsDirectory,
-			config.IsRootWorkerEnabled,
 			adbRunner,
 		),
 		adbRunner: adbRunner,
@@ -216,17 +210,13 @@ func (s *ApapServer) SetAdbPath(ctx context.Context, in *apapproto.SetAdbPathReq
 }
 
 func (s *ApapServer) recipeAllowed(recipeInfo recipe.Recipe) bool {
-	if recipeInfo.Name == gpuRecipeName && !s.config.EnableGPURecipe {
+	if recipeInfo.Name == gpuRecipeName && !s.featureFlags.GPURecipe {
 		return false
 	}
 	if recipeInfo.Status == recipe.RecipeStatusExperimental {
-		return s.config.EnableExperimentalRecipes
+		return s.featureFlags.ExperimentalRecipes
 	}
 	return true
-}
-
-func (s *ApapServer) getFullCaptureSupport() bool {
-	return s.config.EnableFullCaptureSupport || s.config.EnableRerendering
 }
 
 func (s *ApapServer) engineContext() context.Context {
@@ -240,14 +230,10 @@ func (s *ApapServer) engineContext() context.Context {
 // This includes all feature flags.
 func (s *ApapServer) newBaseStageConfiguration() *runtime.StageConfiguration {
 	return &runtime.StageConfiguration{
-		ToolBasePaths:          s.getDeploymentPaths(),
-		TargetSessions:         s.targetSessions,
-		IsRootWorkerEnabled:    s.config.IsRootWorkerEnabled,
-		IsFullCaptureEnabled:   s.getFullCaptureSupport(),
-		RerenderingEnabled:     s.config.EnableRerendering,
-		NeoprofTimelineEnabled: s.config.EnableNeoprofTimeline,
-		JfrCaptureEnabled:      s.config.EnableJfrCapture,
-		PackageManager:         s.packageManager,
+		ToolBasePaths:  s.getDeploymentPaths(),
+		TargetSessions: s.targetSessions,
+		FeatureFlags:   s.featureFlags,
+		PackageManager: s.packageManager,
 	}
 }
 
@@ -494,42 +480,7 @@ func (s *ApapServer) PrepareRender(ctx context.Context, in *apapproto.PrepareRen
 		return nil, err
 	}
 
-	convertedVisualizationParams, err := ProtoMapToAnyMap(in.GetVisualizationParameters())
-	if err != nil {
-		return nil, err
-	}
-
-	rendererSpec := baselineSpec
-	mappedVisualizationParams, err := render.MapVisualizationParamsToRenderParams(convertedVisualizationParams, baselineSpec.Widgets, parsedRecipe.RenderParameters)
-	if err != nil {
-		return nil, err
-	}
-	if len(mappedVisualizationParams) > 0 {
-		// MVP restriction: explicit render params stay authoritative; mapped visualization params only fill gaps.
-		mergedParams := render.MergeRenderParams(convertedParams, mappedVisualizationParams)
-		mergedParams, err = parameters.ConvertRenderParameterInputs(mergedParams, parsedRecipe.RenderParameters, parsedRecipe.Name)
-		if err != nil {
-			return nil, err
-		}
-
-		renderBound, err = parameters.BindRenderParameters(mergedParams, parsedRecipe.RenderParameters, parsedRecipe.Name)
-		if err != nil {
-			return nil, err
-		}
-
-		// Re-run render stages with mapped params, then ensure topology/bindings are unchanged.
-		renderConfig = buildRenderConfig(&renderBound)
-		rendererSpec, err = runtime.GetRendererSpec(ctx, renderConfig, runDescriptions, capabilities)
-		if err != nil {
-			return nil, err
-		}
-
-		if err := render.ValidateRenderOutputStability(baselineSpec, rendererSpec); err != nil {
-			return nil, err
-		}
-	}
-
-	response, err := ConvertRendererOutputToGRPC(rendererSpec, renderBound, compatibilityWarning)
+	response, err := ConvertRendererOutputToGRPC(baselineSpec, renderBound, compatibilityWarning)
 	if err != nil {
 		return nil, message.New(message.CommonUnknownError).WithCause(err)
 	}
@@ -541,13 +492,17 @@ func (s *ApapServer) buildSupportPackageConfig() map[string]any {
 	// are automatically included without needing to manually update this function.
 	// Ignore the error to simplify the signature, the error will rise if config is amended to include unmarshalable fields, unit tests will catch it.
 	vars, _ := util.StructToMap(&s.config)
+	configuredFeatureFlags, _ := util.StructToMap(&s.config.FeatureFlags)
+	for key, value := range configuredFeatureFlags {
+		vars[key] = value
+	}
 	vars["deployment-tools-dir"] = s.deploymentPaths.DeployedToolsDirectory
 	return vars
 }
 
 func (s *ApapServer) newSessionFactory() render.SessionFactory {
 	flags := render.DefaultSessionFlags()
-	flags.EnableDuckDBSandbox = s.config.EnableRenderDBSandbox
+	flags.EnableDuckDBSandbox = s.featureFlags.RenderDBSandbox
 	return &sessionfactory.Impl{Flags: &flags}
 }
 
@@ -1075,14 +1030,14 @@ func (s *ApapServer) ParseRecipe(context context.Context, request *apapproto.Par
 		}
 		// Retrieve the platform support information collected during parameter option stages
 		platformSupport = targetSupportCollector.PlatformSupport
-		return RecipeInfoToProto(parsedRecipe, options, s.config.EnableRerendering, platformSupport)
+		return RecipeInfoToProto(parsedRecipe, options, s.featureFlags.Rerendering, platformSupport)
 	} else {
 		// No target provided, so get generic platform support from the recipe deployments
 		supportedPlatforms, err := recipe.GetSupportedPlatforms(s.packageManager, parsedRecipe)
 		if err != nil {
 			return nil, err
 		}
-		return RecipeInfoToProto(parsedRecipe, recipe.ParameterOptions{}, s.config.EnableRerendering, supportedPlatforms...)
+		return RecipeInfoToProto(parsedRecipe, recipe.ParameterOptions{}, s.featureFlags.Rerendering, supportedPlatforms...)
 	}
 }
 
@@ -1543,6 +1498,12 @@ func mcpClientInstallerError(err error) error {
 			WithCause(installerErr.Err)
 	case mcpclientinstaller.ErrorClientUnavailable:
 		return message.New(message.EngineMcpRegistrationClientUnavailable).
+			WithMetadata(metadata).
+			WithCause(installerErr.Err)
+	case mcpclientinstaller.ErrorClientVersionUnsupported:
+		metadata["version"] = installerErr.ActualVersion
+		metadata["minimumVersion"] = installerErr.MinimumVersion
+		return message.New(message.EngineMcpRegistrationClientVersionUnsupported).
 			WithMetadata(metadata).
 			WithCause(installerErr.Err)
 	case mcpclientinstaller.ErrorConfigRead:

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 )
 
@@ -44,13 +45,23 @@ func TestGetLogPath(t *testing.T) {
 }
 
 func TestFromViper(t *testing.T) {
+	t.Run("uses automatic port defaults", func(t *testing.T) {
+		viper.Reset()
+		t.Cleanup(viper.Reset)
+
+		config := FromViper()
+
+		assert.Equal(t, AutomaticPort, config.Port)
+		assert.Zero(t, config.HttpPort)
+	})
+
 	t.Run("returns server config built from viper configuration", func(t *testing.T) {
+		viper.Reset()
+		t.Cleanup(viper.Reset)
 		host := "example.com"
 		viper.Set("server-hostname", host)
 		port := 123
 		viper.Set("server-port", port)
-		authPort := 456
-		viper.Set("auth-port", authPort)
 		httpPort := 456
 		viper.Set("http-port", httpPort)
 		httpChunkBytes := 1048576
@@ -67,28 +78,33 @@ func TestFromViper(t *testing.T) {
 		viper.Set("enable-secondary-run-paths", false)
 		viper.Set(EnableGPURecipeConfigKey, true)
 		viper.Set("enable-render-db-sandbox", false)
-		viper.Set("enable-neoprof-timeline", !DefaultEnableNeoprofTimeline)
-		viper.Set("enable-jfr-capture", !DefaultEnableJfrCapture)
+		viper.Set("enable-neoprof-timeline", true)
+		viper.Set("enable-neoprof-system-utilization", true)
+		viper.Set("enable-jfr-capture", true)
+		viper.Set("enable-run-component-compression", false)
 
 		config := FromViper()
 
 		assert.Equal(t, grpcserver.GrpcServerConfig{
-			Host:                      host,
-			Port:                      port,
-			AuthPort:                  authPort,
-			HttpPort:                  httpPort,
-			HttpChunkBytes:            httpChunkBytes,
-			ParallelJobs:              uint(jobs), //nolint:gosec // jobs is expected to be a small positive value
-			DataDirectory:             dataDir,
-			LogPath:                   logFile,
-			LogLevel:                  logLevel,
-			EnableExperimentalRecipes: true,
-			EnableSecondaryRunPaths:   false,
-			EnableGPURecipe:           true,
-			EnableRenderDBSandbox:     false,
-			EnableNeoprofTimeline:     !DefaultEnableNeoprofTimeline,
-			EnableJfrCapture:          !DefaultEnableJfrCapture,
-			ConfigDirectory:           DefaultConfigDir,
+			Host:           host,
+			Port:           port,
+			HttpPort:       httpPort,
+			HttpChunkBytes: httpChunkBytes,
+			ParallelJobs:   uint(jobs), //nolint:gosec // jobs is expected to be a small positive value
+			DataDirectory:  dataDir,
+			LogPath:        logFile,
+			LogLevel:       logLevel,
+			FeatureFlags: featureflags.Flags{
+				ExperimentalRecipes:      true,
+				SecondaryRunPaths:        false,
+				GPURecipe:                true,
+				RenderDBSandbox:          false,
+				NeoprofTimeline:          true,
+				NeoprofSystemUtilization: true,
+				JfrCapture:               true,
+				RunComponentCompression:  false,
+			},
+			ConfigDirectory: DefaultConfigDir,
 		}, config)
 	})
 }
@@ -118,9 +134,7 @@ func TestFromViperResolvesDeploymentToolsDir(t *testing.T) {
 	t.Cleanup(func() {
 		viper.Reset()
 		viper.SetDefault("server-port", DefaultServerPort)
-		viper.SetDefault("auth-port", DefaultAuthPort)
 		viper.Set("server-port", DefaultServerPort)
-		viper.Set("auth-port", DefaultAuthPort)
 		viper.Set("data-dir", "./testdata/data")
 		viper.Set("deployment-tools-dir", "./relative/tools")
 

@@ -14,9 +14,12 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/grouping"
+	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/clijson"
+	"github.com/Arm-Debug/apap-cli/apap-cli/service/mcpserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 )
 
@@ -57,7 +60,8 @@ func signalCauseContext(parent context.Context) (context.Context, func()) {
 	}
 }
 
-func newMCPStartCmd(runner MCPRunner) *cobra.Command {
+func newMCPStartCmd(newRunner func(mcpserver.MCPServerOptions) MCPRunner) *cobra.Command {
+	var acknowledgeSourceSharing bool
 
 	cmd := &cobra.Command{
 		Use:          "start",
@@ -74,7 +78,11 @@ func newMCPStartCmd(runner MCPRunner) *cobra.Command {
 			ctx, stop := signalCauseContext(cmd.Context())
 			defer stop()
 
-			err := runner.Run(ctx, readCloser(cmd.InOrStdin()), cmd.OutOrStdout(), cmd.ErrOrStderr())
+			options := mcpserver.MCPServerOptions{
+				AndroidTargetsEnabled:     viper.GetBool(serverconfig.EnableAndroidTargetsConfigKey),
+				SourceSharingAcknowledged: acknowledgeSourceSharing,
+			}
+			err := newRunner(options).Run(ctx, readCloser(cmd.InOrStdin()), cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				wrappedErr := fmt.Errorf("failed to start MCP server: %w", err)
 				clijson.HandleCLIError(cmd.ErrOrStderr(), wrappedErr)
@@ -85,6 +93,8 @@ func newMCPStartCmd(runner MCPRunner) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().BoolVar(&acknowledgeSourceSharing, "acknowledge-source-sharing", false,
+		"Allow MCP tools to add portions of your source code and related profiling data to your model's context. This applies only to this MCP server process and is not saved.")
 	return cmd
 }
 

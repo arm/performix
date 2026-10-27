@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/healthproto"
+	"github.com/Arm-Debug/apap-cli/api/healthproto"
 )
 
 type healthPacksServiceMock struct {

@@ -1017,9 +1017,8 @@ const CPU_UTILIZATION_UPPER_BOUND_SQL = sql`
   SELECT
     greatest(count(*), 1) AS core_count,
     greatest(count(*), 1) AS upper_bucket_start
-  FROM duckdb_columns()
-  WHERE table_name = regexp_extract('${TIMELINE_TABLE_PLACEHOLDER}', '([^".]+)"?$', 1)
-    AND regexp_full_match(column_name, '^cpu[0-9]+_percent$')
+  FROM (DESCRIBE ${TIMELINE_TABLE_PLACEHOLDER})
+  WHERE regexp_full_match(column_name, '^cpu[0-9]+_percent$')
 `;
 const CPU_RELATIVE_LOAD_BUCKET_MULTIPLIERS = [
   0, 0.25, 0.5, 0.55, 0.6, 0.65, 0.7, 1, 1.25, 1.5,
@@ -1138,7 +1137,7 @@ const recipe = {
   api_version: '1.0.0',
   status: 'preview',
   description:
-    'The System Utilization recipe shows how CPU, memory, disk, and network resources are used while your workload runs. It helps you spot saturated system resources, understand utilization trends over time, and correlate workload behavior with broader system activity.',
+    'Analyze CPU, memory, disk, and network activity over time to identify system resource bottlenecks.',
   deployments: [
     {
       appliesTo: [{ architecture: 'aarch64', os: 'Android' }],
@@ -1152,19 +1151,17 @@ const recipe = {
       ],
     },
     {
-      appliesTo: [{ architecture: 'aarch64', os: 'Linux' }],
+      appliesTo: [
+        { architecture: 'aarch64', os: 'Linux' },
+        { architecture: 'x86_64', os: 'Linux' },
+      ],
       dependencies: [
         {
           type: 'tool',
-          name: TOOL_SYSUTIL_TIMELINE.name,
-          version: TOOL_SYSUTIL_TIMELINE.version,
+          name: TOOL_NEOPROF.name,
+          version: TOOL_NEOPROF.version,
           requiredWhen: { type: 'always' },
         },
-      ],
-    },
-    {
-      appliesTo: [{ architecture: 'x86_64', os: 'Linux' }],
-      dependencies: [
         {
           type: 'tool',
           name: TOOL_SYSUTIL_TIMELINE.name,
@@ -1244,7 +1241,7 @@ function generateSysutilTimelineConfig(workload, params) {
 
 /**
  * Generates the NeoProf configuration used to collect system-utilization
- * counters and analyze them on the host.
+ * counters, analyzing on the host for Android and on the target for Linux.
  * @param {import("./docs/jsdocs").Workload} workload
  * @param {import("./docs/jsdocs").TargetInfoDescription} targetInfo
  * @return {import("./docs/jsdocs").ToolConfigurationsArg}
@@ -1265,7 +1262,7 @@ function generateNeoprofSysutilConfig(workload, targetInfo) {
           mode: 'samples',
           sampling_frequency: 'normal',
           workflow: NEOPROF_SYSUTIL_WORKFLOW,
-          reformat_on_host: true,
+          reformat_on_host: isAndroidTarget(targetInfo),
           timeline_device_numbers: JSON.stringify(timelineDeviceNumbers),
           rich_data_capture: false,
         },
@@ -1286,12 +1283,25 @@ function isAndroidTarget(targetInfo) {
 }
 
 /**
+ * @param {import("./docs/jsdocs").ReadyExecutionContext | import("./docs/jsdocs").RunExecutionContext} context
+ * @param {import("./docs/jsdocs").TargetInfoDescription} targetInfo
+ * @returns {boolean}
+ */
+function usesNeoprofSystemUtilization(context, targetInfo) {
+  return (
+    isAndroidTarget(targetInfo) ||
+    (targetInfo?.Os?.OSFamily?.toLowerCase() === 'linux' &&
+      context.isNeoprofSystemUtilizationEnabled())
+  );
+}
+
+/**
  * @param {import("./docs/jsdocs").ReadyExecutionContext} context
  */
 function readySystemUtilization(context) {
   const workload = context.getWorkload();
   const targetInfo = context.targetInfo();
-  if (isAndroidTarget(targetInfo)) {
+  if (usesNeoprofSystemUtilization(context, targetInfo)) {
     const tools = generateNeoprofSysutilConfig(workload, targetInfo);
     const toolResponses = context.probeTools(tools);
     const allAdvice = collectToolAdvice(tools, toolResponses);
@@ -1324,7 +1334,7 @@ function readySystemUtilization(context) {
 function runSystemUtilization(context) {
   const workload = context.getWorkload();
   const targetInfo = context.targetInfo();
-  if (isAndroidTarget(targetInfo)) {
+  if (usesNeoprofSystemUtilization(context, targetInfo)) {
     context.runTools(generateNeoprofSysutilConfig(workload, targetInfo));
     return;
   }
@@ -2236,9 +2246,10 @@ const systemUtilizationSummaryConfig = {
  * not collect that family.
  *
  * @param {import("./docs/jsdocs").RenderExecutionContext} context
- * @returns {string[]}
+ * @returns {{columns: string[], zeroFilledColumns: Set<string>}}
  */
-function getNeoprofTimelineColumns(context) {
+function getNeoprofTimelineSchema(context) {
+  const zeroFilledColumns = new Set();
   const requiredColumns = [
     ...NEOPROF_FIXED_TIMELINE_COLUMN_MAPPINGS.map(
       ({ columnName }) => columnName,
@@ -2266,6 +2277,17 @@ function getNeoprofTimelineColumns(context) {
           )
       : [];
 
+    // Only collected delta counters omit zero events. Unsupported metrics,
+    // absolute samples, and unknown counter classes must remain NULL.
+    const collectedDelta =
+      capability.state === 'collected' && payload.counter_class === 0;
+    if (collectedDelta) {
+      const fixedMapping = NEOPROF_FIXED_TIMELINE_COLUMN_MAPPINGS.find(
+        (mapping) => mapping.title === title && mapping.name === name,
+      );
+      if (fixedMapping) zeroFilledColumns.add(fixedMapping.columnName);
+    }
+
     const deviceMapping = NEOPROF_PER_DEVICE_TIMELINE_COLUMN_MAPPINGS.find(
       (mapping) => mapping.title === title && mapping.name === name,
     );
@@ -2275,7 +2297,10 @@ function getNeoprofTimelineColumns(context) {
           code: 'recipes.system_utilization.TIMELINE_DEVICE_NUMBERS_MISSING',
         };
       }
-      requiredColumns.push(...deviceNumbers.map(deviceMapping.columnName));
+      const columns = deviceNumbers.map(deviceMapping.columnName);
+      requiredColumns.push(...columns);
+      if (collectedDelta)
+        columns.forEach((column) => zeroFilledColumns.add(column));
       continue;
     }
 
@@ -2289,7 +2314,9 @@ function getNeoprofTimelineColumns(context) {
       name.toLowerCase().includes(counter.nameIncludes),
     );
     if (seriesMapping) {
-      requiredColumns.push(`${seriesMapping.columnPrefix}_series_${seriesId}`);
+      const column = `${seriesMapping.columnPrefix}_series_${seriesId}`;
+      requiredColumns.push(column);
+      if (collectedDelta) zeroFilledColumns.add(column);
     }
   }
 
@@ -2310,7 +2337,7 @@ function getNeoprofTimelineColumns(context) {
     }
   }
 
-  return [...new Set(requiredColumns)];
+  return { columns: [...new Set(requiredColumns)], zeroFilledColumns };
 }
 
 /**
@@ -2347,16 +2374,29 @@ function buildNeoprofTimelineRenderer(context) {
          FROM read_json({{path:${NEOPROF_TIMELINE_METADATA_COMPONENT}}},
            columns = {counter_groups: 'STRUCT(key_type BIGINT, counters STRUCT(id BIGINT, title VARCHAR, name VARCHAR)[])[]'})
        ), UNNEST(counter_group.counters) AS entries(counter)`;
-  const timelineColumns = getNeoprofTimelineColumns(context);
+  const { columns: timelineColumns, zeroFilledColumns } =
+    getNeoprofTimelineSchema(context);
   const fixedTimelineColumnCasesSql = makeNeoprofFixedTimelineColumnCasesSql();
   const pivotColumnValues = timelineColumns
     .map((columnName) => `'${columnName}'`)
     .join(', ');
+  // Build SQL that restores missing samples to zero for collected delta counters,
+  // because NeoProf leaves out zero activity. Other metrics keep NULL for missing data.
+  const normalizedColumnExpressionsSql = timelineColumns
+    .map((columnName) => {
+      const column = `wide_timeline."${columnName}"`;
+      return zeroFilledColumns.has(columnName)
+        ? `COALESCE(${column}, 0) AS "${columnName}"`
+        : column;
+    })
+    .join(',\n');
 
   return {
     type: 'SQL',
     id: 'timeline_csv',
     config: {
+      // Normalize once so each chart query reads the prepared timeline table.
+      materialize: true,
       sql: sql`
         WITH
         -- Combine every counter file into one relation. Counter files may
@@ -2466,7 +2506,7 @@ function buildNeoprofTimelineRenderer(context) {
         SELECT
           CAST(NULL AS VARCHAR) AS ts_utc,
           x_start / ${NANOSECONDS_PER_SECOND} AS uptime_s,
-          wide_timeline.* EXCLUDE (x_start),
+          ${normalizedColumnExpressionsSql},
           CASE
             WHEN mem_total_kb > 0 THEN mem_used_kb * 100.0 / mem_total_kb
             ELSE NULL

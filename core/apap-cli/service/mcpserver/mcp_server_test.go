@@ -24,16 +24,16 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/mcpserver/toolimpl"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	apapprotomocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 const mcpProtocolVersion20260728 = "2026-07-28"
 
-func connectTestServer(t *testing.T, ctx context.Context, engine apapproto.ApapClient) (*mcp.ClientSession, *mcp.ServerSession) {
+func connectTestServer(t *testing.T, ctx context.Context, engine apapproto.ApapClient, options MCPServerOptions) (*mcp.ClientSession, *mcp.ServerSession) {
 	t.Helper()
 
-	server := newServer(io.Discard, toolimpl.ToolDependencies{Engine: engine}, DefaultToolRegistry())
+	server := newServer(io.Discard, toolimpl.ToolDependencies{Engine: engine}, DefaultToolRegistry(options))
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
 
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
@@ -156,6 +156,7 @@ func TestMCPServerRun(t *testing.T) {
 		server := NewMCPServer(
 			apapprotomocks.NewApapClient(t),
 			nil,
+			MCPServerOptions{},
 		)
 		go func() {
 			errCh <- server.Run(ctx, reader, &bytes.Buffer{}, &bytes.Buffer{})
@@ -169,7 +170,7 @@ func TestMCPServerRun(t *testing.T) {
 func TestMCPServerProtocol(t *testing.T) {
 	t.Run("initializes and lists default tools", func(t *testing.T) {
 		ctx := context.Background()
-		clientSession, serverSession := connectTestServer(t, ctx, nil)
+		clientSession, serverSession := connectTestServer(t, ctx, nil, MCPServerOptions{})
 		defer clientSession.Close()
 		defer serverSession.Close()
 
@@ -190,11 +191,28 @@ func TestMCPServerProtocol(t *testing.T) {
 		assert.Contains(t, names, "list_render_sessions")
 		assert.Contains(t, names, "close_render_session")
 		assert.Contains(t, names, "run_query")
+		assert.NotContains(t, names, "search_android_packages")
+	})
+
+	t.Run("advertises Android capability only when enabled", func(t *testing.T) {
+		ctx := context.Background()
+		clientSession, serverSession := connectTestServer(t, ctx, nil, MCPServerOptions{AndroidTargetsEnabled: true})
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		tools, err := clientSession.ListTools(ctx, nil)
+		require.NoError(t, err)
+		names := make([]string, 0, len(tools.Tools))
+		for _, tool := range tools.Tools {
+			names = append(names, tool.Name)
+		}
+		assert.Contains(t, names, "search_android_packages")
+
 	})
 
 	t.Run("negotiates latest supported protocol with SDK client", func(t *testing.T) {
 		ctx := context.Background()
-		clientSession, serverSession := connectTestServer(t, ctx, nil)
+		clientSession, serverSession := connectTestServer(t, ctx, nil, MCPServerOptions{})
 		defer clientSession.Close()
 		defer serverSession.Close()
 
@@ -211,7 +229,7 @@ func TestMCPServerProtocol(t *testing.T) {
 
 	t.Run("advertises self-contained union variants", func(t *testing.T) {
 		ctx := context.Background()
-		clientSession, serverSession := connectTestServer(t, ctx, nil)
+		clientSession, serverSession := connectTestServer(t, ctx, nil, MCPServerOptions{})
 		defer clientSession.Close()
 		defer serverSession.Close()
 
@@ -235,7 +253,7 @@ func TestMCPServerProtocol(t *testing.T) {
 
 	t.Run("advertises server instructions on initialize", func(t *testing.T) {
 		ctx := context.Background()
-		clientSession, serverSession := connectTestServer(t, ctx, nil)
+		clientSession, serverSession := connectTestServer(t, ctx, nil, MCPServerOptions{})
 		defer clientSession.Close()
 		defer serverSession.Close()
 
@@ -246,47 +264,25 @@ func TestMCPServerProtocol(t *testing.T) {
 		assert.Equal(t, instructions, initResult.Instructions)
 	})
 
-	t.Run("exposes instructions as readable resources", func(t *testing.T) {
+	t.Run("does not duplicate server usage as a resource", func(t *testing.T) {
 		ctx := context.Background()
-		clientSession, serverSession := connectTestServer(t, ctx, nil)
+		clientSession, serverSession := connectTestServer(t, ctx, nil, MCPServerOptions{})
 		defer clientSession.Close()
 		defer serverSession.Close()
 
 		resources, err := clientSession.ListResources(ctx, nil)
 		require.NoError(t, err)
-		require.NotEmpty(t, resources.Resources)
+		assert.Empty(t, resources.Resources)
+		assert.Nil(t, clientSession.InitializeResult().Capabilities.Resources)
 
-		byURI := make(map[string]*mcp.Resource, len(resources.Resources))
-		for _, resource := range resources.Resources {
-			byURI[resource.URI] = resource
-		}
-
-		scheme := terminology.GetProductBinaryName()
-
-		sections := parseInstructionSections(instructions)
-		require.NotEmpty(t, sections, "embedded instructions should contain at least one section")
-		require.Len(t, resources.Resources, len(sections))
-
-		// Every parsed section should be advertised as its own resource.
-		for _, section := range sections {
-			uri := scheme + "://instructions/" + section.slug
-			require.Contains(t, byURI, uri)
-		}
-
-		// Reading a section resource returns exactly that section's body.
-		section := sections[0]
-		read, err := clientSession.ReadResource(ctx, &mcp.ReadResourceParams{
-			URI: scheme + "://instructions/" + section.slug,
-		})
+		templates, err := clientSession.ListResourceTemplates(ctx, nil)
 		require.NoError(t, err)
-		require.Len(t, read.Contents, 1)
-		assert.Equal(t, instructionsResourceMIMEType, read.Contents[0].MIMEType)
-		assert.Equal(t, section.body, read.Contents[0].Text)
+		assert.Empty(t, templates.ResourceTemplates)
 	})
 
 	t.Run("unknown tool returns error", func(t *testing.T) {
 		ctx := context.Background()
-		clientSession, serverSession := connectTestServer(t, ctx, nil)
+		clientSession, serverSession := connectTestServer(t, ctx, nil, MCPServerOptions{})
 		defer clientSession.Close()
 		defer serverSession.Close()
 
@@ -302,7 +298,7 @@ func TestMCPServerProtocol(t *testing.T) {
 		engine, cleanup := connectGRPCTestEngine(t, grpcCatalogErrorServer{})
 		defer cleanup()
 
-		clientSession, serverSession := connectTestServer(t, ctx, engine)
+		clientSession, serverSession := connectTestServer(t, ctx, engine, MCPServerOptions{})
 		defer clientSession.Close()
 		defer serverSession.Close()
 
@@ -324,7 +320,7 @@ func TestMCPServerProtocol(t *testing.T) {
 	t.Run("server logs go to error stream", func(t *testing.T) {
 		var errOut bytes.Buffer
 
-		server := newServer(&errOut, toolimpl.ToolDependencies{}, DefaultToolRegistry())
+		server := newServer(&errOut, toolimpl.ToolDependencies{}, DefaultToolRegistry(MCPServerOptions{}))
 		clientTransport, serverTransport := mcp.NewInMemoryTransports()
 		serverSession, err := server.Connect(context.Background(), serverTransport, nil)
 		require.NoError(t, err)

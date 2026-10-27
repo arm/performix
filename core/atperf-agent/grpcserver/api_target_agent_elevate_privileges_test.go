@@ -18,9 +18,9 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/privilege"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 // makeClient creates a typed (but inert) gRPC client we never actually use.

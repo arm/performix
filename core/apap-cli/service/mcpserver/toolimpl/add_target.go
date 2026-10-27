@@ -17,21 +17,35 @@ import (
 	targetservice "github.com/Arm-Debug/apap-cli/apap-cli/service/target"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
-type AddTargetTool struct{}
+type AddTargetTool struct {
+	AndroidTargetsEnabled bool
+}
 
 const defaultAddTargetPort = 22
 
+// addTargetInput describes a target to add. Exactly one of SSH or Android must be
+// non-nil.
 type addTargetInput struct {
+	Name       string                 `json:"name,omitempty"`
+	SetDefault bool                   `json:"set_default,omitempty"`
+	SSH        *addTargetSSHInput     `json:"ssh,omitempty"`
+	Android    *addTargetAndroidInput `json:"android,omitempty"`
+}
+
+type addTargetSSHInput struct {
 	Host           string               `json:"host"`
 	User           string               `json:"user"`
 	Port           int                  `json:"port,omitempty"`
 	PrivateKeyPath string               `json:"private_key_path,omitempty"`
-	Name           string               `json:"name,omitempty"`
-	SetDefault     bool                 `json:"set_default,omitempty"`
 	Jumps          []addTargetJumpInput `json:"jumps,omitempty"`
+}
+
+type addTargetAndroidInput struct {
+	SerialNumber    string `json:"serial_number"`
+	DeviceIPAddress string `json:"device_ip_address,omitempty"`
 }
 
 // addTargetJumpInput describes a single intermediate jump node on the path
@@ -43,30 +57,8 @@ type addTargetJumpInput struct {
 	PrivateKeyPath string `json:"private_key_path,omitempty"`
 }
 
-var addTargetInputSchema = &jsonschema.Schema{
-	Type:     "object",
-	Required: []string{"host", "user"},
-	Properties: map[string]*jsonschema.Schema{
-		"host": {
-			Type:        "string",
-			Description: "Hostname or IP address of the target to add.",
-		},
-		"user": {
-			Type:        "string",
-			Description: "Username for the SSH connection to the target.",
-		},
-		"port": {
-			Type:        "integer",
-			Default:     json.RawMessage(strconv.Itoa(defaultAddTargetPort)),
-			Minimum:     jsonschema.Ptr(1.0),
-			Maximum:     jsonschema.Ptr(float64(math.MaxUint16)),
-			Description: "Port for the SSH connection to the target.",
-		},
-		"private_key_path": {
-			Type: "string",
-			Description: "Authentication is SSH key-based. Set private_key_path to use a specific private key. " +
-				"If omitted, will automatically attempt to use any passphrase-less keys detected in common SSH key locations. ",
-		},
+func addTargetInputProperties(androidTargetsEnabled bool) map[string]*jsonschema.Schema {
+	properties := map[string]*jsonschema.Schema{
 		"name": {
 			Type: "string",
 			Description: "A descriptive name for this target configuration. This will help you identify it later. " +
@@ -78,94 +70,181 @@ var addTargetInputSchema = &jsonschema.Schema{
 				"but only do so if the user explicitly requests this. " +
 				"The first target added (via any route, not just MCP) may automatically be promoted to default.",
 		},
-		"jumps": {
-			Type:        "array",
-			Description: "Optional ordered list of intermediate jump (bastion/proxy) hosts to connect through to reach the target. Ordered from the user's machine towards the target.",
-			Items: &jsonschema.Schema{
-				Type:     "object",
-				Required: []string{"host"},
-				Properties: map[string]*jsonschema.Schema{
-					"host": {
-						Type:        "string",
-						Description: "Hostname or IP address of the jump host.",
-					},
-					"user": {
-						Type: "string",
-						Description: "Use jumps to connect through one or more intermediate jump (bastion/proxy) hosts." +
-							"List them in order from the user's machine towards the target, " +
-							"each with its own host (required) and optional user, port, and private_key_path. ",
-					},
-					"port": {
-						Type:        "integer",
-						Default:     json.RawMessage(strconv.Itoa(defaultAddTargetPort)),
-						Minimum:     jsonschema.Ptr(1.0),
-						Maximum:     jsonschema.Ptr(float64(math.MaxUint16)),
-						Description: "Port for the SSH connection to the jump host.",
-					},
-					"private_key_path": {
-						Type:        "string",
-						Description: "Path to the SSH private key file used to authenticate with the jump host.",
+		"ssh": {
+			Type:        "object",
+			Required:    []string{"host", "user"},
+			Description: "Add a target reached through SSH.",
+			Properties: map[string]*jsonschema.Schema{
+				"host": {
+					Type:        "string",
+					Description: "Hostname or IP address of the target to add.",
+				},
+				"user": {
+					Type:        "string",
+					Description: "Username for the SSH connection to the target.",
+				},
+				"port": {
+					Type:        "integer",
+					Minimum:     jsonschema.Ptr(1.0),
+					Maximum:     jsonschema.Ptr(float64(math.MaxUint16)),
+					Description: "Port for the SSH connection to the target. Defaults to 22 when omitted.",
+				},
+				"private_key_path": {
+					Type: "string",
+					Description: "Authentication is SSH key-based. Set private_key_path to use a specific private key. " +
+						"If omitted, will automatically attempt to use any passphrase-less keys detected in common SSH key locations.",
+				},
+				"jumps": {
+					Type:        "array",
+					Description: "Optional ordered list of intermediate jump (bastion/proxy) hosts to connect through to reach the target. Ordered from the user's machine towards the target.",
+					Items: &jsonschema.Schema{
+						Type:     "object",
+						Required: []string{"host"},
+						Properties: map[string]*jsonschema.Schema{
+							"host": {
+								Type:        "string",
+								Description: "Hostname or IP address of the jump host.",
+							},
+							"user": {
+								Type: "string",
+								Description: "Use jumps to connect through one or more intermediate jump (bastion/proxy) hosts." +
+									"List them in order from the user's machine towards the target, " +
+									"each with its own host (required) and optional user, port, and private_key_path.",
+							},
+							"port": {
+								Type:        "integer",
+								Default:     json.RawMessage(strconv.Itoa(defaultAddTargetPort)),
+								Minimum:     jsonschema.Ptr(1.0),
+								Maximum:     jsonschema.Ptr(float64(math.MaxUint16)),
+								Description: "Port for the SSH connection to the jump host.",
+							},
+							"private_key_path": {
+								Type:        "string",
+								Description: "Path to the SSH private key file used to authenticate with the jump host.",
+							},
+						},
 					},
 				},
 			},
 		},
-	},
+	}
+	if androidTargetsEnabled {
+		properties["android"] = &jsonschema.Schema{
+			Type:        "object",
+			Required:    []string{"serial_number"},
+			Description: "Add a target reached through ADB.",
+			Properties: map[string]*jsonschema.Schema{
+				"serial_number": {
+					Type:        "string",
+					Description: "ADB serial number of the Android device.",
+				},
+				"device_ip_address": {
+					Type:        "string",
+					Description: "Optional host and port used to reach the device through ADB, for example 10.0.0.2:5555.",
+				},
+			},
+		}
+	}
+	return properties
+}
+
+func addTargetInputVariant(targetType string) *jsonschema.Schema {
+	return &jsonschema.Schema{
+		Type:       "object",
+		Required:   []string{targetType},
+		Properties: addTargetInputProperties(true),
+	}
+}
+
+func addTargetInputSchema(androidTargetsEnabled bool) *jsonschema.Schema {
+	properties := addTargetInputProperties(androidTargetsEnabled)
+	schema := &jsonschema.Schema{
+		Type:       "object",
+		Properties: properties,
+	}
+	if !androidTargetsEnabled {
+		schema.Required = []string{"ssh"}
+		return schema
+	}
+
+	// Codex code mode renders each root oneOf variant independently, so repeat
+	// the complete input schema in each variant.
+	schema.OneOf = []*jsonschema.Schema{
+		addTargetInputVariant("ssh"),
+		addTargetInputVariant("android"),
+	}
+	return schema
 }
 
 type addTargetOutput struct {
-	TargetName     string     `json:"target_name,omitempty"`
-	Host           string     `json:"host,omitempty"`
-	IsDefault      *bool      `json:"is_default,omitempty"`
-	ConnectivityOK *bool      `json:"connectivity_ok,omitempty"`
-	Error          *toolError `json:"error,omitempty"`
+	TargetName      string     `json:"target_name,omitempty"`
+	Host            string     `json:"host,omitempty"`
+	SerialNumber    string     `json:"serial_number,omitempty"`
+	DeviceIPAddress string     `json:"device_ip_address,omitempty"`
+	IsDefault       *bool      `json:"is_default,omitempty"`
+	ConnectivityOK  *bool      `json:"connectivity_ok,omitempty"`
+	Error           *toolError `json:"error,omitempty"`
 }
 
-var addTargetOutputSchema = &jsonschema.Schema{
-	Type: "object",
-	OneOf: []*jsonschema.Schema{
-		{
-			Type:        "object",
-			Description: "Target was added and the connectivity check succeeded.",
-			Required:    []string{"target_name", "host", "is_default", "connectivity_ok"},
-			Properties: map[string]*jsonschema.Schema{
-				"connectivity_ok": {Type: "boolean", Enum: []any{true}},
+func addTargetOutputSchema(androidTargetsEnabled bool) *jsonschema.Schema {
+	schema := &jsonschema.Schema{
+		Type: "object",
+		OneOf: []*jsonschema.Schema{
+			{
+				Type:        "object",
+				Description: "Target was added and the connectivity check succeeded.",
+				Required:    []string{"target_name", "is_default", "connectivity_ok"},
+				Properties: map[string]*jsonschema.Schema{
+					"connectivity_ok": {Type: "boolean", Enum: []any{true}},
+				},
+				Not: &jsonschema.Schema{Required: []string{"error"}},
 			},
-			Not: &jsonschema.Schema{Required: []string{"error"}},
-		},
-		{
-			Type:        "object",
-			Description: "Target was added but the connectivity check failed.",
-			Required:    []string{"target_name", "host", "is_default", "connectivity_ok", "error"},
-			Properties: map[string]*jsonschema.Schema{
-				"connectivity_ok": {Type: "boolean", Enum: []any{false}},
+			{
+				Type:        "object",
+				Description: "Target was added but the connectivity check failed.",
+				Required:    []string{"target_name", "is_default", "connectivity_ok", "error"},
+				Properties: map[string]*jsonschema.Schema{
+					"connectivity_ok": {Type: "boolean", Enum: []any{false}},
+				},
+			},
+			{
+				Type:        "object",
+				Description: "Either the target was not added, or there was an error after adding the target but before connectivity status could be reported. If target_name is present in the tool output, the target was persisted in the config.",
+				Required:    []string{"error"},
+				Not:         &jsonschema.Schema{Required: []string{"connectivity_ok"}},
 			},
 		},
-		{
-			Type:        "object",
-			Description: "Either the target was not added, or there was an error after adding the target but before connectivity status could be reported. If target_name and host are present in the tool output, the target was persisted in the config.",
-			Required:    []string{"error"},
-			Not:         &jsonschema.Schema{Required: []string{"connectivity_ok"}},
+		Properties: map[string]*jsonschema.Schema{
+			"target_name": {
+				Type:        "string",
+				Description: "Friendly name of the target that was added, which may have been auto-generated.",
+			},
+			"host": {
+				Type:        "string",
+				Description: "Hostname or IP address of the SSH target that was added.",
+			},
+			"is_default": {
+				Type:        "boolean",
+				Description: "True when the new target is the default. After adding the target, the persistent config is checked to accurately report whether the target is the default, as it may have been auto-promoted.",
+			},
+			"connectivity_ok": {
+				Type:        "boolean",
+				Description: "Result of the connectivity check performed after the target is added: true if the check succeeded, false if it failed.",
+			},
+			"error": toolErrorSchema(),
 		},
-	},
-	Properties: map[string]*jsonschema.Schema{
-		"target_name": {
+	}
+	if androidTargetsEnabled {
+		schema.Properties["serial_number"] = &jsonschema.Schema{
 			Type:        "string",
-			Description: "Friendly name of the target that was added, which may have been auto-generated.",
-		},
-		"host": {
+			Description: "ADB serial number of the Android target that was added.",
+		}
+		schema.Properties["device_ip_address"] = &jsonschema.Schema{
 			Type:        "string",
-			Description: "Hostname or IP address of the target that was added.",
-		},
-		"is_default": {
-			Type:        "boolean",
-			Description: "True when the new target is the default. After adding the target, the persistent config is checked to accurately report whether the target is the default, as it may have been auto-promoted.",
-		},
-		"connectivity_ok": {
-			Type:        "boolean",
-			Description: "Result of the connectivity check performed after the target is added: true if the check succeeded, false if it failed.",
-		},
-		"error": toolErrorSchema(),
-	},
+			Description: "Host and port used to reach the Android target through ADB, when provided.",
+		}
+	}
+	return schema
 }
 
 // buildSSHTarget converts the validated tool input into an SSHTarget. Any jump hosts are
@@ -174,7 +253,7 @@ var addTargetOutputSchema = &jsonschema.Schema{
 // validates each hop's port range before any persistence happens, returning a plain error
 // for invalid input. The host key policy is always strict, so every hop's host key must
 // already be trusted in the user's known_hosts file.
-func buildSSHTarget(input addTargetInput) (*engine_target.SSHTarget, error) {
+func buildSSHTarget(input addTargetSSHInput) (*engine_target.SSHTarget, error) {
 	jumps := make([]engine_target.SSHHostConfig, 0, len(input.Jumps)+1)
 
 	for i, jump := range input.Jumps {
@@ -192,6 +271,23 @@ func buildSSHTarget(input addTargetInput) (*engine_target.SSHTarget, error) {
 	jumps = append(jumps, destination)
 
 	return &engine_target.SSHTarget{Jumps: jumps}, nil
+}
+
+func buildTarget(input addTargetInput) (engine_target.Target, error) {
+	switch {
+	case input.SSH != nil && input.Android != nil:
+		return nil, errors.New("ssh and android cannot both be provided")
+	case input.SSH != nil:
+		return buildSSHTarget(*input.SSH)
+	case input.Android != nil:
+		tgt := &engine_target.AndroidTarget{SerialNumber: input.Android.SerialNumber}
+		if input.Android.DeviceIPAddress != "" {
+			tgt.DeviceIPAddress = &input.Android.DeviceIPAddress
+		}
+		return tgt, nil
+	default:
+		return nil, errors.New("either ssh or android must be provided")
+	}
 }
 
 // buildSSHHostConfig builds a single hop's SSHHostConfig, validating the port range before
@@ -247,19 +343,23 @@ func testTargetConnectivity(ctx context.Context, engine apapproto.ApapClient, tg
 	return true, nil
 }
 
-func (AddTargetTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
+func (tool AddTargetTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
+	targetTypes := "SSH"
+	if tool.AndroidTargetsEnabled {
+		targetTypes = "SSH or Android"
+	}
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "add_target",
-		Description: "Adds a new " + terminology.GetProductFullName() + " SSH target to the persistent target configuration so it can be used for future runs. " +
+		Description: "Adds a new " + terminology.GetProductFullName() + " " + targetTypes + " target to the persistent target configuration so it can be used for future runs. " +
 			"After adding the target, a connectivity check is performed. The target is still added even if this check fails. " +
-			"Limitation of this tool: strict host key checking is enforced, so the target's SSH host key must already be present in the user's known_hosts file before connecting to the target. ",
+			"For SSH targets, strict host key checking is enforced, so every SSH host key must already be present in the user's known_hosts file before connecting.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint: false,
 		},
-		InputSchema:  addTargetInputSchema,
-		OutputSchema: addTargetOutputSchema,
+		InputSchema:  addTargetInputSchema(tool.AndroidTargetsEnabled),
+		OutputSchema: addTargetOutputSchema(tool.AndroidTargetsEnabled),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input addTargetInput) (*mcp.CallToolResult, addTargetOutput, error) {
-		tgt, err := buildSSHTarget(input)
+		tgt, err := buildTarget(input)
 		if err != nil {
 			return &mcp.CallToolResult{IsError: true}, addTargetOutput{Error: newToolError(err)}, nil
 		}
@@ -273,15 +373,20 @@ func (AddTargetTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 			return &mcp.CallToolResult{IsError: true}, addTargetOutput{Error: newToolError(err)}, nil
 		}
 
+		result := addTargetOutput{TargetName: name}
+		if input.SSH != nil {
+			result.Host = input.SSH.Host
+		} else {
+			result.SerialNumber = input.Android.SerialNumber
+			result.DeviceIPAddress = input.Android.DeviceIPAddress
+		}
+
 		// Implicitly false by default if not set
 		// i.e. If there is already a non-localhost default target, don't make the new target the default unless user explicitly requests it
 		if input.SetDefault {
 			if err := toolDeps.Targets.SetDefaultTarget(name); err != nil {
-				return &mcp.CallToolResult{IsError: true}, addTargetOutput{
-					TargetName: name,
-					Host:       input.Host,
-					Error:      newToolError(err),
-				}, nil
+				result.Error = newToolError(err)
+				return &mcp.CallToolResult{IsError: true}, result, nil
 			}
 		}
 
@@ -290,11 +395,8 @@ func (AddTargetTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 		// Read the persisted config back to accurately report whether the new target became the default.
 		config, err := toolDeps.Targets.ReadTargetConfig()
 		if err != nil {
-			return &mcp.CallToolResult{IsError: true}, addTargetOutput{
-				TargetName: name,
-				Host:       input.Host,
-				Error:      newToolError(err),
-			}, nil
+			result.Error = newToolError(err)
+			return &mcp.CallToolResult{IsError: true}, result, nil
 		}
 
 		// Probe connectivity after the target is persisted. A failed probe is reported as a
@@ -303,13 +405,9 @@ func (AddTargetTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 		connectivityOK, connectivityErr := testTargetConnectivity(ctx, toolDeps.Engine, tgt)
 
 		isDefault := config.Default == name
-		result := addTargetOutput{
-			TargetName:     name,
-			Host:           input.Host,
-			IsDefault:      &isDefault,
-			ConnectivityOK: &connectivityOK,
-			Error:          connectivityErr,
-		}
+		result.IsDefault = &isDefault
+		result.ConnectivityOK = &connectivityOK
+		result.Error = connectivityErr
 		if connectivityErr != nil {
 			return &mcp.CallToolResult{IsError: true}, result, nil
 		}

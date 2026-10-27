@@ -16,7 +16,7 @@ from typing import Any
 
 
 # Performance quality thresholds are defined for production Performix MCP only;
-# REST and Hackathon MCP are comparison modes and we don't track their performance.
+# The run_query comparison mode does not have performance thresholds.
 PERFORMIX_MCP_MODE = "performix_mcp"
 PERFORMANCE_EVALUATED_MODES = frozenset({PERFORMIX_MCP_MODE})
 QUALITY_GOOD = "GOOD"

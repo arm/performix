@@ -63,6 +63,25 @@ func TestDaemonAutostartFlagHiddenFromHelp(t *testing.T) {
 	}
 }
 
+func TestRootCommandRejectsAutomaticPortsWithCustomHostname(t *testing.T) {
+	viper.Reset()
+	initConfigOnce = sync.Once{}
+	t.Cleanup(func() {
+		viper.Reset()
+		initConfigOnce = sync.Once{}
+	})
+
+	command := NewRootCmd()
+	command.SetArgs([]string{"version", "--server-hostname", "remote-host"})
+
+	err := command.Execute()
+
+	var msg message.Message
+	assert.ErrorAs(t, err, &msg)
+	assert.Equal(t, message.CliCmdDaemonServerHostnameRequiresExplicitPort, msg.Code())
+	assert.Equal(t, "remote-host", msg.Metadata()["host"])
+}
+
 func TestDetermineExitCodeForError(t *testing.T) {
 	t.Run("nil error returns exit code 0", func(t *testing.T) {
 		code := determineExitCodeForError(nil)
@@ -112,11 +131,13 @@ func TestInitConfigSetsDefaults(t *testing.T) {
 
 	initConfig()
 
-	assert.Equal(t, serverconfig.DefaultEnableExperimentalRecipes, viper.GetBool("enable-experimental-recipes"))
-	assert.Equal(t, serverconfig.DefaultEnableAndroidTargets, viper.GetBool(serverconfig.EnableAndroidTargetsConfigKey))
-	assert.Equal(t, serverconfig.DefaultEnableGPURecipe, viper.GetBool(serverconfig.EnableGPURecipeConfigKey))
-	assert.Equal(t, serverconfig.DefaultEnableRenderDBSandbox, viper.GetBool("enable-render-db-sandbox"))
-	assert.Equal(t, serverconfig.DefaultEnableNeoprofTimeline, viper.GetBool("enable-neoprof-timeline"))
-	assert.Equal(t, serverconfig.DefaultEnableJfrCapture, viper.GetBool("enable-jfr-capture"))
+	assert.Equal(t, false, viper.GetBool("enable-experimental-recipes"))
+	assert.False(t, viper.GetBool(serverconfig.EnableAndroidTargetsConfigKey))
+	assert.Equal(t, false, viper.GetBool(serverconfig.EnableGPURecipeConfigKey))
+	assert.Equal(t, true, viper.GetBool("enable-render-db-sandbox"))
+	assert.Equal(t, false, viper.GetBool("enable-neoprof-timeline"))
+	assert.False(t, viper.GetBool("enable-neoprof-system-utilization"))
+	assert.Equal(t, false, viper.GetBool("enable-jfr-capture"))
+	assert.Equal(t, true, viper.GetBool("enable-run-component-compression"))
 	assert.Equal(t, serverconfig.DefaultDaemonAutostart, viper.GetBool(serverconfig.DaemonAutostartConfigKey))
 }

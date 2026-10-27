@@ -140,11 +140,15 @@ Remove Dummy Logs
   Remove File  ${DUMMY_ENGINE_LOG}
 
 Generate Dummy Runs
-  The Test Target Is Added Successfully
-  The Target Is Set To Default Successfully  ${G_TARGET_NAME}
-  ${run_id} =  Run Recipe And Extract Run ID  code_hotspots
+  IF  '${USE_PRERECORDED_RUNS}' == 'True'
+    ${run_id} =  Import Prerecorded Run  code-hotspots-baseline
+  ELSE
+    The Test Target Is Added Successfully
+    The Target Is Set To Default Successfully  ${G_TARGET_NAME}
+    ${run_id} =  Run Recipe And Extract Run ID  code_hotspots
+    The Test Target Is Removed Successfully
+  END
   VAR  ${SUPPORT_PKG_RUN_1_ID} =  ${run_id}  scope=SUITE
-  The Test Target Is Removed Successfully
 
 Remove Dummy Runs
   Delete Run  ${SUPPORT_PKG_RUN_1_ID}

@@ -5,6 +5,7 @@ package process
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -50,6 +51,25 @@ func TestLoggingProcessManager(t *testing.T) {
 		assert.Equal(t, result, res)
 
 		assert.Equal(t, "ExecCommand succeeded", hook.LastEntry().Message)
+		mockPM.AssertExpectations(t)
+	})
+
+	t.Run("process logs omit arguments and environment values", func(t *testing.T) {
+		hook.Reset()
+		cmd := &LaunchCommand{
+			Command:     []string{"program", "private argument"},
+			Environment: map[string]string{"TOKEN": "private environment value"},
+		}
+		result := &CommandResult{Rc: 0}
+		mockPM.On("ExecCommand", cmd).Return(result, nil).Once()
+
+		_, err := loggingPM.ExecCommand(cmd)
+		assert.NoError(t, err)
+		for _, entry := range hook.AllEntries() {
+			fields := fmt.Sprint(entry.Data)
+			assert.NotContains(t, fields, "private argument")
+			assert.NotContains(t, fields, "private environment value")
+		}
 		mockPM.AssertExpectations(t)
 	})
 

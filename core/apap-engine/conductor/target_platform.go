@@ -37,7 +37,6 @@ type TargetActions interface {
 	Stat(s string) (os.FileInfo, error)
 	RemoveDir(dir string) error
 	CommandRunner() CommandRunner // accessor method
-	HasAdminPerms() (bool, error)
 	RunCommand(cmd string) (RunCommandOutput, error)
 	RunCommandAsAdmin(cmd string) (RunCommandOutput, error)
 }

@@ -102,7 +102,7 @@ func NewManager(configDir string) (*Manager, error) {
 }
 
 // GenerateServerCredentials ensures the root authority exists and is valid, creates an
-// in-memory server certificate, and returns the transport credentials for the AuthService.
+// in-memory server certificate, and returns the transport credentials for the gRPC server.
 func (m *Manager) GenerateServerCredentials(host string) (credentials.TransportCredentials, error) {
 	if err := m.ensureTLSDirectory(); err != nil {
 		return nil, err
@@ -192,6 +192,21 @@ func (m *Manager) GenerateClientCertificate(commonName string) (tls.Certificate,
 	return clientCert, nil
 }
 
+// NewClientCredentials returns mutual TLS transport credentials using a client
+// certificate signed by the supplied root authority.
+func NewClientCredentials(host string, rootPEM []byte, clientCertificate tls.Certificate) (credentials.TransportCredentials, error) {
+	rootPool := x509.NewCertPool()
+	if !rootPool.AppendCertsFromPEM(rootPEM) {
+		return nil, message.New(message.EngineTlsLoadRootCaFailed)
+	}
+	return credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{clientCertificate},
+		RootCAs:      rootPool,
+		ServerName:   host,
+		MinVersion:   tls.VersionTLS12,
+	}), nil
+}
+
 // RootCertificatePEM returns the PEM encoded root certificate used for TLS bootstrapping.
 func (m *Manager) RootCertificatePEM() ([]byte, error) {
 	data, err := os.ReadFile(m.rootCACertPath())
@@ -201,9 +216,9 @@ func (m *Manager) RootCertificatePEM() ([]byte, error) {
 	return data, nil
 }
 
-// WaitForAuthority blocks until the root certificate authority is available on disk or the context is cancelled.
-// If the engine is being launched for the first time, the client will wait for up to the specified interval for the
-// authority to be generated.
+// WaitForAuthority blocks until a currently valid root CA certificate and matching private key can be loaded,
+// or the context is cancelled. Polling lets the engine finish creating or regenerating the authority before
+// clients construct their credentials.
 func WaitForAuthority(ctx context.Context, configDir string, interval time.Duration) error {
 	manager, err := NewManager(configDir)
 	if err != nil {
@@ -215,7 +230,11 @@ func WaitForAuthority(ctx context.Context, configDir string, interval time.Durat
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		if manager.authorityExists() {
+		cert, key, err := manager.loadAuthority()
+		now := manager.now()
+		if err == nil && cert.IsCA &&
+			!now.Before(cert.NotBefore) && now.Before(cert.NotAfter) &&
+			key.PublicKey.Equal(cert.PublicKey) {
 			return nil
 		}
 		select {
@@ -353,7 +372,7 @@ func (m *Manager) generateServerCertificate(host string) (tls.Certificate, error
 	now := m.now()
 	template := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: fmt.Sprintf("%v Auth Server", terminology.GetProductFullName())},
+		Subject:      pkix.Name{CommonName: fmt.Sprintf("%v gRPC Server", terminology.GetProductFullName())},
 		NotBefore:    now.Add(-1 * time.Minute),
 		NotAfter:     now.Add(serverCertValidity),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
@@ -364,6 +383,12 @@ func (m *Manager) generateServerCertificate(host string) (tls.Certificate, error
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		template.IPAddresses = append(template.IPAddresses, ip)
+		if ip.IsUnspecified() {
+			template.IPAddresses = append(template.IPAddresses,
+				net.ParseIP("127.0.0.1"),
+				net.IPv6loopback,
+			)
+		}
 	} else {
 		template.DNSNames = append(template.DNSNames, host)
 	}

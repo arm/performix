@@ -13,9 +13,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/grouping"
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/client"
-	"github.com/Arm-Debug/apap-cli/apap-cli/service/server"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
-	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/apap-engine/userdirs"
 )
@@ -24,21 +22,16 @@ const defaultBlock = false
 
 var block bool
 
-type serverFgRunner interface {
-	Run(config grpcserver.GrpcServerConfig) error
+type daemonStarter interface {
+	StartBackgroundDaemon(config grpcserver.GrpcServerConfig) (bool, error)
+	StartForegroundDaemon(config grpcserver.GrpcServerConfig) (bool, error)
+	RunDaemonChild(config grpcserver.GrpcServerConfig) error
 }
 
-type serverBgRunner interface {
-	Run(config grpcserver.GrpcServerConfig) error
-}
+var DaemonStartCmd = newDaemonStartCmd(client.NewAutostartClient())
 
-var DaemonStartCmd = newDaemonStartCmd(
-	server.NewBackgroundRunner(),
-	server.NewForegroundRunner(),
-	client.NewClient(),
-)
-
-func newDaemonStartCmd(bgRunner serverBgRunner, fgRunner serverFgRunner, cc clientConnector) *cobra.Command {
+func newDaemonStartCmd(starter daemonStarter) *cobra.Command {
+	var daemonChild bool
 	daemonStartCmd := &cobra.Command{
 		Use:   "start",
 		Short: fmt.Sprintf("Start the %v CLI daemon.", terminology.GetProductFullName()),
@@ -48,15 +41,10 @@ func newDaemonStartCmd(bgRunner serverBgRunner, fgRunner serverFgRunner, cc clie
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serverPort := viper.GetInt("server-port")
-			if err := serverconfig.ValidatePort("--server-port", serverPort); err != nil {
-				return err
-			}
-			authPort := viper.GetInt("auth-port")
-			if err := serverconfig.ValidatePort("--auth-port", authPort); err != nil {
-				return err
-			}
-			if serverPort == authPort {
-				return message.New(message.CliCmdDaemonServerAuthPortsMustDiffer)
+			if serverPort != serverconfig.AutomaticPort {
+				if err := serverconfig.ValidatePort("--server-port", serverPort); err != nil {
+					return err
+				}
 			}
 			parallelJobs := viper.GetInt("jobs")
 			if parallelJobs < 1 {
@@ -66,18 +54,30 @@ func newDaemonStartCmd(bgRunner serverBgRunner, fgRunner serverFgRunner, cc clie
 				)
 			}
 
+			if daemonChild {
+				return starter.RunDaemonChild(serverconfig.FromViper())
+			}
+
+			var started bool
 			var err error
 			if block {
-				err = fgRunner.Run(serverconfig.FromViper())
-
+				started, err = starter.StartForegroundDaemon(serverconfig.FromViper())
 			} else {
-				err = bgRunner.Run(serverconfig.FromViperForBackground())
+				started, err = starter.StartBackgroundDaemon(serverconfig.FromViperForBackground())
 			}
-			return err
+			if err != nil {
+				return err
+			}
+			if !started && !viper.GetBool("json") {
+				fmt.Fprintf(cmd.OutOrStdout(), "%v daemon is already running.\n", terminology.GetProductFullName())
+			}
+			return nil
 		},
 	}
 
 	daemonStartCmd.Flags().BoolVarP(&block, "block", "b", defaultBlock, "Run the server and block, rather than running the server as a daemon. This causes log messages to be printed to stdout.")
+	daemonStartCmd.Flags().BoolVar(&daemonChild, "daemon-child", false, "Run as the detached daemon child.")
+	_ = daemonStartCmd.Flags().MarkHidden("daemon-child")
 
 	stateDir, _ := userdirs.StateDir()
 	daemonStartCmd.Flags().String("log-file", serverconfig.DefaultLogFile, fmt.Sprintf("The path to the log file for the daemon. By default, logs are written to '%s' in daemon mode or to 'stdout' when '--block' is used.", stateDir))
@@ -94,15 +94,6 @@ func newDaemonStartCmd(bgRunner serverBgRunner, fgRunner serverFgRunner, cc clie
 
 	daemonStartCmd.Flags().IntP("jobs", "j", serverconfig.Jobs, "The number of jobs for the daemon to run in parallel. The default is based on the number of cores available.")
 	config.ViperBindPFlag(daemonStartCmd, "jobs", false)
-
-	daemonStartCmd.Flags().BoolP("enable-on-demand-privilege", "P", serverconfig.DefaultEnableOnDemandPrivilege, "Enable on-demand privilege mode. Run the target agent with minimal privileges and elevate only when required. This option reduces the security risk on the target.")
-	config.ViperBindPFlag(daemonStartCmd, "enable-on-demand-privilege", false)
-
-	daemonStartCmd.Flags().Bool("enable-render-db-sandbox", serverconfig.DefaultEnableRenderDBSandbox, "Enable DuckDB sandbox mode for render sessions. Disable this only for local development workflows such as DuckDB web UI access.")
-	config.ViperBindPFlag(daemonStartCmd, "enable-render-db-sandbox", false)
-
-	daemonStartCmd.Flags().Bool("enable-jfr-capture", serverconfig.DefaultEnableJfrCapture, "Enable Java Flight Recorder capture in recipes that support it.")
-	config.ViperBindPFlag(daemonStartCmd, "enable-jfr-capture", false)
 
 	daemonStartCmd.Flags().Int("http-port", serverconfig.DefaultHTTPPort, "The HTTP listen port for query requests. Use 0 to disable. If enabled, this starts an HTTP server in addition to the gRPC server. The HTTP server provides access to /query endpoint serving Arrow IPC responses for query requests.")
 	config.ViperBindPFlag(daemonStartCmd, "http-port", false)

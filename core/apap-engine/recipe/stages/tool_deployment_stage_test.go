@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -23,6 +24,7 @@ import (
 	conductormocks "github.com/Arm-Debug/apap-cli/apap-engine/conductor/conductormocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
+	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
@@ -33,6 +35,19 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
 )
+
+// Simulate two transfer updates per bundle while retaining real reconciliation.
+type timedDeploymentFilesystem struct{ conductor.TargetFilesystem }
+
+func (fs timedDeploymentFilesystem) CopyFromHost(_, _ string, updates []conductor.ReportProgressRequest) error {
+	for _, sent := range []int64{50, 100} {
+		time.Sleep(10 * time.Second)
+		for _, update := range updates {
+			update.Callback(sent, 100, time.Now())
+		}
+	}
+	return nil
+}
 
 // writeToolBundle creates a dummy tool bundle tarball
 func writeToolBundle(t *testing.T, executableDir string, toolInfo tool.ToolInfo, platform conductor.PlatformConfiguration) {
@@ -148,7 +163,7 @@ func TestToolDeploymentStage_Execute(t *testing.T) {
 			targetSessionSupplier: targetSessionSupplier,
 			toolBundlesSupplier:   func() []deploymentsupport.ToolBundleInfo { return nil },
 			packageManager:        pm,
-			ProgressCallback:      func(int64, int64, time.Time) {},
+			ProgressCallback:      func(notifiers.StageProgress) {},
 		}
 	}
 
@@ -191,6 +206,46 @@ func TestToolDeploymentStage_Execute(t *testing.T) {
 		}, stage.ToolsToDeploy)
 	})
 
+	t.Run("keeps one ETA across tool bundles and unpacking", func(t *testing.T) {
+		first := tool.ToolInfo{Name: "mandatory-tool-bundle", Version: "1.0"}
+		agent := tool.ToolInfo{Name: terminology.GetAgentBinaryName(), Version: versions.GetVersion()}
+		for _, info := range []tool.ToolInfo{first, agent} {
+			writeToolBundleWithContents(t, executableDir, info, targetPlatform, make([]byte, 100))
+		}
+		stage := newTestToolDeploymentStage(t, pm, targetPlatform, basePaths)
+		stage.locality = deploymentsupport.DeploymentLocalityTarget
+		stage.deploymentMode = deployer.ToolDeployAUTO
+		stage.ToolsToDeploy = []tool.ToolInfo{first}
+		stage.toolBundlesSupplier = func() []deploymentsupport.ToolBundleInfo {
+			time.Sleep(10 * time.Second) // Setup time is part of the deployment stage.
+			return []deploymentsupport.ToolBundleInfo{{Name: first.Name, Version: first.Version, Locality: stage.locality}}
+		}
+		fs := timedDeploymentFilesystem{stage.targetFilesystemSupplier()}
+		stage.targetFilesystemSupplier = func() conductor.TargetFilesystem { return fs }
+		runner := &conductormocks.MockCommandRunner{}
+		runner.On("RunCommand", mock.Anything).Run(func(mock.Arguments) { time.Sleep(20 * time.Second) }).Return("", "", nil).Twice()
+		stage.commandRunnerSupplier = func() conductor.CommandRunner { return runner }
+		session := &targetsessionmocks.MockTargetSession{}
+		session.On("ResolveToolsDir").Return(basePaths.DeployedToolsDirectory).Maybe()
+		session.On("CloseTargetAgent").Return(nil).Once()
+		stage.targetSessionSupplier = func() targetsession.TargetSession { return session }
+
+		synctest.Test(t, func(t *testing.T) {
+			var estimates []uint64
+			stage.ProgressCallback = func(snapshot notifiers.StageProgress) {
+				if snapshot.EstimatedRemainingSeconds != nil {
+					estimates = append(estimates, *snapshot.EstimatedRemainingSeconds)
+				}
+			}
+			_, err := stage.Execute(&recipe.StageContext{Context: context.Background()})
+			require.NoError(t, err)
+			// Setup and unpacking advance the same clock; bundle boundaries do not reset it.
+			require.Equal(t, []uint64{60, 30, 50, 20, 0, 0}, estimates)
+		})
+		runner.AssertExpectations(t)
+		session.AssertExpectations(t)
+	})
+
 	t.Run("reports cumulative byte progress across multiple tool deployments", func(t *testing.T) {
 		mandatoryTool := tool.ToolInfo{Name: "mandatory-tool-bundle", Version: "1.0"}
 		agentTool := tool.ToolInfo{Name: terminology.GetAgentBinaryName(), Version: versions.GetVersion()}
@@ -208,8 +263,8 @@ func TestToolDeploymentStage_Execute(t *testing.T) {
 			max  int64
 		}
 		var progress []progressUpdate
-		stage.ProgressCallback = func(sent int64, max int64, _ time.Time) {
-			progress = append(progress, progressUpdate{sent: sent, max: max})
+		stage.ProgressCallback = func(snapshot notifiers.StageProgress) {
+			progress = append(progress, progressUpdate{sent: snapshot.Sent, max: snapshot.Max})
 		}
 
 		session := &targetsessionmocks.MockTargetSession{}
@@ -415,7 +470,7 @@ func TestToolDeploymentStage_ClosesAgentConnection(t *testing.T) {
 			targetSessionSupplier: func() targetsession.TargetSession { return session },
 			toolBundlesSupplier:   func() []deploymentsupport.ToolBundleInfo { return nil },
 			packageManager:        pm,
-			ProgressCallback:      func(int64, int64, time.Time) {},
+			ProgressCallback:      func(notifiers.StageProgress) {},
 		}
 	}
 

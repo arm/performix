@@ -7,5 +7,5 @@
 
 set -euo pipefail
 
-script_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-$script_dir/go/build-all.sh
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+"$script_dir/go/build.sh" $("$script_dir/go/all-modules.sh")

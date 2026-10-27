@@ -9,3 +9,4 @@ requests>=2.32.0
 rich>=14.1.0
 truststore>=0.10
 urllib3<2
+PyYAML          # pre-record workflow structure tests

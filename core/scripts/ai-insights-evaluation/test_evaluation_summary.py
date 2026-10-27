@@ -13,6 +13,18 @@ from evaluation_summary import render_console_summary, render_markdown_summary  
 
 
 class EvaluationSummaryTests(unittest.TestCase):
+    def test_timeout_is_explicit_in_console_and_ci_summaries(self):
+        attempt = {"ai_test_id": "pathways_01", "ai_mode": "performix_mcp", "ai_attempt": "1",
+                   "ai_display_scores": "error", "pytest_outcome": "failed",
+                   "ai_agent_timeout_seconds": "300", "ai_agent_duration_seconds": "301"}
+        for render in (render_console_summary, render_markdown_summary):
+            for attempts in ([attempt], [attempt, {**attempt, "ai_attempt": "2"}]):
+                with self.subTest(renderer=render.__name__, attempts=len(attempts)):
+                    summary = render(attempts)
+                    self.assertIn("TIMEOUT", summary)
+                    self.assertIn("300s limit; judge not run", summary)
+                    self.assertIn(f"{301 * len(attempts)}s", summary)
+
     def test_console_summary_separates_failed_and_successful_performance_metrics(self):
         attempts = [
             {
@@ -200,7 +212,7 @@ class EvaluationSummaryTests(unittest.TestCase):
         attempts = [
             {
                 "ai_test_id": "test_case_01",
-                "ai_mode": "hackathon_mcp",
+                "ai_mode": "other_mode",
                 "pytest_outcome": "passed",
                 "ai_display_scores": "pass",
                 "ai_agent_duration_seconds": "90",
@@ -214,6 +226,27 @@ class EvaluationSummaryTests(unittest.TestCase):
 
         self.assertNotIn("quality", summary)
         self.assertIn("PASS", summary)
+
+    def test_run_query_mcp_summary_includes_metrics(self):
+        attempts = [
+            {
+                "ai_test_id": "test_case_03",
+                "ai_mode": "performix_mcp_run_query",
+                "pytest_outcome": "passed",
+                "ai_display_scores": "pass",
+                "ai_agent_duration_seconds": "60",
+                "ai_input_tokens": "1000",
+                "ai_output_tokens": "2000",
+                "ai_reasoning_output_tokens": "300",
+                "ai_mcp_tool_rounds": "3",
+                "ai_mcp_tool_calls_succeeded": "4",
+                "ai_mcp_tool_calls_failed": "1",
+            }
+        ]
+
+        summary = render_console_summary(attempts, width=240)
+
+        self.assertIn("tokens in=1,000 out=2,000 reason=300 rounds=3 calls=5", summary)
 
     def test_mcp_tool_failure_is_reported_as_a_warning(self):
         attempts = [

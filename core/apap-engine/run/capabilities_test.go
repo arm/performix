@@ -56,6 +56,18 @@ func writeCapabilityTestFile(t *testing.T, dir string, name string, contents str
 	return path
 }
 
+func writeCompressedCapabilityTestFile(t *testing.T, dir string, name string, contents string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+	require.NoError(t, err)
+	compressed := encoder.EncodeAll([]byte(contents), nil)
+	encoder.Close()
+	require.NoError(t, os.WriteFile(path, compressed, perms.LocalFilePerm))
+	return path
+}
+
 func TestLoadRunCapabilities(t *testing.T) {
 	t.Run("loads a compressed capability component", func(t *testing.T) {
 		dir := t.TempDir()
@@ -365,6 +377,51 @@ func TestGetCapabilityDetails(t *testing.T) {
 			require.True(t, parsed)
 			require.Equal(t, tt.invocationPath, invocationPath)
 			require.Equal(t, tt.capabilityID, capabilityID)
+		})
+	}
+}
+
+func TestCPUBindingsLoad(t *testing.T) {
+	t.Run("compressed CPU outcome", func(t *testing.T) {
+		dir := t.TempDir()
+		model := &capabilitiesModelView{components: []cdf.Component{
+			{Type: cdf.ComponentType{Name: "tool_capabilities/cpu_counter", SchemaVersion: "1.0"}, RelativePath: "tool/a/0/capabilities/counter.cpu_cycles.json", AbsolutePath: writeCompressedCapabilityTestFile(t, dir, "cpu.json.zst", `{"state":"collected","payload":{"title":"CPU Cycles","units":"cycles","bindings":[{"seriesCapabilityId":"series"}]}}`), Compressed: true},
+			{Type: cdf.ComponentType{Name: "tool_capabilities/counter", SchemaVersion: "1.0"}, RelativePath: "tool/a/0/capabilities/series.json", AbsolutePath: writeCapabilityTestFile(t, dir, "series.json", `{"state":"collected","payload":{"key_type":0,"series_id":0}}`)},
+		}}
+
+		loaded, err := LoadRunCapabilities([]cdf.ModelView{model})
+		require.NoError(t, err)
+		require.Equal(t, "collected", loaded[0].CapabilitiesPerTool["tool/a/0"]["counter.cpu_cycles"].State)
+	})
+
+	for _, tc := range []struct {
+		name, invocation, typ, state, payload string
+		valid                                 bool
+	}{
+		{"valid", "a", "tool_capabilities/counter", "collected", `{"key_type":0,"series_id":0}`, true},
+		{"other invocation", "b", "tool_capabilities/counter", "collected", `{"key_type":0,"series_id":0}`, false},
+		{"wrong type", "a", "another-type", "collected", `{"key_type":0,"series_id":0}`, false},
+		{"uncollected", "a", "tool_capabilities/counter", "available", `{"key_type":0,"series_id":0}`, false},
+		{"missing series", "a", "tool_capabilities/counter", "collected", `{"key_type":0}`, false},
+		{"key_type_string", "a", "tool_capabilities/counter", "collected", `{"key_type":"8","series_id":0}`, false},
+		{"key_type_boolean", "a", "tool_capabilities/counter", "collected", `{"key_type":true,"series_id":0}`, false},
+		{"key_type_fraction", "a", "tool_capabilities/counter", "collected", `{"key_type":1.5,"series_id":0}`, false},
+		{"key_type_negative", "a", "tool_capabilities/counter", "collected", `{"key_type":-1,"series_id":0}`, false},
+		{"key_type_unsafe", "a", "tool_capabilities/counter", "collected", `{"key_type":9007199254740992,"series_id":0}`, false},
+		{"series_id_string", "a", "tool_capabilities/counter", "collected", `{"key_type":0,"series_id":"8"}`, false},
+		{"series_id_boolean", "a", "tool_capabilities/counter", "collected", `{"key_type":0,"series_id":true}`, false},
+		{"series_id_fraction", "a", "tool_capabilities/counter", "collected", `{"key_type":0,"series_id":1.5}`, false},
+		{"series_id_negative", "a", "tool_capabilities/counter", "collected", `{"key_type":0,"series_id":-1}`, false},
+		{"series_id_unsafe", "a", "tool_capabilities/counter", "collected", `{"key_type":0,"series_id":9007199254740992}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			model := &capabilitiesModelView{components: []cdf.Component{
+				{Type: cdf.ComponentType{Name: "tool_capabilities/cpu_counter", SchemaVersion: "1.0"}, RelativePath: "tool/a/0/capabilities/counter.cpu_cycles.json", AbsolutePath: writeCapabilityTestFile(t, dir, "cpu.json", `{"state":"collected","payload":{"title":"CPU Cycles","units":"cycles","bindings":[{"seriesCapabilityId":"series"}]}}`)},
+				{Type: cdf.ComponentType{Name: tc.typ, SchemaVersion: "1.0"}, RelativePath: "tool/" + tc.invocation + "/0/capabilities/series.json", AbsolutePath: writeCapabilityTestFile(t, dir, "series.json", `{"state":"`+tc.state+`","payload":`+tc.payload+`}`)},
+			}}
+			_, err := LoadRunCapabilities([]cdf.ModelView{model})
+			require.Equal(t, tc.valid, err == nil, "%v", err)
 		})
 	}
 }

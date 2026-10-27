@@ -25,14 +25,7 @@ if [ "$#" -lt 2 ]; then
 fi
 
 script_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-project_root=`$script_dir/../get-project-root.sh`
-
-# shift
-# for arg in "${@}"; do
-#   pushd "$project_root/$arg" > /dev/null
-#   bash -c "$command"
-#   popd > /dev/null
-# done
+project_root=$("$script_dir/../get-project-root.sh")
 
 # Skip any modules that don't have a go.mod file
 shift

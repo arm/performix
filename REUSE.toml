@@ -10,9 +10,8 @@ path = [
     # special cases, such as generated files, where a .license file isn't
     # appropriate.
     "core/apap-cli/tools-builtin/sysutil-timeline/tests/fixtures/**",
+    "core/apap-cli/recipes/lib/gpu-metrics/groups/*.json",
     "core/apap-engine/regressiontests/test-data/**",
-    "core/clients/go/**/*.pb.go",
-    "core/clients/go/**/*_grpc.pb.go",
     "core/robot/stdout.txt",
     "core/scripts/tpip/tools-metadata.json",
     "mise.internal.lock",

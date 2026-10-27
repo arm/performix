@@ -48,12 +48,12 @@ func useTestJSFiles(t *testing.T, files map[string]string) string {
 		require.NoError(t, os.WriteFile(filePath, []byte(source), 0o600))
 	}
 
-	originalResolveJSFilePath := resolveJSFilePath
-	resolveJSFilePath = func(_ *testing.T, relativePath string) string {
+	originalResolveSourceFilePath := resolveSourceFilePath
+	resolveSourceFilePath = func(_ *testing.T, relativePath string) string {
 		return util.CanonicalPath(filepath.Join(directory, relativePath))
 	}
 	t.Cleanup(func() {
-		resolveJSFilePath = originalResolveJSFilePath
+		resolveSourceFilePath = originalResolveSourceFilePath
 	})
 
 	return "entry.js"

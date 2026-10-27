@@ -14,6 +14,21 @@ type Factory interface {
 	GetMigrations() []Migration
 }
 
+// CapabilityInterfaceSupporter declares that a separately versioned integration
+// understands capability requests. This lets the engine reject a request
+// instead of allowing an older integration to silently ignore it.
+type CapabilityInterfaceSupporter interface {
+	CapabilityInterfaceVersion() string
+}
+
+func CapabilityInterfaceVersion(factory Factory) string {
+	supporter, ok := factory.(CapabilityInterfaceSupporter)
+	if !ok {
+		return ""
+	}
+	return supporter.CapabilityInterfaceVersion()
+}
+
 type StopSupporter interface {
 	SupportsStop() bool
 }

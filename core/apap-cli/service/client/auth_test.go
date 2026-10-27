@@ -20,8 +20,8 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/tlsconfig"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
-	"github.com/Arm-Debug/apap-cli/clients/go/authproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/authproto"
 )
 
 type noopAuthServer struct {
@@ -83,23 +83,24 @@ func TestAuthenticateWithAuthServiceFailsWhenPortClosed(t *testing.T) {
 	require.Nil(t, conn)
 }
 
-func TestAuthenticateWithAuthServiceCachesCertificate(t *testing.T) {
-	// Ensures EnsureAuthClientCertificates reuses the in-process TLS certificate for repeated
-	// calls within the same CLI instance, avoiding unnecessary regenerations.
+func TestTransportCredentialsCacheCertificate(t *testing.T) {
+	// Ensures repeated calls within the same CLI instance reuse the in-process TLS certificate.
 	tmpDir := t.TempDir()
 	t.Setenv(util.ApplyEnvPrefix("CONFIG_DIR"), tmpDir)
 	server, _ := startAuthServer(t, tmpDir, 0)
 	t.Cleanup(func() { server.GracefulStop() })
 	t.Cleanup(resetAuthClientCertificateCache)
 
-	require.NoError(t, EnsureAuthClientCertificates())
+	_, err := newTransportCredentials("localhost", true)
+	require.NoError(t, err)
 	cacheKey := filepath.Clean(filepath.Join(tmpDir, tlsDirectoryName))
 	clientCertCacheMu.Lock()
 	initial := clientCertCache[cacheKey]
 	clientCertCacheMu.Unlock()
 	require.NotNil(t, initial)
 
-	require.NoError(t, EnsureAuthClientCertificates())
+	_, err = newTransportCredentials("localhost", true)
+	require.NoError(t, err)
 	clientCertCacheMu.Lock()
 	cached := clientCertCache[cacheKey]
 	clientCertCacheMu.Unlock()
@@ -107,7 +108,7 @@ func TestAuthenticateWithAuthServiceCachesCertificate(t *testing.T) {
 	require.Equal(t, initial, cached)
 }
 
-func TestAuthenticateWithAuthServiceRegeneratesWhenAuthorityChanges(t *testing.T) {
+func TestTransportCredentialsRegenerateWhenAuthorityChanges(t *testing.T) {
 	// Verifies that the process-local cache is refreshed when the underlying root authority
 	// rotates (e.g., engine restart), so clients seamlessly pick up new credentials.
 	tmpDir := t.TempDir()
@@ -115,7 +116,8 @@ func TestAuthenticateWithAuthServiceRegeneratesWhenAuthorityChanges(t *testing.T
 	server, _ := startAuthServer(t, tmpDir, 0)
 	t.Cleanup(resetAuthClientCertificateCache)
 
-	require.NoError(t, EnsureAuthClientCertificates())
+	_, err := newTransportCredentials("localhost", true)
+	require.NoError(t, err)
 	cacheKey := filepath.Clean(filepath.Join(tmpDir, tlsDirectoryName))
 	clientCertCacheMu.Lock()
 	initial := clientCertCache[cacheKey]
@@ -140,7 +142,8 @@ func TestAuthenticateWithAuthServiceRegeneratesWhenAuthorityChanges(t *testing.T
 	_, err = manager.GenerateServerCredentials("127.0.0.1")
 	require.NoError(t, err)
 
-	require.NoError(t, EnsureAuthClientCertificates())
+	_, err = newTransportCredentials("localhost", true)
+	require.NoError(t, err)
 	clientCertCacheMu.Lock()
 	rotated := clientCertCache[cacheKey]
 	rotatedFingerprint := clientCertRootFingerprint[cacheKey]

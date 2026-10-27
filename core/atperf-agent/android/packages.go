@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 // `$ dumpsys package r` lists all system resolvers and

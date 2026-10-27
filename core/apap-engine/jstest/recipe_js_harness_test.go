@@ -39,12 +39,12 @@ func loadTestRecipe(t *testing.T, source string) *RecipeJSHarness {
 	recipePath := filepath.Join(t.TempDir(), "test.js")
 	assert.NoError(t, os.WriteFile(recipePath, []byte(minimalTestRecipe+source), 0o600))
 
-	originalResolveJSFilePath := resolveJSFilePath
-	resolveJSFilePath = func(_ *testing.T, _ string) string {
+	originalResolveSourceFilePath := resolveSourceFilePath
+	resolveSourceFilePath = func(_ *testing.T, _ string) string {
 		return recipePath
 	}
 	t.Cleanup(func() {
-		resolveJSFilePath = originalResolveJSFilePath
+		resolveSourceFilePath = originalResolveSourceFilePath
 	})
 
 	return LoadRecipe(t, "test")

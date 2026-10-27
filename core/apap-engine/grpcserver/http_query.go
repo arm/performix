@@ -5,6 +5,7 @@ package grpcserver
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,7 +95,7 @@ func (s *ApapServer) QueryIPCStream(ctx context.Context, sessionID string, sql s
 	}, nil
 }
 
-func newHTTPQueryHandler(executor httpQueryExecutor, chunkBytes int) http.Handler {
+func newHTTPQueryHandler(executor httpQueryExecutor, chunkBytes int, bearerToken string) http.Handler {
 	if chunkBytes <= 0 {
 		chunkBytes = defaultHTTPChunkBytes
 	}
@@ -104,6 +105,12 @@ func newHTTPQueryHandler(executor httpQueryExecutor, chunkBytes int) http.Handle
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		if !validBearerToken(r.Header.Get("Authorization"), bearerToken) {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeHTTPQueryError(w, http.StatusUnauthorized, errors.New("unauthorized"))
 			return
 		}
 
@@ -177,6 +184,14 @@ func newHTTPQueryHandler(executor httpQueryExecutor, chunkBytes int) http.Handle
 			"request_id":  requestID,
 		}).Info("HTTP query completed")
 	})
+}
+
+func validBearerToken(authorization, expectedToken string) bool {
+	const prefix = "Bearer "
+	if expectedToken == "" || !strings.HasPrefix(authorization, prefix) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(authorization, prefix)), []byte(expectedToken)) == 1
 }
 
 func applyCORSHeaders(w http.ResponseWriter) {

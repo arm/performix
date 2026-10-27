@@ -3,8 +3,6 @@
 
 package message
 
-//go:generate go run ../message-gen/gen_codes.go
-
 import (
 	"errors"
 	"fmt"
@@ -17,7 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 // unknownCatalogMessage is a dummy catalog message indicating there was a

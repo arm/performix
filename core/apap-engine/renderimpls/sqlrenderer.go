@@ -34,6 +34,8 @@ type sqlRendererConfig struct {
 	SQL    string                  `json:"sql"`
 	Inputs []sqlRendererPortConfig `json:"inputs"`
 	Output *sqlRendererPortConfig  `json:"output"`
+	// Materialize evaluates SQL once during initialization instead of on every query.
+	Materialize bool `json:"materialize"`
 }
 
 type SQLRenderer struct {
@@ -151,8 +153,12 @@ func (renderer *SQLRenderer) Initialize(session render.Session, resolvedDataSour
 		associatedContentIDs(session.Content()),
 	))
 
+	objectType := "VIEW"
+	if renderer.specificConfig.Materialize {
+		objectType = "TABLE"
+	}
 	//nolint:gosec
-	query := `CREATE OR REPLACE VIEW ` + sqlDoubleQuoteString(viewName) + ` AS ` + resolvedSQL
+	query := `CREATE OR REPLACE ` + objectType + ` ` + sqlDoubleQuoteString(viewName) + ` AS ` + resolvedSQL
 	if _, err := session.Database().Conn.ExecContext(context.Background(), query); err != nil {
 		return message.New(message.EngineRenderSqlRendererViewCreateFailed).WithMetadata(map[string]string{
 			"viewName": viewName,

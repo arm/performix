@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/daemon"
@@ -21,7 +23,9 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/pidfiles"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/apap-engine/tlsconfig"
+	"github.com/Arm-Debug/apap-cli/apap-engine/userdirs"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 const daemonReadinessTimeout = 10 * time.Second
@@ -39,8 +43,19 @@ type backgroundRunner struct {
 }
 
 func (s backgroundRunner) Run(config grpcserver.GrpcServerConfig) error {
+	return s.run(config, false)
+}
+
+func (s backgroundRunner) StartDaemonChild(config grpcserver.GrpcServerConfig) error {
+	return s.run(config, true)
+}
+
+func (s backgroundRunner) run(config grpcserver.GrpcServerConfig, daemonChild bool) error {
 	apapExe := os.Args[0]
 	args := append([]string{"daemon", "start", "--block"}, serverConfigToArgs(config)...)
+	if daemonChild {
+		args = append(args, "--daemon-child")
+	}
 	process, err := s.runCommand(apapExe, args...)
 	if err != nil {
 		return message.New(message.CliServiceServerCannotStartNewServer).WithCause(err)
@@ -98,7 +113,18 @@ func deleteStartedDaemonPidFile(pid int, host string, port int) error {
 }
 
 func waitForDaemonReady(config grpcserver.GrpcServerConfig) error {
-	conn, err := grpcconnection.Connect(daemonReadinessHost(config.Host), config.Port, daemonReadinessTimeout, nil)
+	host := daemonReadinessHost(config.Host)
+	tlsCredentials, err := newDaemonReadinessCredentials(config.ConfigDirectory, config.Host)
+	if err != nil {
+		return err
+	}
+	conn, err := grpcconnection.Connect(
+		host,
+		config.Port,
+		daemonReadinessTimeout,
+		nil,
+		grpc.WithTransportCredentials(tlsCredentials),
+	)
 	if err != nil {
 		return err
 	}
@@ -108,6 +134,34 @@ func waitForDaemonReady(config grpcserver.GrpcServerConfig) error {
 	defer cancel()
 	_, err = apapproto.NewApapClient(conn).GetVersion(ctx, &emptypb.Empty{})
 	return err
+}
+
+func newDaemonReadinessCredentials(configDir string, host string) (credentials.TransportCredentials, error) {
+	if configDir == "" {
+		var err error
+		configDir, err = userdirs.ConfigDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), daemonReadinessTimeout)
+	defer cancel()
+	if err := tlsconfig.WaitForAuthority(ctx, configDir, tlsconfig.DefaultPollInterval); err != nil {
+		return nil, err
+	}
+	manager, err := tlsconfig.NewManager(configDir)
+	if err != nil {
+		return nil, err
+	}
+	rootPEM, err := manager.RootCertificatePEM()
+	if err != nil {
+		return nil, err
+	}
+	clientCertificate, err := manager.GenerateClientCertificate("daemon readiness client")
+	if err != nil {
+		return nil, err
+	}
+	return tlsconfig.NewClientCredentials(host, rootPEM, clientCertificate)
 }
 
 func daemonReadinessHost(host string) string {
@@ -125,7 +179,6 @@ func serverConfigToArgs(config grpcserver.GrpcServerConfig) []string {
 	args := []string{
 		"--server-hostname", config.Host,
 		"--server-port", fmt.Sprint(config.Port),
-		"--auth-port", fmt.Sprint(config.AuthPort),
 		"--http-port", fmt.Sprint(config.HttpPort),
 		"--http-chunk-bytes", fmt.Sprint(config.HttpChunkBytes),
 		"--jobs", fmt.Sprint(config.ParallelJobs),
@@ -134,8 +187,10 @@ func serverConfigToArgs(config grpcserver.GrpcServerConfig) []string {
 		"--log-file", fmt.Sprint(config.LogPath),
 		"--deployment-tools-dir", fmt.Sprint(config.DeploymentToolsDir),
 		"--adb-path", fmt.Sprint(config.ADBPath),
-		fmt.Sprintf("--enable-render-db-sandbox=%t", config.EnableRenderDBSandbox),
-		fmt.Sprintf("--enable-jfr-capture=%t", config.EnableJfrCapture),
+	}
+	// The child reads the same YAML file and inherits the parent's environment.
+	if configFile := viper.ConfigFileUsed(); configFile != "" {
+		args = append(args, "--config", configFile)
 	}
 	return args
 }

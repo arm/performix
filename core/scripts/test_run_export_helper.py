@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,7 +24,7 @@ class RunCliTests(unittest.TestCase):
         with patch.object(helper.subprocess, "run", return_value=fake_process) as mock_run:
             result = helper.run_cli(["x"], Path("/tmp"))
         self.assertIs(result, fake_process)
-        mock_run.assert_called_once_with(["x"], cwd=Path("/tmp"), capture_output=True, text=True)
+        mock_run.assert_called_once_with(["x"], cwd=Path("/tmp"), env=None, timeout=None, capture_output=True, text=True)
 
     def test_run_cli_failure_includes_context(self):
         fake_process = CompletedProcess(args=["x"], returncode=7, stdout="out", stderr="err")
@@ -33,6 +34,32 @@ class RunCliTests(unittest.TestCase):
         self.assertIn("exit code 7", str(ctx.exception))
         self.assertIn("STDOUT:\nout", str(ctx.exception))
         self.assertIn("STDERR:\nerr", str(ctx.exception))
+
+
+class ImportRunTests(unittest.TestCase):
+    def test_import_and_source_update_use_selected_environment_and_timeout(self):
+        cli, archive, source = Path("/tmp/apx"), Path("fixture.zip"), Path("source")
+        env = {"APXD_CONFIG_DIR": "private"}
+        result = CompletedProcess([], 0, stdout='{"data":{"new_id":{"value":"run-123"}}}')
+        with patch.object(helper.subprocess, "run", return_value=result) as run:
+            run_id = helper.import_run(cli, archive, env=env, timeout=120)
+            helper.update_run_source(cli, run_id, source, env=env, timeout=120)
+        self.assertEqual(run_id, "run-123")
+        self.assertEqual([call.args[0] for call in run.call_args_list], [
+            [str(cli), "run", "import", str(archive), "--json"],
+            [str(cli), "run", "update", "run-123", "--source", str(source)],
+        ])
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs, dict(cwd=cli.parent, env=env, timeout=120, capture_output=True, text=True))
+
+    def test_import_rejects_invalid_json_and_missing_run_id(self):
+        outputs = ["not json", "null", "{}"] + [
+            json.dumps({"data": {"new_id": {"value": value}}}) for value in (None, "", 123)
+        ]
+        for output in outputs:
+            with self.subTest(output=output), patch.object(helper, "run_cli", return_value=CompletedProcess([], 0, stdout=output)):
+                with self.assertRaisesRegex(ValueError, "apx run import --json output"):
+                    helper.import_run(Path("apx"), Path("fixture.zip"))
 
 
 class ParseRecipeRunIDTests(unittest.TestCase):

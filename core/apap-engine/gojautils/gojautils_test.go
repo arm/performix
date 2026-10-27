@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/eventloop"
@@ -682,4 +684,41 @@ func TestAsyncForAwait(t *testing.T) {
 		assert.Equal(t, expectedMsg.Metadata(), msgErr.Metadata())
 		assert.Equal(t, expectedMsg.Reason(), msgErr.Reason())
 	})
+}
+
+func TestAsyncIteratorUTF8(t *testing.T) {
+	for _, input := range []string{"é€😀", strings.Repeat("a", 4095) + "é€😀", "invalid: \xff", "truncated: \xe2\x82", ""} {
+		for _, mode := range []string{"normal", "one byte", "data with EOF"} {
+			t.Run(fmt.Sprintf("length=%d/%s", len(input), mode), func(t *testing.T) {
+				var reader io.Reader = strings.NewReader(input)
+				switch mode {
+				case "one byte":
+					reader = iotest.OneByteReader(reader)
+				case "data with EOF":
+					reader = iotest.DataErrReader(reader)
+				}
+				loop := eventloop.NewEventLoop()
+				var vm *goja.Runtime
+				loop.Run(func(r *goja.Runtime) { vm = r })
+				ah := AsyncHelper{Loop: loop, Vm: vm, Ctx: context.Background()}
+				iterator, err := ah.RegisterAsyncIterator(vm, reader)
+				require.NoError(t, err)
+				require.NoError(t, vm.Set("asyncIt", iterator))
+				_, err = vm.RunString(InjectAsyncHelpers(`
+					out = [];
+					async function testFunc() {
+						await forAwait(asyncIt, chunk => out.push(chunk));
+						joined = out.join('');
+					}
+				`))
+				require.NoError(t, err)
+				testFunc := vm.Get("testFunc").Export().(func(goja.FunctionCall) goja.Value)
+				ah.StartLoop()
+				_, err = ah.CallScriptedFunction(testFunc, nil)
+				ah.StopLoop()
+				require.NoError(t, err)
+				assert.Equal(t, string([]rune(input)), vm.Get("joined").String())
+			})
+		}
+	}
 }

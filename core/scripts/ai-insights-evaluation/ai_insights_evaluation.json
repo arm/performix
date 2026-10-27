@@ -25,8 +25,8 @@
       "rubric": "rubrics/test_case_01.md",
       "performance_thresholds": {
         "duration_seconds": 35,
-        "input_tokens": 59000,
-        "output_tokens": 1800
+        "input_tokens": 70800,
+        "output_tokens": 1032
       }
     },
     {
@@ -37,8 +37,8 @@
       "rubric": "rubrics/test_case_02.md",
       "performance_thresholds": {
         "duration_seconds": 38,
-        "input_tokens": 94000,
-        "output_tokens": 2000
+        "input_tokens": 112800,
+        "output_tokens": 1080
       }
     },
     {
@@ -49,8 +49,8 @@
       "rubric": "rubrics/test_case_03.md",
       "performance_thresholds": {
         "duration_seconds": 41,
-        "input_tokens": 96000,
-        "output_tokens": 2000
+        "input_tokens": 115200,
+        "output_tokens": 984
       }
     },
     {
@@ -61,8 +61,8 @@
       "rubric": "rubrics/test_case_04.md",
       "performance_thresholds": {
         "duration_seconds": 56,
-        "input_tokens": 140000,
-        "output_tokens": 2500
+        "input_tokens": 168000,
+        "output_tokens": 1320
       }
     },
     {
@@ -73,8 +73,8 @@
       "rubric": "rubrics/test_case_05.md",
       "performance_thresholds": {
         "duration_seconds": 43,
-        "input_tokens": 98000,
-        "output_tokens": 2000
+        "input_tokens": 117600,
+        "output_tokens": 1440
       }
     },
     {
@@ -92,8 +92,8 @@
       "rubric": "rubrics/test_case_07.md",
       "performance_thresholds": {
         "duration_seconds": 43,
-        "input_tokens": 110000,
-        "output_tokens": 2300
+        "input_tokens": 132000,
+        "output_tokens": 1560
       }
     },
     {
@@ -104,8 +104,8 @@
       "rubric": "rubrics/test_case_08.md",
       "performance_thresholds": {
         "duration_seconds": 60,
-        "input_tokens": 110000,
-        "output_tokens": 2600
+        "input_tokens": 132000,
+        "output_tokens": 1440
       }
     },
     {
@@ -116,8 +116,8 @@
       "rubric": "rubrics/test_case_09.md",
       "performance_thresholds": {
         "duration_seconds": 64,
-        "input_tokens": 210000,
-        "output_tokens": 3300
+        "input_tokens": 252000,
+        "output_tokens": 1800
       }
     },
     {
@@ -128,8 +128,8 @@
       "rubric": "rubrics/test_case_10.md",
       "performance_thresholds": {
         "duration_seconds": 39,
-        "input_tokens": 92000,
-        "output_tokens": 1900
+        "input_tokens": 110400,
+        "output_tokens": 1008
       }
     },
     {
@@ -147,8 +147,8 @@
       "rubric": "rubrics/test_case_12.md",
       "performance_thresholds": {
         "duration_seconds": 43,
-        "input_tokens": 97000,
-        "output_tokens": 2100
+        "input_tokens": 116400,
+        "output_tokens": 1200
       }
     },
     {
@@ -159,8 +159,8 @@
       "rubric": "rubrics/test_case_13.md",
       "performance_thresholds": {
         "duration_seconds": 51,
-        "input_tokens": 110000,
-        "output_tokens": 2700
+        "input_tokens": 132000,
+        "output_tokens": 1560
       }
     },
     {
@@ -195,8 +195,8 @@
       "rubric": "rubrics/test_case_16.md",
       "performance_thresholds": {
         "duration_seconds": 53,
-        "input_tokens": 190000,
-        "output_tokens": 2600
+        "input_tokens": 228000,
+        "output_tokens": 1440
       },
       "recipe_params": ["collect_java_stacks=true"]
     },
@@ -208,8 +208,8 @@
       "rubric": "rubrics/test_case_17.md",
       "performance_thresholds": {
         "duration_seconds": 68,
-        "input_tokens": 120000,
-        "output_tokens": 3500
+        "input_tokens": 144000,
+        "output_tokens": 1440
       },
       "recipe_params": ["collect_java_stacks=true"]
     },
@@ -221,8 +221,8 @@
       "rubric": "rubrics/test_case_18.md",
       "performance_thresholds": {
         "duration_seconds": 51,
-        "input_tokens": 120000,
-        "output_tokens": 2600
+        "input_tokens": 144000,
+        "output_tokens": 1560
       },
       "recipe_params": ["collect_java_stacks=true"]
     },
@@ -237,13 +237,11 @@
     {
       "id": "test_case_20",
       "summary": "Java heap-constrained cache churn",
-      "acts": ["act3"],
+      "acts": ["act2"],
       "run_artifact": "test_case_20/latest.zip",
       "rubric": "rubrics/test_case_20.md",
-      "expected_failures": {
-        "expected_failure": true,
-        "reason": "Known analysis limitation: the profile clearly shows cache rebuild work under a constrained heap, but current model/context combinations do not yet infer that increasing the JVM heap is the primary remediation."
-      },
+      "evaluation_modes": ["performix_mcp_run_query"],
+      "prerecord": {"enable_jfr_capture": true},
       "recipe_params": ["collect_java_stacks=true"]
     },
     {
@@ -323,8 +321,8 @@
       "rubric": "rubrics/test_case_28.md",
       "performance_thresholds": {
         "duration_seconds": 34,
-        "input_tokens": 55000,
-        "output_tokens": 1800
+        "input_tokens": 66000,
+        "output_tokens": 768
       },
       "recipe_params": ["collect_dotnet_stacks=true"]
     },
@@ -723,6 +721,52 @@
       "acts": ["act2"],
       "run_artifact": "test_case_70/latest.zip",
       "rubric": "rubrics/test_case_70.md"
+    },
+    {
+      "id": "pathways_01",
+      "summary": "Cpp suspected CPU hotspot and controlled source fix",
+      "acts": ["act4"],
+      "run_artifact": "test_case_02/latest.zip",
+      "rubric": "rubrics/pathways_01.md",
+      "mcp_prompt": "The workload `./ai_insights_tests/build-release/test_case_02` is too slow. Treat the slowness as a suspected CPU-side bottleneck. Edit workload source code to reduce its runtime by at least 50% while preserving the checksum.",
+      "pathways_execution": {
+        "mode": "host_ssh",
+        "agent_timeout_seconds": 300,
+        "workload_source": {
+          "repository": "https://github.com/Arm-Debug/performix-workloads.git",
+          "branch": "main"
+        }
+      }
+    },
+    {
+      "id": "test_case_71",
+      "summary": "Java temporary allocation and GC pressure",
+      "acts": ["act2"],
+      "run_artifact": "test_case_71/latest.zip",
+      "rubric": "rubrics/test_case_71.md",
+      "evaluation_modes": ["performix_mcp_run_query"],
+      "prerecord": {"timeout_seconds": 60, "enable_jfr_capture": true},
+      "recipe_params": ["collect_java_stacks=true"]
+    },
+    {
+      "id": "test_case_72",
+      "summary": "Java per-unit explicit GC pauses",
+      "acts": ["act1"],
+      "run_artifact": "test_case_72/latest.zip",
+      "rubric": "rubrics/test_case_72.md",
+      "evaluation_modes": ["performix_mcp_run_query"],
+      "prerecord": {"timeout_seconds": 60, "enable_jfr_capture": true},
+      "recipe_params": ["collect_java_stacks=true"]
+    },
+    {
+      "id": "test_case_73",
+      "summary": "Java retention of processed data",
+      "acts": ["act2"],
+      "run_artifact": "test_case_73/latest.zip",
+      "rubric": "rubrics/test_case_73.md",
+      "evaluation_modes": ["performix_mcp_run_query"],
+      "prerecord": {"timeout_seconds": 60, "enable_jfr_capture": true},
+      "recipe_params": ["collect_java_stacks=true"]
     }
   ]
 }

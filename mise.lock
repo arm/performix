@@ -44,82 +44,261 @@ checksum = "sha256:82c20fbd19ac62073b8ecf89e026fbd209f702a2922106e4ff2ed6934d193
 url = "https://github.com/go-task/task/releases/download/v3.50.0/task_windows_amd64.zip"
 url_api = "https://api.github.com/repos/go-task/task/releases/assets/395680600"
 
-[[tools."github:protocolbuffers/protobuf"]]
-version = "23.4"
-backend = "github:protocolbuffers/protobuf"
+[[tools."github:niXman/mingw-builds-binaries"]]
+version = "15.2.0-rt_v13-rev1"
+backend = "github:niXman/mingw-builds-binaries"
 
-[tools."github:protocolbuffers/protobuf"."platforms.linux-arm64"]
-url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-aarch_64.zip"
-url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884195"
+[tools."github:niXman/mingw-builds-binaries".options]
+asset_pattern = "x86_64-15.2.0-release-posix-seh-ucrt-rt_v13-rev1.7z"
 
-[tools."github:protocolbuffers/protobuf"."platforms.linux-arm64-musl"]
-url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-aarch_64.zip"
-url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884195"
-
-[tools."github:protocolbuffers/protobuf"."platforms.linux-x64"]
-url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-x86_64.zip"
-url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884202"
-
-[tools."github:protocolbuffers/protobuf"."platforms.linux-x64-musl"]
-url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-x86_64.zip"
-url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884202"
-
-[tools."github:protocolbuffers/protobuf"."platforms.macos-arm64"]
-checksum = "blake3:bfbde8becc7226a0d0f889f9a05329564278ee1e9885d45d278ada4de07ddf88"
-url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-osx-aarch_64.zip"
-url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884203"
-
-[tools."github:protocolbuffers/protobuf"."platforms.macos-x64"]
-url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-osx-x86_64.zip"
-url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884205"
-
-[tools."github:protocolbuffers/protobuf"."platforms.windows-arm64"]
-url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-win32.zip"
-url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884207"
-
-[tools."github:protocolbuffers/protobuf"."platforms.windows-x64"]
-url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-win32.zip"
-url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884207"
+[tools."github:niXman/mingw-builds-binaries"."platforms.windows-x64"]
+checksum = "sha256:029bd02b5bce7c10fd9476165b3fe178239fe1838ad62516b5c3e0921bb283cf"
+url = "https://github.com/niXman/mingw-builds-binaries/releases/download/15.2.0-rt_v13-rev1/x86_64-15.2.0-release-posix-seh-ucrt-rt_v13-rev1.7z"
+url_api = "https://api.github.com/repos/niXman/mingw-builds-binaries/releases/assets/358709844"
 
 [[tools.go]]
-version = "1.27.0"
+version = "1.27.2"
 backend = "core:go"
 
 [tools.go."platforms.linux-arm64"]
-checksum = "sha256:51798d2c42d0e1c6ed7fd9f48728b4193abac9e8aad6dbac2fe96a81f5909bda"
-url = "https://dl.google.com/go/go1.27.0.linux-arm64.tar.gz"
+checksum = "sha256:94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8"
+url = "https://dl.google.com/go/go1.27.2.linux-arm64.tar.gz"
 
 [tools.go."platforms.linux-arm64-musl"]
-checksum = "sha256:51798d2c42d0e1c6ed7fd9f48728b4193abac9e8aad6dbac2fe96a81f5909bda"
-url = "https://dl.google.com/go/go1.27.0.linux-arm64.tar.gz"
+checksum = "sha256:94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8"
+url = "https://dl.google.com/go/go1.27.2.linux-arm64.tar.gz"
 
 [tools.go."platforms.linux-x64"]
-checksum = "sha256:675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685"
-url = "https://dl.google.com/go/go1.27.0.linux-amd64.tar.gz"
+checksum = "sha256:ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"
+url = "https://dl.google.com/go/go1.27.2.linux-amd64.tar.gz"
 
 [tools.go."platforms.linux-x64-musl"]
-checksum = "sha256:675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685"
-url = "https://dl.google.com/go/go1.27.0.linux-amd64.tar.gz"
+checksum = "sha256:ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"
+url = "https://dl.google.com/go/go1.27.2.linux-amd64.tar.gz"
 
 [tools.go."platforms.macos-arm64"]
-checksum = "sha256:90493b3bbd5e10f91d12153198bf1994fd756399b4fec93b49b0c6e2acdeeb3e"
-url = "https://dl.google.com/go/go1.27.0.darwin-arm64.tar.gz"
+checksum = "sha256:76812b213b1b2302c978d28fa52fa92d541704b9e7d9d5db8002c50e4018c4c5"
+url = "https://dl.google.com/go/go1.27.2.darwin-arm64.tar.gz"
 
 [tools.go."platforms.macos-x64"]
-checksum = "sha256:d3314e25496e4381d71a5c51d2907e7af655d199f6780b549f015bd85fef4986"
-url = "https://dl.google.com/go/go1.27.0.darwin-amd64.tar.gz"
+checksum = "sha256:587b59182488b23aa6e5fc25110405a3e0e5b38ed2f5b2f46ed13c32aee356fe"
+url = "https://dl.google.com/go/go1.27.2.darwin-amd64.tar.gz"
 
 [tools.go."platforms.windows-arm64"]
-checksum = "sha256:6e0156b9788209931dd340fadc04171ce15063c17b51c92e7b86b51109626e90"
-url = "https://dl.google.com/go/go1.27.0.windows-arm64.zip"
+checksum = "sha256:5c4b294f23b558619ae8a4aa94d023e3bca03f52c8398bb41b9026002b0013de"
+url = "https://dl.google.com/go/go1.27.2.windows-arm64.zip"
 
 [tools.go."platforms.windows-x64"]
-checksum = "sha256:f0c0a0d33ba94f4d2c5dbc887334ce678b21813504ddb3aafcb06e60a5a667c4"
-url = "https://dl.google.com/go/go1.27.0.windows-amd64.zip"
+checksum = "sha256:1314008898bd40df77af4b014f777f08873dbdfbcd3d92308728ee03304fe04f"
+url = "https://dl.google.com/go/go1.27.2.windows-amd64.zip"
+
+[[tools.goreleaser]]
+version = "2.18.1"
+backend = "aqua:goreleaser/goreleaser"
+
+[tools.goreleaser."platforms.linux-arm64"]
+checksum = "sha256:93dba7614308e167158bd26978e8275971fd4b9147e7f3c687a64f5939d42d27"
+url = "https://github.com/goreleaser/goreleaser/releases/download/v2.18.1/goreleaser_Linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/goreleaser/goreleaser/releases/assets/546377096"
+provenance = "github-attestations"
+
+[tools.goreleaser."platforms.linux-arm64-musl"]
+checksum = "sha256:93dba7614308e167158bd26978e8275971fd4b9147e7f3c687a64f5939d42d27"
+url = "https://github.com/goreleaser/goreleaser/releases/download/v2.18.1/goreleaser_Linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/goreleaser/goreleaser/releases/assets/546377096"
+provenance = "github-attestations"
+
+[tools.goreleaser."platforms.linux-x64"]
+checksum = "sha256:0c6122af0ad8fd65638889bf7d3757148b2f80eeff9f079682f0655df66ec8e8"
+url = "https://github.com/goreleaser/goreleaser/releases/download/v2.18.1/goreleaser_Linux_x86_64.tar.gz"
+url_api = "https://api.github.com/repos/goreleaser/goreleaser/releases/assets/546377081"
+provenance = "github-attestations"
+
+[tools.goreleaser."platforms.linux-x64-musl"]
+checksum = "sha256:0c6122af0ad8fd65638889bf7d3757148b2f80eeff9f079682f0655df66ec8e8"
+url = "https://github.com/goreleaser/goreleaser/releases/download/v2.18.1/goreleaser_Linux_x86_64.tar.gz"
+url_api = "https://api.github.com/repos/goreleaser/goreleaser/releases/assets/546377081"
+provenance = "github-attestations"
+
+[tools.goreleaser."platforms.macos-arm64"]
+checksum = "sha256:d0af1f86c439a59ab06c54c505f66fea1a166093dc91a7c0c8aebe3da1cc13b7"
+url = "https://github.com/goreleaser/goreleaser/releases/download/v2.18.1/goreleaser_Darwin_all.tar.gz"
+url_api = "https://api.github.com/repos/goreleaser/goreleaser/releases/assets/546377101"
+provenance = "github-attestations"
+
+[tools.goreleaser."platforms.macos-x64"]
+checksum = "sha256:d0af1f86c439a59ab06c54c505f66fea1a166093dc91a7c0c8aebe3da1cc13b7"
+url = "https://github.com/goreleaser/goreleaser/releases/download/v2.18.1/goreleaser_Darwin_all.tar.gz"
+url_api = "https://api.github.com/repos/goreleaser/goreleaser/releases/assets/546377101"
+provenance = "github-attestations"
+
+[tools.goreleaser."platforms.windows-arm64"]
+checksum = "sha256:e1d1d8fc468ec8ee182b9489fec15a5e6d5c5991f1694039d4b0089ece944c23"
+url = "https://github.com/goreleaser/goreleaser/releases/download/v2.18.1/goreleaser_Windows_arm64.zip"
+url_api = "https://api.github.com/repos/goreleaser/goreleaser/releases/assets/546377150"
+provenance = "github-attestations"
+
+[tools.goreleaser."platforms.windows-x64"]
+checksum = "sha256:dbb3112f619c4827311b726b3c98047bce69af1ecee99984d55d450c04c471fc"
+url = "https://github.com/goreleaser/goreleaser/releases/download/v2.18.1/goreleaser_Windows_x86_64.zip"
+url_api = "https://api.github.com/repos/goreleaser/goreleaser/releases/assets/546377158"
+provenance = "github-attestations"
+
+[[tools.mockery]]
+version = "3.8.1"
+backend = "aqua:vektra/mockery"
+
+[tools.mockery."platforms.linux-arm64"]
+checksum = "sha256:d1f481f3a6e9868dd3ad65da265238ee109ab3a5dd7508958d5811953696f452"
+url = "https://github.com/vektra/mockery/releases/download/v3.8.1/mockery_3.8.1_Linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/vektra/mockery/releases/assets/632915757"
+
+[tools.mockery."platforms.linux-arm64-musl"]
+checksum = "sha256:d1f481f3a6e9868dd3ad65da265238ee109ab3a5dd7508958d5811953696f452"
+url = "https://github.com/vektra/mockery/releases/download/v3.8.1/mockery_3.8.1_Linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/vektra/mockery/releases/assets/632915757"
+
+[tools.mockery."platforms.linux-x64"]
+checksum = "sha256:953c7d38b58dd6398b1c595f27caf8bbf27e9b733b49c404d2e124e86d2ae72a"
+url = "https://github.com/vektra/mockery/releases/download/v3.8.1/mockery_3.8.1_Linux_x86_64.tar.gz"
+url_api = "https://api.github.com/repos/vektra/mockery/releases/assets/632915756"
+
+[tools.mockery."platforms.linux-x64-musl"]
+checksum = "sha256:953c7d38b58dd6398b1c595f27caf8bbf27e9b733b49c404d2e124e86d2ae72a"
+url = "https://github.com/vektra/mockery/releases/download/v3.8.1/mockery_3.8.1_Linux_x86_64.tar.gz"
+url_api = "https://api.github.com/repos/vektra/mockery/releases/assets/632915756"
+
+[tools.mockery."platforms.macos-arm64"]
+checksum = "sha256:303a794484243906b37da0c37056f974bf94278c2e10d7b1372e6bd53a2d5034"
+url = "https://github.com/vektra/mockery/releases/download/v3.8.1/mockery_3.8.1_Darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/vektra/mockery/releases/assets/632915806"
+
+[tools.mockery."platforms.macos-x64"]
+checksum = "sha256:6882331344e946268b304dce042b01371a0213a896536413be8abe49d532ca6f"
+url = "https://github.com/vektra/mockery/releases/download/v3.8.1/mockery_3.8.1_Darwin_x86_64.tar.gz"
+url_api = "https://api.github.com/repos/vektra/mockery/releases/assets/632915746"
+
+[tools.mockery."platforms.windows-arm64"]
+checksum = "sha256:b51f69bea2b14562acd8ba4981f2732c03a1378d83a7d6b1b41042e74fffc3ef"
+url = "https://github.com/vektra/mockery/releases/download/v3.8.1/mockery_3.8.1_Windows_arm64.tar.gz"
+url_api = "https://api.github.com/repos/vektra/mockery/releases/assets/632915804"
+
+[tools.mockery."platforms.windows-x64"]
+checksum = "sha256:7a7458756e9d7bce5f9936b7a63394000f3affa751b9740e65350c4bdcb627dc"
+url = "https://github.com/vektra/mockery/releases/download/v3.8.1/mockery_3.8.1_Windows_x86_64.tar.gz"
+url_api = "https://api.github.com/repos/vektra/mockery/releases/assets/632915759"
 
 [[tools."npm:@modelcontextprotocol/inspector"]]
 version = "2.6.0"
 backend = "npm:@modelcontextprotocol/inspector"
+
+[[tools.protoc]]
+version = "23.4"
+backend = "aqua:protocolbuffers/protobuf/protoc"
+
+[tools.protoc."platforms.linux-arm64"]
+url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-aarch_64.zip"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884195"
+
+[tools.protoc."platforms.linux-arm64-musl"]
+url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-aarch_64.zip"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884195"
+
+[tools.protoc."platforms.linux-x64"]
+url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-x86_64.zip"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884202"
+
+[tools.protoc."platforms.linux-x64-musl"]
+url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-x86_64.zip"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884202"
+
+[tools.protoc."platforms.macos-arm64"]
+url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-osx-aarch_64.zip"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884203"
+
+[tools.protoc."platforms.macos-x64"]
+url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-osx-x86_64.zip"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884205"
+
+[tools.protoc."platforms.windows-arm64"]
+url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-win64.zip"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884208"
+
+[tools.protoc."platforms.windows-x64"]
+url = "https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-win64.zip"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf/releases/assets/115884208"
+
+[[tools.protoc-gen-go]]
+version = "1.34.2"
+backend = "aqua:protocolbuffers/protobuf-go/protoc-gen-go"
+
+[tools.protoc-gen-go."platforms.linux-arm64"]
+url = "https://github.com/protocolbuffers/protobuf-go/releases/download/v1.34.2/protoc-gen-go.v1.34.2.linux.arm64.tar.gz"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf-go/releases/assets/173109690"
+
+[tools.protoc-gen-go."platforms.linux-arm64-musl"]
+url = "https://github.com/protocolbuffers/protobuf-go/releases/download/v1.34.2/protoc-gen-go.v1.34.2.linux.arm64.tar.gz"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf-go/releases/assets/173109690"
+
+[tools.protoc-gen-go."platforms.linux-x64"]
+url = "https://github.com/protocolbuffers/protobuf-go/releases/download/v1.34.2/protoc-gen-go.v1.34.2.linux.amd64.tar.gz"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf-go/releases/assets/173109692"
+
+[tools.protoc-gen-go."platforms.linux-x64-musl"]
+url = "https://github.com/protocolbuffers/protobuf-go/releases/download/v1.34.2/protoc-gen-go.v1.34.2.linux.amd64.tar.gz"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf-go/releases/assets/173109692"
+
+[tools.protoc-gen-go."platforms.macos-arm64"]
+url = "https://github.com/protocolbuffers/protobuf-go/releases/download/v1.34.2/protoc-gen-go.v1.34.2.darwin.arm64.tar.gz"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf-go/releases/assets/173109697"
+
+[tools.protoc-gen-go."platforms.macos-x64"]
+url = "https://github.com/protocolbuffers/protobuf-go/releases/download/v1.34.2/protoc-gen-go.v1.34.2.darwin.amd64.tar.gz"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf-go/releases/assets/173109698"
+
+[tools.protoc-gen-go."platforms.windows-arm64"]
+url = "https://github.com/protocolbuffers/protobuf-go/releases/download/v1.34.2/protoc-gen-go.v1.34.2.windows.arm64.zip"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf-go/releases/assets/173109681"
+
+[tools.protoc-gen-go."platforms.windows-x64"]
+url = "https://github.com/protocolbuffers/protobuf-go/releases/download/v1.34.2/protoc-gen-go.v1.34.2.windows.amd64.zip"
+url_api = "https://api.github.com/repos/protocolbuffers/protobuf-go/releases/assets/173109685"
+
+[[tools.protoc-gen-go-grpc]]
+version = "1.4.0"
+backend = "aqua:grpc/grpc-go/protoc-gen-go-grpc"
+
+[tools.protoc-gen-go-grpc."platforms.linux-arm64"]
+url = "https://github.com/grpc/grpc-go/releases/download/cmd/protoc-gen-go-grpc/v1.4.0/protoc-gen-go-grpc.v1.4.0.linux.arm64.tar.gz"
+url_api = "https://api.github.com/repos/grpc/grpc-go/releases/assets/171237288"
+
+[tools.protoc-gen-go-grpc."platforms.linux-arm64-musl"]
+url = "https://github.com/grpc/grpc-go/releases/download/cmd/protoc-gen-go-grpc/v1.4.0/protoc-gen-go-grpc.v1.4.0.linux.arm64.tar.gz"
+url_api = "https://api.github.com/repos/grpc/grpc-go/releases/assets/171237288"
+
+[tools.protoc-gen-go-grpc."platforms.linux-x64"]
+url = "https://github.com/grpc/grpc-go/releases/download/cmd/protoc-gen-go-grpc/v1.4.0/protoc-gen-go-grpc.v1.4.0.linux.amd64.tar.gz"
+url_api = "https://api.github.com/repos/grpc/grpc-go/releases/assets/171237286"
+
+[tools.protoc-gen-go-grpc."platforms.linux-x64-musl"]
+url = "https://github.com/grpc/grpc-go/releases/download/cmd/protoc-gen-go-grpc/v1.4.0/protoc-gen-go-grpc.v1.4.0.linux.amd64.tar.gz"
+url_api = "https://api.github.com/repos/grpc/grpc-go/releases/assets/171237286"
+
+[tools.protoc-gen-go-grpc."platforms.macos-arm64"]
+url = "https://github.com/grpc/grpc-go/releases/download/cmd/protoc-gen-go-grpc/v1.4.0/protoc-gen-go-grpc.v1.4.0.darwin.arm64.tar.gz"
+url_api = "https://api.github.com/repos/grpc/grpc-go/releases/assets/171237289"
+
+[tools.protoc-gen-go-grpc."platforms.macos-x64"]
+url = "https://github.com/grpc/grpc-go/releases/download/cmd/protoc-gen-go-grpc/v1.4.0/protoc-gen-go-grpc.v1.4.0.darwin.amd64.tar.gz"
+url_api = "https://api.github.com/repos/grpc/grpc-go/releases/assets/171237297"
+
+[tools.protoc-gen-go-grpc."platforms.windows-arm64"]
+url = "https://github.com/grpc/grpc-go/releases/download/cmd/protoc-gen-go-grpc/v1.4.0/protoc-gen-go-grpc.v1.4.0.windows.arm64.tar.gz"
+url_api = "https://api.github.com/repos/grpc/grpc-go/releases/assets/171237287"
+
+[tools.protoc-gen-go-grpc."platforms.windows-x64"]
+url = "https://github.com/grpc/grpc-go/releases/download/cmd/protoc-gen-go-grpc/v1.4.0/protoc-gen-go-grpc.v1.4.0.windows.amd64.tar.gz"
+url_api = "https://api.github.com/repos/grpc/grpc-go/releases/assets/171237300"
 
 [[tools.python]]
 version = "3.10.20"

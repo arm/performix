@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	maps0 "maps"
 	"net"
 	"os/exec"
@@ -75,6 +76,22 @@ func TestGetErrType(t *testing.T) {
 			{
 				Err:             errors.New("who knows what this is"),
 				ExpectedErrType: UnknownErr,
+			},
+			{
+				Err:             fmt.Errorf("ssh: handshake failed: %w", &net.OpError{Op: "read", Net: "tcp", Err: connectionResetErrno}),
+				ExpectedErrType: ClosedErr,
+			},
+			{
+				Err:             fmt.Errorf("ssh: handshake failed: %w", io.EOF),
+				ExpectedErrType: ClosedErr,
+			},
+			{
+				Err:             fmt.Errorf("ssh: handshake failed: %w", io.ErrUnexpectedEOF),
+				ExpectedErrType: ClosedErr,
+			},
+			{
+				Err:             message.New(message.EngineConductorSshKeyFileNotParsableForTarget).WithCause(io.EOF),
+				ExpectedErrType: KnownHostsErr,
 			},
 		}
 

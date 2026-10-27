@@ -4,13 +4,15 @@
 package grpcserver
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/privilege"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
 )
 
 func TestAndroidSuPrivilegeProofConversion(t *testing.T) {
@@ -38,4 +40,31 @@ func TestBuildLaunchCommand(t *testing.T) {
 		expectedErr := message.New(message.AgentApiMissingCommand)
 		assert.Equal(t, expectedErr, err)
 	})
+	t.Run("executable is required", func(t *testing.T) {
+		_, err := buildLaunchCommand(&targetagentproto.StartProcessRequest{Command: []string{""}})
+
+		expectedErr := message.New(message.AgentApiMissingCommand)
+		assert.Equal(t, expectedErr, err)
+	})
+
+	invalidRequests := []struct {
+		name    string
+		request *targetagentproto.StartProcessRequest
+	}{
+		{name: "NUL executable", request: &targetagentproto.StartProcessRequest{Command: []string{"bad\x00program"}}},
+		{name: "NUL argument", request: &targetagentproto.StartProcessRequest{Command: []string{"program", "bad\x00argument"}}},
+		{name: "empty environment name", request: &targetagentproto.StartProcessRequest{Command: []string{"program"}, Environment: map[string]string{"": "value"}}},
+		{name: "equals in environment name", request: &targetagentproto.StartProcessRequest{Command: []string{"program"}, Environment: map[string]string{"A=B": "value"}}},
+		{name: "NUL environment name", request: &targetagentproto.StartProcessRequest{Command: []string{"program"}, Environment: map[string]string{"BAD\x00NAME": "value"}}},
+		{name: "NUL environment value", request: &targetagentproto.StartProcessRequest{Command: []string{"program"}, Environment: map[string]string{"NAME": "bad\x00value"}}},
+		{name: "NUL working directory", request: &targetagentproto.StartProcessRequest{Command: []string{"program"}, WorkingDirectory: "bad\x00directory"}},
+	}
+	for _, tt := range invalidRequests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildLaunchCommand(tt.request)
+			var messageError *message.MessageImpl
+			require.True(t, errors.As(err, &messageError))
+			assert.Equal(t, message.AgentApiInvalidLaunchRequest, messageError.Code())
+		})
+	}
 }

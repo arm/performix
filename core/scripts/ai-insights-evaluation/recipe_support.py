@@ -31,8 +31,7 @@ SUPPORTED_RECIPES = frozenset(
     }
 )
 RECIPE_RESTRICTED_MODES = {
-    "rest": frozenset({CODE_HOTSPOTS_RECIPE}),
-    "hackathon_mcp": frozenset({CODE_HOTSPOTS_RECIPE}),
+    "performix_mcp_run_query": frozenset({CODE_HOTSPOTS_RECIPE}),
 }
 PERFORMIX_MCP_MODE = "performix_mcp"
 PRERECORD_MODES = frozenset({"launch", "attach", "system-wide"})
@@ -116,6 +115,17 @@ ORDER BY memory_access_samples DESC, s.source_file_id
 """
 
 
+def resolve_evaluation_inputs(test_case: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    """Resolve fixture settings only for cases that use a pre-recorded run."""
+    if test_case.get("pathways_execution") and "run_artifact" not in test_case:
+        return dict(test_case)
+    return {
+        **test_case,
+        "recipe": resolve_recipe(test_case, defaults),
+        "prerecord": resolve_prerecord_config(test_case, defaults),
+    }
+
+
 def resolve_prerecord_config(test_case: dict[str, Any], defaults: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return the merged prerecord configuration with a validated profile mode."""
 
@@ -135,6 +145,12 @@ def resolve_prerecord_config(test_case: dict[str, Any], defaults: dict[str, Any]
             f"{test_case.get('id', '<missing>')!r}: {mode!r}"
         )
     config["mode"] = mode
+    enable_jfr_capture = config.get("enable_jfr_capture", False)
+    if not isinstance(enable_jfr_capture, bool):
+        raise ValueError(
+            f"prerecord enable_jfr_capture for testcase "
+            f"{test_case.get('id', '<missing>')!r} must be a boolean"
+        )
     return config
 
 

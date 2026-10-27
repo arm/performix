@@ -76,3 +76,33 @@ Run only the unit tests for this tool from this tool's root directory:
 ```shell
 go test
 ```
+
+## Counter-series validation
+
+Use `--stdout --validate-counter-series` with one CPU timeline Parquet file to
+check its schema and row values instead of converting its rows to JSON.
+Validation streams record batches and checks:
+
+- Exactly one column with each required name: `start_timestamp`,
+  `end_timestamp`, `device_no`, `thread`, and `value`.
+- Integer column types, except `value`, which also accepts floating-point types.
+- Non-null timestamps, device numbers, and values; finite numeric values; and
+  an end timestamp greater than the start timestamp for each row.
+- Non-negative device numbers within JavaScript's safe integer range.
+
+The `thread` column's type is checked, but its row values are not validated.
+Empty series are valid only when the required schema is present. Extra columns
+are allowed. This checks the file contents; it does not establish hardware
+support or coverage of every requested CPU. The tool integration checks native
+counter identities and the returned device numbers separately.
+
+The JSON summary contains `valid` and the sorted, distinct device numbers from
+valid rows, for example:
+
+```json
+{"valid":true,"device_nos":[0,1]}
+```
+
+Invalid row values produce `"valid":false` with a successful process exit; callers
+must check the flag. Missing or corrupt files and invalid schemas produce a
+nonzero exit status rather than an empty successful result.

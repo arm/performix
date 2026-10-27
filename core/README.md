@@ -25,8 +25,7 @@ The GUI follows the same model: its Electron main process invokes the CLI for co
 | [`apap-cli/`](apap-cli/) | `apx` command-line interface, engine-daemon process management, and packaged runtime content. |
 | [`apap-engine/`](apap-engine/) | Shared engine implementation, gRPC server, recipe execution, run storage, and rendering. |
 | [`atperf-agent/`](atperf-agent/) | Target-side `apx-agent` implementation for managed target operations. |
-| [`api/`](api/) | Protobuf definitions shared by the engine, agents, generated clients, and GUI. |
-| [`clients/`](clients/) | Generated client libraries and their generation configuration. |
+| [`api/`](api/) | Shared protobuf definitions, Go bindings, generated test mocks, and their generation configuration. |
 
 ### Command-line interface
 
@@ -50,6 +49,13 @@ Its main responsibilities include:
 - managing targets, sessions, tools, and collectors;
 - storing, querying, importing, exporting, and rendering runs; and
 - translating user-facing failures through the message catalogue.
+
+Logical counter capabilities are defined in
+[`apap-engine/capabilities/definitions.json`](apap-engine/capabilities/definitions.json).
+The engine embeds this catalogue and uses its IDs, component types, titles, and
+units for request, discovery, and publication validation. A new CPU counter using
+the existing schema needs a catalogue entry; a new component schema also needs a
+validator. CPU state and series-binding rules remain in `capabilities/cpu.go`.
 
 The renderer regression suite under [`apap-engine/regressiontests/`](apap-engine/regressiontests/) protects the engine's analysis output.
 
@@ -91,7 +97,7 @@ Commands belong in the [repository development guide](../DEVELOPMENT.md#core-wor
 
 ## Release boundary
 
-The CLI, engine, target-side agent, runtime content, and Go client form the core release surface. The engine implementation is distributed through `apx`, while `apx-agent` and collection tools are packaged as deployable target assets. The GUI records its compatible core version in the `engineVersion` field of [`../gui/package.json`](../gui/package.json).
+The CLI, engine, target-side agent, and runtime content form the core release surface. The engine implementation is distributed through `apx`, while `apx-agent` and collection tools are packaged as deployable target assets. The GUI records its compatible core version in the `engineVersion` field of [`../gui/package.json`](../gui/package.json).
 
 Engine versions follow `MAJOR.MINOR.PATCH` semantics. Between product releases, `feature` increments the minor version and `bugfix` increments the patch version for pull requests labelled `core`; other change-type labels do not affect the engine version. The highest core impact wins. See the [labelling guidance](../CONTRIBUTING.md#labels) for choosing pull-request labels.
 
@@ -103,6 +109,6 @@ Release artifacts are published from the [Arm-Debug/performix releases](https://
 
 | Guide | Use it for |
 | --- | --- |
-| [`clients/README.md`](clients/README.md) | Client generation and distribution. |
+| [`api/README.md`](api/README.md) | Shared protobuf definitions and Go bindings. |
 | [`robot/README.md`](robot/README.md) | Robot Framework functional tests. |
 | [`apap-engine/regressiontests/README.md`](apap-engine/regressiontests/README.md) | Renderer regression tests. |

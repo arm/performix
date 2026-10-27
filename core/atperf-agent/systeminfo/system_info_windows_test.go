@@ -94,12 +94,24 @@ func writeUTF16String(dst *uint16, data []uint16) {
 	copy(buf, data)
 }
 
+const helperProcessCommand = "while ($true) { Start-Sleep -Seconds 1 }"
+const helperProcessCommandLine = `powershell -NoProfile -NonInteractive -Command "while ($true) { Start-Sleep -Seconds 1 }"`
+
+func startSystemInfoTestProcess(t *testing.T) *exec.Cmd {
+	t.Helper()
+	// WMI queries can take longer than a fixed sleep on busy CI runners.
+	// Keep the process alive until the test finishes, then kill and reap it.
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", helperProcessCommand)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait() // Killing the helper normally returns an exit error.
+	})
+	return cmd
+}
+
 func TestWindowsSystemInfoListProcessesDetectsRealProcess(t *testing.T) {
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 10")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start helper process: %v", err)
-	}
-	defer cmd.Process.Kill()
+	cmd := startSystemInfoTestProcess(t)
 
 	wantPid := int32(cmd.Process.Pid)
 	found := false
@@ -114,8 +126,8 @@ func TestWindowsSystemInfoListProcessesDetectsRealProcess(t *testing.T) {
 		for _, p := range procs {
 			if p.Pid == wantPid {
 				found = true
-				assert.Equal(t, p.CmdLine, "powershell -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 10\"")
-				assert.Equal(t, p.Name, "powershell.exe")
+				assert.Equal(t, helperProcessCommandLine, p.CmdLine)
+				assert.Equal(t, "powershell.exe", p.Name)
 				fmt.Printf("process is: %v\n", p)
 				break
 			}
@@ -132,24 +144,18 @@ func TestWindowsSystemInfoListProcessesDetectsRealProcess(t *testing.T) {
 }
 
 func TestLookupProcessOwner(t *testing.T) {
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 10")
-	err := cmd.Start()
-	require.NoError(t, err)
-	defer cmd.Process.Kill()
+	cmd := startSystemInfoTestProcess(t)
 
 	owner := lookupProcessOwner(uint32(cmd.Process.Pid))
 	require.NotEmpty(t, owner)
 }
 
 func TestGetCmdLineWMI(t *testing.T) {
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 10")
-	err := cmd.Start()
-	require.NoError(t, err)
-	defer cmd.Process.Kill()
+	cmd := startSystemInfoTestProcess(t)
 
 	cmdline, err := getCmdLineWMI(uint32(cmd.Process.Pid))
 	require.NoError(t, err)
-	require.Equal(t, cmdline, "powershell -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 10\"")
+	require.Equal(t, helperProcessCommandLine, cmdline)
 }
 
 func TestGetKernelVersion(t *testing.T) {

@@ -32,8 +32,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	runmocks "github.com/Arm-Debug/apap-cli/apap-engine/run/mocks"
-	targetagentmocks "github.com/Arm-Debug/apap-cli/clients/go/mocks"
-	"github.com/Arm-Debug/apap-cli/clients/go/targetagentproto"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/api/mocks"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 )
 
 const (
@@ -130,7 +130,7 @@ func newStartTransferTestManager(
 	tm.baseWg = sync.WaitGroup{}
 	tm.transferErrors = newTransferErrors()
 	tm.transferSlots = newTransferSlotManager(int(maxInFlightTransfers))
-	tm.stageProgressTrackers = newMultiPhaseProgressTracker(func(transferPhase, int64, int64) {})
+	tm.stageProgressTrackers = newMultiPhaseProgressTracker(func(transferPhase, notifiers.StageProgress) {})
 
 	return tm, logBuf, baseCancel, mandatoryCancel
 }
@@ -360,7 +360,7 @@ func TestTransferManagerListen(t *testing.T) {
 		tm.transfersCompleteChannel = make(chan message.Message, 1)
 		tm.transferErrors = newTransferErrors()
 		tm.transferSlots = newTransferSlotManager(int(maxInFlightTransfers))
-		tm.stageProgressTrackers = newMultiPhaseProgressTracker(func(transferPhase, int64, int64) {})
+		tm.stageProgressTrackers = newMultiPhaseProgressTracker(func(transferPhase, notifiers.StageProgress) {})
 
 		return tm, logBuf
 	}
@@ -791,6 +791,8 @@ func TestTransferManagerListen(t *testing.T) {
 		assert.Equal(t, int64(len(testFileContents)), progress.Sent)
 		assert.Equal(t, int64(len(testFileContents)), progress.Max)
 		assert.Empty(t, progress.Message)
+		require.NotNil(t, progress.EstimatedRemainingSeconds)
+		assert.Zero(t, *progress.EstimatedRemainingSeconds)
 		assert.Equal(t, "progress:Retrieving recipe artifacts (required)", requireMessage(t, events, "expected phase1 progress before background listing"))
 		assert.Equal(t, "background-listed", requireMessage(t, events, "expected background listing after phase1 progress"))
 		requireMessage(t, notifier.progress, "background progress was not reported")

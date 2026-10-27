@@ -103,6 +103,47 @@ func TestListTargetsTool(t *testing.T) {
 		}, content.Targets[1])
 	})
 
+	for _, test := range []struct {
+		name                  string
+		androidTargetsEnabled bool
+		expectedNames         []string
+	}{
+		{name: "filters Android targets when disabled", expectedNames: []string{"alpha"}},
+		{name: "includes Android targets when enabled", androidTargetsEnabled: true, expectedNames: []string{"alpha", "phone"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			targets := &targetservice.MockTargetManager{}
+			targets.On("ReadTargetConfig").Return(&engine_target.TargetConfig{
+				Default: "phone",
+				Targets: map[string]engine_target.Target{
+					"alpha": newTestTarget("10.0.0.1"),
+					"phone": &engine_target.AndroidTarget{SerialNumber: "device-123"},
+				},
+			}, nil).Once()
+			tool := ListTargetsTool{AndroidTargetsEnabled: test.androidTargetsEnabled}
+			clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Targets: targets}, tool.Register)
+			defer clientSession.Close()
+			defer serverSession.Close()
+
+			result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "list_targets"})
+
+			require.NoError(t, err)
+			require.False(t, result.IsError)
+			require.Len(t, result.Content, 1)
+			text, ok := result.Content[0].(*mcp.TextContent)
+			require.True(t, ok)
+			var content mcpTargetsResult
+			require.NoError(t, json.Unmarshal([]byte(text.Text), &content))
+			assert.Equal(t, len(test.expectedNames), content.TotalTargets)
+			actualNames := make([]string, 0, len(content.Targets))
+			for _, listed := range content.Targets {
+				actualNames = append(actualNames, listed.Name)
+			}
+			assert.Equal(t, test.expectedNames, actualNames)
+		})
+	}
+
 	t.Run("limits and offsets targets", func(t *testing.T) {
 		ctx := context.Background()
 		targets := &targetservice.MockTargetManager{}
@@ -228,7 +269,7 @@ func TestNewListTargetsResult(t *testing.T) {
 			"localhost": &engine_target.LocalTarget{},
 		}
 
-		result := newListTargetsResult(targetsMap, "beta", listTargetsInput{Limit: defaultListTargetsLimit})
+		result := newListTargetsResult(targetsMap, "beta", false, listTargetsInput{Limit: defaultListTargetsLimit})
 
 		assert.Equal(t, 3, result.TotalTargets)
 		require.Len(t, result.Targets, 3)
@@ -250,7 +291,7 @@ func TestNewListTargetsResult(t *testing.T) {
 			"gamma": newTestTarget("10.0.0.3"),
 		}
 
-		result := newListTargetsResult(targetsMap, "", listTargetsInput{Limit: 1, Offset: 1})
+		result := newListTargetsResult(targetsMap, "", false, listTargetsInput{Limit: 1, Offset: 1})
 
 		assert.Equal(t, 3, result.TotalTargets)
 		assert.Equal(t, 1, result.Offset)
@@ -264,7 +305,7 @@ func TestNewListTargetsResult(t *testing.T) {
 			"beta":  newTestTarget("10.0.0.2"),
 		}
 
-		result := newListTargetsResult(targetsMap, "", listTargetsInput{Limit: defaultListTargetsLimit})
+		result := newListTargetsResult(targetsMap, "", false, listTargetsInput{Limit: defaultListTargetsLimit})
 
 		require.Len(t, result.Targets, 2)
 	})
@@ -275,7 +316,7 @@ func TestNewListTargetsResult(t *testing.T) {
 			"beta":  newTestTarget("10.0.0.2"),
 		}
 
-		result := newListTargetsResult(targetsMap, "", listTargetsInput{Limit: defaultListTargetsLimit, Offset: 5})
+		result := newListTargetsResult(targetsMap, "", false, listTargetsInput{Limit: defaultListTargetsLimit, Offset: 5})
 
 		assert.Equal(t, 2, result.TotalTargets)
 		assert.NotNil(t, result.Targets)
@@ -283,7 +324,7 @@ func TestNewListTargetsResult(t *testing.T) {
 	})
 
 	t.Run("handles an empty target map", func(t *testing.T) {
-		result := newListTargetsResult(map[string]engine_target.Target{}, "", listTargetsInput{Limit: defaultListTargetsLimit})
+		result := newListTargetsResult(map[string]engine_target.Target{}, "", false, listTargetsInput{Limit: defaultListTargetsLimit})
 
 		assert.Equal(t, 0, result.TotalTargets)
 		assert.NotNil(t, result.Targets)
@@ -299,7 +340,7 @@ func TestNewListTargetsResult(t *testing.T) {
 			"bravo":   newTestTarget("10.0.0.5"),
 		}
 
-		result := newListTargetsResult(targetsMap, "", listTargetsInput{Limit: defaultListTargetsLimit})
+		result := newListTargetsResult(targetsMap, "", false, listTargetsInput{Limit: defaultListTargetsLimit})
 
 		require.Len(t, result.Targets, 5)
 		names := targetNames(result.Targets)
@@ -316,7 +357,7 @@ func TestNewListTargetsResult(t *testing.T) {
 			"bravo":   newTestTarget("10.0.0.4"),
 		}
 
-		result := newListTargetsResult(targetsMap, "", listTargetsInput{Limit: 1, Offset: 1})
+		result := newListTargetsResult(targetsMap, "", false, listTargetsInput{Limit: 1, Offset: 1})
 
 		require.Len(t, result.Targets, 1)
 		assert.Equal(t, "alpha", result.Targets[0].Name)

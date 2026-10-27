@@ -78,6 +78,7 @@ def build_payloads(
         "input_tokens",
         "output_tokens",
         "reasoning_output_tokens",
+        "mcp_tool_rounds",
         "mcp_tool_calls_succeeded",
         "mcp_tool_calls_failed",
         "mcp_tool_duration_seconds_succeeded",
@@ -101,6 +102,7 @@ def build_payloads(
         input_tokens = number(attempt.get("ai_input_tokens"))
         output_tokens = number(attempt.get("ai_output_tokens"))
         reasoning_output_tokens = number(attempt.get("ai_reasoning_output_tokens"))
+        mcp_tool_rounds = required_count(attempt, "ai_mcp_tool_rounds")
         mcp_tool_calls_succeeded = required_count(
             attempt, "ai_mcp_tool_calls_succeeded"
         )
@@ -144,6 +146,7 @@ def build_payloads(
             input_tokens,
             output_tokens,
             reasoning_output_tokens,
+            mcp_tool_rounds,
             mcp_tool_calls_succeeded,
             mcp_tool_calls_failed,
             mcp_tool_duration_seconds_succeeded,
@@ -228,7 +231,8 @@ def build_dashboard_benchmarks(report: dict[str, Any]) -> list[dict[str, Any]]:
         for metric, label, unit in (
             ("duration_seconds", "wall-clock time", "s"),
             ("input_tokens", "input tokens", "tokens"),
-            ("output_tokens", "output tokens", "tokens"),
+            ("output_tokens", "non-reasoning output tokens", "tokens"),
+            ("reasoning_output_tokens", "reasoning output tokens", "tokens"),
         ):
             value = cell(row, metric)
             if isinstance(value, (int, float)):

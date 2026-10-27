@@ -22,7 +22,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	engine_run "github.com/Arm-Debug/apap-cli/apap-engine/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 var UpdateCmd = NewUpdateCmd(client.NewAutostartClient(), run.UpdateService{})

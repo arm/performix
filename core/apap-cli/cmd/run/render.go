@@ -21,8 +21,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/clijson"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	"github.com/Arm-Debug/apap-cli/apap-engine/util"
-	"github.com/Arm-Debug/apap-cli/clients/go/apapproto"
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
 var RenderCmd = NewRenderCmd(client.NewAutostartClient(), run.RenderService{}, run.RenderService{})
@@ -129,21 +128,11 @@ func filterPreparedRender(visualizations []string, preparation *apapproto.Prepar
 		}
 	}
 
-	filteredVisualizationParameters := make(map[string]string)
-	for key, renderParamId := range preparation.VisualizationParameters {
-		vizID, _, ok := util.SplitVisualizationParameterKey(key)
-		_, matched := matchedVizIDs[vizID]
-		if ok && matched {
-			filteredVisualizationParameters[key] = renderParamId
-		}
-	}
-
 	return &apapproto.PrepareRenderResponse{
-		Renderers:               filteredRenderers,
-		Visualizations:          filteredViz,
-		CompatibilityWarning:    preparation.CompatibilityWarning,
-		RenderParameters:        preparation.RenderParameters,
-		VisualizationParameters: filteredVisualizationParameters,
+		Renderers:            filteredRenderers,
+		Visualizations:       filteredViz,
+		CompatibilityWarning: preparation.CompatibilityWarning,
+		RenderParameters:     preparation.RenderParameters,
 	}, nil
 }
 
