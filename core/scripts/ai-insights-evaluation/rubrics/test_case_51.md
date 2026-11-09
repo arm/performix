@@ -28,10 +28,11 @@ SPDX-License-Identifier: Apache-2.0
   headers do not need to remain spread across separate memory mappings.
 
 ## What The LLM Should Suggest
-- Store the frequently read headers in a packed array, or allocate tenant blocks
-  in groups from a shared memory pool.
+- Pack or gather the frequently read values into contiguous storage, group
+  allocations to reduce the translation footprint, or propose an equivalent
+  concrete layout change.
 - Larger memory pages are acceptable when separate page-sized storage must
-  remain, but packing the frequently read headers is the primary recommendation.
+  remain.
 
 ## Expected Profiling Characteristics
 - Backend Bound is the largest top-level CPU category and leads the next
@@ -47,12 +48,13 @@ SPDX-License-Identifier: Apache-2.0
 - Pass:
   - Distinguishes delays translating virtual addresses from general
     main-memory or data-cache delays.
-  - Connects the measurements to putting frequently read tenant headers on
-    separate pages.
-  - Recommends a packed header array, grouped allocation or suitable larger
-    memory pages.
+  - Connects significant DTLB walks to sparse or indirect accesses across a
+    large address-translation working set.
+  - Recommends contiguous storage for the frequently read values, grouped
+    allocation, suitable larger memory pages or an equivalent concrete change
+    that reduces the translation footprint.
 - Fail:
   - Says that the data is simply too large for the data cache.
-  - Recommends larger pages without recognising that only a small header is
-    read frequently.
+  - Recommends larger pages or generic memory tuning without identifying
+    address-translation pressure.
   - Gives generic memory-layout advice without address translation evidence.

@@ -4,7 +4,6 @@
 package insights
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,107 +21,54 @@ func TestRecipes(t *testing.T) {
 		SyscallTraceSummaryRecipeName,
 		SystemUtilizationRecipeName,
 	}, SupportedRecipeNames())
-	assert.Contains(t, GeneralGuidance(), "AI Insights Analysis Guide")
-
-	asct, ok := ForRecipe(ASCTRecipeName)
+	asct, ok := GuidanceForRecipe(ASCTRecipeName)
 	require.True(t, ok)
-	assert.Equal(t, MethodRunQuery, asct.Method)
-	assert.Contains(t, asct.Guidance, "Use `run_query`")
-	assert.Contains(t, asct.Guidance, "ASCT Query Guide")
+	assert.Contains(t, asct, "Use `run_query`")
+	assert.Contains(t, asct, "ASCT Query Guide")
 
-	cacheSharing, ok := ForRecipe(CacheSharingRecipeName)
+	cacheSharing, ok := GuidanceForRecipe(CacheSharingRecipeName)
 	require.True(t, ok)
-	assert.Equal(t, MethodRunQuery, cacheSharing.Method)
-	assert.Contains(t, cacheSharing.Guidance, "Use `run_query`")
-	assert.Contains(t, cacheSharing.Guidance, "Cache Sharing Query Guide")
+	assert.Contains(t, cacheSharing, "Use `run_query`")
+	assert.Contains(t, cacheSharing, "Cache Sharing Query Guide")
 
-	codeHotspots, ok := ForRecipe(CodeHotspotsRecipeName)
+	codeHotspots, ok := GuidanceForRecipe(CodeHotspotsRecipeName)
 	require.True(t, ok)
-	assert.Equal(t, MethodCuratedSummary, codeHotspots.Method)
-	assert.Contains(t, codeHotspots.Guidance, "Code Hotspots Evidence Guide")
-	assert.NotContains(t, strings.ToLower(codeHotspots.Guidance), "curated")
+	assert.Contains(t, codeHotspots, "Code Hotspots Query Guide")
 
-	systemUtilization, ok := ForRecipe(SystemUtilizationRecipeName)
+	systemUtilization, ok := GuidanceForRecipe(SystemUtilizationRecipeName)
 	require.True(t, ok)
-	assert.Equal(t, MethodRunQuery, systemUtilization.Method)
-	assert.Contains(t, systemUtilization.Guidance, "Use `run_query`")
-	assert.Contains(t, systemUtilization.Guidance, "cannot identify a specific function or process")
+	assert.Contains(t, systemUtilization, "Use `run_query`")
+	assert.Contains(t, systemUtilization, "cannot identify a specific function or process")
 
-	instructionMix, ok := ForRecipe(InstructionMixRecipeName)
+	instructionMix, ok := GuidanceForRecipe(InstructionMixRecipeName)
 	require.True(t, ok)
-	assert.Equal(t, MethodRunQuery, instructionMix.Method)
-	assert.Contains(t, instructionMix.Guidance, "Use `run_query`")
-	assert.Contains(t, instructionMix.Guidance, "Instruction Mix Query Guide")
+	assert.Contains(t, instructionMix, "Use `run_query`")
+	assert.Contains(t, instructionMix, "Instruction Mix Query Guide")
 
-	memoryAccess, ok := ForRecipe(MemoryAccessRecipeName)
+	memoryAccess, ok := GuidanceForRecipe(MemoryAccessRecipeName)
 	require.True(t, ok)
-	assert.Equal(t, MethodRunQuery, memoryAccess.Method)
-	assert.Contains(t, memoryAccess.Guidance, "Use `run_query`")
-	assert.Contains(t, memoryAccess.Guidance, "Memory Access Query Guide")
+	assert.Contains(t, memoryAccess, "Use `run_query`")
+	assert.Contains(t, memoryAccess, "Memory Access Query Guide")
 
-	syscallTraceSummary, ok := ForRecipe(SyscallTraceSummaryRecipeName)
+	syscallTraceSummary, ok := GuidanceForRecipe(SyscallTraceSummaryRecipeName)
 	require.True(t, ok)
-	assert.Equal(t, MethodRunQuery, syscallTraceSummary.Method)
-	assert.Contains(t, syscallTraceSummary.Guidance, "Syscall Trace Query Guide")
-	assert.Contains(t, syscallTraceSummary.Guidance, "FROM flat_table_1")
+	assert.Contains(t, syscallTraceSummary, "Syscall Trace Query Guide")
+	assert.Contains(t, syscallTraceSummary, "FROM flat_table_1")
 
-	cpuMicroarchitecture, ok := ForRecipe(CPUMicroarchitectureRecipeName)
+	cpuMicroarchitecture, ok := GuidanceForRecipe(CPUMicroarchitectureRecipeName)
 	require.True(t, ok)
-	assert.Equal(t, MethodRunQuery, cpuMicroarchitecture.Method)
-	assert.Contains(t, cpuMicroarchitecture.Guidance, "Use `run_query`")
-	assert.Contains(t, cpuMicroarchitecture.Guidance, "CPU Microarchitecture Query Guide")
+	assert.Contains(t, cpuMicroarchitecture, "Use `run_query`")
+	assert.Contains(t, cpuMicroarchitecture, "CPU Microarchitecture Query Guide")
 
 	for _, recipeName := range SupportedRecipeNames() {
-		recipe, ok := ForRecipe(recipeName)
+		recipe, ok := GuidanceForRecipe(recipeName)
 		require.True(t, ok)
-		if recipe.Method != MethodRunQuery {
-			continue
-		}
-		assert.Contains(t, recipe.Guidance, "Renderer filesystem access is disabled")
-		assert.Equal(t, 1, strings.Count(recipe.Guidance, "`read_text()`"))
+		assert.Contains(t, recipe, "AI Insights Analysis Guide")
+		assert.Contains(t, recipe, "Common `run_query` Guidance")
+		assert.Equal(t, generalAIInsightsGuidance+"\n\n"+runQueryGuidance+"\n\n"+recipes[recipeName], recipe)
 	}
 
-	_, ok = ForRecipe("unsupported_recipe")
+	guidance, ok := GuidanceForRecipe("unsupported_recipe")
 	assert.False(t, ok)
-}
-
-func TestCodeHotspotsModeFromEnvironment(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		value   string
-		want    CodeHotspotsMode
-		wantErr string
-	}{
-		{name: "unset", want: CodeHotspotsModeCurated},
-		{name: "curated", value: "curated", want: CodeHotspotsModeCurated},
-		{name: "run query", value: "run_query", want: CodeHotspotsModeRunQuery},
-		{name: "invalid", value: "unexpected", wantErr: "APXD_CODE_HOTSPOTS_AI_INSIGHTS_MODE"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(CodeHotspotsModeEnvironment, tc.value)
-			got, err := CodeHotspotsModeFromEnvironment()
-			if tc.wantErr != "" {
-				require.ErrorContains(t, err, tc.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
-func TestForRecipeWithCodeHotspotsMode(t *testing.T) {
-	curated, ok := ForRecipeWithCodeHotspotsMode(CodeHotspotsRecipeName, CodeHotspotsModeCurated)
-	require.True(t, ok)
-	assert.Equal(t, MethodCuratedSummary, curated.Method)
-
-	query, ok := ForRecipeWithCodeHotspotsMode(CodeHotspotsRecipeName, CodeHotspotsModeRunQuery)
-	require.True(t, ok)
-	assert.Equal(t, MethodRunQuery, query.Method)
-	assert.Contains(t, query.Guidance, "Code Hotspots Query Guide")
-	assert.Contains(t, query.Guidance, "Common `run_query` Guidance")
-
-	asct, ok := ForRecipeWithCodeHotspotsMode(ASCTRecipeName, CodeHotspotsModeRunQuery)
-	require.True(t, ok)
-	assert.Equal(t, MethodRunQuery, asct.Method)
+	assert.Empty(t, guidance)
 }

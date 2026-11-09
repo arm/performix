@@ -60,14 +60,28 @@ func prepareTarget(cc client.ClientConnector, targetService target.TargetManager
 		return err
 	}
 
+	if _, android := targetDefinition.(*engine_target.AndroidTarget); android && targetName == "" {
+		targetName, err = targetService.GetDefaultTargetName()
+		if err != nil {
+			return err
+		}
+	}
+	if _, android := targetDefinition.(*engine_target.AndroidTarget); android && !viper.GetBool(enableAndroidTargetsConfigKey) {
+		return message.New(message.CommonUnsupportedTargetType).WithMetadata(map[string]string{"targetType": "android"})
+	}
+
 	client, err := cc.ApapClient(serverconfig.FromViperForBackground())
 	if err != nil {
 		return err
 	}
 
-	if err := loginService.LoginToTarget(context.Background(), targetDefinition, serverconfig.FromViperForBackground()); err != nil {
-		return err
+	// Preparation establishes the Android connection without an interactive login.
+	if _, android := targetDefinition.(*engine_target.AndroidTarget); !android {
+		if err := loginService.LoginToTarget(context.Background(), targetDefinition, serverconfig.FromViperForBackground()); err != nil {
+			return err
+		}
 	}
+	client = withAndroidAddressPersistence(client, targetName, targetDefinition, targetService)
 
 	var deploymentType = apapproto.ToolDeploy_AUTO
 	if check {

@@ -20,11 +20,6 @@ to distinguish independent adjacent state from genuinely shared state.
 source. Its measurements include total, coherence, and store samples. The
 queries below resolve measurements by stable identifier rather than numeric ID.
 
-If a named table is unavailable, inspect
-`render_session.visualization_resolved_tables`. If a column is unavailable,
-inspect `duckdb_columns()` once before adapting the queries. Do not guess a
-schema.
-
 ## 1. Establish materiality
 
 First summarize all sampled lines by classification:

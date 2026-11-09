@@ -25,11 +25,12 @@ func featureDefinitions(featureFlags *featureflags.Flags) []featureDefinition {
 		defineFeature("enable-rerendering", true, &featureFlags.Rerendering),
 		defineFeature("enable-experimental-recipes", false, &featureFlags.ExperimentalRecipes),
 		defineFeature("enable-secondary-run-paths", true, &featureFlags.SecondaryRunPaths),
-		defineFeature(EnableGPURecipeConfigKey, false, &featureFlags.GPURecipe),
+		defineFeature(EnableProfilingFocusConfigKey, false, &featureFlags.ProfilingFocus),
 		defineFeature("enable-render-db-sandbox", true, &featureFlags.RenderDBSandbox),
 		defineFeature("enable-neoprof-timeline", false, &featureFlags.NeoprofTimeline),
+		defineFeature("enable-custom-pmu-capture", false, &featureFlags.CustomPMUCapture),
 		defineFeature("enable-neoprof-system-utilization", false, &featureFlags.NeoprofSystemUtilization),
-		defineFeature("enable-jfr-capture", false, &featureFlags.JfrCapture),
+		defineFeature("enable-jfr-capture", true, &featureFlags.JfrCapture),
 		defineFeature("enable-run-component-compression", true, &featureFlags.RunComponentCompression),
 	}
 }

@@ -217,7 +217,7 @@ Run CPU Microarchitecture Recipe And Extract Run ID
 
 Run Memory Access Recipe And Extract Run ID
   [Documentation]  Run memory access recipe against the test target and return a run ID
-  Run Memory Access Recipe  --workload "ls -la" --timeout 1 --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  Run Memory Access Recipe  --workload ${LAUNCH_WORKLOAD} --timeout 10 --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   The Last Command Succeeded
   ${id} =  Extract The Run ID
   The Run Exists  ${id}

@@ -19,12 +19,6 @@ const runDetailsSummaryName = "run_details"
 const runDetailsOSComponentType = "target-info-os"
 const runDetailsCPUsComponentType = "target-info-cpus"
 
-// RunDetailsSummarizer is an UnbudgetedRunSummarizer for summarizing the details of a run.
-var RunDetailsSummarizer = UnbudgetedRunSummarizer{
-	Name:      runDetailsSummaryName,
-	Summarize: SummarizeRunDetails,
-}
-
 func SummarizeRunDetails(ctx context.Context, desc *run.RunDescription, session render.Session) (RunSummary, error) {
 	payload := runDetailsPayload{
 		RunID:               desc.ID,

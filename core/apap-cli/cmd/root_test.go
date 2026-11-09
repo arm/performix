@@ -35,6 +35,8 @@ func TestFlagsDoNotConflict(t *testing.T) {
 
 	executeAndCheck(t, command, []string{"config", "-h"})
 	executeAndCheck(t, command, []string{"config", "print", "-h"})
+	executeAndCheck(t, command, []string{"config", "get", "-h"})
+	executeAndCheck(t, command, []string{"config", "set", "-h"})
 
 	executeAndCheck(t, command, []string{"daemon", "-h"})
 	executeAndCheck(t, command, []string{"daemon", "start", "-h"})
@@ -128,16 +130,17 @@ func TestInitConfigSetsDefaults(t *testing.T) {
 	cfgFile = filepath.Join(tempDir, "apx.yml")
 	t.Setenv(util.ApplyEnvPrefix("CONFIG_DIR"), tempDir)
 	t.Setenv(util.ApplyEnvPrefix("ENABLE_CMN_RECIPE"), "")
+	t.Setenv(util.ApplyEnvPrefix("TELEMETRY_ENABLED"), "")
 
 	initConfig()
 
 	assert.Equal(t, false, viper.GetBool("enable-experimental-recipes"))
 	assert.False(t, viper.GetBool(serverconfig.EnableAndroidTargetsConfigKey))
-	assert.Equal(t, false, viper.GetBool(serverconfig.EnableGPURecipeConfigKey))
 	assert.Equal(t, true, viper.GetBool("enable-render-db-sandbox"))
 	assert.Equal(t, false, viper.GetBool("enable-neoprof-timeline"))
 	assert.False(t, viper.GetBool("enable-neoprof-system-utilization"))
-	assert.Equal(t, false, viper.GetBool("enable-jfr-capture"))
+	assert.Equal(t, true, viper.GetBool("enable-jfr-capture"))
 	assert.Equal(t, true, viper.GetBool("enable-run-component-compression"))
 	assert.Equal(t, serverconfig.DefaultDaemonAutostart, viper.GetBool(serverconfig.DaemonAutostartConfigKey))
+	assert.True(t, viper.GetBool("telemetry-enabled"))
 }

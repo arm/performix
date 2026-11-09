@@ -35,6 +35,7 @@ type TargetManagerService interface {
 	RemoveAllTargets() error
 	SetDefaultTarget(name string) error
 	UpdateTarget(name string, fields *UpdateTargetFields) error
+	UpdateAndroidTargetLastKnownADBAddress(name string, serialNumber string, address string) (bool, error)
 	GetDefaultTargetName() (string, error)
 }
 
@@ -303,6 +304,36 @@ func (dm *TargetManager) GetDefaultTargetName() (string, error) {
 	}
 
 	return config.Default, nil
+}
+
+// UpdateAndroidTargetLastKnownADBAddress updates only the verified address when
+// the named target is still the Android target with the expected serial number.
+// It returns false without writing when the target has changed since it was read.
+func (dm *TargetManager) UpdateAndroidTargetLastKnownADBAddress(targetName string, serialNumber string, address string) (bool, error) {
+	config, err := dm.ReadTargetConfig()
+	if err != nil {
+		return false, err
+	}
+
+	tgt, exists := config.Targets[targetName]
+	if !exists {
+		return false, nil
+	}
+
+	android, ok := tgt.(*AndroidTarget)
+	if !ok || android.SerialNumber != serialNumber {
+		return false, nil
+	}
+
+	if android.LastKnownADBAddress != nil && *android.LastKnownADBAddress == address {
+		return true, nil
+	}
+
+	android.LastKnownADBAddress = &address
+	if err := dm.writeTargetConfig(config); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (dm *TargetManager) UpdateTarget(oldTargetName string, updateFields *UpdateTargetFields) error {

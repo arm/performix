@@ -14,7 +14,7 @@ your saved reports:
 
     .venv/bin/python build_comparison_junit.py \\
       --baseline results/history/initial/reporting/ai-insights-evaluation.xml \\
-      --comparison-mode performix_mcp_run_query \\
+      --comparison-mode performix_mcp \\
       --iteration 1-initial=results/history/initial/reporting/ai-insights-evaluation.xml \\
       --iteration 2-schema=results/history/schema/reporting/ai-insights-evaluation.xml \\
       --output results/comparison/ai-insights-evaluation.xml
@@ -24,7 +24,7 @@ your saved reports:
       --output-dir results/comparison/graphs
 
 The baseline report supplies performix_mcp observations; each iteration supplies
-performix_mcp_run_query observations. All selected modes must contain the same
+performix_mcp observations. All selected modes must contain the same
 testcase and attempt combinations. Open results/comparison/graphs/index.html
 to view the result.
 """
@@ -41,7 +41,7 @@ from junit_attempts import attempts_from_junit
 
 
 BASELINE_MODE = "performix_mcp"
-DEFAULT_COMPARISON_MODE = "performix_mcp_run_query"
+DEFAULT_COMPARISON_MODE = "performix_mcp"
 ITERATION_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 

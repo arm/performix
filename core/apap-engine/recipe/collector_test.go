@@ -232,6 +232,7 @@ func TestStoreComponent_WritesAndReturnsPath(t *testing.T) {
 }
 
 func TestCreateRun_HappyPath(t *testing.T) {
+	// Given
 	tempDir := t.TempDir()
 	runDir := filepath.Join(tempDir, "runs")
 
@@ -319,63 +320,80 @@ func TestCreateRun_HappyPath(t *testing.T) {
 		},
 	}
 
-	for _, wl := range wls {
-		t.Run(fmt.Sprintf("creates metadata correctly for %v", wl.name), func(t *testing.T) {
-			rctx.OrigWorkload = wl.wl
-			runID, release, err := creator.CreateRun(context.Background(), rc, rctx, nil)
-			require.NoError(t, err)
-			require.NotNil(t, release)
-			t.Cleanup(func() { _ = release() })
+	for _, naming := range []struct{ name, group string }{
+		{},
+		{name: "Benchmark", group: " Benchmarks "},
+		{name: "Named only"},
+		{group: "Grouped only"},
+	} {
+		for _, wl := range wls {
+			t.Run(fmt.Sprintf("creates metadata correctly for %v with name %q and group %q", wl.name, naming.name, naming.group), func(t *testing.T) {
+				// Given
+				rctx.OrigWorkload = wl.wl
+				rctx.RunName = naming.name
+				rctx.GroupName = naming.group
+				// When
+				runID, release, err := creator.CreateRun(context.Background(), rc, rctx, nil)
+				// Then
+				require.NoError(t, err)
+				require.NotNil(t, release)
+				t.Cleanup(func() { _ = release() })
 
-			assert.NotEqual(t, run.InvalidRunID, runID)
+				assert.NotEqual(t, run.InvalidRunID, runID)
 
-			// Extra assertions on run contents
-			runPath := rc.GetRunPath(runID)
-			info, err := os.Stat(runPath)
-			require.NoError(t, err)
-			assert.True(t, info.IsDir())
+				// Extra assertions on run contents
+				runPath := rc.GetRunPath(runID)
+				info, err := os.Stat(runPath)
+				require.NoError(t, err)
+				assert.True(t, info.IsDir())
 
-			// The preserved recipe should exist inside the run
-			recipeComponentPath, err := rc.GetRecipeComponentPath(runID)
-			require.NoError(t, err)
-			if assert.FileExists(t, recipeComponentPath) {
-				contents, _ := os.ReadFile(recipeComponentPath)
-				assert.Contains(t, string(contents), "test-recipe")
-			}
+				// The preserved recipe should exist inside the run
+				recipeComponentPath, err := rc.GetRecipeComponentPath(runID)
+				require.NoError(t, err)
+				if assert.FileExists(t, recipeComponentPath) {
+					contents, _ := os.ReadFile(recipeComponentPath)
+					assert.Contains(t, string(contents), "test-recipe")
+				}
 
-			// The default categorization component should exist and be listed in the manifest.
-			categorizationPath := filepath.Join(runPath, run.CategorizationFilename)
-			assert.FileExists(t, categorizationPath)
-			categorization, err := run.ReadRunCategorization(categorizationPath)
-			require.NoError(t, err)
-			assert.Equal(t, run.RunCategorization{Tags: []string{}}, *categorization)
+				// The default categorization component should exist and be listed in the manifest.
+				categorizationPath := filepath.Join(runPath, run.CategorizationFilename)
+				assert.FileExists(t, categorizationPath)
+				categorization, err := run.ReadRunCategorization(categorizationPath)
+				require.NoError(t, err)
+				assert.Equal(t, run.RunCategorization{Group: strings.TrimSpace(naming.group), Tags: []string{}}, *categorization)
 
-			manifest, err := util.ReadJSONFile[cdf.Manifest](filepath.Join(runPath, "manifest.json"))
-			require.NoError(t, err)
-			entry := manifest.Lookup(run.CategorizationFilename)
-			require.NotNil(t, entry)
-			assert.Equal(t, run.CategorizationCT(), entry.ComponentType)
+				manifest, err := util.ReadJSONFile[cdf.Manifest](filepath.Join(runPath, "manifest.json"))
+				require.NoError(t, err)
+				entry := manifest.Lookup(run.CategorizationFilename)
+				require.NotNil(t, entry)
+				assert.Equal(t, run.CategorizationCT(), entry.ComponentType)
 
-			// The run should load without error via the collection API
-			model, err := rc.LoadRun(runID)
-			require.NoError(t, err)
-			assert.NotNil(t, model)
-			assert.Equal(t, "myRecip", model.Metadata().RecipeName)
-			assert.Equal(t, map[string]any{
-				"radioParam":    "radioValue",
-				"selectParam":   []any{"option1", "option2"},
-				"inputParam":    "inputValue",
-				"checkboxParam": true,
-			}, model.Metadata().Parameters)
-			assert.Equal(t, wl.expected[0], model.Metadata().WorkloadType)
-			assert.Equal(t, wl.expected[1], model.Metadata().Cmdline)
-			assert.Equal(t, wl.expected[2], model.Metadata().Env)
-			assert.Equal(t, wl.expected[3], model.Metadata().WorkingDir)
-			assert.Equal(t, wl.expected[4], model.Metadata().UseShell)
-			assert.Equal(t, wl.expected[5], model.Metadata().Pid)
-			assert.Equal(t, wl.expected[6], model.Metadata().AndroidPackageName)
-			assert.Equal(t, wl.expected[7], model.Metadata().AndroidActivityName)
-		})
+				// The run should load without error via the collection API
+				model, err := rc.LoadRun(runID)
+				require.NoError(t, err)
+				assert.NotNil(t, model)
+				expectedName := naming.name
+				if expectedName == "" {
+					expectedName = creator.RunBuilder.GenerateRunName(meta.Name)
+				}
+				assert.Equal(t, expectedName, model.Metadata().Name)
+				assert.Equal(t, "myRecip", model.Metadata().RecipeName)
+				assert.Equal(t, map[string]any{
+					"radioParam":    "radioValue",
+					"selectParam":   []any{"option1", "option2"},
+					"inputParam":    "inputValue",
+					"checkboxParam": true,
+				}, model.Metadata().Parameters)
+				assert.Equal(t, wl.expected[0], model.Metadata().WorkloadType)
+				assert.Equal(t, wl.expected[1], model.Metadata().Cmdline)
+				assert.Equal(t, wl.expected[2], model.Metadata().Env)
+				assert.Equal(t, wl.expected[3], model.Metadata().WorkingDir)
+				assert.Equal(t, wl.expected[4], model.Metadata().UseShell)
+				assert.Equal(t, wl.expected[5], model.Metadata().Pid)
+				assert.Equal(t, wl.expected[6], model.Metadata().AndroidPackageName)
+				assert.Equal(t, wl.expected[7], model.Metadata().AndroidActivityName)
+			})
+		}
 	}
 }
 

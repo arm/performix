@@ -11,14 +11,19 @@ const {
 
 const TOOL_NAME = 'asct';
 const TOOL_DISPLAY_NAME = 'ASCT';
-const BUNDLE_VERSION = '0.7.0';
-const BUNDLE_HASH = 'dbf3ee9';
+const BUNDLE_VERSION = '0.7.1';
+const BUNDLE_HASH = '77461b3';
 const BUNDLE_DIR = `${TOOL_NAME}/${BUNDLE_VERSION}`;
 const BUNDLE_ARCHIVE_NAME = `${TOOL_NAME}-${BUNDLE_VERSION}+${BUNDLE_HASH}.tar.gz`;
 const INSTALL_DIR_NAME = `install-${BUNDLE_VERSION}+${BUNDLE_HASH}`;
+const INSTALL_SCRIPT_NAME = 'install.sh';
+const INSTALLER_INPUTS_DIR_NAME = 'installer-inputs';
+const DEPENDENCY_LOG_DIRNAME = 'dependency-logs';
 const TOOL_LOG_FILENAME = `${TOOL_NAME}.log`;
 const SETUP_LOG_DIRNAME = 'setup-logs';
+const SETUP_LOG_COMPONENT = { name: 'asct-setup-log', version: '1.0' };
 const RUN_DATA_DIRNAME = 'data';
+const INSTALLER_STATUS_MAX_LINES = 2;
 const CANCEL_INTERRUPT_GRACE_MS = 3000;
 const CANCEL_KILL_WAIT_GRACE_MS = 1500;
 const INTERRUPT_PROPAGATION_GRACE_MS = 500;
@@ -67,18 +72,46 @@ function buildBundlePath(toolsRoot) {
 }
 
 /**
+ * Build the deployed ASCT installer path.
+ *
+ * @param {string} toolsRoot
+ * @returns {string}
+ */
+function buildInstallerPath(toolsRoot) {
+  return `${toolsRoot}/${BUNDLE_DIR}/${INSTALL_SCRIPT_NAME}`;
+}
+
+/**
+ * Build paths for an isolated copy of the ASCT installer inputs.
+ *
+ * The APX deployment directory also contains the outer architecture-specific
+ * bundle archive. ASCT's installer intentionally rejects directories with more
+ * than one `asct-*.tar.gz`, so only expose the installer and inner sdist in its
+ * working directory.
+ *
+ * @param {string} installRoot
+ * @returns {{inputsDir: string, installerPath: string}}
+ */
+function buildInstallerInputPaths(installRoot) {
+  const inputsDir = `${installRoot}/${INSTALLER_INPUTS_DIR_NAME}`;
+  return {
+    inputsDir,
+    installerPath: `${inputsDir}/${INSTALL_SCRIPT_NAME}`,
+  };
+}
+
+/**
  * Build the persistent target-side install paths for the current ASCT bundle.
  *
  * @param {string} installRoot
- * @returns {{installRoot: string, venvDir: string, binaryPath: string, pipPath: string}}
+ * @returns {{installRoot: string, venvDir: string, binaryPath: string}}
  */
 function buildPersistentInstallPaths(installRoot) {
-  const venvDir = `${installRoot}/venv`;
+  const venvDir = `${installRoot}/asct_venv`;
   return {
     installRoot,
     venvDir,
     binaryPath: `${venvDir}/bin/${TOOL_NAME}`,
-    pipPath: `${venvDir}/bin/pip`,
   };
 }
 
@@ -96,30 +129,6 @@ async function pathExists(engine, path) {
 }
 
 /**
- * Create a directory path recursively on the target.
- *
- * @param {Engine} engine
- * @param {string} path
- * @returns {Promise<void>}
- */
-async function ensureDirectory(engine, path) {
-  const cmd = ['mkdir', '-p', path];
-  const mkdirResult = await engine.execCommand(cmd, {});
-  if (mkdirResult.rc !== 0) {
-    throw {
-      code: 'tool_integrations.common.MKDIR_FAILED',
-      metadata: {
-        tool: TOOL_NAME,
-        path,
-        cmd: cmd.join(' '),
-        exitCode: mkdirResult.rc,
-        stderr: mkdirResult.stderr || '',
-      },
-    };
-  }
-}
-
-/**
  * Resolve a persistent target-side install root for cached ASCT environments.
  * Keep the cache near the deployed ASCT bundle by rooting it under `toolsRoot`.
  *
@@ -134,7 +143,7 @@ function resolvePersistentInstallRoot(toolsRoot) {
  * Check whether the cached ASCT install looks reusable for this run.
  *
  * @param {Engine} engine
- * @param {{installRoot: string, venvDir: string, binaryPath: string, pipPath: string}} installPaths
+ * @param {{installRoot: string, venvDir: string, binaryPath: string}} installPaths
  * @returns {Promise<boolean>}
  */
 async function hasReusableInstall(engine, installPaths) {
@@ -166,17 +175,46 @@ function emitSetupStepLogs(engine, logDir, basename) {
   engine.emitOutput(
     stdoutPath,
     `${SETUP_LOG_DIRNAME}/${basename}.stdout.log`,
-    /** @type {any} */ ({ name: 'log-text', version: '1.0' }),
+    /** @type {any} */ (SETUP_LOG_COMPONENT),
   );
   engine.emitOutput(
     stderrPath,
     `${SETUP_LOG_DIRNAME}/${basename}.stderr.log`,
-    /** @type {any} */ ({ name: 'log-text', version: '1.0' }),
+    /** @type {any} */ (SETUP_LOG_COMPONENT),
   );
   return {
     stdout: { redirect: 'file', path: stdoutPath },
     stderr: { redirect: 'file', path: stderrPath },
   };
+}
+
+/**
+ * Relay installer output to the APX run log without interpreting its statuses.
+ * Keep the captured output files unchanged for diagnostics.
+ *
+ * @param {Engine} engine
+ * @param {string} logDir
+ * @returns {Promise<string>}
+ */
+async function relayInstallerOutput(engine, logDir) {
+  const diagnostics = [];
+  for (const stream of ['stdout', 'stderr']) {
+    const result = await engine.execCommand(
+      ['cat', `${logDir}/install.${stream}.log`],
+      {},
+    );
+    if (result.rc !== 0 || !result.stdout?.trim()) {
+      continue;
+    }
+
+    const output = result.stdout.replaceAll(
+      'use --python to select a supported interpreter',
+      'install a supported Python 3 interpreter as python3',
+    );
+    engine.log('info', `ASCT installer ${stream}:\n${output.trim()}`);
+    diagnostics.push(`${stream}:\n${output.trim()}`);
+  }
+  return diagnostics.join('\n\n');
 }
 
 /**
@@ -769,164 +807,6 @@ function parseBenchmarksParam(benchmarks) {
 
 const PYTHON_VER_MAJOR = 3;
 const PYTHON_VER_MINOR = 10;
-/**
- * Check whether `numactl` is available on the target.
- *
- * @param {Engine} engine
- * @returns {Promise<import("../recipes/docs/jsdocs").ProbeAdvice>}
- */
-async function probeNumactl(engine) {
-  const check = await engine.execCommand(
-    ['bash', '-c', 'command -v numactl'],
-    {},
-  );
-  if (check.rc !== 0) {
-    return {
-      level: 'error',
-      messageCode: readinessMessageCode,
-      metadata: {
-        message:
-          'numactl is not available on the target machine. Install the numactl package on the target machine.',
-      },
-    };
-  }
-
-  return {
-    level: 'ready',
-    messageCode: '',
-  };
-}
-
-const GCC_MIN_MAJOR_VERSION = 8;
-/**
- * Check whether `GCC` is available on the target.
- *
- * @param {Engine} engine
- * @returns {Promise<import("../recipes/docs/jsdocs").ProbeAdvice>}
- */
-async function probeGCC(engine) {
-  const check = await engine.execCommand(
-    ['gcc', '-dumpfullversion', '-dumpversion'],
-    {},
-  );
-
-  if (check.rc !== 0) {
-    return {
-      level: 'warning',
-      messageCode: readinessMessageCode,
-      metadata: {
-        message: 'GCC was not found on PATH. Install GCC version 8 or later.',
-      },
-    };
-  }
-
-  const majorVersion = Number.parseInt(check.stdout.trim().split('.')[0], 10);
-  if (!Number.isInteger(majorVersion) || majorVersion < GCC_MIN_MAJOR_VERSION) {
-    return {
-      level: 'warning',
-      messageCode: readinessMessageCode,
-      metadata: {
-        message:
-          'The installed GCC version is incompatible. ASCT requires GCC version 8 or later.',
-      },
-    };
-  }
-
-  return {
-    level: 'ready',
-    messageCode: '',
-  };
-}
-
-/**
- * Check whether the c compiler `cc` is available on the target.
- *
- * @param {Engine} engine
- * @returns {Promise<import("../recipes/docs/jsdocs").ProbeAdvice>}
- */
-async function probeCC(engine) {
-  const check = await engine.execCommand(['cc', '--version'], {});
-
-  if (check.rc !== 0) {
-    return {
-      level: 'warning',
-      messageCode: readinessMessageCode,
-      metadata: {
-        message:
-          'No C compiler named `cc` was found on PATH. Install a C compiler that provides `cc`.',
-      },
-    };
-  }
-
-  return {
-    level: 'ready',
-    messageCode: '',
-  };
-}
-
-/**
- * Check whether `make` is available on the target.
- *
- * @param {Engine} engine
- * @returns {Promise<import("../recipes/docs/jsdocs").ProbeAdvice>}
- */
-async function probeMake(engine) {
-  const check = await engine.execCommand(['/usr/bin/make', '--version'], {});
-
-  if (check.rc !== 0) {
-    return {
-      level: 'warning',
-      messageCode: readinessMessageCode,
-      metadata: {
-        message:
-          'ASCT requires an executable GNU Make installation at `/usr/bin/make`.',
-      },
-    };
-  }
-
-  return {
-    level: 'ready',
-    messageCode: '',
-  };
-}
-
-/**
- * Check the tools needed to build ASCT's bundled native benchmarks.
- *
- * @param {Engine} engine
- * @returns {Promise<import("../recipes/docs/jsdocs").ProbeAdvice[]>}
- */
-async function probeBuildPrerequisites(engine) {
-  const results = [
-    await probeMake(engine),
-    await probeGCC(engine),
-    await probeCC(engine),
-  ];
-  return results.filter((result) => result.level !== 'ready');
-}
-
-/**
- * Raise a catalog-backed run error for failed prerequisite checks.
- *
- * @param {import("../recipes/docs/jsdocs").ProbeAdvice[]} advice
- * @param {string} messageCode
- * @returns {void}
- */
-function ensurePrerequisites(advice, messageCode) {
-  if (advice.length === 0) {
-    return;
-  }
-
-  throw {
-    code: messageCode,
-    metadata: {
-      details: advice
-        .map((item) => item.metadata?.message)
-        .filter(Boolean)
-        .join(' '),
-    },
-  };
-}
 
 /**
  * @type {import("../recipes/docs/jsdocs").ToolIntegration}}
@@ -1011,13 +891,6 @@ let tool = {
       advice.push(whlAdvice);
     }
 
-    let numactlAdvice = await probeNumactl(engine);
-    if (numactlAdvice.level !== 'ready') {
-      advice.push(numactlAdvice);
-    }
-
-    advice.push(...(await probeBuildPrerequisites(engine)));
-
     return {
       available: !advice.some((item) => item.level === 'error'),
       capabilities: {},
@@ -1043,14 +916,9 @@ let tool = {
     // Catch a stop/cancel that was already recorded before setup begins.
     throwIfInterrupted(engine, ctx, 'ASCT setup');
 
-    const numactlAdvice = await probeNumactl(engine);
-    ensurePrerequisites(
-      numactlAdvice.level === 'ready' ? [] : [numactlAdvice],
-      'tool_integrations.asct.RUNTIME_PREREQUISITE_MISSING',
-    );
-
     await waitForPendingInterruption(engine, ctx, 'ASCT setup');
-    let deployPath = buildBundlePath(ctx.toolsRoot);
+    const deployPath = buildBundlePath(ctx.toolsRoot);
+    const installerPath = buildInstallerPath(ctx.toolsRoot);
 
     // Create a scratch area for per-run logs and collected ASCT artifacts.
     let outputDir = await engine.createTempDir();
@@ -1060,6 +928,11 @@ let tool = {
     await engine.mkDir(runDataDir);
     const installRoot = await resolvePersistentInstallRoot(ctx.toolsRoot);
     const installPaths = buildPersistentInstallPaths(installRoot);
+    engine.emitOutput(
+      `${installRoot}/${DEPENDENCY_LOG_DIRNAME}/**/*`,
+      `${SETUP_LOG_DIRNAME}/${DEPENDENCY_LOG_DIRNAME}/**/*`,
+      /** @type {any} */ (SETUP_LOG_COMPONENT),
+    );
     engine.log(
       'info',
       `${TOOL_DISPLAY_NAME} install root for this bundle: ${installRoot}`,
@@ -1078,10 +951,6 @@ let tool = {
         'info',
         `No reusable cached ${TOOL_DISPLAY_NAME} install found; rebuilding at ${installRoot}`,
       );
-      ensurePrerequisites(
-        await probeBuildPrerequisites(engine),
-        'tool_integrations.asct.BUILD_PREREQUISITES_MISSING',
-      );
       if (await pathExists(engine, installRoot)) {
         engine.log(
           'warn',
@@ -1090,65 +959,109 @@ let tool = {
         await engine.rm(installRoot, true, true);
       }
 
-      await ensureDirectory(engine, installRoot);
+      await engine.mkDir(installRoot);
       throwIfInterrupted(engine, ctx, 'bundle verification');
 
-      let wheelExistsResult = await engine.execCommand(
-        ['stat', deployPath],
+      for (const artifactPath of [deployPath, installerPath]) {
+        const artifactExistsResult = await engine.execCommand(
+          ['stat', artifactPath],
+          {},
+        );
+        if (artifactExistsResult.rc !== 0) {
+          throw {
+            code: 'tool_integrations.common.TOOL_NOT_DEPLOYED',
+            metadata: {
+              tool: tool.name,
+              deployPath: artifactPath,
+              locality: engine.getLocality(),
+            },
+          };
+        }
+      }
+
+      const installerInputs = buildInstallerInputPaths(installRoot);
+      await engine.mkDir(installerInputs.inputsDir);
+      const copyResult = await engine.execCommand(
+        ['cp', deployPath, installerPath, installerInputs.inputsDir],
         {},
       );
-      if (wheelExistsResult.rc !== 0) {
+      if (copyResult.rc !== 0) {
         throw {
-          code: 'tool_integrations.common.TOOL_NOT_DEPLOYED',
+          code: 'tool_integrations.common.INSTALL_MODULE',
           metadata: {
             tool: tool.name,
-            deployPath: deployPath,
-            locality: engine.getLocality(),
+            deployPath,
+            installerPath,
+            exitCode: copyResult.rc,
           },
         };
       }
 
-      // Setup logs and collection outputs are split so failed setup still yields useful logs.
-      // Build the venv first so later commands run against the bundled install.
-      await runSetupStep(engine, ctx, {
-        logDir: setupLogsDir,
-        stageName: 'Python virtual environment setup',
-        trackerId: `Setting up ${TOOL_DISPLAY_NAME} Python virtual environment`,
-        label: 'ASCT Python virtual environment setup',
-        logBasename: 'setup_venv',
-        cmd: ['python3', '-m', 'venv', installPaths.venvDir],
-        errorCode: 'tool_integrations.common.CREATE_PYTHON_VENV',
-        getErrorMetadata: (exitCode) => ({
-          tool: tool.name,
-          pythonVersion: '3.10',
-          exitCode,
-        }),
-      });
+      // Preserve installer output in the Run even if setup fails.
+      await waitForPendingInterruption(engine, ctx, 'ASCT installer launch');
+      try {
+        const installTrackerId = `Installing ${TOOL_DISPLAY_NAME} into the virtual environment`;
+        try {
+          await runSetupStep(engine, ctx, {
+            logDir: setupLogsDir,
+            stageName: 'ASCT installation',
+            trackerId: installTrackerId,
+            label: 'ASCT installation',
+            logBasename: 'install',
+            cmd: [
+              'sh',
+              installerInputs.installerPath,
+              '--install-dir',
+              installRoot,
+            ],
+            errorCode: 'tool_integrations.common.INSTALL_MODULE',
+            getErrorMetadata: (exitCode) => ({
+              tool: tool.name,
+              deployPath,
+              installerPath: installerInputs.installerPath,
+              exitCode,
+            }),
+          });
+        } catch (err) {
+          const details = await relayInstallerOutput(engine, setupLogsDir);
+          if (isInterruptionError(ctx, err)) {
+            throw err;
+          }
+          if (details) {
+            const statusDetails = details
+              .split('\n')
+              .filter((line) => line.trim())
+              .slice(-INSTALLER_STATUS_MAX_LINES)
+              .join('\n');
+            throw {
+              code: 'tool_integrations.asct.INSTALL_FAILED',
+              metadata: {
+                details: statusDetails,
+                exitCode:
+                  err && typeof err === 'object' && 'metadata' in err
+                    ? (err.metadata?.exitCode ?? 'unknown')
+                    : 'unknown',
+              },
+            };
+          }
+          throw err;
+        }
+        await relayInstallerOutput(engine, setupLogsDir);
+        throwIfInterrupted(engine, ctx, 'installation smoke test');
 
-      // Keep an interruption window immediately before the first long setup step.
-      await waitForPendingInterruption(engine, ctx, 'pip install setup');
-      await waitForPendingInterruption(engine, ctx, 'pip install launch');
-      await runSetupStep(engine, ctx, {
-        logDir: setupLogsDir,
-        stageName: 'package installation',
-        trackerId: `Installing ${TOOL_DISPLAY_NAME} into the virtual environment`,
-        label: 'ASCT package installation',
-        logBasename: 'pip_install',
-        cmd: [installPaths.pipPath, 'install', deployPath],
-        errorCode: 'tool_integrations.common.INSTALL_MODULE',
-        getErrorMetadata: (exitCode) => ({
-          tool: tool.name,
-          deployPath: deployPath,
-          exitCode,
-        }),
-      });
-      throwIfInterrupted(engine, ctx, 'installation smoke test');
-
-      // Smoke-test the entrypoint before launching the real collection run.
-      let testCmd = [installPaths.binaryPath, '--help'];
-      let testResult = await engine.execCommand(testCmd, {});
-      if (testResult.rc !== 0) {
-        throw `${TOOL_DISPLAY_NAME} module installed successfully, but ${testCmd.join(' ')} exited with code ${testResult.rc}`;
+        if (!(await hasReusableInstall(engine, installPaths))) {
+          throw {
+            code: 'tool_integrations.common.INSTALL_MODULE',
+            metadata: {
+              tool: tool.name,
+              deployPath,
+              installerPath: installerInputs.installerPath,
+            },
+          };
+        }
+      } finally {
+        // The deployed bundle remains the recovery source for future rebuilds.
+        await engine.rm(installerInputs.inputsDir, true, true);
       }
     }
     throwIfInterrupted(engine, ctx, 'ASCT command preparation');
@@ -1185,31 +1098,14 @@ let tool = {
         asPrivileged: true,
       },
     );
-    const currentPythonPathResult = await engine.execCommand(
-      ['bash', '-c', 'echo ${PYTHONPATH:-}'],
-      {
-        asPrivileged: true,
-      },
-    );
     const venvPath = installPaths.venvDir;
     const existingPath = currentPathResult.stdout.trim();
-    const existingPythonPath = currentPythonPathResult.stdout.trim();
     const updatePath = [`${venvPath}/bin`, ...existingPath.split(':')]
-      .filter(Boolean)
-      .join(':');
-    const updatePythonPath = [
-      `${venvPath}/lib/python${PYTHON_VER_MAJOR}.${PYTHON_VER_MINOR}/site-packages`,
-      ...existingPythonPath.split(':'),
-    ]
       .filter(Boolean)
       .join(':');
     throwIfInterrupted(engine, ctx, 'output registration');
 
     engine.log('info', `PATH for ${TOOL_DISPLAY_NAME} run: ${updatePath}`);
-    engine.log(
-      'info',
-      `PYTHONPATH for ${TOOL_DISPLAY_NAME} run: ${updatePythonPath}`,
-    );
     engine.log(
       'info',
       `Starting ${TOOL_DISPLAY_NAME} with args: ${processArgs.join(' ')}`,
@@ -1257,7 +1153,6 @@ let tool = {
           },
           environment: {
             PATH: updatePath,
-            PYTHONPATH: updatePythonPath,
             VIRTUAL_ENV: venvPath,
           },
         },

@@ -3,7 +3,7 @@
 
 package sourcecontent
 
-// fetcher.go contains SourceFilesFetcher, used to fetch source content
+// fetcher.go contains FetchSourceFiles, used to fetch source content
 // concurrently from host and target machines. Source content is returned
 // verbatim as a single string. Consumers should perform any required
 // post-processing, such as splitting it into lines. Failures are returned as
@@ -12,7 +12,6 @@ package sourcecontent
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
@@ -28,9 +27,6 @@ const defaultSourceFilesFetchConcurrency = 4
 // SourceFile identifies one source file and the ordered locations to try.
 type SourceFile struct {
 	Locations []SourceFileLocation
-	// MinimumLineCount rejects source mappings that cannot contain a required
-	// source line, allowing the next configured location to be tried.
-	MinimumLineCount uint32
 }
 
 // SourceFileLocation identifies one source file location.
@@ -53,7 +49,6 @@ type SourceFileContent struct {
 // SourceFileFailure describes a failed source-content fetch attempt.
 type SourceFileFailure struct {
 	Location SourceLocation
-	Path     string
 	Err      error
 	Reason   SourceFailureReason
 }
@@ -65,32 +60,25 @@ const (
 	SourceLocationTarget SourceLocation = "target"
 )
 
-// SourceFilesFetcher fetches the content of the given source files.
-// One result is returned for each input file, in order.
-type SourceFilesFetcher func(files []SourceFile) []SourceFileContent
-
 type SourceFailureReason string
 
 const (
 	SourceFailureMissingHostMapping     SourceFailureReason = "missing_host_mapping"
 	SourceFailureHostPathFailed         SourceFailureReason = "host_source_path_failed"
-	SourceFailureHostPathMismatched     SourceFailureReason = "host_source_path_mismatched"
 	SourceFailureTargetNotReachable     SourceFailureReason = "target_not_reachable"
 	SourceFailureTargetAgentUnavailable SourceFailureReason = "target_agent_unavailable"
 	SourceFailureTargetPathFailed       SourceFailureReason = "target_source_path_failed"
-	SourceFailureTargetPathMismatched   SourceFailureReason = "target_source_path_mismatched"
 
 	sourceFailureNone SourceFailureReason = ""
 )
 
 type targetFileFetcher func(ctx context.Context, targetPath string) (content string, failure SourceFailureReason, err error)
 
-// NewSourceFilesFetcher returns a source file fetcher for the given target.
-func NewSourceFilesFetcher(ctx context.Context, tgt target.Target, targetSessions targetsession.TargetSessionProvider) SourceFilesFetcher {
-	return func(files []SourceFile) []SourceFileContent {
-		tgtFileFetcher := newTargetFileFetcher(tgt, targetSessions, nil)
-		return fetchSourceFiles(ctx, files, tgtFileFetcher, defaultSourceFilesFetchConcurrency)
-	}
+// FetchSourceFiles fetches the content of the given source files.
+// One result is returned for each input file, in order.
+func FetchSourceFiles(ctx context.Context, files []SourceFile, tgt target.Target, targetSessions targetsession.TargetSessionProvider) []SourceFileContent {
+	tgtFileFetcher := newTargetFileFetcher(tgt, targetSessions, nil)
+	return fetchSourceFiles(ctx, files, tgtFileFetcher, defaultSourceFilesFetchConcurrency)
 }
 
 // fetchSourceFiles fetches source file content concurrently and returns results
@@ -162,36 +150,14 @@ func fetchSourceFile(ctx context.Context, sourceFile SourceFile, tgtFileFetcher 
 			continue
 		}
 
-		if sourceFile.MinimumLineCount == 0 || sourceContentLineCount(content) >= int(sourceFile.MinimumLineCount) {
-			result.Content = content
-			result.LoadedLocation = location
-			return result
-		}
-
-		reason := SourceFailureTargetPathMismatched
-		if location.Location == SourceLocationHost {
-			reason = SourceFailureHostPathMismatched
-		}
-		result.Failures = append(result.Failures, SourceFileFailure{
-			Location: location.Location,
-			Path:     location.Path,
-			Err:      fmt.Errorf("source content shorter than minimum line count %d", sourceFile.MinimumLineCount),
-			Reason:   reason,
-		})
+		result.Content = content
+		result.LoadedLocation = location
+		return result
 	}
 	if len(result.Failures) == 0 {
 		result.Failures = append(result.Failures, SourceFileFailure{Err: fmt.Errorf("missing source location")})
 	}
 	return result
-}
-
-// sourceContentLineCount returns the number of lines separated by '\n'.
-func sourceContentLineCount(content string) int {
-	lineCount := strings.Count(content, "\n")
-	if !strings.HasSuffix(content, "\n") {
-		lineCount++
-	}
-	return lineCount
 }
 
 // fetchHostSourceLocation reads source content from the host.
@@ -231,7 +197,6 @@ func fetchTargetSourceLocation(ctx context.Context, location SourceFileLocation,
 func sourceLocationFailure(location SourceFileLocation, reason SourceFailureReason, err error) SourceFileFailure {
 	return SourceFileFailure{
 		Location: location.Location,
-		Path:     location.Path,
 		Err:      err,
 		Reason:   reason,
 	}

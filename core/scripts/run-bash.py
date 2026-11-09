@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import platform
 import shutil
 import subprocess
 import sys
@@ -16,17 +15,8 @@ from collections.abc import Sequence
 from lib.msys2 import (
     find_msys2_bash,
     is_windows_host,
-    to_msys2_path,
     ucrt64_environment,
 )
-
-
-def venv_directory() -> str:
-    """Return the venv directory for the interpreter used to create it."""
-    # All non-native launchers use the UCRT64 Python first on PATH. MSYS2's
-    # UCRT64 Python reports ``sys.platform == "win32"``, so use the system
-    # name to keep its environment separate from native Windows Python.
-    return "env-windows" if platform.system().casefold() == "windows" else "env-ucrt64"
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
@@ -38,11 +28,6 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if is_windows_host():
         bash = find_msys2_bash()
         environment = ucrt64_environment()
-        environment["PERFORMIX_PYTHON"] = to_msys2_path(sys.executable)
-        environment["PERFORMIX_VENV_DIRECTORY"] = venv_directory()
-        environment["PERFORMIX_VENV_LAYOUT"] = (
-            "windows" if sys.platform == "win32" else "posix"
-        )
     else:
         bash_path = shutil.which("bash")
         if bash_path is None:

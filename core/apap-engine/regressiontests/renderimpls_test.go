@@ -621,8 +621,12 @@ func TestAllRenderersAreInvokedByRegressionTests(t *testing.T) {
 	}
 }
 
-// These are some exception renderers that are allowd to have an empty output spec.
-var ExceptionRenderersNoOutputSpec = []string{"SlAnalyzeRenderer", "SQL"}
+// These renderers are allowed to have an empty output spec.
+var ExceptionRenderersNoOutputSpec = []string{
+	"SlAnalyzeRenderer",
+	"SQL",
+	"TraceViewportRenderer", // Registers a query function without producing manifest tables.
+}
 
 func isExceptionRenderer(name string) bool {
 	for _, exception := range ExceptionRenderersNoOutputSpec {

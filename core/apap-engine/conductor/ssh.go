@@ -1382,6 +1382,20 @@ func HostKeyAlgorithmsForKnownHost(knownHostsPath string, host string, port int)
 	return algorithms
 }
 
+// HostKeyCallback applies the selected host trust policy to an SSH connection.
+func HostKeyCallback(fs afero.Fs, knownHostsPath string, hostCfg target.SSHHostConfig, prompt FingerprintPromptProvider) (ssh.HostKeyCallback, error) {
+	switch hostCfg.HostKeyPolicy {
+	case target.AcceptNewHost:
+		return TrustNewOrFailMismatchKnownHostsWithFs(fs, knownHostsPath)
+	case target.AskNewHost:
+		return promptNewOrFailMismatchKnownHosts(fs, knownHostsPath, SSHDialInfo{FingerprintPromptProvider: prompt}, hostCfg)
+	case target.IgnoreHostKey:
+		return ssh.InsecureIgnoreHostKey(), nil // #nosec G106 -- explicitly selected policy
+	default:
+		return failNewandFailMismatchKnownHosts(knownHostsPath)
+	}
+}
+
 func (c *SecureConnector) buildSSHClientConfig(hostCfg target.SSHHostConfig, dialInfo SSHDialInfo, prompter *passwordAuthPrompter, includeAuth bool) (*ssh.ClientConfig, error) {
 	var hostKeyCallback ssh.HostKeyCallback
 	var knownHostsPath string
@@ -1394,26 +1408,9 @@ func (c *SecureConnector) buildSSHClientConfig(hostCfg target.SSHHostConfig, dia
 		}
 	}
 
-	switch hostCfg.HostKeyPolicy {
-	case target.AcceptNewHost:
-		hostKeyCallback, err = TrustNewOrFailMismatchKnownHostsWithFs(c.FS, knownHostsPath)
-		if err != nil {
-			return nil, err
-		}
-	case target.AskNewHost:
-		hostKeyCallback, err = promptNewOrFailMismatchKnownHosts(c.FS, knownHostsPath, dialInfo, hostCfg)
-		if err != nil {
-			return nil, err
-		}
-	case target.IgnoreHostKey:
-		hostKeyCallback = ssh.InsecureIgnoreHostKey() // #nosec G106
-	case target.RejectHostKeyIfMissing:
-		fallthrough
-	default:
-		hostKeyCallback, err = failNewandFailMismatchKnownHosts(knownHostsPath)
-		if err != nil {
-			return nil, err
-		}
+	hostKeyCallback, err = HostKeyCallback(c.FS, knownHostsPath, hostCfg, dialInfo.FingerprintPromptProvider)
+	if err != nil {
+		return nil, err
 	}
 
 	config := &ssh.ClientConfig{

@@ -58,6 +58,13 @@ type ScriptedStage interface {
 	Name() string
 }
 
+// ParameterOptionsStage is a ScriptedStage that can declare if deployed tools are required
+// to retrieve the parameter options.
+type ParameterOptionsStage interface {
+	ScriptedStage
+	RequiresTools() bool
+}
+
 type RunIDSupplier func() run.RunID
 type TargetFilesystemSupplier func() conductor.TargetFilesystem
 type PlatformConfigurationSupplier func() conductor.PlatformConfiguration

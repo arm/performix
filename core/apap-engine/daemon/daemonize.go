@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ARM-software/golang-utils/utils/filesystem"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/pidfiles"
@@ -110,7 +109,10 @@ func (d *Daemon) Kill(pidfile string) error {
 		err = d.killPid(pid)
 	}
 	if err == nil {
-		err = filesystem.Rm(pidfile)
+		err = os.Remove(pidfile)
+		if errors.Is(err, os.ErrNotExist) {
+			err = nil
+		}
 	}
 	if err != nil {
 		log.WithFields(log.Fields{

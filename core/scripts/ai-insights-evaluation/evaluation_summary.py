@@ -39,6 +39,7 @@ from performance_quality import (
 )
 
 
+# Retain retired mode labels so historical JUnit reports remain readable.
 MODE_ORDER = (
     "performix_mcp",
     "performix_mcp_run_query",
@@ -369,6 +370,8 @@ def _summary_rows(attempts: list[dict[str, str]]) -> list[tuple[str, dict[str, l
         mode = attempt.get("ai_mode")
         if not test_id or not mode:
             continue
+        if model_config := attempt.get("ai_model_config"):
+            test_id = f"{test_id} [{model_config}]"
         rows.setdefault(test_id, {}).setdefault(mode, []).append(attempt)
     return [(test_id, rows[test_id]) for test_id in sorted(rows, key=_testcase_sort_key)]
 
@@ -603,12 +606,17 @@ def _format_performance_quality_lines(
         metrics = recorded_performance_metrics_for_attempt(attempt)
         if not metrics:
             continue
-        failed_metrics = [metric for metric in metrics if metric.quality != QUALITY_GOOD]
-        if not failed_metrics:
-            continue
+        failed_metrics = [
+            metric for metric in metrics
+            if metric.quality != QUALITY_GOOD and not metric.is_warning
+        ]
+        warning_metrics = [metric for metric in metrics if metric.is_warning]
         attempt_label = _attempt_label(attempt, index)
         suffix = f" (attempt {attempt_label})" if multiple_attempts else ""
-        lines.append(f"❌ Error{suffix}: {_format_quality_metrics(failed_metrics)}")
+        if failed_metrics:
+            lines.append(f"❌ Error{suffix}: {_format_quality_metrics(failed_metrics)}")
+        if warning_metrics:
+            lines.append(f"⚠️  Warning{suffix}: {_format_quality_metrics(warning_metrics)}")
     return lines
 
 

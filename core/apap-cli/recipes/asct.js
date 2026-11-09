@@ -5,7 +5,7 @@
 
 // @ts-check
 
-const ASCT_VERSION = '0.7.0';
+const ASCT_VERSION = '0.7.1';
 const TOOL_ASCT_NAME = 'asct';
 const TOOL_ASCT_VERSION = ASCT_VERSION;
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
@@ -389,7 +389,14 @@ function buildASCTJSONTableSQL(relativePath) {
     )
     SELECT
       row_key,
-      metric,
+      CASE
+        -- TODO(ASCT-760): Include units in metrics coming from ASCT.
+        -- Normalize the older unitless name; both formats contain decimal MB/s.
+        WHEN metric = 'total_bandwidth' THEN 'total_bandwidth_mbps'
+        -- TODO(ASCT-760): Include the byte unit in the detailed size field name.
+        WHEN metric = 'sizes' THEN 'size_bytes'
+        ELSE metric
+      END AS metric,
       CASE
         WHEN value_type = 'VARCHAR' THEN json_extract_string(raw_value, '$')
         ELSE raw_value::VARCHAR
@@ -435,7 +442,7 @@ const ASCT_CSV_ANALYSIS_VISUALIZATIONS = [
         tableNamePlaceholder: '__table__',
         // The CSV renderer exposes its row ordinal as `column0`; it is not ASCT data.
         // Retain all ASCT columns so optional metrics are shown when available.
-        query: "SELECT COLUMNS(c -> c != 'column0') FROM __table__",
+        query: "SELECT COLUMNS(lambda c: c != 'column0') FROM __table__",
       },
       noDataMessage: 'Peak bandwidth data is unavailable for this run.',
       noDataStatus: 'info',
@@ -465,9 +472,9 @@ const ASCT_CSV_ANALYSIS_VISUALIZATIONS = [
           'SELECT ' +
           'try_cast("CPUA" AS VARCHAR) AS "source_core", ' +
           'try_cast("CPUB" AS VARCHAR) AS "target_core", ' +
-          'try_cast("Latency" AS DOUBLE) AS "latency_ns" ' +
+          'try_cast("Latency [ns]" AS DOUBLE) AS "latency_ns" ' +
           'FROM {table} ' +
-          'WHERE "CPUA" IS NOT NULL AND "CPUB" IS NOT NULL AND "Latency" IS NOT NULL ' +
+          'WHERE "CPUA" IS NOT NULL AND "CPUB" IS NOT NULL AND "Latency [ns]" IS NOT NULL ' +
           'ORDER BY try_cast("CPUA" AS INTEGER), try_cast("CPUB" AS INTEGER)',
       },
     },
@@ -506,7 +513,7 @@ const ASCT_CSV_ANALYSIS_VISUALIZATIONS = [
               try_cast(
                 json_extract_string(
                   row_to_json(data),
-                  '$."% of Peak Theoretical BW"'
+                  '$."% of Peak Theoretical"'
                 ) AS DOUBLE
               ) AS peak_bandwidth_percent,
               try_cast("Loaded latency [ns]" AS DOUBLE) / 1000000000 AS latency_seconds
@@ -528,7 +535,7 @@ const ASCT_CSV_ANALYSIS_VISUALIZATIONS = [
       // The CSV renderer exposes its row ordinal as `column0`; it is not ASCT data.
       customQuery: {
         tableNamePlaceholder: '__table__',
-        query: "SELECT COLUMNS(c -> c != 'column0') FROM __table__",
+        query: "SELECT COLUMNS(lambda c: c != 'column0') FROM __table__",
       },
       noDataMessage: 'Loaded latency data is unavailable for this run.',
       noDataStatus: 'info',
@@ -545,8 +552,8 @@ const ASCT_CSV_ANALYSIS_VISUALIZATIONS = [
       customQuery: {
         tableNamePlaceholder: '__table__',
         query:
-          "SELECT COLUMNS(c -> c = 'index' OR c = 'column0' OR c = '') AS \"Level\", " +
-          "COLUMNS(c -> c != 'index' AND c != 'column0' AND c != '') FROM __table__",
+          "SELECT COLUMNS(lambda c: c = 'index' OR c = 'column0' OR c = '') AS \"Level\", " +
+          "COLUMNS(lambda c: c != 'index' AND c != 'column0' AND c != '') FROM __table__",
       },
       noDataMessage: 'Latency sweep data is unavailable for this run.',
       noDataStatus: 'info',
@@ -562,7 +569,7 @@ const ASCT_CSV_ANALYSIS_VISUALIZATIONS = [
       // The CSV renderer exposes its row ordinal as `column0`; it is not ASCT data.
       customQuery: {
         tableNamePlaceholder: '__table__',
-        query: "SELECT COLUMNS(c -> c != 'column0') FROM __table__",
+        query: "SELECT COLUMNS(lambda c: c != 'column0') FROM __table__",
       },
       noDataMessage: 'Bandwidth sweep data is unavailable for this run.',
       noDataStatus: 'info',
@@ -586,7 +593,6 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
       yAxisTitle: 'Latency',
       yAxisType: 'log',
       yAxisLogBase: 2,
-      yAxisMin: 'dataMin',
       yAxisValueFormat: 'seconds',
       pointSize: 7,
       enableZoom: false,
@@ -606,7 +612,7 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
             SELECT
               row_key,
               max(
-                CASE WHEN metric = 'sizes' THEN try_cast(value AS DOUBLE) END
+                CASE WHEN metric = 'size_bytes' THEN try_cast(value AS DOUBLE) END
               ) AS size_bytes,
               max(
                 CASE
@@ -615,7 +621,7 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
                 END
               ) AS average_latency_ns
             FROM __table__
-            WHERE metric IN ('sizes', 'average_latency_ns')
+            WHERE metric IN ('size_bytes', 'average_latency_ns')
             GROUP BY row_key
           )
           -- Normalize ASCT's nanosecond output to seconds so the renderer can
@@ -641,11 +647,10 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
       xAxisLogBase: 2,
       xAxisMin: 'dataMin',
       xAxisValueFormat: 'iec-bytes',
-      yAxisTitle: 'Bandwidth',
+      yAxisTitle: 'Bandwidth [MB/s]',
       yAxisType: 'log',
       yAxisLogBase: 2,
-      yAxisMin: 'dataMin',
-      yAxisValueFormat: 'iec-bytes-per-second',
+      yAxisValueFormat: 'raw',
       pointSize: 7,
       enableZoom: false,
       enableTooltip: true,
@@ -654,7 +659,7 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
           type: 'single',
           name: 'Total bandwidth',
           xColumn: 'size_bytes',
-          yColumn: 'total_bandwidth_bytes_per_second',
+          yColumn: 'total_bandwidth_mbps',
         },
       ],
       customQuery: {
@@ -664,7 +669,7 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
             SELECT
               row_key,
               max(
-                CASE WHEN metric = 'sizes' THEN try_cast(value AS DOUBLE) END
+                CASE WHEN metric = 'size_bytes' THEN try_cast(value AS DOUBLE) END
               ) AS size_bytes,
               max(
                 CASE
@@ -673,14 +678,12 @@ const ASCT_JSON_ANALYSIS_VISUALIZATIONS = [
                 END
               ) AS total_bandwidth_mbps
             FROM __table__
-            WHERE metric IN ('sizes', 'total_bandwidth_mbps')
+            WHERE metric IN ('size_bytes', 'total_bandwidth_mbps')
             GROUP BY row_key
           )
-          -- ASCT reports decimal MB/s; normalize to bytes/s so the renderer
-          -- can choose an appropriate IEC display unit.
           SELECT
             size_bytes,
-            total_bandwidth_mbps * 1000000 AS total_bandwidth_bytes_per_second
+            total_bandwidth_mbps
           FROM chart_values
           WHERE size_bytes IS NOT NULL
             AND total_bandwidth_mbps IS NOT NULL
@@ -723,8 +726,12 @@ const ASCT_CACHE_SIZES_DATA_SOURCE = makeRendererDataSource(
   'table',
 );
 
-// system-info.csv names cache capacities using K/M/G/T. Convert them to
-// bytes so the marker values align with the sweep x-axis data.
+// ASCT encodes binary cache capacities in keys using K/M/G/T; the engine
+// relabels them as KiB/MiB/GiB/TiB without changing their numeric sizes.
+// TODO(ASCT-760): Emit IEC labels at source so new captures need no relabelling.
+// Keep engine relabelling for older captures while they remain supported.
+// The SQL query below converts cache capacities to bytes, matching the sweep
+// charts' x-axis data. The GUI uses the results to position cache-size markers.
 const ASCT_CACHE_SIZE_MARKERS_CONFIG = {
   data_source: {
     tables: {
@@ -738,18 +745,18 @@ const ASCT_CACHE_SIZE_MARKERS_CONFIG = {
         SELECT
           regexp_extract(
             "key",
-            '^sys_hw\\.caches\\.(L1D|L2U|L3U)\\s+([0-9]+(?:\\.[0-9]+)?[KkMmGgTt])(?:\\s+|$)',
+            '^sys_hw\\.caches\\.(L1D|L2U|L3U)\\s+([0-9]+(?:\\.[0-9]+)?[KkMmGgTt])iB(?:\\s+|$)',
             1
           ) AS level,
           regexp_extract(
             "key",
-            '^sys_hw\\.caches\\.(L1D|L2U|L3U)\\s+([0-9]+(?:\\.[0-9]+)?[KkMmGgTt])(?:\\s+|$)',
+            '^sys_hw\\.caches\\.(L1D|L2U|L3U)\\s+([0-9]+(?:\\.[0-9]+)?[KkMmGgTt])iB(?:\\s+|$)',
             2
           ) AS size
         FROM __table__
         WHERE regexp_matches(
           "key",
-          '^sys_hw\\.caches\\.(L1D|L2U|L3U)\\s+[0-9]+(?:\\.[0-9]+)?[KkMmGgTt](?:\\s+|$)'
+          '^sys_hw\\.caches\\.(L1D|L2U|L3U)\\s+[0-9]+(?:\\.[0-9]+)?[KkMmGgTt]iB(?:\\s+|$)'
         )
       )
       SELECT
@@ -759,7 +766,7 @@ const ASCT_CACHE_SIZE_MARKERS_CONFIG = {
             WHEN 'K' THEN 1024
             WHEN 'M' THEN 1024 * 1024
             WHEN 'G' THEN 1024 * 1024 * 1024
-            WHEN 'T' THEN 1024 * 1024 * 1024 * 1024
+            WHEN 'T' THEN 1024::BIGINT * 1024 * 1024 * 1024
           END AS x
       FROM cache_sizes
       WHERE try_cast(left(size, length(size) - 1) AS DOUBLE) > 0
@@ -833,7 +840,7 @@ function buildAsctAnalysisConfig({
     const rendererId = `asct_csv_${benchmark.id}`;
     if (!csvRendererIds.has(rendererId)) {
       renderersToAdd.push({
-        type: 'CSV',
+        type: 'ASCTCSV',
         id: rendererId,
         config: {
           component: outputFilePath,
@@ -943,12 +950,33 @@ function renderAsct(context) {
       id: rendererId,
       config: {
         sql: `
-          SELECT *
-          FROM read_csv(
-            {{path:${systemInformationPath}}},
-            header = false,
-            columns = {'key': 'VARCHAR', 'value': 'VARCHAR'}
+          WITH system_info AS (
+            SELECT
+              key,
+              value,
+              regexp_extract(
+                key,
+                '^(sys_hw\\.caches\\.[^ ]+\\s+[0-9]+(?:\\.[0-9]+)?)([KkMmGgTt])(\\s.*|$)',
+                ['prefix', 'unit', 'suffix']
+              ) AS cache_size
+            FROM read_csv(
+              {{path:${systemInformationPath}}},
+              header = false,
+              columns = {'key': 'VARCHAR', 'value': 'VARCHAR'}
+            )
           )
+          -- TODO(ASCT-760): Supply units alongside bare memory size and theoretical bandwidth fields.
+          SELECT
+            CASE
+              WHEN key = 'memory.total_size' THEN 'memory.total_size [bytes]'
+              WHEN key = 'memory.peak_theoretical_bw' THEN 'memory.peak_theoretical_bandwidth [bytes/s]'
+              -- TODO(ASCT-760): Use explicit IEC units in cache-size keys instead of K/M/G/T.
+              WHEN cache_size.unit != '' THEN
+                cache_size.prefix || upper(cache_size.unit) || 'iB' || cache_size.suffix
+              ELSE key
+            END AS key,
+            value
+          FROM system_info
         `,
         output: {
           name: 'table',

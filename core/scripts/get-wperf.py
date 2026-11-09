@@ -9,16 +9,16 @@ import subprocess
 import shutil
 import sys
 import tarfile
-import urllib.error
-import urllib.request
 import zipfile
 from pathlib import Path
 
-BUNDLE_VERSION = "1.0.1"
-WPERF_VERSION = "5.5.0"
-WPERF_HELPER_VERSION = "0.3.0"
+import requests
 
-ZIP_NAME = f"windowsperf-bin-{WPERF_VERSION}.zip"
+BUNDLE_VERSION = "1.0.2"
+WPERF_VERSION = "5.8.0"
+WPERF_HELPER_VERSION = "0.4.0"
+
+ZIP_NAME = f"windowsperf-{WPERF_VERSION}.zip"
 TAR_NAME = "wperf-Windows-aarch64.tar.gz"
 SRC_ZIP_NAME = f"windowsperf-{WPERF_VERSION}.zip"
 
@@ -43,9 +43,12 @@ def _default_tools_dir(script_dir: Path) -> Path:
 def _download_file(url: str, destination: Path) -> None:
     log(f"Downloading {destination.name} from {url}")
     try:
-        with urllib.request.urlopen(url) as response, destination.open("wb") as out_file:
-            shutil.copyfileobj(response, out_file)
-    except urllib.error.URLError as exc:
+        with requests.get(url, stream=True, timeout=120) as response:
+            response.raise_for_status()
+            with destination.open("wb") as out_file:
+                for chunk in response.iter_content(chunk_size=1024 * 256):
+                    out_file.write(chunk)
+    except requests.RequestException as exc:
         raise RuntimeError(f"Failed to download {destination.name} from {url}") from exc
 
 

@@ -279,10 +279,7 @@ func render(cc client.ClientConnector, preparer run.RenderPreparer, invoker run.
 
 	content := marshalContentSelection(cliParams.Runs)
 
-	params, err := cliParams.ToPreparationParams()
-	if err != nil {
-		return err
-	}
+	params := cliParams.ToPreparationParams()
 
 	params.RenderParameterValues, err = recipe.ParamListToMap(cliParams.renderParamsList)
 	if err != nil {

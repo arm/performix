@@ -19,11 +19,21 @@ Recipe-level render coverage lives in [`../recipejstest/code_hotspots_cpu_counte
 
 A CPU group is a set of CPUs grouped by the collector. Generated Parquet fixtures represent one group on which the profiled process never ran and another with recorded measurements. The tests verify that the inactive group's counter series remains queryable and returns no observations, while the active group's measurements remain available. These tests run as part of the engine Go unit tests.
 
+## JFR heap timeline origins
+
+[`../recipejstest/java_heap_timeline_test.go`](../recipejstest/java_heap_timeline_test.go)
+executes the Java heap SQL renderer against temporary Parquet fixtures. It checks
+an explicit capture origin, exact nanosecond differences above JavaScript's safe
+integer range, events before and at the origin, and a shared origin across
+recordings. A separate compatibility test checks recording-relative timestamps
+when the anchor argument is omitted. These tests run with the engine Go unit tests
+and do not require a collector release or a recorded capture.
+
 ## NeoProf System Utilization idle counters
 
 [`system_utilization_neoprof_test.go`](../recipejstest/system_utilization_neoprof_test.go) checks that missing samples in collected delta counters become zero, including idle disk and IRQ counters. It also checks that recorded values are preserved and missing or unsupported metrics, such as NUMA, stay NULL. These tests run with the engine Go unit tests.
 
-The same tests verify that normalization produces a table, so chart queries reuse the results. The SQL renderer's optional `materialize: true` setting evaluates the query once per render session; other SQL renderers keep using views by default.
+The same tests verify that normalization produces a table, so chart queries reuse the results. The SQL renderer's optional `materialized: true` setting evaluates the query once per render session; other SQL renderers keep using views by default.
 
 ## Adding New Tests
 
@@ -55,9 +65,9 @@ captures. Run the **Instruction Mix Fidelity Pre-record Run** workflow manually
 to refresh one; it supplies the workload, recipe parameters, AWS instance type,
 and Artifactory destination so that those inputs are not re-entered by hand.
 
-| Workflow fixture | Recipe parameters | Artifactory archive | Regression configuration | Generated truth |
-| --- | --- | --- | --- | --- |
-| `pr-smoke` | `mode=dynamic` | `its.apx-prerecorded-runs/manual/instruction-mix-openssl-speed-pr-smoke/latest.zip` | `test-data/tests/instruction_mix_dynamic_pr_smoke.json` | `test-data/truth/instruction_mix_dynamic_pr_smoke/` |
+| Workflow fixture     | Recipe parameters                   | Artifactory archive                                                                   | Regression configuration                                  | Generated truth                                       |
+| -------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------- |
+| `pr-smoke`           | `mode=dynamic`                      | `its.apx-prerecorded-runs/manual/instruction-mix-openssl-speed-pr-smoke/latest.zip`   | `test-data/tests/instruction_mix_dynamic_pr_smoke.json`   | `test-data/truth/instruction_mix_dynamic_pr_smoke/`   |
 | `nightly-comparison` | `mode=dynamic`, `sampling_freq=low` | `its.apx-prerecorded-runs/manual/instruction-mix-openssl-speed-comparison/latest.zip` | `test-data/tests/instruction_mix_dynamic_comparison.json` | `test-data/truth/instruction_mix_dynamic_comparison/` |
 
 Both captures run the `openssl-speed` workload on an Ubuntu 24.04 Arm
@@ -115,3 +125,5 @@ the function measurement registry and call-path renderer. The GUI's
 values to check table groups and topdown graph binding. Run the Go test with
 `duckdb_arrow,confidential_telemetry` build tags. Other C1 tests cover all four
 specifications, collector aliases, and rejection of foreign-core prefixes.
+
+GPU timeline SQL execution coverage in `../jstest/unit/recipes/gpu_metrics_test.go` uses Parquet fixtures to verify leading, interior and trailing omitted intervals, a device present only at a coarse resolution, mixed resolutions, unrelated devices, partial final bins and zero-duration captures. Only collected delta counters are zero filled; other classes preserve NULL.

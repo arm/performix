@@ -150,7 +150,7 @@ func (renderer *LogRenderer) logLogFile(component cdf.Component, session render.
 				array_to_string(
 					list_transform(
 						json_keys(json_extract(column0, '$.context')),
-						k -> k || '=' || json_extract_string(column0, '$.context.' || k)
+						lambda k: k || '=' || json_extract_string(column0, '$.context.' || k)
 					),
 					' '
 				) AS ctx_pairs

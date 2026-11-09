@@ -4,9 +4,11 @@ Use `run_query` to inspect the Syscall Trace summary tables and Syscall Frequenc
 
 ## Available tables
 
-The descriptive renderer names are not DuckDB table names. Confirm the queryable names from `render_session.visualization_resolved_tables`, then use the unqualified names shown below when they match. Replace them with the returned names if they differ. The names remain stable for the lifetime of the session.
+The renderer IDs below identify the recipe steps that produce each dataset.
+SQL queries use the corresponding physical DuckDB table names in the second
+column, as confirmed by `render_session.table_schemas`.
 
-| Descriptive renderer name | Queryable table | Contents |
+| Renderer ID | Physical table name | Contents |
 | --- | --- | --- |
 | `syscall_summary_metrics` | `flat_table` | Run-wide syscall count, failure rate, traced duration, timed-event count and distinct PID count as `Metric`/`Value` rows. |
 | `syscall_frequency_heatmap` | `flat_table_1` | Syscall rate in precomputed relative `time_s` buckets for up to 100 syscall names selected by run-wide count. |
@@ -118,7 +120,12 @@ Choose the interval from the overview and the syscall set from both the timeline
 
 ## Optional detail queries
 
-Use these exact templates only when failures, process attribution or individual slow events could affect the diagnosis.
+Adapt these templates when failures, process attribution or event details could affect the diagnosis.
+
+For event context, filter `flat_table_3` to the relevant syscalls before applying a
+row limit, then inspect results and arguments. A global duration ranking can hide
+relevant events. The table contains only up to 100 globally slowest events, so
+absence from this sample does not establish that an operation did not occur.
 
 ```sql
 SELECT
@@ -159,6 +166,7 @@ SELECT
   "Errno",
   "Args"
 FROM flat_table_3
+WHERE "Syscall" IN (<quoted syscall names>)
 ORDER BY "Duration (ms)" DESC
 LIMIT 20
 ```

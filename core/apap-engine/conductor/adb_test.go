@@ -22,6 +22,7 @@ type recordingADBRunner struct {
 	calls     [][]string
 	err       error
 	responses map[string]adbRunResult
+	onRun     func(args []string)
 }
 
 type adbRunResult struct {
@@ -33,11 +34,17 @@ type adbRunResult struct {
 func (r *recordingADBRunner) Run(args ...string) (string, string, error) {
 	copied := append([]string(nil), args...)
 	r.calls = append(r.calls, copied)
+	if r.onRun != nil {
+		r.onRun(args)
+	}
 	if response, ok := r.responses[strings.Join(args, "\x00")]; ok {
 		return response.stdout, response.stderr, response.err
 	}
 	if r.err != nil {
 		return "", "", r.err
+	}
+	if len(args) == 5 && args[2] == "shell" && args[3] == "getprop" {
+		return args[1], "", nil
 	}
 	return "ok", "", nil
 }
@@ -68,7 +75,12 @@ func TestExecADBRunnerReturnsStructuredErrorWhenADBIsNotFound(t *testing.T) {
 
 func TestADBCommandRunner(t *testing.T) {
 	deviceIP := "android-target.invalid:5555"
-	runner := &recordingADBRunner{}
+	runner := &recordingADBRunner{responses: map[string]adbRunResult{}}
+	runner.onRun = func(args []string) {
+		if args[0] == "connect" {
+			runner.responses[adbRunKey("devices")] = adbRunResult{stdout: "List of devices attached\ndevice-123\tdevice\n"}
+		}
+	}
 	client := newTestADBClient("device-123", &deviceIP, runner)
 	cmdRunner := &ADBCommandRunner{client: client}
 
@@ -76,10 +88,12 @@ func TestADBCommandRunner(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ok", stdout)
 	assert.Empty(t, stderr)
-	require.Len(t, runner.calls, 3)
+	require.Len(t, runner.calls, 5)
 	assert.Equal(t, []string{"devices"}, runner.calls[0])
 	assert.Equal(t, []string{"connect", deviceIP}, runner.calls[1])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "uname -a"}, runner.calls[2])
+	assert.Equal(t, []string{"devices"}, runner.calls[2])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[3])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "uname -a"}, runner.calls[4])
 }
 
 func TestADBCommandRunnerSkipsConnectWhenDeviceIsAlreadyListed(t *testing.T) {
@@ -94,11 +108,11 @@ func TestADBCommandRunnerSkipsConnectWhenDeviceIsAlreadyListed(t *testing.T) {
 
 	_, _, err := cmdRunner.RunCommand("uname -a")
 	require.NoError(t, err)
-	require.Len(t, runner.calls, 2)
+	require.Len(t, runner.calls, 3)
 	assert.Equal(t, []string{"devices"}, runner.calls[0])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "uname -a"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "uname -a"}, runner.calls[2])
 }
-
 func TestADBCommandRunnerUsesLocallyVisibleDeviceWithoutDeviceIP(t *testing.T) {
 	runner := &recordingADBRunner{
 		responses: map[string]adbRunResult{
@@ -110,11 +124,11 @@ func TestADBCommandRunnerUsesLocallyVisibleDeviceWithoutDeviceIP(t *testing.T) {
 
 	_, _, err := cmdRunner.RunCommand("uname -a")
 	require.NoError(t, err)
-	require.Len(t, runner.calls, 2)
+	require.Len(t, runner.calls, 3)
 	assert.Equal(t, []string{"devices"}, runner.calls[0])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "uname -a"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "uname -a"}, runner.calls[2])
 }
-
 func TestADBCommandRunnerCachesConnectedDevice(t *testing.T) {
 	runner := &recordingADBRunner{
 		responses: map[string]adbRunResult{
@@ -129,12 +143,12 @@ func TestADBCommandRunnerCachesConnectedDevice(t *testing.T) {
 	_, _, err = cmdRunner.RunCommand("id")
 	require.NoError(t, err)
 
-	require.Len(t, runner.calls, 3)
+	require.Len(t, runner.calls, 4)
 	assert.Equal(t, []string{"devices"}, runner.calls[0])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "uname -a"}, runner.calls[1])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "id"}, runner.calls[2])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "uname -a"}, runner.calls[2])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "id"}, runner.calls[3])
 }
-
 func TestADBCommandRunnerInvalidatesCacheOnCommandError(t *testing.T) {
 	commandErr := errors.New("device disconnected")
 	runner := &recordingADBRunner{
@@ -151,20 +165,21 @@ func TestADBCommandRunnerInvalidatesCacheOnCommandError(t *testing.T) {
 	_, _, err = cmdRunner.RunCommand("uname -a")
 	require.NoError(t, err)
 
-	require.Len(t, runner.calls, 4)
+	require.Len(t, runner.calls, 6)
 	assert.Equal(t, []string{"devices"}, runner.calls[0])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "false"}, runner.calls[1])
-	assert.Equal(t, []string{"devices"}, runner.calls[2])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "uname -a"}, runner.calls[3])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "false"}, runner.calls[2])
+	assert.Equal(t, []string{"devices"}, runner.calls[3])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[4])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "uname -a"}, runner.calls[5])
 }
-
 func TestADBCommandRunnerReturnsErrorWhenDeviceIsNotVisibleWithoutDeviceIP(t *testing.T) {
 	runner := &recordingADBRunner{}
 	client := newTestADBClient("device-123", nil, runner)
 	cmdRunner := &ADBCommandRunner{client: client}
 
 	_, _, err := cmdRunner.RunCommand("uname -a")
-	require.ErrorContains(t, err, `android device "device-123" is not visible in adb devices`)
+	require.Equal(t, message.EngineConductorAdbDeviceNotFound, message.IsMessage(err).Code())
 	require.Len(t, runner.calls, 1)
 	assert.Equal(t, []string{"devices"}, runner.calls[0])
 }
@@ -199,9 +214,10 @@ func TestADBCheckHealth(t *testing.T) {
 		err := client.CheckHealth()
 
 		require.NoError(t, err)
-		require.Len(t, runner.calls, 2)
+		require.Len(t, runner.calls, 3)
 		assert.Equal(t, []string{"devices"}, runner.calls[0])
-		assert.Equal(t, []string{"-s", "device-123", "get-state"}, runner.calls[1])
+		assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+		assert.Equal(t, []string{"-s", "device-123", "get-state"}, runner.calls[2])
 	})
 
 	t.Run("wraps adb error", func(t *testing.T) {
@@ -217,10 +233,10 @@ func TestADBCheckHealth(t *testing.T) {
 		err := client.CheckHealth()
 
 		require.ErrorIs(t, err, healthErr)
-		require.ErrorContains(t, err, "health check for Android target failed")
-		require.Len(t, runner.calls, 2)
+		require.Len(t, runner.calls, 3)
 		assert.Equal(t, []string{"devices"}, runner.calls[0])
-		assert.Equal(t, []string{"-s", "device-123", "get-state"}, runner.calls[1])
+		assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+		assert.Equal(t, []string{"-s", "device-123", "get-state"}, runner.calls[2])
 	})
 
 	t.Run("preserves missing adb error", func(t *testing.T) {
@@ -236,7 +252,6 @@ func TestADBCheckHealth(t *testing.T) {
 		assert.NotContains(t, err.Error(), "health check for Android target failed")
 	})
 }
-
 func TestADBClient(t *testing.T) {
 	deviceIPAddress := "192.0.2.1:5555"
 	runner := &recordingADBRunner{}
@@ -301,9 +316,10 @@ func TestADBTargetFilesystemFileStat(t *testing.T) {
 		assert.Equal(t, "file", info.Name())
 		assert.Equal(t, int64(42), info.Size())
 		assert.False(t, info.IsDir())
-		require.Len(t, runner.calls, 2)
+		require.Len(t, runner.calls, 3)
 		assert.Equal(t, []string{"devices"}, runner.calls[0])
-		assert.Equal(t, []string{"-s", "device-123", "shell", "stat -c '%s %A' '/data/local/tmp/file'"}, runner.calls[1])
+		assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+		assert.Equal(t, []string{"-s", "device-123", "shell", "stat -c '%s %A' '/data/local/tmp/file'"}, runner.calls[2])
 	})
 
 	t.Run("directory", func(t *testing.T) {
@@ -341,7 +357,6 @@ func TestADBTargetFilesystemFileStat(t *testing.T) {
 		require.ErrorContains(t, err, "could not parse adb stat output")
 	})
 }
-
 func TestADBTargetFilesystemCreateDirTree(t *testing.T) {
 	runner := &recordingADBRunner{
 		responses: map[string]adbRunResult{
@@ -353,12 +368,12 @@ func TestADBTargetFilesystemCreateDirTree(t *testing.T) {
 	err := fs.CreateDirTree("/data/local/tmp/apap tools", 0o700)
 
 	require.NoError(t, err)
-	require.Len(t, runner.calls, 3)
+	require.Len(t, runner.calls, 4)
 	assert.Equal(t, []string{"devices"}, runner.calls[0])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "mkdir -p '/data/local/tmp/apap tools'"}, runner.calls[1])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "chmod u=rwx,g=,o= '/data/local/tmp/apap tools'"}, runner.calls[2])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "mkdir -p '/data/local/tmp/apap tools'"}, runner.calls[2])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "chmod u=rwx,g=,o= '/data/local/tmp/apap tools'"}, runner.calls[3])
 }
-
 func TestADBTargetFilesystemRemoveDirTree(t *testing.T) {
 	runner := &recordingADBRunner{
 		responses: map[string]adbRunResult{
@@ -370,11 +385,11 @@ func TestADBTargetFilesystemRemoveDirTree(t *testing.T) {
 	err := fs.RemoveDirTree("/data/local/tmp/apap tools")
 
 	require.NoError(t, err)
-	require.Len(t, runner.calls, 2)
+	require.Len(t, runner.calls, 3)
 	assert.Equal(t, []string{"devices"}, runner.calls[0])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "rm -rf '/data/local/tmp/apap tools'"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "rm -rf '/data/local/tmp/apap tools'"}, runner.calls[2])
 }
-
 func TestADBTargetFilesystemCreateEmptyFile(t *testing.T) {
 	runner := &recordingADBRunner{
 		responses: map[string]adbRunResult{
@@ -386,12 +401,12 @@ func TestADBTargetFilesystemCreateEmptyFile(t *testing.T) {
 	err := fs.CreateEmptyFile("/data/local/tmp/apap tools/.extracted", 0o644)
 
 	require.NoError(t, err)
-	require.Len(t, runner.calls, 3)
+	require.Len(t, runner.calls, 4)
 	assert.Equal(t, []string{"devices"}, runner.calls[0])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "touch '/data/local/tmp/apap tools/.extracted'"}, runner.calls[1])
-	assert.Equal(t, []string{"-s", "device-123", "shell", "chmod u=rw,g=r,o=r '/data/local/tmp/apap tools/.extracted'"}, runner.calls[2])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "touch '/data/local/tmp/apap tools/.extracted'"}, runner.calls[2])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "chmod u=rw,g=r,o=r '/data/local/tmp/apap tools/.extracted'"}, runner.calls[3])
 }
-
 func TestADBTargetFilesystemCopyFromHostUsesPush(t *testing.T) {
 	runner := &recordingADBRunner{
 		responses: map[string]adbRunResult{
@@ -412,11 +427,11 @@ func TestADBTargetFilesystemCopyFromHostUsesPush(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []int64{0, 7, 7, 7}, progress)
-	require.Len(t, runner.calls, 2)
+	require.Len(t, runner.calls, 3)
 	assert.Equal(t, []string{"devices"}, runner.calls[0])
-	assert.Equal(t, []string{"-s", "device-123", "push", hostPath, "/data/local/tmp/tool"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "push", hostPath, "/data/local/tmp/tool"}, runner.calls[2])
 }
-
 func TestADBTargetFilesystemCopyFromHostReturnsHostStatError(t *testing.T) {
 	runner := &recordingADBRunner{}
 	fs := newTestADBClient("device-123", nil, runner).Filesystem()
@@ -454,8 +469,9 @@ func TestADBDialRemovesForwardWhenLocalDialFails(t *testing.T) {
 	_, err := client.Dial("tcp", "android-device.invalid:1234")
 
 	require.Error(t, err)
-	require.Len(t, runner.calls, 3)
+	require.Len(t, runner.calls, 4)
 	assert.Equal(t, []string{"devices"}, runner.calls[0])
-	assert.Equal(t, []string{"-s", "device-123", "forward", runner.calls[1][3], "tcp:1234"}, runner.calls[1])
-	assert.Equal(t, []string{"-s", "device-123", "forward", "--remove", runner.calls[1][3]}, runner.calls[2])
+	assert.Equal(t, []string{"-s", "device-123", "shell", "getprop", "ro.serialno"}, runner.calls[1])
+	assert.Equal(t, []string{"-s", "device-123", "forward", runner.calls[2][3], "tcp:1234"}, runner.calls[2])
+	assert.Equal(t, []string{"-s", "device-123", "forward", "--remove", runner.calls[2][3]}, runner.calls[3])
 }

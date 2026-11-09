@@ -14,8 +14,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -35,29 +38,39 @@ type RunQueryTool struct {
 }
 
 type runQueryInput struct {
-	RunID     string `json:"run_id"`
-	SessionID string `json:"session_id"`
-	SQL       string `json:"sql"`
+	RunID        string `json:"run_id"`
+	SessionID    string `json:"session_id"`
+	SQL          string `json:"sql"`
+	CloseSession bool   `json:"close_session"`
 }
 
 // runQueryInputProperties returns the complete input property set. Codex reads
 // each oneOf branch independently, so the root and both branches must include
 // these properties.
-func runQueryInputProperties() map[string]*jsonschema.Schema {
-	return map[string]*jsonschema.Schema{
+func runQueryInputProperties(allowCloseSession bool) map[string]*jsonschema.Schema {
+	properties := map[string]*jsonschema.Schema{
 		"run_id": {
 			Type:        "string",
 			Description: "Unique identifier of a Performix run. The tool opens a temporary render session and closes it after this query.",
 		},
 		"session_id": {
 			Type:        "string",
-			Description: "session_id from open_render_session or from generate_ai_insights.render_session. The existing session remains open after this query.",
+			Description: "session_id from open_render_session or from generate_ai_insights.render_session. The session remains open unless close_session is true.",
 		},
 		"sql": {
 			Type:        "string",
 			Description: "One DuckDB SELECT statement to execute against the run's rendered data.",
 		},
+		"close_session": {
+			Type:        "boolean",
+			Default:     json.RawMessage("false"),
+			Description: "With session_id, close the render session after a successful final query. Failed queries leave it open.",
+		},
 	}
+	if !allowCloseSession {
+		properties["close_session"].Const = jsonschema.Ptr(any(false))
+	}
+	return properties
 }
 
 var runQueryInputSchema = &jsonschema.Schema{
@@ -68,17 +81,17 @@ var runQueryInputSchema = &jsonschema.Schema{
 		{
 			Type:       "object",
 			Required:   []string{"sql", "run_id"},
-			Properties: runQueryInputProperties(),
+			Properties: runQueryInputProperties(false),
 			Not:        &jsonschema.Schema{Required: []string{"session_id"}},
 		},
 		{
 			Type:       "object",
 			Required:   []string{"sql", "session_id"},
-			Properties: runQueryInputProperties(),
+			Properties: runQueryInputProperties(true),
 			Not:        &jsonschema.Schema{Required: []string{"run_id"}},
 		},
 	},
-	Properties: runQueryInputProperties(),
+	Properties: runQueryInputProperties(true),
 }
 
 type runQueryColumn struct {
@@ -90,6 +103,7 @@ type runQueryResult struct {
 	Rows                 [][]any          `json:"rows"`
 	ReturnedRowCount     int              `json:"returned_row_count"`
 	CompatibilityWarning *toolError       `json:"compatibility_warning,omitempty"`
+	CleanupWarning       *toolError       `json:"cleanup_warning,omitempty"`
 	Error                *toolError       `json:"error,omitempty"`
 }
 
@@ -110,7 +124,7 @@ var runQueryOutputSchema = &jsonschema.Schema{
 		},
 		"rows": {
 			Type:        "array",
-			Description: "Each row is an array of JSON values in the same order as columns.",
+			Description: "Each row is an array of JSON values in the same order as columns. Integers outside the JavaScript safe range are decimal strings.",
 			Items: &jsonschema.Schema{
 				Type: "array",
 				Items: &jsonschema.Schema{
@@ -130,6 +144,7 @@ var runQueryOutputSchema = &jsonschema.Schema{
 			Description: "Number of rows returned by the query.",
 		},
 		"compatibility_warning": toolErrorSchema(),
+		"cleanup_warning":       toolErrorSchema(),
 		"error":                 toolErrorSchema(),
 	},
 }
@@ -138,10 +153,11 @@ func (t RunQueryTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "run_query",
 		Description: "Runs one DuckDB SELECT statement against rendered Performix data. Pass exactly one of run_id or session_id. " +
-			"run_id creates and closes a temporary render; session_id reuses a session from open_render_session or generate_ai_insights.render_session and leaves it open. " +
+			"run_id creates and closes a temporary render; session_id reuses a session from open_render_session or generate_ai_insights.render_session. " +
+			"Set close_session to true with session_id when this is the final query. " +
 			"Use selective aggregate queries, predicates, or LIMIT to control result size. " +
 			fmt.Sprintf("Query results larger than %d MiB are rejected.", runQueryMaxResultMiB),
-		Annotations:  &mcp.ToolAnnotations{ReadOnlyHint: true},
+		Annotations:  &mcp.ToolAnnotations{ReadOnlyHint: false},
 		InputSchema:  runQueryInputSchema,
 		OutputSchema: runQueryOutputSchema,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input runQueryInput) (*mcp.CallToolResult, runQueryResult, error) {
@@ -162,8 +178,9 @@ func (t RunQueryTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
 }
 
 // executeRunQuery runs SQL in either a temporary session for run_id or an
-// existing session_id. It always closes temporary sessions and never closes a
-// session supplied by the caller.
+// existing session_id. It always closes temporary sessions and closes a
+// supplied session only when a successful query requests it.
+// Cleanup failures are warnings so callers retain successful query results.
 func executeRunQuery(ctx context.Context, engine apapproto.ApapClient, input runQueryInput) (result runQueryResult, err error) {
 	result.Columns = []runQueryColumn{}
 	result.Rows = [][]any{}
@@ -172,6 +189,9 @@ func executeRunQuery(ctx context.Context, engine apapproto.ApapClient, input run
 	sessionID := strings.TrimSpace(input.SessionID)
 	if (runID == "") == (sessionID == "") {
 		return result, errors.New("exactly one of run_id or session_id is required")
+	}
+	if runID != "" && input.CloseSession {
+		return result, errors.New("close_session is only valid with session_id")
 	}
 	querySQL := strings.TrimSpace(input.SQL)
 	if querySQL == "" {
@@ -193,7 +213,7 @@ func executeRunQuery(ctx context.Context, engine apapproto.ApapClient, input run
 			if err != nil {
 				err = errors.Join(err, closeErr)
 			} else {
-				err = closeErr
+				result.CleanupWarning = newToolError(closeErr)
 			}
 		}()
 	}
@@ -206,6 +226,9 @@ func executeRunQuery(ctx context.Context, engine apapproto.ApapClient, input run
 	}
 	if err := ensureJSONSizeAtMost(result, runQueryMaxResultBytes); err != nil {
 		return result, runQueryResultTooLargeError(err)
+	}
+	if input.CloseSession {
+		result.CleanupWarning = newToolError(cleanupRenderSession(ctx, engine, sessionID))
 	}
 	return result, nil
 }
@@ -311,7 +334,7 @@ func runQueryRowsFromArrowIPC(reader io.Reader, maxJSONBytes int) ([][]any, erro
 		for rowIndex := 0; rowIndex < int(record.NumRows()); rowIndex++ {
 			row := make([]any, int(record.NumCols()))
 			for columnIndex := range row {
-				row[columnIndex] = record.Column(columnIndex).GetOneForMarshal(rowIndex)
+				row[columnIndex] = runQueryJSONValue(record.Column(columnIndex), rowIndex)
 			}
 			encodedRow, err := json.Marshal(row)
 			if err != nil {
@@ -336,4 +359,60 @@ func runQueryRowsFromArrowIPC(reader io.Reader, maxJSONBytes int) ([][]any, erro
 	}
 
 	return rows, nil
+}
+
+// runQueryJSONValue preserves integer precision for clients that decode JSON
+// numbers as IEEE 754 doubles. Traverse nested Arrow arrays before marshaling
+// so integer values can be distinguished from floating-point values.
+func runQueryJSONValue(column arrow.Array, index int) any {
+	if column.IsNull(index) {
+		return nil
+	}
+	switch a := column.(type) {
+	case array.Union:
+		child := a.Field(a.ChildID(index))
+		offset := index
+		if dense, ok := a.(*array.DenseUnion); ok {
+			offset = int(dense.ValueOffset(index))
+		}
+		if child.IsNull(offset) {
+			return nil
+		}
+		return []any{a.TypeCode(index), runQueryJSONValue(child, offset)}
+	case *array.Dictionary:
+		return runQueryJSONValue(a.Dictionary(), a.GetValueIndex(index))
+	case array.ListLike:
+		start, end := a.ValueOffsets(index)
+		values := make([]any, end-start)
+		for i := range values {
+			values[i] = runQueryJSONValue(a.ListValues(), int(start)+i)
+		}
+		return values
+	case *array.Struct:
+		values := make(map[string]any, a.NumField())
+		for i, field := range a.DataType().(*arrow.StructType).Fields() {
+			values[field.Name] = runQueryJSONValue(a.Field(i), index)
+		}
+		return values
+	}
+
+	const maxSafeInteger = 1<<53 - 1
+	value := column.GetOneForMarshal(index)
+	switch v := value.(type) {
+	case int64:
+		if v < -maxSafeInteger || v > maxSafeInteger {
+			return strconv.FormatInt(v, 10)
+		}
+	case uint64:
+		if v > maxSafeInteger {
+			return strconv.FormatUint(v, 10)
+		}
+	case arrow.MonthDayNanoInterval:
+		if v.Nanoseconds < -maxSafeInteger || v.Nanoseconds > maxSafeInteger {
+			return map[string]any{
+				"months": v.Months, "days": v.Days, "nanoseconds": strconv.FormatInt(v.Nanoseconds, 10),
+			}
+		}
+	}
+	return value
 }

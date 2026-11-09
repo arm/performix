@@ -5,6 +5,9 @@ package ssh
 
 import (
 	"github.com/stretchr/testify/mock"
+
+	"github.com/Arm-Debug/apap-cli/apap-cli/service/targetlogin"
+	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 )
 
 type MockSSHKeyProvisioner struct {
@@ -17,9 +20,9 @@ func (m *MockSSHKeyProvisioner) CreateSSHKeyPair(dataDir string) (privateKeyPath
 }
 
 func (m *MockSSHKeyProvisioner) ProvisionPublicKeyWithPassword(
-	dataDir, host string, port int, username, password, pubKey string,
+	dataDir string, host target.SSHHostConfig, promptSecret targetlogin.SecretPrompter, pubKey string,
 ) error {
-	args := m.Called(dataDir, host, port, username, password, pubKey)
+	args := m.Called(dataDir, host, promptSecret, pubKey)
 	return args.Error(0)
 }
 

@@ -8,8 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 ## Problem Summary
 - CPU categories and causes: Frontend Bound from instruction-fetch pressure,
   Backend Bound from D-cache misses, and Bad Speculation from branch
-  mispredictions. Each category and cause must be connected to the correct
-  function.
+  mispredictions. Each cause must be connected to the correct function;
+  equivalent plain-language diagnoses are acceptable.
 
 ## ID
 - `test_case_52`
@@ -19,6 +19,18 @@ SPDX-License-Identifier: Apache-2.0
   packet type processing code into one application.
 - Adjust only how often each part runs so that the recording contains enough
   samples from all three.
+
+## Private Workload Design
+- The request, record and packet kernels correspond to cases 46, 47 and 49.
+  Their weights are 4, 1 and 3 respectively, balancing instruction-fetch
+  pressure, data-cache misses and branch misprediction in one recording.
+- The application warms up for 5 seconds, then measures for a fixed 45 seconds.
+  These durations, weights, inputs and per-iteration work are part of the
+  workload contract, not optimization opportunities.
+- Input construction is outside the measured phase but can receive startup
+  samples. Its translation units retain `-g0` so source archives from Dynamic
+  Insights recordings expose the measured kernels without revealing the
+  calibrated input layout.
 
 ## What's Wrong In Current Implementation
 - The application contains three independent performance causes. A run-wide
@@ -47,9 +59,14 @@ SPDX-License-Identifier: Apache-2.0
 ## Scoring Guidance
 - Pass:
   - Identifies all three distinct causes.
-  - Uses the top-level CPU categories and supporting measurements for each path
-    to connect every cause to the correct code.
-  - Gives the corresponding code change for each path.
+  - Connects every cause to the correct code using path-specific measurements.
+    Equivalent descriptions of the mechanisms count; exact Topdown category
+    labels are not required.
+  - A qualified instruction-fetch diagnosis is acceptable when supported by
+    instruction-cache or instruction-TLB evidence. Caveats about inconsistent
+    sampled Topdown estimates do not invalidate an otherwise supported diagnosis.
+  - Gives a concrete, separately justified change for each path. Eliminating
+    repeated work is acceptable when source semantics support it.
 - Fail:
   - Reports only the run-wide dominant category.
   - Connects the cache, instruction-fetch or branch evidence to the wrong path.

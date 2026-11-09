@@ -38,7 +38,6 @@ COVERED_MCP_TOOLS = frozenset(
         "list_runs",
         "list_targets",
         "open_render_session",
-        "read_ai_insights_payload_details",
         "recipe_info",
         "run_query",
         "run_recipe",
@@ -66,7 +65,7 @@ class MCPClientSmoke:
         self._test_root = Path()
         self._output_dir = Path()
         self._target: dict[str, Any] = {}
-        self._curated_run_id = ""
+        self._code_hotspots_run_id = ""
         self._query_run_id = ""
         self._server_port = 0
         self._client: CodingAgentMCPTestClient = CodexMCPTestClient()
@@ -122,12 +121,12 @@ class MCPClientSmoke:
                     "strict",
                 ]
             )
-            self._curated_run_id = self._create_fixture_run(
+            self._code_hotspots_run_id = self._create_fixture_run(
                 "code_hotspots",
                 ["--system-wide", "--timeout", "1"],
             )
             self._assign_fixture_run_group(
-                self._curated_run_id, FIXTURE_RUN_GROUP
+                self._code_hotspots_run_id, FIXTURE_RUN_GROUP
             )
             self._query_run_id = self._create_fixture_run(
                 "system_utilization",
@@ -319,19 +318,19 @@ class MCPClientSmoke:
         fixtures = {
             run.get("id"): run
             for run in runs
-            if run.get("id") in {self._curated_run_id, self._query_run_id}
+            if run.get("id") in {self._code_hotspots_run_id, self._query_run_id}
         }
-        if fixtures.keys() != {self._curated_run_id, self._query_run_id}:
+        if fixtures.keys() != {self._code_hotspots_run_id, self._query_run_id}:
             raise AssertionError(f"Fixture runs were not listed: {call['result']}")
         failed = [
             run for run in fixtures.values() if run.get("run_result") != "success"
         ]
         if failed:
             raise AssertionError(f"Fixture runs were not successful: {failed}")
-        if fixtures[self._curated_run_id].get("group") != FIXTURE_RUN_GROUP:
+        if fixtures[self._code_hotspots_run_id].get("group") != FIXTURE_RUN_GROUP:
             raise AssertionError(
                 "Fixture run group was not listed: "
-                f"{fixtures[self._curated_run_id]}"
+                f"{fixtures[self._code_hotspots_run_id]}"
             )
         return True
 
@@ -411,7 +410,7 @@ class MCPClientSmoke:
     def export_and_import_run(self) -> bool:
         """Check that a captured run can be exported and imported through Codex."""
         export_arguments = {
-            "run_id": self._curated_run_id,
+            "run_id": self._code_hotspots_run_id,
             "target_directory": str(self._test_root),
         }
         prompt = self._prompt(
@@ -425,18 +424,18 @@ class MCPClientSmoke:
         exported, imported, listed = calls
 
         self._require_arguments(exported, export_arguments)
-        archive_path = self._test_root / f"{self._curated_run_id}.zip"
+        archive_path = self._test_root / f"{self._code_hotspots_run_id}.zip"
         if exported["result"].get("archive_path") != str(archive_path) or not archive_path.is_file():
             raise AssertionError(f"Run archive was not exported: {exported['result']}")
 
         self._require_arguments(imported, {"path": str(archive_path)})
         imported_run_id = imported["result"].get("run_id")
-        if not imported_run_id or imported_run_id == self._curated_run_id:
+        if not imported_run_id or imported_run_id == self._code_hotspots_run_id:
             raise AssertionError(f"Import did not create a new run ID: {imported['result']}")
 
         self._require_arguments(listed, {})
         run_ids = {run.get("id") for run in listed["result"].get("runs", [])}
-        if not {self._curated_run_id, imported_run_id}.issubset(run_ids):
+        if not {self._code_hotspots_run_id, imported_run_id}.issubset(run_ids):
             raise AssertionError(f"Original and imported runs were not listed: {listed['result']}")
         return True
 
@@ -497,68 +496,27 @@ class MCPClientSmoke:
             raise AssertionError(f"Query returned no row: {call['result']}")
         return True
 
-    @keyword("Codex Can Generate Curated AI Insights")
-    def generate_curated_ai_insights(self) -> bool:
-        """Check curated insight generation and its payload-details tool."""
-        prompt = self._prompt(
-            "Call `generate_ai_insights` exactly once with these JSON arguments: "
-            f"{json.dumps({'run_id': self._curated_run_id})}. Then call "
-            "`read_ai_insights_payload_details` exactly once with `bundle_id` "
-            "set to the returned `bundle_id`, `name` set to the first returned "
-            "payload's `name`, and `offset` set to 0, even if that payload is "
-            "already complete."
-        )
-        calls = self._run_client("curated-ai-insights", prompt)
-        self._require_call_sequence(
-            calls,
-            [
-                "generate_ai_insights",
-                "read_ai_insights_payload_details",
-            ],
-        )
-        generate, read_payload = calls
-        self._require_arguments(generate, {"run_id": self._curated_run_id})
-        bundle_id = generate["result"].get("bundle_id")
-        payloads = generate["result"].get("payloads") or []
-        if (
-            generate["result"].get("run_id") != self._curated_run_id
-            or not bundle_id
-            or not payloads
-        ):
-            raise AssertionError(
-                "Curated AI Insights returned no readable bundle: "
-                f"{generate['result']}"
-            )
-
-        expected_arguments = {
-            "bundle_id": bundle_id,
-            "name": payloads[0].get("name"),
-            "offset": 0,
-        }
-        self._require_arguments(read_payload, expected_arguments)
-        if read_payload["result"].get("name") != expected_arguments["name"]:
-            raise AssertionError(
-                f"Payload details returned the wrong payload: {read_payload['result']}"
-            )
-        return True
+    @keyword("Codex Can Generate Code Hotspots AI Insights")
+    def generate_code_hotspots_ai_insights(self) -> bool:
+        """Check that Code Hotspots uses query-based insights."""
+        return self._generate_query_ai_insights("code-hotspots-ai-insights", self._code_hotspots_run_id)
 
     @keyword("Codex Can Generate Query-Based AI Insights")
     def generate_query_ai_insights(self) -> bool:
         """Check query-based insight generation."""
-        arguments = {"run_id": self._query_run_id}
-        generate = self._call_tool(
-            "query-ai-insights", "generate_ai_insights", arguments
-        )
+        return self._generate_query_ai_insights("query-ai-insights", self._query_run_id)
+
+    def _generate_query_ai_insights(self, test_name: str, run_id: str) -> bool:
+        arguments = {"run_id": run_id}
+        generate = self._call_tool(test_name, "generate_ai_insights", arguments)
         result = generate["result"]
         payloads = result.get("payloads") or []
-        if result.get("run_id") != self._query_run_id:
+        if result.get("run_id") != run_id:
             raise AssertionError(
                 f"Query-based AI Insights used the wrong run: {result}"
             )
-        if result.get("bundle_id"):
-            raise AssertionError(
-                f"Query-based AI Insights returned a curated bundle: {result}"
-            )
+        if not result.get("render_session", {}).get("session_id"):
+            raise AssertionError(f"AI Insights returned no render session: {result}")
         if "run_query" not in result.get("guidance", ""):
             raise AssertionError(
                 f"Query-based AI Insights returned no query guidance: {result}"
@@ -566,7 +524,7 @@ class MCPClientSmoke:
         if (
             len(payloads) != 1
             or payloads[0].get("name") != "run_details"
-            or payloads[0].get("complete") is not True
+            or not payloads[0].get("content")
         ):
             raise AssertionError(
                 f"Query-based AI Insights returned unexpected payloads: {result}"

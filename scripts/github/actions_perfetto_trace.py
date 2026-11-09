@@ -17,7 +17,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+
+from requests.utils import urlparse
 
 try:
     from fastcore.foundation import L

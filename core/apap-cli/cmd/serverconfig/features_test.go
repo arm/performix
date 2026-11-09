@@ -66,6 +66,7 @@ func TestFeatureDefaults(t *testing.T) {
 		Rerendering:             true,
 		SecondaryRunPaths:       true,
 		RenderDBSandbox:         true,
+		JfrCapture:              true,
 		RunComponentCompression: true,
 	}, LoadFeatureFlags(v))
 }
@@ -135,10 +136,10 @@ func TestFeatureDefinitionsKeepInstancesIndependent(t *testing.T) {
 	}
 	require.Equal(t, LoadFeatureFlags(v), first)
 	require.Equal(t, featureflags.Flags{}, second)
-	v.Set("enable-jfr-capture", true)
+	v.Set("enable-jfr-capture", false)
 	for _, def := range secondDefinitions {
 		def.load(v)
 	}
-	require.True(t, second.JfrCapture)
-	require.False(t, first.JfrCapture)
+	require.False(t, second.JfrCapture)
+	require.True(t, first.JfrCapture)
 }

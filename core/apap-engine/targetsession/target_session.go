@@ -33,7 +33,7 @@ type TargetSession interface {
 	// TargetAgent returns the agent connection for the target, establishing a new connection if required.
 	// An underlying target connection must have been established before calling this method.
 	TargetAgent(ctx context.Context) (*agent.AgentConn, error)
-	// CloseTargetAgent closes the cached agent connection if one exists.
+	// CloseTargetAgent closes the cached agent connection for this locality if one exists.
 	// It is a no-op if no agent connection has been established.
 	CloseTargetAgent() error
 	// ResolveToolsDir returns the cached resolved tools base directory for this session.
@@ -43,7 +43,7 @@ type TargetSession interface {
 }
 
 type sshConnect func(ctx context.Context, sshTgt target.SSHTarget, promptProviders conductor.PromptProviders) (conductor.SecureClient, error)
-type androidConnect func(androidTgt target.AndroidTarget) (*conductor.ADBClient, error)
+type androidConnect func(ctx context.Context, androidTgt target.AndroidTarget) (*conductor.ADBClient, error)
 type createTargetPlatform func(cmdRunner conductor.CommandRunner, fs conductor.TargetFilesystem, platformGate conductor.PlatformGate) (*conductor.TargetPlatform, error)
 type resolveToolsDir func(baseDir string, platformOS conductor.OS, cmdRunner conductor.CommandRunner, localityName string) (string, error)
 
@@ -60,8 +60,8 @@ type targetSession struct {
 	connection TargetConnection
 	// Holds platform-specific functionality
 	platform *conductor.TargetPlatform
-	// Holds the agent Grpc connection
-	agent *agent.AgentConn
+	// Cache agents separately because host and target launch policies can differ.
+	agents map[string]*agent.AgentConn
 	// Holds the resolved tools base directory on the target
 	resolvedToolsDir string
 	baseToolsDir     string
@@ -96,9 +96,9 @@ func newTargetSession(tgt target.Target, agentConnCreator agent.ConnectionCreato
 			secureConnector := conductor.NewDefaultSecureConnector()
 			return secureConnector.SecureConnectNoRetry(ctx, &sshTgt, promptProviders)
 		},
-		androidConnect: func(androidTgt target.AndroidTarget) (*conductor.ADBClient, error) {
+		androidConnect: func(ctx context.Context, androidTgt target.AndroidTarget) (*conductor.ADBClient, error) {
 			adbClient := conductor.NewADBClient(androidTgt.SerialNumber, androidTgt.DeviceIPAddress, adbRunner)
-			if err := adbClient.CheckHealth(); err != nil {
+			if err := adbClient.CheckHealthContext(ctx); err != nil {
 				return nil, err
 			}
 			return adbClient, nil
@@ -135,7 +135,12 @@ func (ts *targetSession) connectWithOptions(ctx context.Context, options Connect
 	defer ts.mu.Unlock()
 
 	if ts.connection != nil {
-		err := ts.connection.CheckHealth()
+		var err error
+		if android, ok := ts.connection.(*androidTargetConnection); ok {
+			err = android.client.CheckHealthContext(ctx)
+		} else {
+			err = ts.connection.CheckHealth()
+		}
 		if err == nil && ts.platform != nil {
 			if err := conductor.ValidatePlatformGateSupport(ts.platform.PlatformConfiguration, options.PlatformGate); err != nil {
 				return nil, err
@@ -166,7 +171,7 @@ func (ts *targetSession) connectWithOptions(ctx context.Context, options Connect
 	case *target.LocalTarget:
 		ts.connection = &localTargetConnection{}
 	case *target.AndroidTarget:
-		adbClient, err := ts.androidConnect(*tgt)
+		adbClient, err := ts.androidConnect(ctx, *tgt)
 		if err != nil {
 			return nil, err
 		}
@@ -213,25 +218,25 @@ func (ts *targetSession) targetAgent(ctx context.Context, localityName string) (
 		return nil, message.New(message.EngineTargetSessionConnectionNotEstablished)
 	}
 
-	if ts.agent != nil {
-		err := agent.CheckAgentClientConn(ctx, ts.agent)
+	if cached := ts.agents[localityName]; cached != nil {
+		err := agent.CheckAgentClientConn(ctx, cached)
 		if err == nil {
 			logx.FromContext(ctx).WithField("target", ts.target.String()).Info("Existing agent connection found")
 
-			return ts.agent, nil
+			return cached, nil
 		}
 
 		logx.FromContext(ctx).WithFields(logrus.Fields{"err": err, "target": ts.target.String()}).Warn(
 			"Existing agent connection is unhealthy, re-establishing")
 
 		// Close existing connection
-		err = ts.agent.Close()
+		err = cached.Close()
 		if err != nil {
 			logx.FromContext(ctx).WithField("target", ts.target.String()).WithError(err).Warn(
 				"Error closing unhealthy agent connection",
 			)
 		}
-		ts.agent = nil
+		delete(ts.agents, localityName)
 	}
 	conn, err := ts.agentCreator.NewConnection(ts.target.DisplayHost(), localityName, *ts.platform, ts.connection.Dialer())
 	if err != nil {
@@ -239,18 +244,26 @@ func (ts *targetSession) targetAgent(ctx context.Context, localityName string) (
 	}
 
 	logx.FromContext(ctx).WithField("target", ts.target.String()).Info("New agent connection created")
-	ts.agent = conn
+	if ts.agents == nil {
+		ts.agents = make(map[string]*agent.AgentConn)
+	}
+	ts.agents[localityName] = conn
 	return conn, nil
 }
 
 func (ts *targetSession) CloseTargetAgent() error {
+	return ts.closeTargetAgent(locality.Target)
+}
+
+func (ts *targetSession) closeTargetAgent(localityName string) error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	if ts.agent == nil {
+	cached := ts.agents[localityName]
+	if cached == nil {
 		return nil
 	}
-	err := ts.agent.Close()
-	ts.agent = nil
+	err := cached.Close()
+	delete(ts.agents, localityName)
 	return err
 }
 
@@ -268,11 +281,11 @@ func (ts *targetSession) Close() error {
 
 func (ts *targetSession) close() error {
 	var joined error
-	if ts.agent != nil {
-		if err := ts.agent.Close(); err != nil {
+	for localityName, cached := range ts.agents {
+		if err := cached.Close(); err != nil {
 			joined = errors.Join(joined, err)
 		}
-		ts.agent = nil
+		delete(ts.agents, localityName)
 	}
 	ts.platform = nil
 	if ts.connection != nil {
@@ -305,7 +318,7 @@ func (ls *localityScopedTargetSession) TargetPlatform() (*conductor.TargetPlatfo
 }
 
 func (ls *localityScopedTargetSession) CloseTargetAgent() error {
-	return ls.base.CloseTargetAgent()
+	return ls.base.closeTargetAgent(ls.localityName)
 }
 
 func (ls *localityScopedTargetSession) Close() error {

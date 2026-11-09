@@ -29,6 +29,8 @@ func (s *scriptedReadyStageMock) Name() string {
 	return s.Called().String(0)
 }
 
+func (s *scriptedReadyStageMock) RequiresTools() bool { return false }
+
 func newScriptedReadyStageMock(name string) *scriptedReadyStageMock {
 	stage := &scriptedReadyStageMock{}
 	stage.On("Name").Return(name).Maybe()
@@ -53,7 +55,7 @@ func TestConfigureRecipeReadyStages_WithParameterValidationStage(t *testing.T) {
 	ready := newScriptedReadyStageMock("ready-stage")
 
 	cfg := newReadyStageConfiguration(&recipe.Recipe{
-		ParameterOptionsStages:   []recipe.ScriptedStage{optionA},
+		ParameterOptionsStages:   []recipe.ParameterOptionsStage{optionA},
 		ParameterValidationStage: validation,
 		ReadyStages:              []recipe.ScriptedStage{ready},
 	})
@@ -91,7 +93,7 @@ func TestConfigureRecipeReadyStages_WithoutParameterValidationStage(t *testing.T
 	ready := newScriptedReadyStageMock("ready-stage")
 
 	cfg := newReadyStageConfiguration(&recipe.Recipe{
-		ParameterOptionsStages: []recipe.ScriptedStage{option},
+		ParameterOptionsStages: []recipe.ParameterOptionsStage{option},
 		ReadyStages:            []recipe.ScriptedStage{ready},
 	})
 
@@ -130,7 +132,7 @@ func TestConfigureRecipeInfoStages(t *testing.T) {
 		infoStage := newScriptedReadyStageMock("info-stage")
 		cfg := newReadyStageConfiguration(&recipe.Recipe{})
 
-		stageList := ConfigureRecipeInfoStages(cfg, []recipe.ScriptedStage{infoStage})
+		stageList := ConfigureRecipeInfoStages(cfg, []recipe.ParameterOptionsStage{infoStage})
 
 		require.Len(t, stageList, 9)
 		assert.IsType(t, &stages.TargetConnectStage{}, stageList[0])
@@ -143,5 +145,16 @@ func TestConfigureRecipeInfoStages(t *testing.T) {
 		require.IsType(t, &stages.CustomRecipeStage{}, stageList[7])
 		assert.Equal(t, "info-stage", stageList[7].Name())
 		assert.IsType(t, &stages.ReleaseTargetLockStage{}, stageList[8])
+	})
+
+	t.Run("only target support stages are required without dynamic options", func(t *testing.T) {
+		cfg := newReadyStageConfiguration(&recipe.Recipe{})
+
+		stageList := ConfigureRecipeInfoStages(cfg, nil)
+
+		require.Len(t, stageList, 3)
+		assert.IsType(t, &stages.TargetConnectStage{}, stageList[0])
+		assert.IsType(t, &stages.TargetArchitectureStage{}, stageList[1])
+		assert.IsType(t, &stages.TargetPlatformSupportStage{}, stageList[2])
 	})
 }

@@ -12,7 +12,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 HARNESS_DIR = SCRIPTS_DIR / "ai-insights-evaluation"
 sys.path.append(str(HARNESS_DIR))
 
-import conftest as ai_conftest  # noqa: E402
+from tests.evaluation import conftest as ai_conftest  # noqa: E402
 
 
 class _HookOutcome:
@@ -26,14 +26,17 @@ class _HookOutcome:
 class PerformanceQualityHookTests(unittest.TestCase):
     PERFORMANCE_THRESHOLDS = {
         "test_case_01": {
-            "duration_seconds": 30,
-            "input_tokens": 1000,
-            "output_tokens": 1000,
+            "test-high": {
+                "duration_seconds": 30,
+                "input_tokens": 1000,
+                "output_tokens": 1000,
+            }
         }
     }
 
     def _run_hook(self, report) -> None:
-        item = SimpleNamespace(config=object())
+        report.user_properties.append(("ai_model_config", "test-high"))
+        item = SimpleNamespace(config=object(), user_properties=[])
         hook = ai_conftest.pytest_runtest_makereport(item, call=None)
         next(hook)
         with patch.object(
@@ -62,7 +65,7 @@ class PerformanceQualityHookTests(unittest.TestCase):
         self._run_hook(report)
 
         self.assertEqual("failed", report.outcome)
-        self.assertIn("runtime=31 (POOR, threshold=30)", report.longrepr)
+        self.assertNotIn("runtime=", report.longrepr)
         self.assertIn("input tokens=None (INDETERMINABLE, threshold=1000)", report.longrepr)
         properties = dict(report.user_properties)
         self.assertEqual("true", properties["ai_performance_evaluated"])

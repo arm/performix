@@ -31,11 +31,15 @@ type sqlRendererPortConfig struct {
 }
 
 type sqlRendererConfig struct {
-	SQL    string                  `json:"sql"`
-	Inputs []sqlRendererPortConfig `json:"inputs"`
-	Output *sqlRendererPortConfig  `json:"output"`
-	// Materialize evaluates SQL once during initialization instead of on every query.
-	Materialize bool `json:"materialize"`
+	// Materialized indicates whether the output of the SQLRenderer should be materialized
+	// as a table (true) or as a view (false). Default is false (view).
+	//
+	// **Use with care**: If Materialized is true, the output will be stored as a table in the
+	// database, which can improve query performance but will cause more storage usage.
+	Materialized bool                    `json:"materialized"`
+	SQL          string                  `json:"sql"`
+	Inputs       []sqlRendererPortConfig `json:"inputs"`
+	Output       *sqlRendererPortConfig  `json:"output"`
 }
 
 type SQLRenderer struct {
@@ -147,22 +151,25 @@ func (renderer *SQLRenderer) Initialize(session render.Session, resolvedDataSour
 	}
 
 	output := renderer.outputSpec.Ports[0]
-	viewName := session.Manifest().AddEntry(render.NewManifestEntryInfo(
+	outputName := session.Manifest().AddEntry(render.NewManifestEntryInfo(
 		output.ComponentType,
 		renderer.config.Identity,
 		associatedContentIDs(session.Content()),
 	))
 
 	objectType := "VIEW"
-	if renderer.specificConfig.Materialize {
+	errorCode := message.EngineRenderSqlRendererViewCreateFailed
+	if renderer.specificConfig.Materialized {
 		objectType = "TABLE"
+		errorCode = message.EngineRenderSqlRendererTableCreateFailed
 	}
 	//nolint:gosec
-	query := `CREATE OR REPLACE ` + objectType + ` ` + sqlDoubleQuoteString(viewName) + ` AS ` + resolvedSQL
+	query := `CREATE OR REPLACE ` + objectType + ` ` + sqlDoubleQuoteString(outputName) + ` AS ` + resolvedSQL
 	if _, err := session.Database().Conn.ExecContext(context.Background(), query); err != nil {
-		return message.New(message.EngineRenderSqlRendererViewCreateFailed).WithMetadata(map[string]string{
-			"viewName": viewName,
-			"portName": output.Name,
+		_ = session.Manifest().RemoveEntry(outputName)
+		return message.New(errorCode).WithMetadata(map[string]string{
+			"outputName": outputName,
+			"portName":   output.Name,
 		}).WithCause(err)
 	}
 

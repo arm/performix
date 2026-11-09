@@ -114,7 +114,7 @@ task core:test:robot TARGET=my_device
 Some suites import pre-recorded runs by default, using the same target OS,
 architecture, workload and profiling settings as live capture.
 
-CI, `task core:test:robot` and `make robot-test` download missing pre-recorded
+CI and `task core:test:robot` download missing pre-recorded
 runs and metadata to `robot/resources/files/prerecorded-runs`.
 Set `ARTIFACTORY_API_TOKEN` for local downloads.
 
@@ -162,7 +162,7 @@ task core:test:robot TARGET=my_device ROBOT_ARGS="--run-remote-localhost --launc
 For the full list of supported arguments, run from the `core` directory:
 
 ```shell
-python3 scripts/run-robot.py --help
+python3 robot/run-robot.py --help
 ```
 
 ### Running `robot` directly
@@ -191,7 +191,7 @@ Note that `remote-localhost`-tagged tests will be skipped automatically if the r
 | x86-64 target (exclude unsupported recipes) | `robot -T --outputdir robot/results --exclude disabledORcpu_microarchitectureORinstruction_mixORmemory_access --variable TARGET:<name> robot/tests` |
 | Only run recipe tests | `robot -T --outputdir robot/results --include recipe --exclude disabled --variable TARGET:<name> robot/tests` |
 | Only run target and run tests | `robot -T --outputdir robot/results --include targetORrun --exclude disabled --variable TARGET:<name> robot/tests` |
-| Skip `remote-localhost` tests (note: `remote-localhost` tests require special setup on the target before they are run, this can be handled `./scripts/run-robot.py` with the `--run-remote-localhost` flag) | `robot -T --outputdir robot/results --exclude disabledORremote-localhost --variable TARGET:<name> robot/tests` |
+| Skip `remote-localhost` tests (note: `remote-localhost` tests require special setup on the target before they are run, this can be handled `./robot/run-robot.py` with the `--run-remote-localhost` flag) | `robot -T --outputdir robot/results --exclude disabledORremote-localhost --variable TARGET:<name> robot/tests` |
 | Dry run a single suite (no execution) | `robot --dryrun --output NONE --log NONE --report NONE robot/tests/recipe/recipe.robot` |
 | Run without producing output files | `robot --output NONE --log NONE --report NONE --variable TARGET:<name> robot/tests` |
 
@@ -249,12 +249,12 @@ You can also prepare workloads separately using `scripts/download_and_prepare_wo
 
 ```shell
 # Step 1: download and deploy workloads, write paths to a JSON file
-GITHUB_TOKEN=<token> python3 scripts/download_and_prepare_workloads.py \
+GITHUB_TOKEN=<token> python3 core/scripts/download_and_prepare_workloads.py \
     --workloads netbench,simple-java-work \
     --target-user myuser \
     --target-host 192.168.1.1 \
     --ssh-key ~/.ssh/id_rsa \
-    --output robot/resources/files/workloads/prepared_workloads.json
+    --output core/robot/resources/files/workloads/prepared_workloads.json
 
 # Step 2: run the tests, passing the stem of the output file
 task core:test:robot TARGET=my_device \

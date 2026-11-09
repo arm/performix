@@ -24,7 +24,8 @@ ${INSTRUCTION_MIX_STATIC_RUN_ID_1}  NONE
 ${INSTRUCTION_MIX_STATIC_RUN_ID_2}  NONE
 ${CODE_HOTSPOTS_RUN_ID_1}  NONE
 ${CODE_HOTSPOTS_RUN_ID_2}  NONE
-${MEMORY_ACCESS_RUN_ID}  NONE
+${MEMORY_ACCESS_RUN_ID_1}  NONE
+${MEMORY_ACCESS_RUN_ID_2}  NONE
 ${SYSTEM_UTILIZATION_RUN_ID}  NONE
 ${FLAT_COMPARISON_RENDER_CONFIG}  NONE
 ${FLAT_RENDER_CONFIG}  NONE
@@ -216,11 +217,13 @@ The Code Hotspots Run Renders Successfully
 
 The Memory Access Run Renders Successfully
   [Documentation]  Check that Memory Access run can be rendered.
-  ...  Disabled as there's no SPE data with the 1s timeout
-  [Tags]  disabled  memory-access
-  Given The Run Exists  ${MEMORY_ACCESS_RUN_ID}
-  When Run Render  ${MEMORY_ACCESS_RUN_ID}
+  ...  Uses pre-recorded SPE data by default; live mode requires a target that fully supports memory access.
+  [Tags]  memory-access
+  [Setup]  Prepare Memory Access Runs
+  Given The Run Exists  ${MEMORY_ACCESS_RUN_ID_1}
+  When Run Render  ${MEMORY_ACCESS_RUN_ID_1}
   Then The Render Invocation Was Successful
+  And The Memory Access Render Contains Samples  1
 
 The System Utilization Run Renders Successfully
   [Documentation]  Check that a System Utilization run can be rendered.
@@ -279,11 +282,15 @@ The Two Code Hotspots Runs Render Successfully
 
 The Two Memory Access Runs Render Successfully
   [Documentation]  Check that two Memory Access runs can be rendered.
-  ...  Disabled as there's no SPE data with the 1s timeout
-  [Tags]  disabled  memory-access
-  Given The Run Exists  ${MEMORY_ACCESS_RUN_ID}
-  When Run Render  ${MEMORY_ACCESS_RUN_ID}  ${MEMORY_ACCESS_RUN_ID}
+  ...  Uses pre-recorded SPE data by default; live mode requires a target that fully supports memory access.
+  [Tags]  memory-access
+  [Setup]  Prepare Memory Access Runs
+  Given The Run Exists  ${MEMORY_ACCESS_RUN_ID_1}
+  And The Run Exists  ${MEMORY_ACCESS_RUN_ID_2}
+  And Should Not Be Equal  ${MEMORY_ACCESS_RUN_ID_1}  ${MEMORY_ACCESS_RUN_ID_2}
+  When Run Render  ${MEMORY_ACCESS_RUN_ID_1}  ${MEMORY_ACCESS_RUN_ID_2}
   Then The Render Invocation Was Successful
+  And The Memory Access Render Contains Samples  2
 
 
 *** Keywords ***
@@ -296,7 +303,6 @@ Run Recipes For Suite
     IF  ${cpu_microarchitecture_supported}  Generate CPU Microarchitecture Runs
     ${instruction_mix_supported} =  Instruction Mix Is Supported On Target
     IF  ${instruction_mix_supported}  Generate Instruction Mix Runs
-    # Generate Memory Access Run // temporary disabled to unblock integration (also disabled deletion in Render Suite Teardown)
     ${system_utilization_supported} =  System Utilization Is Supported On Target
     IF  ${system_utilization_supported}  Generate System Utilization Run
   END
@@ -362,9 +368,43 @@ Generate Local Code Hotspots Runs
   ${run_id} =  Run Code Hotspots Recipe And Extract Run ID
   VAR  ${CODE_HOTSPOTS_LOCAL_RUN_ID} =  ${run_id}  scope=SUITE
 
-Generate Memory Access Run
-  ${run_id} =  Run Memory Access Recipe And Extract Run ID
-  VAR  ${MEMORY_ACCESS_RUN_ID} =  ${run_id}  scope=SUITE
+Prepare Memory Access Runs
+  [Documentation]  Prepare two distinct Memory Access runs only when these tests are selected.
+  ...  Imported captures do not require SPE on the configured target. Live capture does.
+  Skip Unless Target OS Is  ${OS_LINUX}
+  Skip Unless Target Arch Is  ${ARCH_AARCH64}
+  IF  '${MEMORY_ACCESS_RUN_ID_1}' != 'NONE' and '${MEMORY_ACCESS_RUN_ID_2}' != 'NONE'  RETURN
+  IF  '${USE_PRERECORDED_RUNS}' == 'True'
+    Import Prerecorded Runs  memory-access-baseline
+    ...  MEMORY_ACCESS_RUN_ID_1  MEMORY_ACCESS_RUN_ID_2
+  ELSE
+    Prepare Render Capture Target
+    ${run_id} =  Run Memory Access Recipe And Extract Run ID
+    VAR  ${MEMORY_ACCESS_RUN_ID_1} =  ${run_id}  scope=SUITE
+    ${run_id} =  Run Memory Access Recipe And Extract Run ID
+    VAR  ${MEMORY_ACCESS_RUN_ID_2} =  ${run_id}  scope=SUITE
+  END
+
+The Memory Access Render Contains Samples
+  [Documentation]  Require nonzero SPE samples from every input run, including both comparison inputs.
+  [Arguments]  ${expected_runs}
+  ${response} =  Parse Last JSON Stdout Line To Dictionary
+  VAR  ${entries} =  ${response}[data][invocation][manifest][entry]
+  VAR  @{tables}  @{EMPTY}
+  FOR  ${entry}  IN  @{entries}
+    ${renderer_id} =  Evaluate  $entry.get('renderer_id', {}).get('value')
+    IF  $renderer_id == 'latency_breakdown' and $entry['component_type'] == 'drilldown'
+      Append To List  ${tables}  ${entry}[table_name]
+    END
+  END
+  Length Should Be  ${tables}  ${expected_runs}
+  FOR  ${table}  IN  @{tables}
+    ${query} =  Catenate
+    ...  "select coalesce(sum(d.measurement_value), 0) from ${table} d
+    ...  join ref_measurements m using (measurement_id) where m.identifier = 'spe.samples.count'"
+    ${samples} =  Query Single Value From Render Session  ${G_RENDER_SESSION_ID}  ${query}
+    Should Be True  ${samples} > 0  Memory Access capture contains no SPE samples in ${table}.
+  END
 
 Generate System Utilization Run
   ${run_id} =  Run System Utilization Recipe And Extract Run ID

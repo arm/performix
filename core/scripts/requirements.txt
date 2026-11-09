@@ -3,12 +3,10 @@
 
 # Python dependencies for the helper scripts under core/scripts/.
 #
-# Keep this lean: list only what the scripts in this directory import or invoke.
-# Robot Framework test dependencies live in ../robot/requirements.txt, which
-# includes this file via "-r" so the shared tooling virtualenv (core/.venv)
-# still receives everything it needs.
+# ../robot/requirements.txt includes these shared dependencies and adds
+# the packages needed by the Robot launcher and tests.
 
-certifi          # download_github_release_asset.py
+certifi>=2026.7.22  # Current public CA roots for HTTPS downloads
+requests>=2.32.0  # Tool downloads, Robot orchestration, and benchmark reporting
 jsonschema==4.25.1  # validate_matrix.py, validate_telemetry.py
 pytest>=8.4.2    # sysutil-timeline pytest tests (pending shared-venv unification)
-robotframework>=7.2.0  # run-robot.py test selection

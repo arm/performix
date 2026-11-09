@@ -25,12 +25,13 @@ func TestTableNativeRow(t *testing.T) {
 	_, err = db.Conn.ExecContext(context.Background(), `INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob')`)
 	require.NoError(t, err)
 
-	table, err := NewNativeRowTableAccessor(db, `SELECT id, name FROM users`, NativeRowSettings{})
+	table, err := NewNativeRowTableAccessor(db, `SELECT id, name, NULL AS missing FROM users`, NativeRowSettings{})
 	require.NoError(t, err)
 
-	require.Equal(t, 2, table.ColumnCount())
+	require.Equal(t, 3, table.ColumnCount())
 	require.Equal(t, "id", table.ColumnDescription(0).Name)
 	require.Equal(t, "name", table.ColumnDescription(1).Name)
+	require.Equal(t, "missing", table.ColumnDescription(2).Name)
 
 	chunk, err := table.NextChunk()
 	require.NoError(t, err)
@@ -38,6 +39,8 @@ func TestTableNativeRow(t *testing.T) {
 
 	require.Equal(t, int64(1), chunk[0]["id"])
 	require.Equal(t, "Alice", chunk[0]["name"])
+	require.Contains(t, chunk[0], "missing")
+	require.Nil(t, chunk[0]["missing"])
 	require.Equal(t, int64(2), chunk[1]["id"])
 	require.Equal(t, "Bob", chunk[1]["name"])
 

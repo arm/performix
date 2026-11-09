@@ -178,12 +178,15 @@ func TestGetCPUTopology(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, "", cpuTopology.PrimaryCPUName)
 	require.Greater(t, len(cpuTopology.CPUs), 0)
+	require.Equal(t, cpuTopology.CPUs[0].Name, cpuTopology.PrimaryCPUName)
 	require.Greater(t, len(cpuTopology.ClusterInfo), 0)
 
 	for _, cpu := range cpuTopology.CPUs {
 		require.Less(t, cpu.CoreNumber, uint32(len(cpuTopology.CPUs)))
 		require.Less(t, cpu.ClusterID, uint32(len(cpuTopology.ClusterInfo)))
-		require.Equal(t, "", cpu.Midr)
-		require.Equal(t, cpuTopology.PrimaryCPUName, cpu.Name)
+		require.NotEmpty(t, cpu.Name)
+		if cpu.Midr != "" {
+			require.Regexp(t, `^0x[0-9a-f]{8}$`, cpu.Midr)
+		}
 	}
 }

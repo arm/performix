@@ -4,14 +4,16 @@
 package pidfiles
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/ARM-software/golang-utils/utils/filesystem"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/apap-engine/userdirs"
 )
@@ -32,7 +34,7 @@ func ConstructPidFilePath(host string, port int) (string, error) {
 
 // Read the PID from a pidfile
 func GetPid(pidfile string) (int, error) {
-	data, err := filesystem.ReadFile(pidfile)
+	data, err := os.ReadFile(pidfile)
 	if err != nil {
 		return 0, err
 	}
@@ -47,7 +49,7 @@ func SavePid(pid int, host string, port int) error {
 		return err
 	}
 
-	if filesystem.Exists(pidFilePath) {
+	if _, err := os.Stat(pidFilePath); err == nil {
 		log.WithFields(log.Fields{
 			"PID file": pidFilePath,
 		}).Info("Duplicate PID file found. Overwriting.")
@@ -59,9 +61,9 @@ func SavePid(pid int, host string, port int) error {
 func DeletePid(host string, port int) {
 	pidFilePath, err := ConstructPidFilePath(host, port)
 	if err == nil {
-		err = filesystem.Rm(pidFilePath)
+		err = os.Remove(pidFilePath)
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.WithFields(log.Fields{
 			"PID file": pidFilePath,
 			"err":      err,
@@ -70,12 +72,12 @@ func DeletePid(host string, port int) {
 }
 
 func writeFile(path string, content string) error {
-	err := filesystem.MkDir(filepath.Dir(path))
+	err := os.MkdirAll(filepath.Dir(path), perms.LocalDirPerm)
 	if err != nil {
 		return err
 	}
 
-	file, err := filesystem.CreateFile(path)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, perms.LocalFilePerm)
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,7 @@ package render
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"path/filepath"
 	"sync"
@@ -427,4 +428,35 @@ func TestApplyDuckDBSandboxForRunRoots_RejectsDifferentRootsForSharedDBKey(t *te
 	err = ApplyDuckDBSandboxForRunRoots("key-conflict", db2, []string{"/tmp/run-b"})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "different run root allowlist")
+}
+
+func TestNativeConnectionPreservesSharedDatabase(t *testing.T) {
+	oldLevel := logrus.GetLevel()
+	logrus.SetLevel(logrus.DebugLevel)
+	defer logrus.SetLevel(oldLevel)
+	db, err := (&DuckDBFactory{}).Connect(t.Name())
+	require.NoError(t, err)
+	defer db.Close()
+	require.NoError(t, db.WithNativeConnection(context.Background(), func(conn *sql.Conn) error {
+		require.NoError(t, conn.Raw(func(raw any) error {
+			_, ok := raw.(*duckdb.Conn)
+			require.True(t, ok)
+			return nil
+		}))
+		_, err := conn.ExecContext(context.Background(), `CREATE TABLE native_connection_state AS SELECT 42 AS value`)
+		return err
+	}))
+	// A new native connection must still be able to open after the first
+	// temporary pool closes, and it must see the same database.
+	require.NoError(t, db.WithNativeConnection(context.Background(), func(conn *sql.Conn) error {
+		var value int
+		err := conn.QueryRowContext(context.Background(), `SELECT value FROM native_connection_state`).Scan(&value)
+		require.NoError(t, err)
+		require.Equal(t, 42, value)
+		return nil
+	}))
+	// The session connection must retain access after both temporary pools close.
+	var value int
+	require.NoError(t, db.Conn.QueryRowContext(context.Background(), `SELECT value FROM native_connection_state`).Scan(&value))
+	require.Equal(t, 42, value)
 }

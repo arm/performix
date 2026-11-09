@@ -114,7 +114,7 @@ func TestLoadSourceContentUsesHostPath(t *testing.T) {
 		"run1": "source_files",
 	}))
 
-	require.NoError(t, registerLoadSourceContentFunction(db.Conn, "source_files_union", nil, nil, "s1"))
+	require.NoError(t, registerLoadSourceContentFunction(db, "source_files_union", nil, nil, "s1"))
 
 	var content string
 	require.NoError(t, db.Conn.QueryRowContext(context.Background(), `SELECT load_source_content('run1', 1)`).Scan(&content))
@@ -149,7 +149,7 @@ func TestLoadSourceContentCachesRemoteFetch(t *testing.T) {
 	tsProvider := &stubTargetSessionProvider{session: ts}
 
 	runTargets := map[string]target.Target{"run1": &target.LocalTarget{}}
-	require.NoError(t, registerLoadSourceContentFunction(db.Conn, "source_files_union", tsProvider, runTargets, "s1"))
+	require.NoError(t, registerLoadSourceContentFunction(db, "source_files_union", tsProvider, runTargets, "s1"))
 
 	var content string
 	require.NoError(t, db.Conn.QueryRowContext(context.Background(), `SELECT load_source_content('run1', 1)`).Scan(&content))

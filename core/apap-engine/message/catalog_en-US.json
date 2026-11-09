@@ -325,14 +325,6 @@
             "Advice": "Check the message for each failed run for more information. If the issue continues, contact Arm support."
           }
         },
-        "prepare_render": {
-          "NO_OVERRIDE_RECIPE": {
-            "Severity": "Error",
-            "Message": "You must specify a recipe to use with the `override-by-name` recipe selection policy.",
-            "Explanation": "To use the `override-by-name` recipe selection policy, you must specify the name of a recipe to use for rendering.",
-            "Advice": "To specify the recipe name, use the `--recipe` flag. For more information on the available recipe selection policies, run the command with the `--help` flag."
-          }
-        },
         "render": {
           "RENDERER_FAILED": {
             "Severity": "Error",
@@ -350,7 +342,7 @@
             "Severity": "Error",
             "Message": "The visualization with the ID `{id}` does not exist.",
             "Explanation": "The recipe used for rendering does not define a visualization with the ID `{id}`.",
-            "Advice": "Check that the recipe defines each visualization that you specify with `--visualization`. Use `--recipe-selection-policy` to choose the rendering recipe. Run the command with `--help` for more information."
+            "Advice": "Check that the recipe defines each visualization that you specify with `--visualization`. Use `--recipe` to choose the rendering recipe. Run the command with `--help` for more information."
           },
           "INDETERMINABLE_MESSAGE": {
             "Severity": "Info",
@@ -1276,6 +1268,24 @@
           "Message": "Unable to use Android Debug Bridge (adb).",
           "Explanation": "The configured adb executable could not be found.",
           "Advice": "Verify that adb is installed. If it is installed but not found, provide the path to the adb executable with the `--adb-path` option, then retry."
+        },
+        "DISCOVERY_FAILED": {
+          "Severity": "Error",
+          "Message": "Unable to discover Android devices.",
+          "Explanation": "Android Debug Bridge (adb) could not list the connected devices.",
+          "Advice": "Check that adb is working and the device is connected, then retry."
+        },
+        "DEVICE_IDENTITY_UNAVAILABLE": {
+          "Severity": "Error",
+          "Message": "Unable to identify the connected Android devices.",
+          "Explanation": "The connected devices did not provide a readable physical serial number.",
+          "Advice": "Authorize USB debugging on the devices and retry. If a device still cannot be identified, check with its manufacturer that it provides a serial number."
+        },
+        "DEVICE_NOT_FOUND": {
+          "Severity": "Error",
+          "Message": "Unable to find Android target `{serial}`.",
+          "Explanation": "No connected, authorized Android device has the saved physical serial number.",
+          "Advice": "Connect the device to adb and retry."
         }
       },
       "file_transfer": {
@@ -1678,35 +1688,11 @@
       }
     },
     "insights": {
-      "INSUFFICIENT_BYTE_LIMIT": {
-        "Severity": "Error",
-        "Message": "The byte limit is too small for the minimum `{summaryName}` summary.",
-        "Explanation": "The `{byteLimit}` byte limit is smaller than the minimum summary size.",
-        "Advice": "If the issue continues, contact Arm support."
-      },
-      "RENDER_TABLE_NOT_FOUND": {
-        "Severity": "Error",
-        "Message": "The `{summaryName}` summarizer could not find the required render tables: {componentTypes}.",
-        "Explanation": "The render session does not contain all tables required by this summary.",
-        "Advice": "If the issue continues, contact Arm support."
-      },
-      "RENDER_QUERY_FAILED": {
-        "Severity": "Error",
-        "Message": "The `{summaryName}` summarizer could not query the render session.",
-        "Explanation": "An error occurred while querying render session data for this summary.",
-        "Advice": "If the issue continues, contact Arm support."
-      },
       "RUN_SUMMARY_MARSHAL_FAILED": {
         "Severity": "Error",
         "Message": "{$PRODUCT_FULL_NAME} cannot create the run summary JSON.",
         "Explanation": "The summary operation cannot serialize a payload as JSON.",
         "Advice": "If the issue continues, contact Arm support."
-      },
-      "RENDER_PARAMETERS_UNSUPPORTED": {
-        "Severity": "Error",
-        "Message": "The `{recipeName}` recipe does not support render parameters for AI Insights.",
-        "Explanation": "This recipe uses a curated summary that cannot apply render parameters.",
-        "Advice": "Call `generate_ai_insights` again without `render_parameters`."
       },
       "UNSUPPORTED_RECIPE": {
         "Severity": "Error",
@@ -1721,6 +1707,26 @@
         "Message": "Failed to start the {$PRODUCT_FULL_NAME} server.",
         "Explanation": "An error occurred during initialization.",
         "Advice": "Try relaunching the server. If the issue continues, contact Arm support."
+      }
+    },
+    "product_telemetry": {
+      "IDENTITY_ACCESS_FAILED": {
+        "Severity": "Error",
+        "Message": "The telemetry user ID could not be accessed.",
+        "Explanation": "The server could not read or create a valid ID in the application state directory.",
+        "Advice": "Check that your home directory is available and that you have permission to read and write the application state directory."
+      },
+      "MARKERS_ACCESS_FAILED": {
+        "Severity": "Error",
+        "Message": "The telemetry user classification could not be accessed.",
+        "Explanation": "The server could not locate or update the local files used to classify telemetry users.",
+        "Advice": "Check that your home directory is available and that you have permission to update the application state directory."
+      },
+      "PREFERENCE_UPDATE_FAILED": {
+        "Severity": "Error",
+        "Message": "The telemetry preference could not be saved.",
+        "Explanation": "The server could not update the APX configuration file. The active preference has not changed.",
+        "Advice": "Check that the configuration file is valid and that you have permission to update it, then try again."
       }
     },
     "packages": {
@@ -2128,19 +2134,19 @@
             "Severity": "Warning",
             "Message": "Your current version of {$PRODUCT_FULL_NAME} cannot render run `{runID}`.",
             "Explanation": "Version `{runVersion}` of {$PRODUCT_FULL_NAME} created run `{runID}`. Your current version cannot render it. Version `{currentEngineVersion}` supports runs from version `{currentMinSupportedVersion}` or later.",
-            "Advice": "To guarantee compatibility, downgrade {$PRODUCT_FULL_NAME} to a version between `{minCompatibleVersion}` and `{maxCompatibleVersion}` (inclusive). You can try to render the run with a different recipe by changing the recipe selection policy using the `--recipe-selection-policy` flag. Alternatively, manually specify a renderer configuration with the `run invoke-render` command. For help with both options, run `run invoke-render --help`"
+            "Advice": "To guarantee compatibility, downgrade {$PRODUCT_FULL_NAME} to a version between `{minCompatibleVersion}` and `{maxCompatibleVersion}` (inclusive). You can try to render the run with a different recipe using the `--recipe` flag. Alternatively, manually specify a renderer configuration with the `run invoke-render` command. For help, run `run render --help` or `run invoke-render --help`."
           },
           "TOO_OLD_PLURAL": {
             "Severity": "Warning",
             "Message": "Your current version of {$PRODUCT_FULL_NAME} cannot render the runs.",
             "Explanation": "Older versions of {$PRODUCT_FULL_NAME} created these runs: {versionMapping}. Your current version cannot render them. Version `{currentEngineVersion}` supports runs from version `{currentMinSupportedVersion}` or later.",
-            "Advice": "To guarantee compatibility, downgrade {$PRODUCT_FULL_NAME} to a version between `{minCompatibleVersion}` and `{maxCompatibleVersion}` (inclusive). You can try to render the runs with a different recipe by changing the recipe selection policy using the `--recipe-selection-policy` flag. Alternatively, manually specify a renderer configuration with the `run invoke-render` command. For help with both options, run `run invoke-render --help`."
+            "Advice": "To guarantee compatibility, downgrade {$PRODUCT_FULL_NAME} to a version between `{minCompatibleVersion}` and `{maxCompatibleVersion}` (inclusive). You can try to render the runs with a different recipe using the `--recipe` flag. Alternatively, manually specify a renderer configuration with the `run invoke-render` command. For help, run `run render --help` or `run invoke-render --help`."
           },
           "TOO_OLD_SAME_VERSION": {
             "Severity": "Warning",
             "Message": "Your current version of {$PRODUCT_FULL_NAME} cannot render the runs.",
             "Explanation": "Version `{runVersion}` of {$PRODUCT_FULL_NAME} created these runs: {runIDs}. Your current version cannot render them. Version `{currentEngineVersion}` supports runs from version `{currentMinSupportedVersion}` or later.",
-            "Advice": "To guarantee compatibility, downgrade {$PRODUCT_FULL_NAME} to a version between `{minCompatibleVersion}` and `{maxCompatibleVersion}` (inclusive). You can try to render the runs with a different recipe by changing the recipe selection policy using the `--recipe-selection-policy` flag. Alternatively, manually specify a renderer configuration with the `run invoke-render` command. For help with both options, run `run invoke-render --help`."
+            "Advice": "To guarantee compatibility, downgrade {$PRODUCT_FULL_NAME} to a version between `{minCompatibleVersion}` and `{maxCompatibleVersion}` (inclusive). You can try to render the runs with a different recipe using the `--recipe` flag. Alternatively, manually specify a renderer configuration with the `run invoke-render` command. For help, run `run render --help` or `run invoke-render --help`."
           },
           "MUTUALLY_INCOMPATIBLE": {
             "Severity": "Warning",
@@ -2202,6 +2208,38 @@
           "Message": "The selected CPU core type `{coreType}` is unavailable.",
           "Explanation": "The Run does not report any cores with the selected core type.",
           "Advice": "Choose a core type reported for this Run and try again."
+        }
+      },
+      "trace_viewport_renderer": {
+        "CONFIG_INVALID": {
+          "Severity": "Error",
+          "Message": "The trace viewport Renderer configuration is invalid.",
+          "Explanation": "The trace viewport Renderer requires a unique explicit dataset ID.",
+          "Advice": "Check the Renderer ID in the Recipe and try again."
+        },
+        "INPUT_INVALID": {
+          "Severity": "Error",
+          "Message": "The trace viewport Renderer input is invalid.",
+          "Explanation": "The Renderer requires canonical trace tracks and spans.",
+          "Advice": "Check the trace input bindings and schemas in the Recipe."
+        },
+        "INITIALIZATION_FAILED": {
+          "Severity": "Error",
+          "Message": "The trace viewport could not be prepared.",
+          "Explanation": "An error occurred while preparing the trace query function.",
+          "Advice": "Retry the Run render. If the problem continues, contact Arm support."
+        },
+        "QUERY_INVALID": {
+          "Severity": "Error",
+          "Message": "The trace viewport request is invalid.",
+          "Explanation": "The dataset, tracks, time range, or resolution is invalid.",
+          "Advice": "Choose valid span tracks and a time range with a positive resolution, then retry."
+        },
+        "QUERY_FAILED": {
+          "Severity": "Error",
+          "Message": "The trace viewport could not be loaded.",
+          "Explanation": "Reading or indexing the requested trace tracks failed or was cancelled.",
+          "Advice": "Retry the trace request. If the problem continues, contact Arm support."
         }
       },
       "trace_data_renderer": {
@@ -2357,10 +2395,16 @@
           "Explanation": "The path placeholder `{path}` did not match any component in the selected run content.",
           "Advice": "Check that the referenced component path exists in the run content and that the placeholder uses the correct run index."
         },
+        "TABLE_CREATE_FAILED": {
+          "Severity": "Error",
+          "Message": "The SQL renderer could not create the output table `{outputName}`.",
+          "Explanation": "The SQL renderer resolved the query for output port `{portName}`, but the render database could not store its results in the table `{outputName}`.",
+          "Advice": "Check the SQL query, placeholder bindings, and referenced run content, then retry."
+        },
         "VIEW_CREATE_FAILED": {
           "Severity": "Error",
-          "Message": "The SQL renderer could not create the output `{viewName}`.",
-          "Explanation": "The SQL renderer resolved the query for output port `{portName}`, but the render database could not create the output table or view `{viewName}`.",
+          "Message": "The SQL renderer could not create the output `{outputName}`.",
+          "Explanation": "The SQL renderer resolved the query for output port `{portName}`, but the render database could not create the output table or view `{outputName}`.",
           "Advice": "Check the SQL query, placeholder bindings, and referenced run content, then retry."
         }
       },
@@ -2485,14 +2529,8 @@
       "DIFFERENT_RECIPES": {
         "Severity": "Error",
         "Message": "{$PRODUCT_FULL_NAME} cannot automatically select a rendering recipe because different recipes produced the specified runs.",
-        "Explanation": "The recipe selection policy does not use `override-by-name`, so {$PRODUCT_FULL_NAME} detects the rendering recipe automatically. Automatic detection fails when runs use different recipes. Run `{runID1}` uses `{recipe1}`, and run `{runID2}` uses `{recipe2}`.",
-        "Advice": "Use 2 runs from the same recipe, or use `--recipe-selection-policy override-by-name` to choose a rendering recipe. Run `run render --help` for more information."
-      },
-      "DIFFERENT_RECIPE_SCHEMAS": {
-        "Severity": "Error",
-        "Message": "{$PRODUCT_FULL_NAME} cannot automatically select a recipe to use for rendering because the specified runs use different versions of the `{recipe}` recipe.",
-        "Explanation": "The recipe selection policy uses `from-content`, so {$PRODUCT_FULL_NAME} uses the recipe stored in each run. This policy cannot combine different recipe versions. Run `{runID1}` uses `{schema1}` of `{recipe}`, but run `{runID2}` uses `{schema2}`.",
-        "Advice": "Use 2 runs of the same version of the recipe, or change the recipe selection policy by setting the `--recipe-selection-policy` flag. For more information about the available recipe selection policies, run `run render --help`."
+        "Explanation": "{$PRODUCT_FULL_NAME} selects the rendering recipe automatically unless you specify a recipe. Automatic selection fails when runs use different recipes. Run `{runID1}` uses `{recipe1}`, and run `{runID2}` uses `{recipe2}`.",
+        "Advice": "Use 2 runs from the same recipe, or use `--recipe` to choose a rendering recipe. Run `run render --help` for more information."
       },
       "UPDATE_METADATA": {
         "Severity": "Error",
@@ -2511,6 +2549,12 @@
         "Message": "{$PRODUCT_FULL_NAME} could not save the categorization data for run `{runID}`.",
         "Explanation": "{$PRODUCT_FULL_NAME} could not update the categorization data file at `{path}`. Possible causes include incorrect permissions or a problem with the file system.",
         "Advice": "Ensure that you have write permission for `{path}`, then retry. If {$PRODUCT_FULL_NAME} still cannot update the run categorization, contact Arm support."
+      },
+      "INVALID_NAME": {
+        "Severity": "Error",
+        "Message": "The run name is invalid.",
+        "Explanation": "Run names cannot exceed 100 characters, contain forward slashes or backslashes, or equal `..`.",
+        "Advice": "Enter a valid run name, or omit it to use a generated name."
       },
       "INVALID_GROUP": {
         "Severity": "Error",
@@ -2909,6 +2953,26 @@
     }
   },
   "recipes": {
+    "gpu": {
+      "GPU_NOT_IDENTIFIED": {
+        "Severity": "Error",
+        "Message": "The Run does not identify its GPU.",
+        "Explanation": "The collected Run does not contain the GPU identity required to select GPU metrics.",
+        "Advice": "Run the Graphics recipe again on a supported target. If the problem continues, collect a support package for the Run and contact Arm support."
+      },
+      "METRICS_UNAVAILABLE": {
+        "Severity": "Error",
+        "Message": "The requested GPU metrics are unavailable for {gpu}.",
+        "Explanation": "The GPU metric definitions could not resolve these requested selectors for {gpu}: {selectors}.",
+        "Advice": "Run the Graphics recipe again on a supported target. If the problem continues, collect a support package for the Run and contact Arm support."
+      },
+      "TIMELINE_DATA_MISSING": {
+        "Severity": "Error",
+        "Message": "The Run does not contain GPU timeline data for {gpu}.",
+        "Explanation": "GPU counters were reported as collected for {gpu}, but the Run is missing timeline counter files or the capture metadata needed to interpret them.",
+        "Advice": "Run the Graphics recipe again on a supported target. If the problem continues, collect a support package for the Run and contact Arm support."
+      }
+    },
     "code_hotspots": {
       "TELEMETRY_SPECIFICATION_UNAVAILABLE": {
         "Severity": "Warning",
@@ -2976,6 +3040,12 @@
       }
     },
     "system_utilization": {
+      "TIMELINE_DATA_INCOMPLETE": {
+        "Severity": "Error",
+        "Message": "The System Utilization timeline data is incomplete.",
+        "Explanation": "The timeline data does not match the expected levels of detail. The available bin durations are `{availableBinDurations}`; the expected bin durations are `{expectedBinDurations}`.",
+        "Advice": "Run the System Utilization recipe again to regenerate the timeline data. If the problem continues, contact Arm support."
+      },
       "TIMELINE_DEVICE_NUMBERS_MISSING": {
         "Severity": "Error",
         "Message": "The System Utilization timeline cannot identify the captured CPU devices.",
@@ -3152,17 +3222,11 @@
       }
     },
     "asct": {
-      "BUILD_PREREQUISITES_MISSING": {
+      "INSTALL_FAILED": {
         "Severity": "Error",
-        "Message": "ASCT cannot be installed because required build tools are unavailable.",
-        "Explanation": "ASCT builds native benchmarks while it is installed on the Target, but one or more build requirements are missing or incompatible: {details}",
-        "Advice": "Install GNU Make at `/usr/bin/make`, GCC version 8 or later as `gcc`, and a C compiler as `cc`, then run the Recipe again."
-      },
-      "RUNTIME_PREREQUISITE_MISSING": {
-        "Severity": "Error",
-        "Message": "ASCT cannot run because a required tool is unavailable on the Target.",
-        "Explanation": "ASCT requires additional system tools while collecting data, but a runtime requirement is unavailable: {details}",
-        "Advice": "Install `numactl` on the Target, then run the Recipe again."
+        "Message": "ASCT could not be installed on the Target.",
+        "Explanation": "The ASCT installer exited with code {exitCode}. Installer output: {details}",
+        "Advice": "Resolve the issue reported by the ASCT installer, then run the Recipe again. The complete installer output is also available in the Recipe logs."
       },
       "RUN_FAILED": {
         "Severity": "Error",
@@ -3380,6 +3444,64 @@
       }
     },
     "neoprof": {
+      "GPU_NOT_IDENTIFIED": {
+        "Severity": "Error",
+        "Message": "The target GPU could not be identified.",
+        "Explanation": "{$PRODUCT_FULL_NAME} could not determine which GPU is available on the target.",
+        "Advice": "Confirm that the target has a GPU supported by this recipe. If the issue continues, contact Arm support."
+      },
+      "GPU_METRIC_UNAVAILABLE": {
+        "Severity": "Warning",
+        "Message": "A GPU metric is unavailable on this target: {counter}.",
+        "Explanation": "Results requiring this metric will be unavailable.",
+        "Advice": "Run the recipe to collect the available GPU metrics."
+      },
+      "SL_RECORD_PROBE_ADVICE": {
+        "Severity": "Info",
+        "Message": "{message}"
+      },
+      "GPU_COUNTER_QUERY_FAILED": {
+        "Severity": "Error",
+        "Message": "The GPU counters available on the target could not be read.",
+        "Explanation": "The profiling tool failed to query the target GPU counters.",
+        "Advice": "Run the recipe readiness check again. If the issue continues, contact Arm support."
+      },
+      "GPU_COUNTERS_NOT_REPORTED": {
+        "Severity": "Error",
+        "Message": "No hardware counters were reported for {gpu}.",
+        "Explanation": "The target GPU did not expose hardware counters to the profiling tool.",
+        "Advice": "Confirm that the target GPU and driver support hardware counter collection. If the issue continues, contact Arm support."
+      },
+      "GPU_COUNTER_METADATA_QUERY_FAILED": {
+        "Severity": "Error",
+        "Message": "The GPU counter information could not be read from the target.",
+        "Explanation": "The profiling tool failed to query the information needed to interpret GPU counters.",
+        "Advice": "Run the recipe readiness check again. If the issue continues, contact Arm support."
+      },
+      "IPC_METRIC_UNAVAILABLE": {
+        "Severity": "Warning",
+        "Message": "The instructions per cycle (IPC) metric could not be identified on this target.",
+        "Explanation": "The collected profiling data does not include the IPC metric.",
+        "Advice": "Run the recipe to collect the other available metrics."
+      },
+      "ANALYZER_GLIBC_INCOMPATIBLE": {
+        "Severity": "Error",
+        "Message": "The GNU C Library on the {locality} is incompatible with the `{tool}` tool.",
+        "Explanation": "The `{tool}` tool requires GNU C Library version {version} or later on the {locality}.",
+        "Advice": "Update the GNU C Library on the {locality}, or use a machine with a newer operating system."
+      },
+      "GPU_COUNTERS_UNAVAILABLE": {
+        "Severity": "Error",
+        "Message": "The requested GPU counters are unavailable on this target.",
+        "Explanation": "{$PRODUCT_FULL_NAME} could not identify the GPU or read its hardware counter information when the run started. The requested metrics were: {counters}.",
+        "Advice": "Run the recipe readiness check again and resolve any GPU errors it reports. Confirm that the target's GPU and driver support hardware counter collection. If the check still fails, collect a support package and contact Arm support."
+      },
+      "INVALID_REQUESTED_GPU_METRICS": {
+        "Severity": "Error",
+        "Message": "The recipe supplied invalid GPU metric selectors.",
+        "Explanation": "The `neoprof` tool expected a non-empty JSON array of GPU metric selectors.",
+        "Advice": "If the issue continues, contact Arm support."
+      },
       "ANDROID_PACKAGE_NOT_DEBUGGABLE": {
         "Severity": "Error",
         "Message": "The Android package `{package}` cannot be profiled.",
@@ -3553,6 +3675,18 @@
         "Message": "{$PRODUCT_FULL_NAME} cannot find the workload file or directory path.",
         "Explanation": "{$PRODUCT_FULL_NAME} cannot find the specified workload on the target.",
         "Advice": "If you specified an absolute path to the workload, ensure that the workload exists at this location on the target. Alternatively, set the current working directory using the `--working-dir` flag. If the issue continues, contact Arm support."
+      },
+      "CPU_COUNTER_DISCOVERY_FAILED": {
+        "Severity": "Error",
+        "Message": "CPU counter discovery failed.",
+        "Explanation": "The profiling tool failed while querying the counters available on the target.",
+        "Advice": "If the issue continues, contact Arm support."
+      },
+      "CPU_COUNTER_CATALOGUE_INVALID": {
+        "Severity": "Error",
+        "Message": "The CPU counter information is invalid.",
+        "Explanation": "The profiling tool returned CPU counter information in an unexpected format. Available counters could not be determined.",
+        "Advice": "If the issue continues, contact Arm support."
       },
       "CPU_COUNTER_OPTIONS_INVALID": {
         "Severity": "Error",

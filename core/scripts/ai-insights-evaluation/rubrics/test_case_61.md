@@ -19,8 +19,9 @@ SPDX-License-Identifier: Apache-2.0
 - Quantify the peak-bandwidth traffic rows in GB/s and their ASCT-provided
   percentages; identify that the generated maximum is 50%.
 - Apply the below-60% guidance as a reason to investigate, not proof of a defect.
-- Keep aggregate peak bandwidth distinct from the unchanged single-core
-  bandwidth sweep.
+- Mentioning the single-core sweep is optional; do not conflate its measurements
+  with aggregate bandwidth. Separately identified aggregate NUMA measurements
+  are acceptable cross-checks.
 - Present configuration, frequency, memory population and background load only
   as possible checks, and recommend a controlled repeat.
 

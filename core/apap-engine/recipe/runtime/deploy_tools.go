@@ -58,3 +58,58 @@ func DeployMandatoryTools(context context.Context, tgt target.Target, daemonPath
 
 	return toolDeploymentStage.Result, nil
 }
+
+func parameterOptionsRequireTools(options []recipe.ParameterOptionsStage) bool {
+	for _, stage := range options {
+		if stage.RequiresTools() {
+			return true
+		}
+	}
+	return false
+}
+
+// recipeToolDeployment holds the relevant stages for tool deployment
+type recipeToolDeployment struct {
+	resolution       *stages.ToolBundleResolutionStage
+	hostArchitecture *stages.HostArchitectureStage
+	target           *stages.ToolDeploymentStage
+	host             *stages.ToolDeploymentStage
+}
+
+func newRecipeToolDeployment(config *StageConfiguration, connect *stages.TargetConnectStage, architecture *stages.TargetArchitectureStage, mode deployer.ToolDeploymentMode) *recipeToolDeployment {
+	resolution := stages.NewToolBundleResolutionStage(
+		config.PackageManager,
+		architecture.PlatformConfigurationSupplier,
+		&config.Ctx.ParamValues,
+		config.Recipe,
+	)
+	hostArchitecture := stages.NewHostArchitectureStage(config.TargetSessions, resolution.ToolBundlesSupplier)
+	return &recipeToolDeployment{
+		resolution:       resolution,
+		hostArchitecture: hostArchitecture,
+		target: stages.NewToolDeploymentStage(
+			architecture.PlatformConfigurationSupplier,
+			connect.CommandRunnerSupplier,
+			connect.TargetFilesystemSupplier,
+			connect.TargetSessionSupplier,
+			resolution.ToolBundlesSupplier,
+			deploymentsupport.DeploymentLocalityTarget,
+			mode,
+			config.PackageManager,
+		),
+		host: stages.NewToolDeploymentStage(
+			hostArchitecture.PlatformConfigurationSupplier,
+			hostArchitecture.CommandRunnerSupplier,
+			hostArchitecture.TargetFilesystemSupplier,
+			hostArchitecture.TargetSessionSupplier,
+			resolution.ToolBundlesSupplier,
+			deploymentsupport.DeploymentLocalityHost,
+			mode,
+			config.PackageManager,
+		),
+	}
+}
+
+func (d *recipeToolDeployment) stages() []recipe.Stage {
+	return []recipe.Stage{d.resolution, d.target, d.hostArchitecture, d.host}
+}

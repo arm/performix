@@ -17,6 +17,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf/semver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/gojautils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
@@ -34,8 +35,9 @@ type APIFactory func(*goja.Runtime, recipe.ExecutionContext, context.Context, *c
 
 // JS implementation of RecipeParser, using Goja
 type RecipeParserJS struct {
-	APIFactory APIFactory
-	vm         *goja.Runtime
+	APIFactory   APIFactory
+	FeatureFlags featureflags.Flags
+	vm           *goja.Runtime
 }
 
 type StageProperty struct {
@@ -93,7 +95,7 @@ func (r *RecipeParserJS) ParseRecipe(sourceName string, content string) (recipe.
 	}
 
 	recipeOut := recipe.Recipe{}
-	recipe, err := ParseRecipeJS(r.vm, sourceName, content)
+	recipe, err := ParseRecipeJS(r.vm, sourceName, content, r.FeatureFlags)
 	if err != nil {
 		return recipeOut, err
 	}
@@ -106,13 +108,16 @@ func ParseInlineRecipe(parser RecipeParser, content string) (recipe.Recipe, erro
 
 // ParseRecipeJS executes a recipe in vm and returns its raw JavaScript recipe
 // definition. Callers must only use vm from the goroutine that owns it.
-func ParseRecipeJS(vm *goja.Runtime, sourceName string, recipeFileData string) (Recipe, error) {
+func ParseRecipeJS(vm *goja.Runtime, sourceName string, recipeFileData string, flags featureflags.Flags) (Recipe, error) {
 	recipe := Recipe{}
 	// Map field names to their JSON tags where available
 	vm.SetFieldNameMapper(&tool_goja.JsonFieldNameMapper{})
 
 	if err := gojautils.SetPerformixGlobal(vm); err != nil {
 		return recipe, fmt.Errorf("setting Performix JS metadata: %w", err)
+	}
+	if err := vm.Get("performix").ToObject(vm).Set("customPMUCaptureEnabled", flags.CustomPMUCapture); err != nil {
+		return recipe, fmt.Errorf("setting recipe feature flags: %w", err)
 	}
 	if err := setRecipeUtilsGlobal(vm); err != nil {
 		return recipe, fmt.Errorf("setting Performix recipe utilities: %w", err)
@@ -228,13 +233,14 @@ func (r *RecipeParserJS) getParamaterValidationStage(recipeProperties Recipe, re
 		}, recOut}
 }
 
-func (r *RecipeParserJS) newOptionsStage(stageName string, callback func(goja.FunctionCall) goja.Value) GojaScriptedRecipeStage {
+func (r *RecipeParserJS) newOptionsStage(options parameters.ParameterOptionsFunction) GojaScriptedRecipeStage {
 	return GojaScriptedRecipeStage{
-		StageName:  stageName,
-		Exec:       callback,
-		VM:         r.vm,
-		apiFactory: r.APIFactory,
-		Exposer:    &ReadyStageAPIExposer{},
+		StageName:     fmt.Sprintf("Validating %s parameter options", options.ParameterID),
+		Exec:          options.Callback,
+		VM:            r.vm,
+		apiFactory:    r.APIFactory,
+		Exposer:       &ReadyStageAPIExposer{},
+		requiresTools: options.RequiresTools,
 	}
 }
 
@@ -265,23 +271,22 @@ func (r *RecipeParserJS) getRecipeProperties(recipeProperties Recipe) (recipe.Re
 	}
 	recipeOut.RenderParameters = renderParametersOut
 	for _, cb := range optionCallbacks {
-		stageName := fmt.Sprintf("Validating %s parameter options", cb.ParameterID)
 		switch cb.ParameterType {
 		case parameters.ParameterConfigTypeRadio:
 			recipeOut.ParameterOptionsStages = append(recipeOut.ParameterOptionsStages, &GojaRadioParameterOptionStage{
-				GojaScriptedRecipeStage: r.newOptionsStage(stageName, cb.Callback),
+				GojaScriptedRecipeStage: r.newOptionsStage(cb),
 				ri:                      cb.ParameterIndex,
 				apiVersion:              apiVersion,
 			})
 		case parameters.ParameterConfigTypeSingleSelect:
 			recipeOut.ParameterOptionsStages = append(recipeOut.ParameterOptionsStages, &GojaSingleSelectedParameterOptionStage{
-				GojaScriptedRecipeStage: r.newOptionsStage(stageName, cb.Callback),
+				GojaScriptedRecipeStage: r.newOptionsStage(cb),
 				ssi:                     cb.ParameterIndex,
 				apiVersion:              apiVersion,
 			})
 		case parameters.ParameterConfigTypeMultiSelect:
 			recipeOut.ParameterOptionsStages = append(recipeOut.ParameterOptionsStages, &GojaMultiSelectedParameterOptionStage{
-				GojaScriptedRecipeStage: r.newOptionsStage(stageName, cb.Callback),
+				GojaScriptedRecipeStage: r.newOptionsStage(cb),
 				msi:                     cb.ParameterIndex,
 				apiVersion:              apiVersion,
 			})

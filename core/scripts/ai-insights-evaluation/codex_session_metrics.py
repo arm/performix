@@ -38,44 +38,55 @@ def iter_jsonl_records(path: Path, *, invalid_lines: list[int] | None = None) ->
                 invalid_lines.append(number)
 
 
+def normalize_mcp_event(payload: dict[str, Any], server: str) -> dict[str, Any]:
+    """Normalize MCP calls to begin/end events without modifying the original payload.
+
+    The server identifies namespaced function calls. Other event types stay intact
+    so callers can also process shell output and preserve the complete timeline.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("payload is not an object")
+    source_type = payload.get("type")
+    if source_type == "function_call" and payload.get("namespace") == f"mcp__{server.replace('-', '_')}":
+        payload = {"type": "mcp_tool_call_begin", "call_id": payload.get("call_id"),
+                   "invocation": {"server": server, "tool": payload.get("name"), "arguments": payload.get("arguments")}}
+    if source_type in ("item_started", "item_completed"):
+        item = payload.get("item") or {}
+        if not isinstance(item, dict):
+            raise ValueError("item is not an object")
+        if item.get("type") == "McpToolCall":
+            payload = {
+                "type": "mcp_tool_call_end" if source_type == "item_completed" else "mcp_tool_call_begin",
+                "call_id": item.get("id"), "invocation": item,
+                "result": ({"Ok": item.get("result")} if item.get("status") == "completed"
+                           else {"Err": item.get("error")}),
+            }
+    invocation = payload.get("invocation") or {}
+    if not isinstance(invocation, dict):
+        raise ValueError("invocation is not an object")
+    arguments = invocation.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            pass  # Retain invalid arguments as incomplete evidence.
+        payload = {**payload, "invocation": {**invocation, "arguments": arguments}}
+    return {**payload, "source_type": source_type}
+
+
 def iter_mcp_events(path: Path, server: str, *, invalid_lines: list[int] | None = None) -> Iterator[tuple[int, dict[str, Any]]]:
     """Yield numbered MCP begin/end events, preserving their source format and data."""
     for number, event in iter_jsonl_records(path, invalid_lines=invalid_lines):
-        payload = event.get("payload") or {}
         try:
-            if not isinstance(payload, dict):
-                raise ValueError("payload is not an object")
-            source_type = payload.get("type")
-            if source_type == "function_call" and payload.get("namespace") == f"mcp__{server.replace('-', '_')}":
-                arguments = payload.get("arguments")
-                if isinstance(arguments, str):
-                    try:
-                        arguments = json.loads(arguments)
-                    except ValueError:
-                        pass  # Retain invalid arguments as incomplete evidence.
-                payload = {"type": "mcp_tool_call_begin", "call_id": payload.get("call_id"),
-                           "invocation": {"server": server, "tool": payload.get("name"), "arguments": arguments}}
-            item = payload.get("item") or {}
-            if source_type in ("item_started", "item_completed"):
-                if not isinstance(item, dict):
-                    raise ValueError("item is not an object")
-                if item.get("type") == "McpToolCall":
-                    payload = {
-                        "type": "mcp_tool_call_end" if source_type == "item_completed" else "mcp_tool_call_begin",
-                        "call_id": item.get("id"), "invocation": item,
-                        "result": ({"Ok": item.get("result")} if item.get("status") == "completed"
-                                   else {"Err": item.get("error")}),
-                    }
-            invocation = payload.get("invocation") or {}
-            if not isinstance(invocation, dict):
-                raise ValueError("invocation is not an object")
+            payload = normalize_mcp_event(event.get("payload") or {}, server)
         except ValueError as exc:
             if invalid_lines is None:
                 raise ValueError(f"{path} line {number}: {exc}") from exc
             invalid_lines.append(number)
             continue
+        invocation = payload.get("invocation") or {}
         if invocation.get("server") == server and payload.get("type") in ("mcp_tool_call_begin", "mcp_tool_call_end"):
-            yield number, {**payload, "source_type": source_type}
+            yield number, payload
 
 
 def codex_session_log(codex_home: Path) -> Path:
@@ -102,8 +113,8 @@ def persist_codex_session_log(codex_home: Path, attempt_dir: Path) -> Path:
     return destination
 
 
-def collect_mcp_tool_metrics(codex_home: Path, server: str) -> dict[str, int | float]:
-    """Return MCP call rounds, counts and durations grouped by outcome."""
+def collect_mcp_tool_metrics(codex_home: Path, server: str, raw_jsonl: Path) -> dict[str, int | float]:
+    """Read durations and rounds from both logs, allowing valid sessions with zero calls."""
     succeeded = 0
     failed = 0
     rounds = 0
@@ -111,36 +122,20 @@ def collect_mcp_tool_metrics(codex_home: Path, server: str) -> dict[str, int | f
     failed_duration = 0.0
     session_log = codex_session_log(codex_home)
     events = list(iter_mcp_events(session_log, server))
-    target_call_ids = {
-        event["call_id"]
-        for _, event in events
-        if event["source_type"] == "item_completed"
-    }
-    if None in target_call_ids:
+    observed_call_ids = {event["call_id"] for _, event in events}
+    if None in observed_call_ids:
         raise RuntimeError(f"Codex MCP call for {server} has no call ID")
-
-    active_calls: set[str] = set()
-    started_calls: set[str] = set()
     completed_calls: set[str] = set()
     for _, event in events:
-        call_id = event["call_id"]
-        if event["type"] == "mcp_tool_call_begin" and call_id in target_call_ids:
-            # Codex may record the same start as both a function call and an item.
-            if call_id in started_calls:
-                continue
-            if not active_calls:
-                rounds += 1
-            active_calls.add(call_id)
-            started_calls.add(call_id)
-            continue
-
         # Only completed items carry the timing and status used below.
         if event["source_type"] != "item_completed":
             continue
         item = event["invocation"]
-        if call_id not in active_calls:
-            raise RuntimeError(f"Codex MCP call for {server} has no matching start event")
-        active_calls.remove(call_id)
+        call_id = event["call_id"]
+        if not call_id:
+            raise RuntimeError(f"Codex MCP call for {server} has no call ID")
+        if call_id in completed_calls:
+            raise RuntimeError(f"Codex MCP call for {server} has duplicate completion events")
         completed_calls.add(call_id)
         duration = item.get("duration") or {}
         seconds = duration.get("secs")
@@ -163,10 +158,35 @@ def collect_mcp_tool_metrics(codex_home: Path, server: str) -> dict[str, int | f
         else:
             succeeded += 1
             succeeded_duration += elapsed
-    if active_calls or completed_calls != target_call_ids:
+    if completed_calls != observed_call_ids:
         raise RuntimeError(f"Codex MCP calls for {server} are incomplete")
-    if succeeded + failed == 0:
-        raise RuntimeError(f"Codex session contains no MCP calls for {server}")
+
+    # The exec stream retains starts for functions.exec calls too. Its item IDs
+    # differ from session call IDs, so pair events within this stream only.
+    active_calls: set[str] = set()
+    started_calls: set[str] = set()
+    for event in iter_jsonl(raw_jsonl):
+        item = event.get("item", {})
+        if item.get("type") != "mcp_tool_call" or item.get("server") != server:
+            continue
+        if event.get("type") not in ("item.started", "item.completed"):
+            continue
+        call_id = item.get("id")
+        if not call_id:
+            raise RuntimeError(f"Codex MCP call for {server} has no call ID")
+        if event["type"] == "item.started":
+            if call_id in started_calls:
+                raise RuntimeError(f"Codex MCP call for {server} has duplicate start events")
+            if not active_calls:
+                rounds += 1
+            active_calls.add(call_id)
+            started_calls.add(call_id)
+        else:
+            if call_id not in active_calls:
+                raise RuntimeError(f"Codex MCP call for {server} has no matching start event")
+            active_calls.remove(call_id)
+    if active_calls or len(started_calls) != len(completed_calls):
+        raise RuntimeError(f"Codex MCP calls for {server} are incomplete or differ between logs")
     return {
         "tool_rounds": rounds,
         "tool_calls_succeeded": succeeded,

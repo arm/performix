@@ -244,6 +244,17 @@ func formatFingerprintPrompt(prompt *authproto.TargetLoginFingerprintPrompt) (st
 		"add this host to the list of known hosts (yes/no/[fingerprint])? ", cfg.Host, cfg.HostKeyFingerprint, knownAs), nil
 }
 
+// PromptHostKey asks whether to trust a host using the standard CLI fingerprint prompt.
+func PromptHostKey(cfg conductor.HostKeyPromptConfig) (bool, error) {
+	text, err := formatFingerprintPrompt(&authproto.TargetLoginFingerprintPrompt{
+		Host: cfg.Host, HostKeyType: cfg.HostKeyType, HostKeyFingerprint: cfg.HostKeyFingerprint, KnownAs: cfg.KnownAs,
+	})
+	if err != nil {
+		return false, err
+	}
+	return PromptFingerprint(text, cfg.HostKeyFingerprint)
+}
+
 // normalizeHostKeyType converts various representations of host key types to a more user-friendly format for display in prompts.
 func normalizeHostKeyType(hostKeyType string) string {
 	hostKeyType = strings.TrimSpace(hostKeyType)

@@ -16,6 +16,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcconnection"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
+	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
+	"github.com/Arm-Debug/apap-cli/apap-engine/recipe/stages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
@@ -149,4 +151,89 @@ func TestDeployMandatoryTools_ReturnsDeployWhenMissing(t *testing.T) {
 			require.Equal(t, deployer.Deploy, result)
 		})
 	}
+}
+
+type optionsDeploymentCallback struct {
+	requiresTools bool
+	calls         int
+}
+
+func (s *optionsDeploymentCallback) Name() string        { return "event options" }
+func (s *optionsDeploymentCallback) RequiresTools() bool { return s.requiresTools }
+func (s *optionsDeploymentCallback) Execute(recipe.ExecutionContext, *recipe.StageContext) (func(), error) {
+	s.calls++
+	return nil, nil
+}
+
+func TestOptionsToolChecksOnlyWhenRequired(t *testing.T) {
+	for name, build := range map[string]func(*StageConfiguration) []recipe.Stage{
+		"readiness": func(cfg *StageConfiguration) []recipe.Stage {
+			return ConfigureRecipeReadyStages(cfg, cfg.Recipe.ReadyStages)
+		},
+		"info and validation evaluator": func(cfg *StageConfiguration) []recipe.Stage {
+			return ConfigureRecipeInfoStages(cfg, cfg.Recipe.ParameterOptionsStages)
+		},
+		"direct validation stages": func(cfg *StageConfiguration) []recipe.Stage {
+			return (&ValidationStageFactoryImpl{}).BuildStages(cfg, nil)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, required := range []bool{false, true} {
+				cfg := newReadyStageConfiguration(&recipe.Recipe{
+					ParameterOptionsStages: []recipe.ParameterOptionsStage{
+						&optionsDeploymentCallback{requiresTools: required},
+						&optionsDeploymentCallback{requiresTools: required},
+					},
+					ParameterValidationStage: &fakeScriptedStage{},
+				})
+				ss := build(cfg)
+				var sequence []string
+				for _, stage := range ss {
+					switch stage := stage.(type) {
+					case *stages.ToolDeploymentStage:
+						sequence = append(sequence, "check tools")
+					case *stages.ConnectingToTargetAgentStage:
+						sequence = append(sequence, "connect agent")
+					case *stages.CustomRecipeStage:
+						if _, ok := stage.ScriptedStage.(*optionsDeploymentCallback); ok {
+							sequence = append(sequence, "options")
+						}
+					}
+				}
+				expected := []string{"connect agent", "options", "options"}
+				if required {
+					expected = append([]string{"check tools", "check tools"}, expected...)
+				}
+				require.Equal(t, expected, sequence, "requiresTools=%v", required)
+			}
+		})
+	}
+}
+
+func TestOptionsDeploymentNotScheduledWhenOptionsSkipped(t *testing.T) {
+	cfg := newReadyStageConfiguration(&recipe.Recipe{
+		ParameterOptionsStages: []recipe.ParameterOptionsStage{&optionsDeploymentCallback{requiresTools: true}},
+	})
+	includeOptions := false
+	for _, ss := range [][]recipe.Stage{
+		ConfigureRecipeReadyStages(cfg, nil),
+		ConfigureRecipeInfoStages(cfg, nil),
+		(&ValidationStageFactoryImpl{IncludeOptionStages: &includeOptions}).BuildStages(cfg, nil),
+	} {
+		for _, stage := range ss {
+			require.IsNotType(t, &stages.ToolDeploymentStage{}, stage)
+		}
+	}
+}
+
+func TestRequiredOptionsWithoutTarget(t *testing.T) {
+	options := &optionsDeploymentCallback{requiresTools: true}
+	cfg := &StageConfiguration{
+		Recipe: &recipe.Recipe{ParameterOptionsStages: []recipe.ParameterOptionsStage{options}},
+		Ctx:    &recipe.RecipeCtx{},
+	}
+	sc := (&RecipeParameterValidatorConcrete{}).BuildStageContext(context.Background(), cfg)
+	_, err := (&ParameterOptionsEvaluatorConcrete{}).Evaluate(context.Background(), cfg, &sc)
+	require.NoError(t, err)
+	require.Zero(t, options.calls)
 }

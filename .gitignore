@@ -109,6 +109,7 @@ coverage/
 **/coverage/
 
 # GUI test results and generated data
+gui/scripts/e2e/android-workload/build/
 gui/e2e-tests/performance-tests/performance-test-results.json
 gui/e2e-tests/soak-tests/soak-test-results.json
 **/e2e-test-results/
@@ -164,7 +165,8 @@ AGENTS.override.md
 core/apap-engine/message/codes.go
 /core/atperf-agent/systeminfo/armcpus/cpus.go
 /core/api/**/*.pb.go
-/core/api/mocks/
+/core/api/mocks/*
+!/core/api/mocks/dependencies.go
 
 # Temporary mockery generation files
 /core/api/.mockery.boilerplate.*

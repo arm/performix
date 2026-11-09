@@ -10,27 +10,34 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+
+	"github.com/Arm-Debug/apap-cli/api/apapproto"
+	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 func connectSourceSharingTestClient(t *testing.T, options *mcp.ClientOptions) (*mcp.ClientSession, *mcp.CallToolParams) {
 	t.Helper()
-	cache, err := newAIInsightsBundleCache(1)
-	require.NoError(t, err)
-	cache.store("bundle-1", []aiInsightsPayload{{name: "payload", payload: "source evidence"}})
-	client, server := connectTestServerWithClientOptions(t, t.Context(), ToolDependencies{}, options,
-		func(s *mcp.Server, _ ToolDependencies) {
-			GenerateAIInsightsTool{}.registerReadAIInsightsPayloadDetailsTool(s, cache)
-		})
+	engine := apapprotomocks.NewApapClient(t)
+	response := runQueryArrowRows(t, arrow.NewSchema([]arrow.Field{{Name: "source", Type: arrow.BinaryTypes.String}}, nil), map[string]any{"source": "source evidence"})
+	engine.On("Query", mock.Anything, mock.Anything).Return(
+		func(context.Context, *apapproto.QueryRequest, ...grpc.CallOption) apapproto.Apap_QueryClient {
+			return newRunQueryStream(runQueryDescription("source"), response)
+		}, nil,
+	).Maybe()
+	client, server := connectTestServerWithClientOptions(t, t.Context(), ToolDependencies{Engine: engine}, options, RunQueryTool{}.Register)
 	t.Cleanup(func() {
 		client.Close()
 		server.Close()
 	})
 	return client, &mcp.CallToolParams{
-		Name: "read_ai_insights_payload_details", Arguments: map[string]any{"bundle_id": "bundle-1", "name": "payload"},
+		Name: "run_query", Arguments: map[string]any{"session_id": "session-1", "sql": "SELECT source"},
 	}
 }
 
@@ -213,7 +220,6 @@ func TestSourceSharingToolWiring(t *testing.T) {
 	}{
 		{"generate_ai_insights", map[string]any{"run_id": "run-1"}},
 		{"run_query", map[string]any{"session_id": "session-1", "sql": "SELECT 1"}},
-		{"read_ai_insights_payload_details", map[string]any{"bundle_id": "bundle-1", "name": "payload"}},
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "config")

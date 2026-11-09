@@ -30,8 +30,11 @@ SPDX-License-Identifier: Apache-2.0
 - Worker threads spend notable time around shared-counter updates.
 
 ## Scoring Guidance
+
 - Pass:
   - Identifies shared atomic contention and recommends local aggregation/striped counter approach.
 - Fail:
   - Identifies the hotspot but only recommends generic threading changes.
   - Or misses the counter contention issue or suggests an unrelated primary fix.
+  - Stops the analysis because JFR is missing, or invents JVM settings or GC data.
+  - Replaces the supported counter fix with unsupported JVM tuning or upgrade advice.

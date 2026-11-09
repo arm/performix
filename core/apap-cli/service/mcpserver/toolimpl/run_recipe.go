@@ -44,6 +44,8 @@ const (
 
 // Exactly one workload option should be non-nil.
 type runRecipeInput struct {
+	RunName       string             `json:"run_name,omitempty"`
+	GroupName     string             `json:"group_name,omitempty"`
 	Recipe        string             `json:"recipe"`
 	Target        string             `json:"target"`
 	Timeout       *uint32            `json:"timeout,omitempty"`
@@ -82,6 +84,8 @@ type systemOpts struct{}
 // specific invalid field error.
 func runRecipeInputProperties(validateRanges bool, androidTargetsEnabled bool) map[string]*jsonschema.Schema {
 	properties := map[string]*jsonschema.Schema{
+		"run_name":   {Type: "string", Description: "Optional name for the new run. Empty uses a generated name."},
+		"group_name": {Type: "string", Description: "Optional group for the new run. Empty leaves it ungrouped."},
 		"recipe": {
 			Type:        "string",
 			Description: "The recipe to run. Use the list_recipes tool to discover currently available recipes.",
@@ -318,6 +322,8 @@ func (tool RunRecipeTool) Register(server *mcp.Server, toolDeps ToolDependencies
 		// problems (an unsupported platform, a missing non-deployable dependency, or insufficient
 		// privileges) surface as a run failure on the stream rather than via a separate readiness check.
 		startCommand := &apapproto.RecipeStartCommand{
+			RunName:        input.RunName,
+			GroupName:      input.GroupName,
 			Target:         protoTarget,
 			TargetName:     &targetName,
 			Name:           input.Recipe,

@@ -279,8 +279,9 @@ func (t *LocalTarget) Validate(name string) error {
 
 // AndroidTarget is the configuration struct for Android targets reached through ADB.
 type AndroidTarget struct {
-	SerialNumber    string
-	DeviceIPAddress *string
+	SerialNumber        string
+	LastKnownADBAddress *string
+	DeviceIPAddress     *string
 }
 
 // DisplayHost returns the serial number for AndroidTarget.

@@ -12,14 +12,13 @@ or destroy the target.
 import shlex
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from codex_session_metrics import persist_codex_session_log
 from pathways_target_access import TargetAccess
 
 from performix_attempt import PerformixAttempt
-
-TEMPORARY_HOST_DIRECTORIES = ("codex_workspace", "codex_home", "performix_state", "agent_home")
 
 
 class PathwaysAttempt:
@@ -32,7 +31,11 @@ class PathwaysAttempt:
             raise ValueError("attempt is outside its results directory")
         self.target = TargetAccess(target)
         self.directory = attempt_dir
-        self.performix = PerformixAttempt(attempt_dir)
+        # Agent-visible paths must not encode the scenario or attempt number.
+        # Keep runtime state outside the labelled evidence tree, without a symlink
+        # back to it. Explicit cleanup preserves state if evidence capture fails.
+        self.runtime_directory = Path(tempfile.mkdtemp(prefix="performix-agent-")).resolve()
+        self.performix = PerformixAttempt(self.runtime_directory)
 
     @property
     def performix_state(self):
@@ -42,7 +45,7 @@ class PathwaysAttempt:
         """Prepare private Performix state, target source and the agent's SSH access."""
         self.performix.prepare()
         self.target.seed(workspace, baseline)
-        home = self.directory / "agent_home"
+        home = self.runtime_directory / "agent_home"
         connection = self.target.export_connection(home / ".ssh")
         helper = home / "ssh_proxy.py"
         shutil.copyfile(Path(__file__).with_name("pathways_ssh_proxy.py"), helper)
@@ -58,8 +61,8 @@ class PathwaysAttempt:
 
     def collect_evidence_and_clean_host(self):
         """Capture evidence and remove host state; leave the target to its owner."""
-        from pathways_artifacts import preserve_pathways_artifacts
-        directory = self.directory
+        from pathways_artifacts import is_pathways_artifact, preserve_pathways_artifacts
+        directory = self.runtime_directory
         errors = []
 
         def capture(label, action):
@@ -72,18 +75,17 @@ class PathwaysAttempt:
         if home.exists():
             capture("session capture", lambda: persist_codex_session_log(home, directory))
         capture("MCP recipe capture", lambda: preserve_pathways_artifacts(directory, errors))
+        # Copy any available evidence even if another capture step failed.
+        for path in directory.iterdir():
+            if is_pathways_artifact(path.name) and path.is_file():
+                capture(path.name, lambda: shutil.copyfile(path, self.directory / path.name))
         if errors:
-            raise RuntimeError("; ".join(errors))
-        for name in TEMPORARY_HOST_DIRECTORIES:
-            path = directory / name
-            if path.is_symlink():
-                path.unlink()
-            elif path.exists():
-                shutil.rmtree(path)
+            raise RuntimeError(f"Host state retained at {directory}: {'; '.join(errors)}")
+        shutil.rmtree(directory)
 
 
 def create_pathways_attempt(cfg, attempt_dir):
-    """Create an attempt from the caller’s disposable-target settings."""
+    """Read the caller-supplied target settings for one attempt."""
     values = cfg["target_prompt_values"]
     if not values["target_host"] or not values["target_user"] or not values["target_private_key_path"]:
         raise ValueError("Pathways requires target host, user and SSH private-key path")

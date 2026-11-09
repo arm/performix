@@ -71,7 +71,7 @@ SELECT
 FROM per_function AS p
 JOIN symbols AS s USING (symbol_id)
 LEFT JOIN images AS i USING (image_id)
-LEFT JOIN source_files AS sf USING (source_file_id)
+LEFT JOIN source_files AS sf ON sf."source_file_id" = s."source_file_id"
 CROSS JOIN totals AS t
 WHERE p.sample_count > 0
 ORDER BY p.l1_hit_improvement_potential DESC NULLS LAST,
@@ -148,7 +148,7 @@ FROM overall AS o
 JOIN levels AS l USING (symbol_id)
 JOIN symbols AS s USING (symbol_id)
 LEFT JOIN images AS i USING (image_id)
-LEFT JOIN source_files AS sf USING (source_file_id)
+LEFT JOIN source_files AS sf ON sf."source_file_id" = s."source_file_id"
 WHERE s.name = '<exact_function_name>'
   AND i.image_name = '<exact_image_name>'
 ORDER BY l.contribution_cycles DESC NULLS LAST, l.memory_level
@@ -225,7 +225,7 @@ SELECT
 FROM tlb_metrics AS t
 JOIN symbols AS s USING (symbol_id)
 LEFT JOIN images AS i USING (image_id)
-LEFT JOIN source_files AS sf USING (source_file_id)
+LEFT JOIN source_files AS sf ON sf."source_file_id" = s."source_file_id"
 LEFT JOIN latency_samples AS ls USING (symbol_id)
 CROSS JOIN sample_total AS st
 CROSS JOIN tlb_total AS tt

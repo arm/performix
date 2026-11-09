@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ARM-software/golang-utils/utils/filesystem"
 	"github.com/gofrs/flock"
 	log "github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
@@ -136,7 +135,7 @@ func TestRunCollectionExists(t *testing.T) {
 	t.Run("run directory will not be created twice if already exists", func(t *testing.T) {
 		fakePath := filepath.Join(os.TempDir(), "fake/path/runCollection")
 		defer os.RemoveAll(fakePath)
-		err := filesystem.MkDir(fakePath)
+		err := os.MkdirAll(fakePath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 		assert.DirExists(t, fakePath)
 		runCollection := NewTestRunCollection(t, fakePath)
@@ -147,7 +146,7 @@ func TestRunCollectionExists(t *testing.T) {
 		fakePath := filepath.Join(os.TempDir(), "fake/path/runCollection")
 		defer os.RemoveAll(fakePath)
 		runCollection := NewTestRunCollection(t, fakePath)
-		err := filesystem.MkDir(fakePath)
+		err := os.MkdirAll(fakePath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 		assert.DirExists(t, fakePath)
 		assert.True(t, runCollection.exists())
@@ -164,7 +163,7 @@ func TestRunCollectionExists(t *testing.T) {
 		runCollection := NewTestRunCollection(t, fakePath)
 		runID := RunID{"abcdef123456"}
 		runPath := runCollection.GetRunPath(runID)
-		err := filesystem.MkDir(runPath)
+		err := os.MkdirAll(runPath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 		assert.DirExists(t, runPath)
 		assert.True(t, runCollection.runExists(runID))
@@ -174,7 +173,7 @@ func TestRunCollectionExists(t *testing.T) {
 		defer os.RemoveAll(fakePath)
 		// Make the runCollection path
 		runCollection := NewTestRunCollection(t, fakePath)
-		err := filesystem.MkDir(fakePath)
+		err := os.MkdirAll(fakePath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 		assert.DirExists(t, fakePath)
 		// But not the run path
@@ -233,7 +232,7 @@ func TestRunCreate(t *testing.T) {
 		fakeBuilder.AddEntity(fakeEntityName)
 		fakeMetadata := &cdf.Metadata{}
 		// Make the fake runCollection path for run to be created in
-		err = filesystem.MkDir(fakePath)
+		err = os.MkdirAll(fakePath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 		runID, err := runCollection.CreateRun(fakeBuilder, fakeMetadata)
 		assert.NoError(t, err)
@@ -249,7 +248,7 @@ func TestRunCreate(t *testing.T) {
 		runCollection := NewTestRunCollection(t, fakePath)
 		fakeRunID := RunID{"abcdef123456"}
 		runPath := runCollection.GetRunPath(fakeRunID)
-		err := filesystem.MkDir(runPath)
+		err := os.MkdirAll(runPath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 		assert.DirExists(t, runPath)
 		fakeBuilder := RunBuilder{runID: fakeRunID}
@@ -306,7 +305,7 @@ func TestRunDelete(t *testing.T) {
 		fakeBuilder.AddEntity("fakeEntity")
 		fakeMetadata := &cdf.Metadata{}
 		// Make the fake runCollection path for run to be created in
-		err := filesystem.MkDir(fakePath)
+		err := os.MkdirAll(fakePath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 		runID, err := runCollection.CreateRun(fakeBuilder, fakeMetadata)
 		assert.NoError(t, err)
@@ -394,7 +393,7 @@ func TestDeleteRuns(t *testing.T) {
 	fakePath := filepath.Join(os.TempDir(), "fake/path")
 	defer os.RemoveAll(fakePath)
 	// Make the fake runCollection path for run to be created in
-	err := filesystem.MkDir(fakePath)
+	err := os.MkdirAll(fakePath, perms.LocalDirPerm)
 	assert.NoError(t, err)
 	runCollection := NewTestRunCollection(t, fakePath)
 
@@ -439,7 +438,7 @@ func TestDeleteRuns(t *testing.T) {
 func TestDeleteAllRuns(t *testing.T) {
 	fakePath := filepath.Join(os.TempDir(), "fake/path")
 	defer os.RemoveAll(fakePath)
-	err := filesystem.MkDir(fakePath)
+	err := os.MkdirAll(fakePath, perms.LocalDirPerm)
 	assert.NoError(t, err)
 	runCollection := NewTestRunCollection(t, fakePath)
 
@@ -480,7 +479,7 @@ func TestRunLoad(t *testing.T) {
 		fakeBuilder.AddEntity("fakeEntity")
 		fakeMetadata := &cdf.Metadata{TargetConfig: emptySSHTargetConfig}
 		// Make the fake runCollection path for run to be created in
-		err := filesystem.MkDir(fakePath)
+		err := os.MkdirAll(fakePath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 		runID, err := runCollection.CreateRun(fakeBuilder, fakeMetadata)
 		assert.NoError(t, err)
@@ -678,7 +677,7 @@ func TestRunList(t *testing.T) {
 		fakeBuilder2.AddEntity("fakeEntity2")
 		fakeMetadata := &cdf.Metadata{TargetConfig: emptySSHTargetConfig}
 		// Make the fake runCollection path for runs to be created in
-		err := filesystem.MkDir(fakePath)
+		err := os.MkdirAll(fakePath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 		// Create two dummy runs
 		fakeRunID1, err := runCollection.CreateRun(fakeBuilder1, fakeMetadata)
@@ -717,7 +716,7 @@ func TestRunList(t *testing.T) {
 		fakeBuilder.AddEntity("fakeEntity")
 		fakeMetadata := &cdf.Metadata{}
 		// Make the fake runCollection path for runs to be created in
-		err := filesystem.MkDir(fakePath)
+		err := os.MkdirAll(fakePath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 		// Create a dummy run
 		_, err = runCollection.CreateRun(fakeBuilder, fakeMetadata)
@@ -739,7 +738,7 @@ func TestRunList(t *testing.T) {
 		fakeBuilder.AddEntity("fakeEntity")
 		fakeMetadata := &cdf.Metadata{}
 		// Make the fake runCollection path for runs to be created in
-		err := filesystem.MkDir(fakePath)
+		err := os.MkdirAll(fakePath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 		// Create a dummy run
 		_, err = runCollection.CreateRun(fakeBuilder, fakeMetadata)
@@ -786,7 +785,7 @@ func TestRunManifest(t *testing.T) {
 		fakeRunID := RunID{"abcdef123456"}
 		fakeManifest := &cdf.Manifest{}
 		// Make the fake runCollection run path for manifest file to be created in
-		err := filesystem.MkDir(filepath.Join(fakePath, fakeRunID.Value))
+		err := os.MkdirAll(filepath.Join(fakePath, fakeRunID.Value), perms.LocalDirPerm)
 		assert.NoError(t, err)
 		err = runCollection.writeManifest(fakeRunID, fakeManifest)
 		assert.True(t, runCollection.manifestExists(fakeRunID))
@@ -799,7 +798,7 @@ func TestRunManifest(t *testing.T) {
 		fakeRunID := RunID{"abcdef123456"}
 		fakeManifest := cdf.Manifest{}
 		// Make the fake runCollection run path for manifest file to be created in
-		err := filesystem.MkDir(filepath.Join(fakePath, fakeRunID.Value))
+		err := os.MkdirAll(filepath.Join(fakePath, fakeRunID.Value), perms.LocalDirPerm)
 		assert.NoError(t, err)
 		err = runCollection.writeManifest(fakeRunID, &fakeManifest)
 		assert.NoError(t, err)
@@ -813,7 +812,7 @@ func TestRunManifest(t *testing.T) {
 		runCollection := NewTestRunCollection(t, fakePath)
 		fakeRunID := RunID{"abcdef123456"}
 		runPath := filepath.Join(fakePath, fakeRunID.Value)
-		err := filesystem.MkDir(runPath)
+		err := os.MkdirAll(runPath, perms.LocalDirPerm)
 		assert.NoError(t, err)
 
 		err = runCollection.writeManifest(fakeRunID, &cdf.Manifest{})
@@ -873,7 +872,7 @@ func TestRunMetadata(t *testing.T) {
 		fakeRunID := RunID{"abcdef123456"}
 		fakeMetadata := cdf.Metadata{Name: "fakeName"}
 		// Make the fake runCollection run path for metadata file to be created in
-		err := filesystem.MkDir(filepath.Join(fakePath, fakeRunID.Value))
+		err := os.MkdirAll(filepath.Join(fakePath, fakeRunID.Value), perms.LocalDirPerm)
 		assert.NoError(t, err)
 		err = runCollection.writeMetadata(fakeRunID, &fakeMetadata)
 		assert.True(t, runCollection.metadataExists(fakeRunID))
@@ -886,7 +885,7 @@ func TestRunMetadata(t *testing.T) {
 		fakeRunID := RunID{"abcdef123456"}
 		fakeMetadata := cdf.Metadata{Name: "fakeName", TargetConfig: emptySSHTargetConfig}
 		// Make the fake runCollection run path for metadata file to be created in
-		err := filesystem.MkDir(filepath.Join(fakePath, fakeRunID.Value))
+		err := os.MkdirAll(filepath.Join(fakePath, fakeRunID.Value), perms.LocalDirPerm)
 		assert.NoError(t, err)
 		err = runCollection.writeMetadata(fakeRunID, &fakeMetadata)
 		assert.NoError(t, err)
@@ -914,7 +913,7 @@ func TestRunMetadata(t *testing.T) {
 		runCollection := NewTestRunCollection(t, fakePath)
 		fakeRunID := RunID{"abcdef123456"}
 		// Make the fake runCollection run path for metadata file to be created in
-		err := filesystem.MkDir(filepath.Join(fakePath, fakeRunID.Value))
+		err := os.MkdirAll(filepath.Join(fakePath, fakeRunID.Value), perms.LocalDirPerm)
 		assert.NoError(t, err)
 
 		// Write metadata with old time
@@ -2689,23 +2688,6 @@ func TestRunAccessorFunctions_RunCollection(t *testing.T) {
 		assert.Equal(t, runID, runID3)
 	})
 
-	t.Run("CheckRunsUseSameRecipe succeeds when the 2 runs use the same recipe", func(t *testing.T) {
-		err := runCollection.CheckRunsUseSameRecipe([]RunID{runID1, runID2})
-		assert.NoError(t, err)
-	})
-
-	t.Run("CheckRunsUseSameRecipe fails when the 2 runs use different recipes", func(t *testing.T) {
-		err := runCollection.CheckRunsUseSameRecipe([]RunID{runID1, runID3})
-		expectedMetadata := map[string]string{
-			"runID1":  runID1.Value,
-			"runID2":  runID3.Value,
-			"recipe1": "cpu_microarchitecture",
-			"recipe2": "other_recipe",
-		}
-		expectedErr := message.New(message.EngineRunDifferentRecipes).WithMetadata(expectedMetadata)
-		assert.Equal(t, expectedErr, err)
-	})
-
 	t.Run("CheckRunsUseSameRecipeNameOnly succeeds with identical names", func(t *testing.T) {
 		err := runCollection.CheckRunsUseSameRecipeNameOnly([]RunID{runID1, runID2})
 		assert.NoError(t, err)
@@ -2724,7 +2706,7 @@ func TestRunAccessorFunctions_RunCollection(t *testing.T) {
 	})
 }
 
-func TestCheckRunsUseSameRecipe_ToleratesMissingSchemas(t *testing.T) {
+func TestCheckRunsUseSameRecipeNameOnly_IgnoresSchemas(t *testing.T) {
 	runDir := t.TempDir()
 	runCollection, err := NewRunCollection(runDir)
 	require.NoError(t, err)
@@ -2764,45 +2746,7 @@ func TestCheckRunsUseSameRecipe_ToleratesMissingSchemas(t *testing.T) {
 	}
 
 	runWithSchemaA := createRun("cpu_microarchitecture", util.Ptr("1.0"))
-	runWithSchemaA2 := createRun("cpu_microarchitecture", util.Ptr("1.0"))
 	runWithSchemaB := createRun("cpu_microarchitecture", util.Ptr("2.0")) // incompatible
-	runWithoutSchema := createRun("cpu_microarchitecture", nil)           // simulates older run with no schema
-
-	t.Run("succeeds when all runs use the same recipe and missing schemas are ignored", func(t *testing.T) {
-		err := runCollection.CheckRunsUseSameRecipe([]RunID{runWithSchemaA, runWithoutSchema, runWithSchemaA2})
-		assert.NoError(t, err)
-	})
-
-	t.Run("succeeds regardless of order of missing-schema runs", func(t *testing.T) {
-		err := runCollection.CheckRunsUseSameRecipe([]RunID{runWithoutSchema, runWithSchemaA, runWithSchemaA2})
-		assert.NoError(t, err)
-	})
-
-	t.Run("fails when a run has a different recipe schema", func(t *testing.T) {
-		err := runCollection.CheckRunsUseSameRecipe([]RunID{runWithSchemaA, runWithSchemaB})
-		expectedMetadata := map[string]string{
-			"runID1":  runWithSchemaA.Value,
-			"runID2":  runWithSchemaB.Value,
-			"recipe":  "cpu_microarchitecture",
-			"schema1": "1.0",
-			"schema2": "2.0",
-		}
-		expectedErr := message.New(message.EngineRunDifferentRecipeSchemas).WithMetadata(expectedMetadata)
-		assert.Equal(t, expectedErr, err)
-	})
-
-	t.Run("fails when a mismatched schema comes after a missing-schema run", func(t *testing.T) {
-		err := runCollection.CheckRunsUseSameRecipe([]RunID{runWithoutSchema, runWithSchemaB, runWithSchemaA})
-		expectedMetadata := map[string]string{
-			"runID1":  runWithSchemaB.Value,
-			"runID2":  runWithSchemaA.Value,
-			"recipe":  "cpu_microarchitecture",
-			"schema1": "2.0",
-			"schema2": "1.0",
-		}
-		expectedErr := message.New(message.EngineRunDifferentRecipeSchemas).WithMetadata(expectedMetadata)
-		assert.Equal(t, expectedErr, err)
-	})
 
 	t.Run("checkRunsUseSameRecipeNameOnly ignores mismatched schemas", func(t *testing.T) {
 		err := runCollection.CheckRunsUseSameRecipeNameOnly([]RunID{runWithSchemaA, runWithSchemaB})

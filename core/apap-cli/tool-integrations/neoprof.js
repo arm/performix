@@ -31,13 +31,14 @@ const {
   translateGPUCounters,
 } = require('./gpu-counters');
 const cpuCounters = require('./neoprof_cpu_counters');
+const {
+  resolveGPUHardwareCounterAliases,
+} = require('../recipes/lib/gpu-metrics');
 const { NEOPROF_TIMELINE_BIN_DURATIONS_NS } = require('./neoprof_timeline');
 const { COUNTER_CAPABILITY_COMPONENT_TYPE } = require('./tool_capabilities');
 
-let slAnalyzeVersion = '2.3.3-RC0';
-let slRecordVersion = '2.3.3.v20260929_0928-neoprof';
-let readinessMessageCode =
-  'engine.recipeparser.js_recipe_stage.READINESS_MESSAGE';
+let slAnalyzeVersion = '2.4.1-RC0';
+let slRecordVersion = '2.4.1.v20261029_1134-neoprof';
 
 const slAnalyzeToolName = 'sl-analyze';
 const slRecordToolName = 'sl-record';
@@ -133,6 +134,15 @@ function isSysUtilWorkflow(ctx) {
   return ctx.params.workflow === 'sys_util';
 }
 
+/** @param {import("../recipes/docs/jsdocs").ToolContext} ctx @returns {boolean} */
+function hasRequestedGPUMetrics(ctx) {
+  // Optional input parameters are bound to an empty string when omitted.
+  return (
+    ctx.params.requested_gpu_metrics !== undefined &&
+    ctx.params.requested_gpu_metrics !== ''
+  );
+}
+
 /**
  * Returns whether sl-analyze timeline exports are required for this invocation.
  * The sys_util workflow consumes the timeline as its primary output, so it
@@ -142,7 +152,11 @@ function isSysUtilWorkflow(ctx) {
  * @returns {boolean}
  */
 function isTimelineExportEnabled(engine, ctx) {
-  return engine.isNeoprofTimelineEnabled() || isSysUtilWorkflow(ctx);
+  return (
+    engine.isNeoprofTimelineEnabled() ||
+    isSysUtilWorkflow(ctx) ||
+    hasRequestedGPUMetrics(ctx)
+  );
 }
 
 function validateCPUCounterOptions(engine, ctx) {
@@ -278,7 +292,7 @@ let tool = {
       id: 'mode',
       label: 'Profiling mode',
       description:
-        'Select the profiling mode used when invoking `sl-record`. Choose `samples` to collect CPU samples, `metrics` to gather counter metrics, `spe` for Arm Statistical Profiling Extension data, or `gpu` to identify the GPU and its counters.',
+        'Select the profiling mode used when invoking `sl-record`. Choose `samples` to collect CPU samples, `metrics` to gather counter metrics, `spe` for Arm Statistical Profiling Extension data.',
       config: {
         type: 'radio',
         defaultValue: 'samples',
@@ -286,7 +300,6 @@ let tool = {
           { value: 'samples', label: 'Samples' },
           { value: 'spe', label: 'SPE' },
           { value: 'metrics', label: 'Metrics' },
-          { value: 'gpu', label: 'GPU' },
         ],
       },
     },
@@ -298,6 +311,13 @@ let tool = {
       config: {
         type: 'input',
       },
+    },
+    {
+      id: 'requested_gpu_metrics',
+      label: 'GPU metrics',
+      description:
+        'Required in GPU mode: a non-empty JSON array of semantic GPU metrics to collect.',
+      config: { type: 'input' },
     },
     {
       id: 'sampling_frequency',
@@ -333,6 +353,16 @@ let tool = {
       },
     },
     {
+      id: 'poll_interval',
+      label: 'Polling interval',
+      description:
+        'Polling interval for userspace counters in milliseconds (minimum 10). Used for system utilization.',
+      config: {
+        type: 'input',
+        defaultValue: '100',
+      },
+    },
+    {
       id: 'spe_sample_rate',
       label: 'SPE sample rate',
       description:
@@ -365,6 +395,15 @@ let tool = {
       label: 'Collect .NET stacks',
       description:
         'Enable collection of .NET stack traces when profiling .NET workloads.',
+      config: {
+        type: 'checkbox',
+        defaultValue: false,
+      },
+    },
+    {
+      id: 'compute_cpu_pmu_events',
+      label: 'Compute CPU PMU events',
+      description: 'List available CPU PMU events when probing.',
       config: {
         type: 'checkbox',
         defaultValue: false,
@@ -419,6 +458,11 @@ let tool = {
   ],
 
   probe: async (engine, ctx) => {
+    if (ctx.params.compute_cpu_pmu_events) {
+      ctx.metadata.neoprofAsPrivileged = await isPerfPrivilegeRequired(engine);
+      return probeCPUPMUEvents(engine, ctx);
+    }
+
     validateCPUCounterOptions(engine, ctx);
     const neoprofAsPrivileged = await isPrivilegeRequired(engine, ctx);
     engine.log('info', `Neoprof privilege requirement: ${neoprofAsPrivileged}`);
@@ -438,6 +482,25 @@ let tool = {
     if (jfrValidation) {
       result.advice.push(jfrValidation);
       return result;
+    }
+
+    /** @type {string[] | null} */
+    let requestedMetrics = null;
+
+    if (hasRequestedGPUMetrics(ctx)) {
+      try {
+        requestedMetrics = parseRequestedGPUMetrics(
+          ctx.params.requested_gpu_metrics,
+        );
+      } catch {
+        result.available = false;
+        result.advice.push({
+          level: 'error',
+          messageCode:
+            'tool_integrations.neoprof.INVALID_REQUESTED_GPU_METRICS',
+        });
+        return result;
+      }
     }
 
     if (isAndroidLaunch(ctx)) {
@@ -491,27 +554,60 @@ let tool = {
     result.available = recordDeployed && analyzeDeployed;
 
     if (recordDeployed) {
-      // Generate the initial probe report using sl-record
-      const slRecordProbe = await probeSlRecord(engine, ctx);
-      /** @type {import("../recipes/docs/jsdocs").SlRecordProbeReport} */
-      const probeResponse = JSON.parse(slRecordProbe.stdout);
+      const probeResponse = await generateProbeReport(engine, ctx);
+      if (hasRequestedGPUMetrics(ctx)) {
+        const counterReadiness = await checkGPUCounterReadiness(
+          engine,
+          ctx,
+          probeResponse,
+          requestedMetrics,
+        );
 
-      const gpuName =
-        ctx.params.mode === 'gpu' ? queryGPUInfo(probeResponse) : null;
-      if (gpuName) {
-        result.capabilities.platform = {
-          componentType: neoprofPlatformCapabilityType,
-          state: 'available',
-          payload: { gpu_name: gpuName },
-        };
-        const gpuCounterProbe = await probeGPUCounters(engine, ctx, gpuName);
-        if (gpuCounterProbe.level === 'ready') {
-          addProbeCapabilities(result, gpuCounterProbe.report.counters);
-        } else {
-          result.advice.push(gpuCounterProbe);
+        const hasSupportedGpu = counterReadiness.gpuName != null;
+
+        if (hasSupportedGpu) {
+          result.capabilities.platform = {
+            componentType: neoprofPlatformCapabilityType,
+            state: 'available',
+            payload: { gpu_name: counterReadiness.gpuName },
+          };
         }
-      }
 
+        const gpuMetricsOptional = isSysUtilWorkflow(ctx);
+
+        if (
+          counterReadiness.probeFailure &&
+          // don't show any GPU probe messages for sys-util recipe if no Mali GPU is detected
+          (!gpuMetricsOptional || hasSupportedGpu)
+        ) {
+          result.advice.push({
+            ...counterReadiness.probeFailure,
+            level: gpuMetricsOptional
+              ? 'warning'
+              : counterReadiness.probeFailure.level,
+          });
+        }
+
+        for (const counter of counterReadiness.availableCounters) {
+          result.capabilities[`counter.${counter.counter}`] = {
+            componentType: {
+              name: 'tool_capabilities/counter',
+              version: '1.0',
+            },
+            state: 'available',
+            payload: { counter: counter.counter, alias: counter.alias },
+          };
+        }
+        result.advice.push(
+          ...counterReadiness.missingCounters.map((counter) => ({
+            level: 'warning',
+            messageCode: 'tool_integrations.neoprof.GPU_METRIC_UNAVAILABLE',
+            metadata: {
+              counter,
+            },
+          })),
+        );
+      }
       // Probe the IPC metric name
       let ipcMetricProbe = await probeIpcMetric(engine, ctx);
       if (ipcMetricProbe.level !== 'ready') {
@@ -565,7 +661,7 @@ let tool = {
         ...probeResponse.advice.map((a) => {
           return {
             level: a.severity,
-            messageCode: readinessMessageCode,
+            messageCode: 'tool_integrations.neoprof.SL_RECORD_PROBE_ADVICE',
             metadata: { message: a.message },
           };
         }),
@@ -613,6 +709,10 @@ let tool = {
     const neoprofAsPrivileged = await isPrivilegeRequired(engine, ctx);
     engine.log('info', `Neoprof privilege requirement: ${neoprofAsPrivileged}`);
     ctx.metadata.neoprofAsPrivileged = neoprofAsPrivileged;
+
+    const gpuCounters = hasRequestedGPUMetrics(ctx)
+      ? await resolveRunGPUCounters(engine, ctx)
+      : [];
 
     // This is a workaround for the fact that we cannot control where the sl-record log file is written to.
     // The file is always written to the bin directory. If we could choose to write it to the run working
@@ -674,7 +774,7 @@ let tool = {
       ...counterArgs,
     ];
 
-    let recordArgs = buildRecordArgs(ctx);
+    let recordArgs = buildRecordArgs(ctx, gpuCounters);
     processArgs.push(...recordArgs);
     engine.log(
       'info',
@@ -840,22 +940,6 @@ let tool = {
         },
       );
       ctx.metadata.dotnetAgentProcHandle = dotnetAgentProcHandle;
-
-      if (ctx.timeout > 0) {
-        const dotnetAgentPid = dotnetAgentProcHandle.pid();
-        if (!Number.isInteger(dotnetAgentPid) || dotnetAgentPid <= 0) {
-          throw {
-            code: 'common.UNKNOWN_ERROR',
-            cause: `invalid dotnet-agent pid: ${String(dotnetAgentPid)}`,
-          };
-        }
-
-        processArgs.push('--timeout-signal-pid', String(dotnetAgentPid));
-        engine.log(
-          'info',
-          `sl-record timeout will signal dotnet-agent pid ${dotnetAgentPid}`,
-        );
-      }
     }
 
     // Java support
@@ -942,6 +1026,8 @@ let tool = {
       ctx.metadata.jitdumpJvmProcHandle = jitdumpJvmProcHandle;
     }
 
+    processArgs.push(...buildTimeoutSignalArgs(engine, ctx));
+
     // Set the workload last so that workload command arguments are correctly passed down
     processArgs.push(...workloadToSLArgs(ctx.workload));
 
@@ -994,23 +1080,55 @@ let tool = {
 
   onStop: async (engine, ctx) => {
     ctx.metadata.requestStop = true;
-    await stopDotnetAgent(engine, ctx);
-    if (ctx.metadata.recordHandle && ctx.metadata.allowStop) {
-      await ctx.metadata.recordHandle.interrupt();
+    if (!ctx.metadata.allowStop) return;
+
+    if (!ctx.metadata.neoprofStopPromise) {
+      ctx.metadata.neoprofStopPromise = (async () => {
+        await Promise.all([
+          stopJvmAgent(engine, ctx),
+          stopDotnetAgent(engine, ctx),
+        ]);
+        if (ctx.metadata.recordHandle) {
+          await ctx.metadata.recordHandle.interrupt();
+        }
+        if (ctx.metadata.procHandle) {
+          await ctx.metadata.procHandle.interrupt();
+        }
+      })();
     }
-    if (ctx.metadata.procHandle) {
-      await ctx.metadata.procHandle.interrupt();
-    }
+
+    await ctx.metadata.neoprofStopPromise;
   },
 };
+
+/**
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ * @returns {Promise<import("../recipes/docs/jsdocs").ProbeResult>}
+ */
+async function probeCPUPMUEvents(engine, ctx) {
+  const paths = getNeoprofPaths(engine);
+  const slRecordPath = paths.slRecordDeployPath + slRecordToolName;
+  await ensureDeployed(engine, slRecordPath, slRecordToolName);
+  const capabilities = await cpuCounters.discoverNativeEvents(
+    engine,
+    ctx,
+    slRecordPath,
+  );
+  return {
+    available: true,
+    capabilities,
+    advice: [],
+  };
+}
 
 /**
  * @param {import("../recipes/docs/jsdocs").SlRecordProbeReport} probeReport
  * @returns {string|null}
  */
 function queryGPUInfo(probeReport) {
-  // TODO(NEOPROF-1008): Replace model parsing with a gpu_id lookup in the
-  // metric catalogue once sl-record reports matching IDs.
+  // TODO: Use the product_id reported by sl-record to look up GPU metric
+  // sets directly instead of normalizing the model name.
   const model = probeReport.gpus?.[0]?.model;
   if (!model) return null;
   const gpuName = model
@@ -1044,10 +1162,7 @@ async function probeGPUCounters(engine, ctx, gpuName) {
   if (activeCounterResult.rc !== 0) {
     return {
       level: 'error',
-      messageCode: readinessMessageCode,
-      metadata: {
-        message: 'The GPU counters available on the target could not be read.',
-      },
+      messageCode: 'tool_integrations.neoprof.GPU_COUNTER_QUERY_FAILED',
       cause: activeCounterResult.stderr,
     };
   }
@@ -1059,21 +1174,16 @@ async function probeGPUCounters(engine, ctx, gpuName) {
   if (activeCounters.length === 0) {
     return {
       level: 'error',
-      messageCode: readinessMessageCode,
-      metadata: {
-        message: `No hardware counters were reported for ${gpuName}.`,
-      },
+      messageCode: 'tool_integrations.neoprof.GPU_COUNTERS_NOT_REPORTED',
+      metadata: { gpu: gpuName },
     };
   }
 
   if (eventsCounterResult.rc !== 0) {
     return {
       level: 'error',
-      messageCode: readinessMessageCode,
-      metadata: {
-        message:
-          'The GPU counter information could not be read from the target.',
-      },
+      messageCode:
+        'tool_integrations.neoprof.GPU_COUNTER_METADATA_QUERY_FAILED',
       cause: eventsCounterResult.stderr,
     };
   }
@@ -1087,7 +1197,7 @@ async function probeGPUCounters(engine, ctx, gpuName) {
     eventCounters,
     metricSetId,
     activeCounters,
-  ).map((counter) => ({ name: counter.counter, alias: counter.alias }));
+  );
 
   // Temporary NEOPROF-1007 workaround: construct the future sl-record shape.
   // Replace this block with the native report once sl-record provides it.
@@ -1104,6 +1214,165 @@ async function probeGPUCounters(engine, ctx, gpuName) {
     messageCode: '',
     report,
   };
+}
+
+/**
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ * @returns {Promise<import("../recipes/docs/jsdocs").SlRecordProbeReport>}
+ */
+async function generateProbeReport(engine, ctx) {
+  // Generate the initial probe report using sl-record
+  const slRecordProbe = await probeSlRecord(engine, ctx);
+  /** @type {import("../recipes/docs/jsdocs").SlRecordProbeReport} */
+  return JSON.parse(slRecordProbe.stdout);
+}
+
+/** @param {string} rawMetrics @returns {string[]} */
+function parseRequestedGPUMetrics(rawMetrics) {
+  let requestedMetrics;
+  try {
+    requestedMetrics = JSON.parse(rawMetrics);
+  } catch {
+    requestedMetrics = null;
+  }
+  if (
+    !Array.isArray(requestedMetrics) ||
+    requestedMetrics.length === 0 ||
+    !requestedMetrics.every((metric) => typeof metric === 'string')
+  ) {
+    throw { code: 'tool_integrations.neoprof.INVALID_REQUESTED_GPU_METRICS' };
+  }
+  return requestedMetrics;
+}
+
+/**
+ * @typedef {{counter: string, alias: string}} GPUCounterSelection
+ * @typedef {{
+ *   gpuName: string | null,
+ *   availableCounters: GPUCounterSelection[],
+ *   selectedCounters: GPUCounterSelection[],
+ *   missingCounters: string[],
+ *   probeFailure: import("../recipes/docs/jsdocs").ProbeAdvice | null
+ * }} GPUCounterReadiness
+ */
+
+/**
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ * @param {import("../recipes/docs/jsdocs").SlRecordProbeReport} probeReport
+ * @param {string[] | null} requestedMetrics - Null probes all counters without selecting metrics.
+ * @returns {Promise<GPUCounterReadiness>}
+ */
+async function checkGPUCounterReadiness(
+  engine,
+  ctx,
+  probeReport,
+  requestedMetrics,
+) {
+  const gpuName = queryGPUInfo(probeReport);
+  if (!gpuName) {
+    return {
+      gpuName: null,
+      availableCounters: [],
+      selectedCounters: [],
+      missingCounters: [],
+      probeFailure: {
+        level: 'error',
+        messageCode: 'tool_integrations.neoprof.GPU_NOT_IDENTIFIED',
+      },
+    };
+  }
+
+  const counterProbe = await probeGPUCounters(engine, ctx, gpuName);
+  if (counterProbe.level !== 'ready') {
+    return {
+      gpuName,
+      availableCounters: [],
+      selectedCounters: [],
+      missingCounters: [],
+      probeFailure: counterProbe,
+    };
+  }
+
+  const availableCounters = counterProbe.report.counters;
+  const required = requestedMetrics
+    ? resolveGPUHardwareCounterAliases(gpuName, requestedMetrics)
+    : null;
+  const selectedAliases = new Set(required?.aliases);
+  const selectedCounters = required
+    ? availableCounters.filter((counter) => selectedAliases.has(counter.alias))
+    : availableCounters;
+  const foundAliases = new Set(
+    selectedCounters.map((counter) => counter.alias),
+  );
+  const missingCounters = required
+    ? [
+        ...new Set([
+          ...required.unresolvedSelectors,
+          ...required.aliases.filter((alias) => !foundAliases.has(alias)),
+        ]),
+      ]
+    : [];
+
+  return {
+    gpuName,
+    availableCounters,
+    selectedCounters,
+    missingCounters,
+    probeFailure: null,
+  };
+}
+
+/**
+ * Resolves recipe selectors against the counters reported on this run target.
+ * The readiness probe cannot pass its capabilities to the later run stage, so
+ * the tool checks the native counter names again immediately before recording.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {import("../recipes/docs/jsdocs").ToolContext} toolContext
+ * @returns {Promise<Array<{counter: string, alias: string}>>}
+ */
+async function resolveRunGPUCounters(engine, toolContext) {
+  const requestedMetrics = parseRequestedGPUMetrics(
+    toolContext.params.requested_gpu_metrics,
+  );
+
+  const probeReport = await generateProbeReport(engine, toolContext);
+
+  const readiness = await checkGPUCounterReadiness(
+    engine,
+    toolContext,
+    probeReport,
+    requestedMetrics,
+  );
+
+  const errorMessageCode = 'tool_integrations.neoprof.GPU_COUNTERS_UNAVAILABLE';
+  if (!readiness.gpuName || readiness.probeFailure) {
+    // GPU activity is optional for system utilization targets.
+    if (isSysUtilWorkflow(toolContext)) return [];
+    throw {
+      code: errorMessageCode,
+      metadata: { counters: requestedMetrics.join(', ') },
+      cause: readiness.probeFailure?.cause,
+    };
+  }
+
+  if (readiness.missingCounters.length > 0) {
+    engine.log(
+      'warn',
+      `Some requested GPU metrics are unavailable: ${readiness.missingCounters.join(', ')}`,
+    );
+  }
+
+  // Probe capabilities are not persisted into the run. Keep the GPU identity
+  // alongside its counters so rendering can select the correct metric set.
+  await engine.addToolCapability('platform', neoprofPlatformCapabilityType, {
+    state: 'collected',
+    payload: { gpu_name: readiness.gpuName },
+  });
+
+  // Missing metrics are readiness warnings; collect the available subset.
+  return readiness.selectedCounters;
 }
 
 async function reformatOnHost(engine, ctx, useTwoStageAnalyze) {
@@ -1139,13 +1408,11 @@ async function reformatOnHost(engine, ctx, useTwoStageAnalyze) {
   // disassembly output. When it is disabled, analysis goes straight to the
   // export pass below.
   if (useTwoStageAnalyze) {
-    const discoveryArgs = [
+    const discoveryArgs = buildDiscoveryArgs(
       slAnalyzePath,
-      '-o',
       hostAnalysisDirectory,
-      '--verbose',
       hostCaptureDirectory,
-    ];
+    );
 
     await runSlAnalyze(engine, ctx, discoveryArgs, {
       stdoutLog: 'host_analysis_phase1.log',
@@ -1352,6 +1619,17 @@ async function convertJfrRecordingIndex(engine, ctx, parquetOutputDir) {
   }
 }
 
+function buildDiscoveryArgs(slAnalyzePath, outputDirectory, captureDirectory) {
+  return [
+    slAnalyzePath,
+    '-o',
+    outputDirectory,
+    '--verbose',
+    '--no-analyze-all-symbols',
+    captureDirectory,
+  ];
+}
+
 function buildAnalyzeArgs(engine, ctx, options) {
   const args = [options.slAnalyzePath, '-o', options.outputDirectory];
   const timelineOnly = isSysUtilWorkflow(ctx);
@@ -1364,6 +1642,7 @@ function buildAnalyzeArgs(engine, ctx, options) {
     // Verbose output drives the analysis progress tracker but is not copied to
     // the user-facing log because it is noisy.
     '--verbose',
+    '--no-analyze-all-symbols',
   );
 
   if (!timelineOnly) {
@@ -1568,10 +1847,7 @@ async function probeIpcMetric(engine, ctx) {
       );
       return {
         level: 'warning',
-        messageCode: readinessMessageCode,
-        metadata: {
-          message: `The name of the IPC metric for the target could not be determined. This means that the IPC metric will not be included in the profiling data collected.`,
-        },
+        messageCode: 'tool_integrations.neoprof.IPC_METRIC_UNAVAILABLE',
       };
     }
   }
@@ -1603,9 +1879,11 @@ async function probeSlAnalyze(engine, ctx) {
     );
     return {
       level: 'error',
-      messageCode: readinessMessageCode,
+      messageCode: 'tool_integrations.neoprof.ANALYZER_GLIBC_INCOMPATIBLE',
       metadata: {
-        message: `The ${locality} is using a version of the GNU C Library which is incompatible with the '${tool.name}' tool. Upgrade the GNU C Library on the ${locality} machine to at least version GLIBC_${glibcMatch[1]}, or use a different ${locality} machine with a newer operating system.`,
+        tool: tool.name,
+        locality,
+        version: glibcMatch[1],
       },
     };
   }
@@ -1659,6 +1937,10 @@ function javaLaunchEnvironment(ctx, environment) {
  * @returns {Promise<void>}
  */
 async function runSlRecord(engine, ctx, processArgs) {
+  let outFilehandle = await createRunFile(engine, 'capture_log.txt', {
+    name: 'log-text',
+    version: '1.0',
+  });
   let errFilehandle = await createRunFile(engine, 'capture_log_err.txt', {
     name: 'log-text',
     version: '1.0',
@@ -1667,10 +1949,7 @@ async function runSlRecord(engine, ctx, processArgs) {
   let stopSafetyTimer = null;
   /** @type {import("../recipes/docs/jsdocs").ProcessOptions} */
   let recordProcessOptions = {
-    stdout: {
-      redirect: 'file',
-      path: `${ctx.metadata.outputDirectory}/capture_log.txt`,
-    },
+    stdout: { redirect: 'stream' },
     stderr: { redirect: 'stream' },
     asPrivileged: ctx.metadata.neoprofAsPrivileged,
     environment: {
@@ -1723,22 +2002,36 @@ async function runSlRecord(engine, ctx, processArgs) {
     // Stop requests until the process has had time to initialize.
     ctx.metadata.allowStop = false;
     stopSafetyTimer = setTimeout(() => {
-      ctx.metadata.allowStop = true;
-      if (ctx.metadata.requestStop && ctx.metadata.recordHandle) {
-        ctx.metadata.recordHandle.interrupt();
-      }
+      allowSlRecordStop(engine, ctx);
     }, slRecordStopDelayMs);
 
     if (ctx.metadata.requestCancel) {
       ctx.metadata.recordHandle.kill();
     }
 
-    await drainStreamToFileAndClose(
-      errFilehandle,
-      ctx.metadata.recordHandle.stderr,
-    );
-    result = await ctx.metadata.recordHandle.wait();
-    ctx.metadata.recordHandle = null;
+    const captureTasks = [
+      recordHandle.wait(),
+      drainStreamToFileAndClose(outFilehandle, recordHandle.stdout),
+      drainStreamToFileAndClose(errFilehandle, recordHandle.stderr),
+    ];
+    try {
+      [result] = await Promise.all(captureTasks);
+    } catch (err) {
+      // Stop the process and settle both streams before returning the original error.
+      try {
+        await recordHandle.kill();
+      } catch (killErr) {
+        // A failed kill cancels the handle's local wait and streams.
+        engine.log(
+          'warn',
+          `Could not confirm sl-record termination after capture failure: ${killErr instanceof Error ? killErr.message : String(killErr)}`,
+        );
+      }
+      await Promise.allSettled(captureTasks);
+      throw err;
+    } finally {
+      ctx.metadata.recordHandle = null;
+    }
   } finally {
     if (stopSafetyTimer !== null) {
       clearTimeout(stopSafetyTimer);
@@ -1750,7 +2043,7 @@ async function runSlRecord(engine, ctx, processArgs) {
     engine,
     ctx,
     errFilehandle.path(),
-    `${ctx.metadata.outputDirectory}/capture_log.txt`,
+    outFilehandle.path(),
     result.exitCode,
     slRecordToolName,
   );
@@ -1891,6 +2184,17 @@ async function stopJitdumpAgents(engine, ctx, runErr) {
 }
 
 /**
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ */
+function allowSlRecordStop(engine, ctx) {
+  ctx.metadata.allowStop = true;
+  if (ctx.metadata.requestStop) {
+    return tool.onStop(engine, ctx);
+  }
+}
+
+/**
  * Converts workload configuration to streamline-cli arguments.
  * @param {import("../recipes/docs/jsdocs").WorkloadLaunch |
  * import("../recipes/docs/jsdocs").WorkloadAndroidLaunch |
@@ -1958,11 +2262,58 @@ function workloadToAgentHelperArgs(workload) {
 }
 
 /**
- * Builds the arguments for sl-record based on the given parameters.
+ * Builds the sl-record arguments for helper processes to signal on timeout.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
  * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
  * @returns {string[]}
  */
-function buildRecordArgs(ctx) {
+function buildTimeoutSignalArgs(engine, ctx) {
+  const args = [];
+
+  if (ctx.timeout > 0) {
+    if (ctx.metadata.jitdumpJvmProcHandle) {
+      const jitdumpJvmPid = ctx.metadata.jitdumpJvmProcHandle.pid();
+      if (!Number.isInteger(jitdumpJvmPid) || jitdumpJvmPid <= 0) {
+        throw {
+          code: 'common.UNKNOWN_ERROR',
+          cause: `invalid jitdump-jvm pid: ${String(jitdumpJvmPid)}`,
+        };
+      }
+
+      args.push('--timeout-signal-pid', String(jitdumpJvmPid));
+      engine.log(
+        'info',
+        `sl-record timeout will signal jitdump-jvm pid ${jitdumpJvmPid}`,
+      );
+    }
+
+    if (ctx.metadata.dotnetAgentProcHandle) {
+      const dotnetAgentPid = ctx.metadata.dotnetAgentProcHandle.pid();
+      if (!Number.isInteger(dotnetAgentPid) || dotnetAgentPid <= 0) {
+        throw {
+          code: 'common.UNKNOWN_ERROR',
+          cause: `invalid dotnet-agent pid: ${String(dotnetAgentPid)}`,
+        };
+      }
+
+      args.push('--timeout-signal-pid', String(dotnetAgentPid));
+      engine.log(
+        'info',
+        `sl-record timeout will signal dotnet-agent pid ${dotnetAgentPid}`,
+      );
+    }
+  }
+
+  return args;
+}
+
+/**
+ * Builds the arguments for sl-record based on the given parameters.
+ * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ * @param {Array<{counter: string}>} [gpuCounters]
+ * @returns {string[]}
+ */
+function buildRecordArgs(ctx, gpuCounters = []) {
   let args = [];
 
   const mode = ctx.params['mode'];
@@ -2019,17 +2370,23 @@ function buildRecordArgs(ctx) {
     if (speWorkflow) {
       args.push('-X', speWorkflow);
     }
-    // TODO: Here to make GPU recipe valid withou mode specific params, this will be removed once have mechanism
-    // for determining Mali counters from templates.
-  } else if (mode !== 'gpu') {
+  } else if (mode !== undefined || !hasRequestedGPUMetrics(ctx)) {
     throw {
       code: 'tool_integrations.neoprof.INVALID_MODE_PARAM',
       metadata: { value: mode },
     };
   }
 
+  if (gpuCounters.length > 0) {
+    args.push('-C', gpuCounters.map((counter) => counter.counter).join(','));
+  }
+
   if (workflow) {
     args.push('--workflow', workflow);
+  }
+
+  if (isSysUtilWorkflow(ctx) && ctx.params.poll_interval !== undefined) {
+    args.push('--poll-interval', String(ctx.params.poll_interval));
   }
 
   return args;
@@ -2563,7 +2920,10 @@ function emitCaptureDir(engine, outputDir) {
 }
 
 function emitAnalysisFiles(engine, ctx, analysisDir, captureDir) {
-  if (isSysUtilWorkflow(ctx)) {
+  if (
+    isSysUtilWorkflow(ctx) ||
+    (ctx.params.mode === undefined && hasRequestedGPUMetrics(ctx))
+  ) {
     emitNeoprofTimelineFiles(engine, captureDir);
     return;
   }
@@ -2602,17 +2962,6 @@ function immediateEmitSlRecordFiles(engine, ctx, outputDir) {
     'gator-log.txt',
     {
       name: 'log-text-debug',
-      version: '1.0',
-    },
-    {
-      immediateRetrieval: true,
-    },
-  );
-  engine.emitOutput(
-    outputDir + '/../capture_log.txt',
-    'capture_log.txt',
-    {
-      name: 'log-text',
       version: '1.0',
     },
     {
@@ -2923,6 +3272,13 @@ function emitNeoprofTimelineFiles(engine, captureDir) {
       version: '1.0',
     },
   );
+  // A glob keeps scheduler exports optional for older collectors and captures
+  // without scheduler data. It includes switches, thread exits and reason metadata.
+  engine.emitOutput(
+    captureDir + '/report-new/apx/timeline/scheduler_*.parquet',
+    'output/parquet/timeline/scheduler_*.parquet',
+    { name: 'timeline-scheduler', version: '1.0' },
+  );
   engine.emitOutput(
     captureDir + '/report-new/apx/timeline/**/counter.parquet',
     'output/parquet/timeline/**/counter.parquet',
@@ -3192,6 +3548,15 @@ async function isPrivilegeRequired(engine, ctx) {
     return true;
   }
 
+  return isPerfPrivilegeRequired(engine);
+}
+
+/**
+ * Checks whether the target requires privileged performance monitoring.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @returns {Promise<boolean>}
+ */
+async function isPerfPrivilegeRequired(engine) {
   // CAP_PERFMON (Linux 5.8+) and CAP_SYS_ADMIN (pre-5.8 fallback) allow
   // performance monitoring without routing the operation through the root worker.
   if (await isPerfCapable(engine)) {
@@ -3265,37 +3630,6 @@ async function parseExecutablePaths(engine, captureDirectory) {
     });
   }
   return Array.from(paths.values());
-}
-
-/**
- * @param {import("../recipes/docs/jsdocs").ProbeResult} result
- * @param {string} id
- * @param {import("../recipes/docs/jsdocs").OutputMetadata} metadata
- * @param {import("../recipes/docs/jsdocs").CapabilityData} data
- */
-function addProbeCapability(result, id, metadata, data) {
-  result.capabilities[id] = {
-    componentType: metadata,
-    ...data,
-  };
-}
-
-/**
- * @param {import("../recipes/docs/jsdocs").ProbeResult} result
- * @param {Array<{name: string, alias: string}>} counters
- */
-function addProbeCapabilities(result, counters) {
-  for (const counter of counters) {
-    addProbeCapability(
-      result,
-      `counter.${counter.name}`,
-      COUNTER_CAPABILITY_COMPONENT_TYPE,
-      {
-        state: 'available',
-        payload: { counter: counter.name, alias: counter.alias },
-      },
-    );
-  }
 }
 
 /**

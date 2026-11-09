@@ -7,6 +7,7 @@ package util
 
 import "os"
 
-func atomicReplaceFile(src, dst string) error {
+// AtomicReplaceFile replaces dst with src using os.Rename.
+func AtomicReplaceFile(src, dst string) error {
 	return os.Rename(src, dst)
 }

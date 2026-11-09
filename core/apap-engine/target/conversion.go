@@ -23,8 +23,9 @@ func EngineTargetFromJSON(t JSONTarget) (Target, error) {
 
 	case *JSONAndroidTarget:
 		return &AndroidTarget{
-			SerialNumber:    tgt.SerialNumber,
-			DeviceIPAddress: tgt.DeviceIPAddress,
+			SerialNumber:        tgt.SerialNumber,
+			LastKnownADBAddress: tgt.LastKnownADBAddress,
+			DeviceIPAddress:     tgt.DeviceIPAddress,
 		}, nil
 
 	default:
@@ -59,8 +60,9 @@ func JSONTargetFromEngine(t Target) (JSONTarget, error) {
 	case *AndroidTarget:
 		return JSONTarget{
 			Value: &JSONAndroidTarget{
-				SerialNumber:    v.SerialNumber,
-				DeviceIPAddress: v.DeviceIPAddress,
+				SerialNumber:        v.SerialNumber,
+				LastKnownADBAddress: v.LastKnownADBAddress,
+				DeviceIPAddress:     v.DeviceIPAddress,
 			},
 		}, nil
 

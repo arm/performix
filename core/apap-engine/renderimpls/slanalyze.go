@@ -214,6 +214,7 @@ func (renderer *SlAnalyzeRenderer) buildSlAnalyzeArgs(slAnalyzePath, tempDir, ca
 		"--include-empty-columns",
 		"--annotate-source",
 		"--disassemble",
+		"--no-analyze-all-symbols",
 	}
 
 	if renderer.specificConfig.FilterPid != nil {

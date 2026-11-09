@@ -3,6 +3,9 @@
 
 const cpuCounters = require('../../../../../apap-cli/tool-integrations/neoprof_cpu_counters');
 const { createFixture } = require('./harness');
+const catalogueError =
+  'tool_integrations.neoprof.CPU_COUNTER_CATALOGUE_INVALID';
+const discoveryError = 'tool_integrations.neoprof.CPU_COUNTER_DISCOVERY_FAILED';
 function streamChunks(chunks) {
   let index = 0;
   return {
@@ -231,19 +234,25 @@ const scenarios = {
   },
   streamed_discovery_failures: async () => {
     const { arm, assertEqual } = createFixture(cpuCounters);
-    for (const stage of ['launch', 'stdout', 'stderr', 'wait']) {
-      const original = new Error(stage);
+    for (const stage of ['launch', 'stdout', 'stderr', 'wait', 'structured']) {
+      // Given a process or stream failure, possibly already structured.
+      const original =
+        stage === 'structured'
+          ? { code: discoveryError, cause: 'existing diagnostic' }
+          : new Error(stage);
+      const launchFailure = stage === 'launch' || stage === 'structured';
       let kills = 0;
       const cleanupWarnings = [];
       let launches = 0;
       let caught;
+      // When reading the discovery catalogue.
       try {
         await cpuCounters.discover(
           {
             log: (level, text) => cleanupWarnings.push({ level, text }),
             startProcess: async () => {
               launches++;
-              if (stage === 'launch') throw original;
+              if (launchFailure) throw original;
               const handle = commandHandle(arm.counters);
               handle.kill = async () => {
                 kills++;
@@ -275,10 +284,21 @@ const scenarios = {
       } catch (error) {
         caught = error;
       }
-      assertEqual(caught, original, 'Preserve ' + stage + ' error');
+      // Then report a structured error and preserve the diagnostic.
+      assertEqual(caught.code, discoveryError, 'Discovery failure code');
+      if (stage === 'structured') {
+        assertEqual(caught, original, 'Do not wrap structured errors');
+      } else {
+        assertEqual(
+          caught.cause,
+          String(original),
+          'Preserve ' + stage + ' cause',
+        );
+        assertEqual(caught.metadata.capability, cpuCounters.ID, 'Capability');
+      }
       assertEqual(
         cleanupWarnings.length,
-        stage === 'launch' ? 0 : 1,
+        launchFailure ? 0 : 1,
         'Report termination failure',
       );
       if (cleanupWarnings.length) {
@@ -293,28 +313,24 @@ const scenarios = {
           'Retain cleanup cause',
         );
       }
-      assertEqual(kills, stage === 'launch' ? 0 : 1, 'Clean up ' + stage);
+      assertEqual(kills, launchFailure ? 0 : 1, 'Clean up ' + stage);
       assertEqual(launches, 1, 'Do not continue discovery after ' + stage);
     }
-    for (const [stdout, stderr, rc] of [
-      [arm.counters, '', 1],
-      ['<broken', '', 0],
+    for (const [stdout, rc, expectedCode] of [
+      [arm.counters, 1, discoveryError],
+      ['<broken', 0, catalogueError],
     ]) {
       let caught;
       try {
         await cpuCounters.discover(
-          { startProcess: async () => commandHandle(stdout, stderr, rc) },
+          { startProcess: async () => commandHandle(stdout, '', rc) },
           { metadata: {} },
           '/collector',
         );
       } catch (error) {
         caught = error;
       }
-      assertEqual(
-        caught?.code,
-        'common.UNKNOWN_ERROR',
-        'Invalid catalog must fail',
-      );
+      assertEqual(caught?.code, expectedCode, 'Invalid catalog must fail');
     }
   },
   capability_id_errors_propagate: () => expectInternalFailure('capability_id'),
@@ -599,7 +615,7 @@ const scenarios = {
       try {
         cpuCounters.resolveCatalogue(catalogue);
       } catch (e) {
-        failed = e.code === 'common.UNKNOWN_ERROR';
+        failed = e.code === catalogueError;
       }
       assertEqual(failed, true, label + ' must fail discovery');
     }
@@ -683,10 +699,10 @@ const scenarios = {
       'Retain every nonempty diagnostic in logs',
     );
 
-    for (const [label, output, errors, rc] of [
-      ['nonzero exit', arm, stderr, 1],
-      ['invalid counters', { ...arm, counters: '<broken' }, stderr, 0],
-      ['invalid events', { ...arm, events: '<broken' }, stderr, 0],
+    for (const [label, output, rc, expectedCode] of [
+      ['nonzero exit', arm, 1, discoveryError],
+      ['invalid counters', { ...arm, counters: '<broken' }, 0, catalogueError],
+      ['invalid events', { ...arm, events: '<broken' }, 0, catalogueError],
     ]) {
       let caught;
       try {
@@ -694,7 +710,7 @@ const scenarios = {
           {
             log: () => {},
             startProcess: async (args) =>
-              commandHandle(output[args[2].split('.')[0]], errors, rc),
+              commandHandle(output[args[2].split('.')[0]], stderr, rc),
           },
           { metadata: {} },
           '/collector',
@@ -704,7 +720,7 @@ const scenarios = {
       }
       assertEqual(
         caught?.code,
-        'common.UNKNOWN_ERROR',
+        expectedCode,
         label + ' must still fail discovery',
       );
     }
@@ -721,7 +737,7 @@ const scenarios = {
       try {
         cpuCounters.resolveCatalogue(text);
       } catch (e) {
-        failed = e.code === 'common.UNKNOWN_ERROR';
+        failed = e.code === catalogueError;
       }
       assertEqual(
         failed,
@@ -740,7 +756,7 @@ const scenarios = {
         '/collector',
       );
     } catch (e) {
-      failed = e.code === 'common.UNKNOWN_ERROR';
+      failed = e.code === discoveryError;
     }
     assertEqual(failed, true, 'Nonzero collector exit must fail discovery');
   },

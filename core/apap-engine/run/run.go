@@ -58,10 +58,8 @@ type RunCollection struct {
 
 // RunRecipeLookup is a minimal interface needed for selecting a recipe.
 type RunRecipeLookup interface {
-	CheckRunsUseSameRecipe([]RunID) error
 	CheckRunsUseSameRecipeNameOnly([]RunID) error
 	GetNewestRun([]RunID) (RunID, error)
-	GetRecipeComponentPath(RunID) (string, error)
 	GetRecipeName(RunID) (string, error)
 }
 
@@ -1718,60 +1716,6 @@ func (c *RunCollection) RunDescriptionsForExport(ctx context.Context) ([]map[str
 	return result, nil
 }
 
-// CheckRunsUseSameRecipe takes a list of run IDs and checks whether all runs are using the same recipe.
-func (c *RunCollection) CheckRunsUseSameRecipe(runIDs []RunID) error {
-	if len(runIDs) == 0 {
-		return message.New(message.CommonUnknownError).WithCause(fmt.Errorf("no runs provided"))
-	}
-
-	var referenceName string
-	var referenceNameID string
-
-	var referenceSchema string
-	var referenceSchemaID string
-
-	for _, runID := range runIDs {
-		recipeName, err := c.GetRecipeName(runID)
-		if err != nil {
-			return err
-		}
-		if referenceNameID == "" {
-			referenceName = recipeName
-			referenceNameID = runID.Value
-		} else if recipeName != referenceName {
-			metadata := map[string]string{
-				"runID1":  referenceNameID,
-				"runID2":  runID.Value,
-				"recipe1": referenceName,
-				"recipe2": recipeName,
-			}
-			return message.New(message.EngineRunDifferentRecipes).WithMetadata(metadata)
-		}
-
-		schema, err := c.GetRecipeSchema(runID)
-		if err != nil {
-			// If the schema is missing (e.g., old run), skip comparison
-			continue
-		}
-
-		if referenceSchemaID == "" {
-			referenceSchema = schema
-			referenceSchemaID = runID.Value
-		} else if schema != referenceSchema {
-			metadata := map[string]string{
-				"runID1":  referenceSchemaID,
-				"runID2":  runID.Value,
-				"recipe":  referenceName,
-				"schema1": referenceSchema,
-				"schema2": schema,
-			}
-			return message.New(message.EngineRunDifferentRecipeSchemas).WithMetadata(metadata)
-		}
-	}
-
-	return nil
-}
-
 // CheckRunsUseSameRecipeNameOnly takes a list of run IDs and checks whether all runs are using the same recipe using
 // recipe name only.
 func (c *RunCollection) CheckRunsUseSameRecipeNameOnly(runIDs []RunID) error {
@@ -1843,15 +1787,6 @@ func (c *RunCollection) GetNewestRun(runIDs []RunID) (RunID, error) {
 		}
 	}
 	return newestRunID, nil
-}
-
-// GetRecipeSchema takes a runID and returns the schema version for the recipe component
-func (c *RunCollection) GetRecipeSchema(runID RunID) (string, error) {
-	component, err := c.LoadRecipeComponent(runID)
-	if err != nil {
-		return "", err
-	}
-	return component.Type.SchemaVersion, nil
 }
 
 // LoadRecipeComponent takes a runID and returns the recipe cdf component

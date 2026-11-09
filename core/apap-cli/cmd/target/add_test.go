@@ -18,6 +18,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/ssh"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/target"
+	"github.com/Arm-Debug/apap-cli/apap-cli/service/targetlogin"
 	"github.com/Arm-Debug/apap-cli/apap-cli/utils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
@@ -99,7 +100,7 @@ func TestAddCommandValidArguments(t *testing.T) {
 	var blah []byte
 	mkp.On("CreateSSHKeyPair", mock.Anything, mock.Anything).Return("foo", nil)
 	mkp.On("ReadPublicKey", mock.Anything).Return(blah, nil)
-	mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mtm.On("AddTarget", testTargetName, mock.Anything).Return(nil)
 	mtm.On("SetDefaultTarget", testTargetName).Return(nil)
 	cmd := newAddCommand(nil, &mtm, &mkp)
@@ -251,7 +252,7 @@ func TestAddCommandAddTargetFailsOnError(t *testing.T) {
 	mkp := ssh.MockSSHKeyProvisioner{}
 	mkp.On("CreateSSHKeyPair", mock.Anything, mock.Anything).Return("foo", nil)
 	mkp.On("ReadPublicKey", mock.Anything).Return(blah, nil)
-	mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	cmd := newAddCommand(nil, &mtm, &mkp)
 	cmd.SetArgs([]string{testTargetUser + "@111.111.111.111:1111:" + testTargetKey, "--name", testTargetName})
 
@@ -268,7 +269,7 @@ func TestAddCommandSetDefaultTargetFails(t *testing.T) {
 	mkp := ssh.MockSSHKeyProvisioner{}
 	mkp.On("CreateSSHKeyPair", mock.Anything, mock.Anything).Return("foo", nil)
 	mkp.On("ReadPublicKey", mock.Anything).Return(blah, nil)
-	mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	cmd := newAddCommand(nil, &mtm, &mkp)
 	cmd.SetArgs([]string{testTargetUser + "@111.111.111.111:1111:" + testTargetKey, "--name", testTargetName, "--default"})
 
@@ -285,7 +286,7 @@ func TestAddCommandAddRandomTargetName(t *testing.T) {
 	mkp := ssh.MockSSHKeyProvisioner{}
 	mkp.On("CreateSSHKeyPair", mock.Anything, mock.Anything).Return("foo", nil)
 	mkp.On("ReadPublicKey", mock.Anything).Return(blah, nil)
-	mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	cmd := newAddCommand(nil, &mtm, &mkp)
 	cmd.SetArgs([]string{testTargetUser + "@111.111.111.111:" + testTargetKey})
 
@@ -408,7 +409,7 @@ func TestAddCommandHostKeyPolicyValues(t *testing.T) {
 		mkp := &ssh.MockSSHKeyProvisioner{}
 		mkp.On("CreateSSHKeyPair", mock.Anything, mock.Anything).Return("foo", nil)
 		mkp.On("ReadPublicKey", mock.Anything).Return(blah, nil)
-		mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		cmd := newAddCommand(nil, mtm, mkp)
 		cmd.SetArgs([]string{testTargetUser + "@111.111.111.111:" + testTargetKey, "--name", testTargetName})
 
@@ -417,6 +418,7 @@ func TestAddCommandHostKeyPolicyValues(t *testing.T) {
 	})
 
 	t.Run("password provisioning reads stdin when no key provided", func(t *testing.T) {
+		// Given
 		origStdin := os.Stdin
 		r, w, err := os.Pipe()
 		require.NoError(t, err)
@@ -435,15 +437,26 @@ func TestAddCommandHostKeyPolicyValues(t *testing.T) {
 		mkp := &ssh.MockSSHKeyProvisioner{}
 		mkp.On("CreateSSHKeyPair", mock.Anything, mock.Anything).Return("/tmp/key", nil)
 		mkp.On("ReadPublicKey", "/tmp/key.pub").Return([]byte("pub"), nil)
-		mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything, "piped-secret", "pub").Return(nil)
+		var provisionHost engine_target.SSHHostConfig
+		var password []byte
+		var promptErr error
+		mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, "pub").Run(func(args mock.Arguments) {
+			provisionHost = args.Get(1).(engine_target.SSHHostConfig)
+			password, promptErr = args.Get(2).(targetlogin.SecretPrompter)("Enter password: ")
+		}).Return(nil)
 
 		cmd := newAddCommand(nil, mtm, mkp)
 		cmd.SetArgs([]string{testTargetUser + "@111.111.111.111", "--name", "piped", "--provision-key"})
 
+		// When
 		err = cmd.Execute()
+
+		// Then
 		require.NoError(t, err)
 
-		assert.Equal(t, "piped-secret", userPassword)
+		require.NoError(t, promptErr)
+		assert.Equal(t, engine_target.AskNewHost, provisionHost.HostKeyPolicy)
+		assert.Equal(t, "piped-secret", string(password))
 		mtm.AssertExpectations(t)
 		mkp.AssertExpectations(t)
 	})
@@ -458,7 +471,7 @@ func TestAddCommandHostKeyPolicyValues(t *testing.T) {
 			mkp := &ssh.MockSSHKeyProvisioner{}
 			mkp.On("CreateSSHKeyPair", mock.Anything, mock.Anything).Return("foo", nil)
 			mkp.On("ReadPublicKey", mock.Anything).Return(blah, nil)
-			mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+			mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			cmd := newAddCommand(nil, mtm, mkp)
 			cmd.SetArgs([]string{testTargetUser + "@111.111.111.111:" + testTargetKey, "--name", testTargetName, "--host-key-policy", value})
 
@@ -472,7 +485,7 @@ func TestAddCommandHostKeyPolicyValues(t *testing.T) {
 			mkp := ssh.MockSSHKeyProvisioner{}
 			mkp.On("CreateSSHKeyPair", mock.Anything, mock.Anything).Return("foo", nil)
 			mkp.On("ReadPublicKey", mock.Anything).Return(blah, nil)
-			mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+			mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			cmd := newAddCommand(nil, &target.MockTargetManager{}, &mkp)
 			cmd.SetArgs([]string{testTargetUser + "@111.111.111.111:" + testTargetKey, "--name", testTargetName, "--host-key-policy", value})
 
@@ -733,7 +746,7 @@ func TestAddCommandJSONOutput(t *testing.T) {
 		var blah []byte
 		mkp.On("CreateSSHKeyPair", mock.Anything, mock.Anything).Return("foo", nil)
 		mkp.On("ReadPublicKey", mock.Anything).Return(blah, nil)
-		mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mkp.On("ProvisionPublicKeyWithPassword", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		mtm.On("AddTarget", testTargetName, mock.Anything).Return(nil)
 		mtm.On("SetDefaultTarget", testTargetName).Return(nil)
 

@@ -29,3 +29,22 @@ func TestResolveFullCaptureDependency(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveCustomPMUCaptureDependency(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		configured       Flags
+		wantTimelineFlag bool
+	}{
+		{name: "both disabled", configured: Flags{}},
+		{name: "timeline enabled", configured: Flags{NeoprofTimeline: true}, wantTimelineFlag: true},
+		{name: "custom PMU capture enabled", configured: Flags{CustomPMUCapture: true}, wantTimelineFlag: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			effective := Resolve(tc.configured)
+			if effective.NeoprofTimeline != tc.wantTimelineFlag {
+				t.Errorf("Resolve(%+v).NeoprofTimeline = %t; want %t", tc.configured, effective.NeoprofTimeline, tc.wantTimelineFlag)
+			}
+		})
+	}
+}

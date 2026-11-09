@@ -420,21 +420,25 @@ func (*WindowsSystemInfo) GetOSDescription() (string, error) {
 	return fmt.Sprintf("%s %s", product, displayVersion), nil
 }
 
-func getProcessorName() (string, error) {
+func getProcessorInfo(coreNumber uint32) (string, string) {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE,
-		`HARDWARE\DESCRIPTION\System\CentralProcessor\0`,
+		fmt.Sprintf(`HARDWARE\DESCRIPTION\System\CentralProcessor\%d`, coreNumber),
 		registry.QUERY_VALUE)
 	if err != nil {
-		return "", err
+		return "", ""
 	}
 	defer k.Close()
 
-	s, _, err := k.GetStringValue("ProcessorNameString")
-	return s, err
+	name, _, _ := k.GetStringValue("ProcessorNameString")
+	var midr string
+	// Windows caches MIDR_EL1 as the CP 4000 registry value on Arm CPUs.
+	if value, _, err := k.GetIntegerValue("CP 4000"); err == nil {
+		midr = fmt.Sprintf("0x%08x", value)
+	}
+	return name, midr
 }
 
 func (*WindowsSystemInfo) GetCPUTopology() (CPUTopology, error) {
-	processorName, _ := getProcessorName()
 	processorCount := windows.GetActiveProcessorCount(windows.ALL_PROCESSOR_GROUPS)
 
 	// Assume a single cluster for now
@@ -445,16 +449,22 @@ func (*WindowsSystemInfo) GetCPUTopology() (CPUTopology, error) {
 
 	var cpus []CPUDescription
 	for i := uint32(0); i < processorCount; i++ {
+		processorName, midr := getProcessorInfo(i)
 		cpus = append(cpus, CPUDescription{
 			CoreNumber: i,
 			ClusterID:  uint32(0),
-			Midr:       "", // Not readily available on Windows
-			Name:       processorName,
+			Midr:       midr,
+			Name:       resolveCPUName(cpuInfo{modelName: processorName}, midr),
 		})
 	}
 
+	primaryCPUName := ""
+	if len(cpus) > 0 {
+		primaryCPUName = cpus[0].Name
+	}
+
 	return CPUTopology{
-		PrimaryCPUName: processorName,
+		PrimaryCPUName: primaryCPUName,
 		CPUs:           cpus,
 		ClusterInfo:    clusterInfo,
 	}, nil

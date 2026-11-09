@@ -60,9 +60,11 @@ the column families and their units are as listed above.
 
 ## Initial inspection
 
-Issue these independent queries together: a bounded time-series overview and a
-cheap query returning target-specific column names. This avoids a later model
-and tool exchange if follow-up analysis needs them.
+Start with the time-series overview below. Target-specific CPU, IRQ, NUMA,
+storage and network columns are listed in `table_schemas` when they fit. If
+`table_schemas_query` is present, discover the relevant column family through
+the catalogue for follow-up when the overview shows a material question about
+those resources. The overview does not require target-specific column names.
 
 ### Time-series overview
 
@@ -72,15 +74,15 @@ WITH samples AS (
     *,
     coalesce(list_sum(list_transform(
       list_value(unpack(COLUMNS('^(read_iops|write_iops)_.*$'))),
-      x -> coalesce(try_cast(x AS DOUBLE), 0)
+      lambda x: coalesce(try_cast(x AS DOUBLE), 0)
     )), 0) AS total_storage_iops,
     coalesce(list_sum(list_transform(
       list_value(unpack(COLUMNS('^(read_bps|write_bps)_.*$'))),
-      x -> coalesce(try_cast(x AS DOUBLE), 0)
+      lambda x: coalesce(try_cast(x AS DOUBLE), 0)
     )), 0) AS total_storage_bps,
     coalesce(list_sum(list_transform(
       list_value(unpack(COLUMNS('^(rx_bps|tx_bps)_.*$'))),
-      x -> coalesce(try_cast(x AS DOUBLE), 0)
+      lambda x: coalesce(try_cast(x AS DOUBLE), 0)
     )), 0) AS total_network_bps
   FROM flat_table
 ),
@@ -123,25 +125,6 @@ higher-frequency recordings return at most 100 time buckets. For interval rates
 and percentages, each bucket reports an average and maximum. For sampled state
 fields, it reports the extrema selected by the query. Storage and network
 activity is aggregated without requiring target-specific names.
-
-### Target-specific columns
-
-```sql
-SELECT string_agg(name, ', ' ORDER BY name) AS target_specific_columns
-FROM pragma_table_info('flat_table')
-WHERE regexp_matches(
-  name,
-  '^(cpu[0-9]+_percent|irq_cpu[0-9]+_per_s|'
-  || 'numa_node[0-9]+_allocations_per_s|'
-  || '(read_iops|write_iops|read_bps|write_bps)_.+|'
-  || '(rx_bps|tx_bps)_.+)$'
-);
-```
-
-This returns the names of the CPU, IRQ, NUMA, storage and network columns
-discovered for the run. Make use of these columns when follow-up analysis needs
-target-specific detail. When aggregating a column family, use the `COLUMNS()`
-pattern below instead.
 
 ## Interpreting the time series
 
@@ -226,7 +209,7 @@ the regular expression and alias for `write_bps`, `read_iops`, `write_iops`,
 ```sql
 coalesce(list_sum(list_transform(
   list_value(unpack(COLUMNS('^read_bps_.*$'))),
-  x -> coalesce(try_cast(x AS DOUBLE), 0)
+  lambda x: coalesce(try_cast(x AS DOUBLE), 0)
 )), 0) AS total_read_bps
 ```
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	conductormocks "github.com/Arm-Debug/apap-cli/apap-engine/conductor/conductormocks"
+	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
@@ -60,6 +61,38 @@ func TestDeployTools(t *testing.T) {
 
 	targetMachineType := conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.X86_64}
 
+	for _, locality := range []deploymentsupport.DeploymentLocality{deploymentsupport.DeploymentLocalityTarget, deploymentsupport.DeploymentLocalityHost} {
+		for _, deployed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("ensure %s deployed=%v", locality, deployed), func(t *testing.T) {
+				tp, cleanup := writeLocalToolFile(t, testTool, targetMachineType)
+				defer cleanup()
+				remoteFS := afero.NewMemMapFs()
+				if deployed {
+					require.NoError(t, remoteFS.MkdirAll(tp.DstDir, perms.LocalDirPerm))
+					require.NoError(t, afero.WriteFile(remoteFS, tp.TargetBundle, []byte{1}, perms.LocalFilePerm))
+					writeMarkerFile(t, remoteFS, tp)
+				}
+				runner := &conductormocks.MockCommandRunner{}
+				result, err := ReconcileTool(targetMachineType, testTool, locality, ToolDeployENSURE, runner, targetFilesystem(remoteFS), tp, nil)
+				if deployed {
+					require.NoError(t, err)
+					require.Equal(t, NoAction, result)
+				} else {
+					require.ErrorIs(t, err, message.New(message.ToolIntegrationsCommonToolNotDeployed))
+					require.Equal(t, Deploy, result)
+					require.Equal(t, testTool.Name, message.IsMessage(err).Metadata()["tool"])
+					require.Equal(t, filepath.ToSlash(tp.DstDir), message.IsMessage(err).Metadata()["deployPath"])
+					require.Equal(t, string(locality), message.IsMessage(err).Metadata()["locality"])
+					require.NoError(t, message.ValidateMetadataPlaceholders(err))
+				}
+				exists, statErr := afero.DirExists(remoteFS, tp.DstDir)
+				require.NoError(t, statErr)
+				require.Equal(t, deployed, exists)
+				runner.AssertNotCalled(t, "RunCommand", mock.Anything)
+			})
+		}
+	}
+
 	t.Run("Reconcile fails, error produced when unzip fails, destination is cleaned up", func(t *testing.T) {
 		mcr := &conductormocks.MockCommandRunner{}
 		mcr.On("RunCommand", `tar zxf apapDeploy/testTool/1.0/testTool-Linux-x86_64.tar.gz -C apapDeploy/testTool/1.0`).Return("", "", errors.New("rekt"))
@@ -69,7 +102,7 @@ func TestDeployTools(t *testing.T) {
 
 		remoteFS := afero.NewMemMapFs()
 
-		_, err := ReconcileTool(targetMachineType, testTool, ToolDeployAUTO, mcr, targetFilesystem(remoteFS), tp, nil)
+		_, err := ReconcileTool(targetMachineType, testTool, deploymentsupport.DeploymentLocalityTarget, ToolDeployAUTO, mcr, targetFilesystem(remoteFS), tp, nil)
 		expectedMetadata := map[string]string{
 			"toolName": testTool.Name,
 			"version":  testTool.Version,
@@ -98,7 +131,7 @@ func TestDeployTools(t *testing.T) {
 		require.NoError(t, afero.WriteFile(remoteFS, "apapDeploy/testTool/1.0/testTool-Linux-x86_64.tar.gz", []byte{23, 53, 9, 3}, perms.LocalFilePerm))
 		writeMarkerFile(t, remoteFS, tp)
 
-		reconcileResult, err := ReconcileTool(targetMachineType, testTool, ToolDeployAUTO, mcr, targetFilesystem(remoteFS), tp, nil)
+		reconcileResult, err := ReconcileTool(targetMachineType, testTool, deploymentsupport.DeploymentLocalityTarget, ToolDeployAUTO, mcr, targetFilesystem(remoteFS), tp, nil)
 
 		assert.NoError(t, err)
 		assert.Equal(t, NoAction, reconcileResult)
@@ -134,7 +167,7 @@ func TestDeployTools(t *testing.T) {
 			_ = afero.WriteFile(remoteFS, "apapDeploy/testTool/1.0/extractedTool", []byte{}, perms.LocalFilePerm)
 		})
 
-		reconcileResult, err := ReconcileTool(targetMachineType, testTool, ToolDeployAUTO, mcr, targetFilesystem(remoteFS), tp, nil)
+		reconcileResult, err := ReconcileTool(targetMachineType, testTool, deploymentsupport.DeploymentLocalityTarget, ToolDeployAUTO, mcr, targetFilesystem(remoteFS), tp, nil)
 
 		assert.NoError(t, err)
 		assert.Equal(t, Deployed, reconcileResult)
@@ -157,7 +190,7 @@ func TestDeployTools(t *testing.T) {
 			_ = afero.WriteFile(remoteFS, "apapDeploy/testTool/1.0/extractedTool", []byte{}, perms.LocalFilePerm)
 		})
 
-		reconcileResult, err := ReconcileTool(targetMachineType, testTool, ToolDeployAUTO, mcr, targetFilesystem(remoteFS), tp, nil)
+		reconcileResult, err := ReconcileTool(targetMachineType, testTool, deploymentsupport.DeploymentLocalityTarget, ToolDeployAUTO, mcr, targetFilesystem(remoteFS), tp, nil)
 
 		assert.NoError(t, err)
 		assert.Equal(t, Deployed, reconcileResult)
@@ -182,7 +215,7 @@ func TestDeployTools(t *testing.T) {
 			_ = afero.WriteFile(remoteFS, "apapDeploy/testTool/1.0/extractedTool", []byte{}, perms.LocalFilePerm)
 		})
 
-		reconcileResult, err := ReconcileTool(targetMachineType, testTool, ToolDeployAUTOFORCE, mcr, targetFilesystem(remoteFS), tp, nil)
+		reconcileResult, err := ReconcileTool(targetMachineType, testTool, deploymentsupport.DeploymentLocalityTarget, ToolDeployAUTOFORCE, mcr, targetFilesystem(remoteFS), tp, nil)
 
 		assert.NoError(t, err)
 		assert.Equal(t, Deployed, reconcileResult)
@@ -208,7 +241,7 @@ func TestDeployTools(t *testing.T) {
 
 		mcr := &conductormocks.MockCommandRunner{}
 
-		reconcileResult, err := ReconcileTool(targetMachineType, testTool, ToolDeployAUTOFORCE, mcr, targetFilesystem(remoteFS), tp, nil)
+		reconcileResult, err := ReconcileTool(targetMachineType, testTool, deploymentsupport.DeploymentLocalityTarget, ToolDeployAUTOFORCE, mcr, targetFilesystem(remoteFS), tp, nil)
 
 		assert.Equal(t, NoAction, reconcileResult)
 		var msg message.Message
@@ -238,7 +271,7 @@ func TestDeployTools(t *testing.T) {
 		})
 
 		// Check deployment - should return NoAction
-		reconcileResult, err := ReconcileTool(targetMachineType, testTool, ToolDeployCHECK, mcr, targetFilesystem(remoteFS), tp, nil)
+		reconcileResult, err := ReconcileTool(targetMachineType, testTool, deploymentsupport.DeploymentLocalityTarget, ToolDeployCHECK, mcr, targetFilesystem(remoteFS), tp, nil)
 
 		assert.NoError(t, err)
 		assert.Equal(t, NoAction, reconcileResult)
@@ -257,7 +290,7 @@ func TestDeployTools(t *testing.T) {
 		})
 
 		// Check deployment - should return Deploy
-		reconcileResult, err := ReconcileTool(targetMachineType, testTool, ToolDeployCHECK, mcr, targetFilesystem(remoteFS), tp, nil)
+		reconcileResult, err := ReconcileTool(targetMachineType, testTool, deploymentsupport.DeploymentLocalityTarget, ToolDeployCHECK, mcr, targetFilesystem(remoteFS), tp, nil)
 
 		assert.NoError(t, err)
 		assert.Equal(t, Deploy, reconcileResult)
@@ -274,7 +307,7 @@ func TestDeployTools(t *testing.T) {
 		mcr := &conductormocks.MockCommandRunner{}
 		mcr.On("RunCommand", mock.Anything).Return("", "", nil)
 
-		reconcileResult, err := ReconcileTool(targetMachineType, testTool, ToolDeployCHECK, mcr, targetFilesystem(remoteFS), tp, nil)
+		reconcileResult, err := ReconcileTool(targetMachineType, testTool, deploymentsupport.DeploymentLocalityTarget, ToolDeployCHECK, mcr, targetFilesystem(remoteFS), tp, nil)
 
 		assert.NoError(t, err)
 		assert.Equal(t, Deploy, reconcileResult)
@@ -292,7 +325,7 @@ func TestDeployTools(t *testing.T) {
 		mcr := &conductormocks.MockCommandRunner{}
 		mcr.On("RunCommand", mock.Anything).Return("", "", nil)
 
-		reconcileResult, err := ReconcileTool(targetMachineType, testTool, ToolDeployCHECK, mcr, targetFilesystem(remoteFS), tp, nil)
+		reconcileResult, err := ReconcileTool(targetMachineType, testTool, deploymentsupport.DeploymentLocalityTarget, ToolDeployCHECK, mcr, targetFilesystem(remoteFS), tp, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, Deploy, reconcileResult)
 	})
@@ -362,7 +395,7 @@ func TestDeployTools(t *testing.T) {
 			_ = afero.WriteFile(remoteFS, "apapDeploy/testTool/1.0/extractedTool", []byte{}, perms.LocalFilePerm)
 		})
 
-		reconcileResult, err := ReconcileTool(targetMachineType, testTool, ToolDeployAUTOFORCE, mcr, targetFilesystem(remoteFS), tp, nil)
+		reconcileResult, err := ReconcileTool(targetMachineType, testTool, deploymentsupport.DeploymentLocalityTarget, ToolDeployAUTOFORCE, mcr, targetFilesystem(remoteFS), tp, nil)
 
 		assert.NoError(t, err)
 		assert.Equal(t, Deployed, reconcileResult)

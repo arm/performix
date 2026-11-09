@@ -36,23 +36,23 @@ type androidTargetDiscoverer interface {
 type adbAndroidTargetDiscoverer struct{}
 
 func (adbAndroidTargetDiscoverer) DiscoverAndroidTargets() ([]*engine_target.AndroidTarget, error) {
-	stdout, _, err := conductor.NewExecADBRunner(viper.GetString("adb-path")).Run("devices")
+	return discoverAndroidTargets(conductor.NewExecADBRunner(viper.GetString("adb-path")))
+}
+
+func discoverAndroidTargets(runner conductor.ADBRunner) ([]*engine_target.AndroidTarget, error) {
+	devices, err := conductor.DiscoverADBDevices(runner)
 	if err != nil {
 		return nil, err
 	}
-
-	return parseADBDevices(stdout), nil
-}
-
-func parseADBDevices(stdout string) []*engine_target.AndroidTarget {
 	var targets []*engine_target.AndroidTarget
-	for _, line := range strings.Split(stdout, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[1] == "device" {
-			targets = append(targets, &engine_target.AndroidTarget{SerialNumber: fields[0]})
-		}
+	for _, device := range devices {
+		address := device.Address
+		targets = append(targets, &engine_target.AndroidTarget{
+			SerialNumber:        device.SerialNumber,
+			LastKnownADBAddress: &address,
+		})
 	}
-	return targets
+	return targets, nil
 }
 
 func newListCommand(mtm target.TargetManagerService, discoverer androidTargetDiscoverer) *cobra.Command {

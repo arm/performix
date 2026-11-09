@@ -869,7 +869,8 @@ func TestRecipeParameterValidation(t *testing.T) {
 		paramPipeline := &mockParameterPipeline{}
 
 		testRecipe := &recipe.Recipe{
-			Name: "test-recipe",
+			Name:         "test-recipe",
+			ToolVersions: map[string]string{"test-tool": "1.0.0"},
 			Parameters: parameters.Parameters{Input: []parameters.InputParameter{
 				{Parameter: parameters.Parameter{ID: "param1"}},
 			}},
@@ -878,6 +879,7 @@ func TestRecipeParameterValidation(t *testing.T) {
 		paramPipeline.On("Validate", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 			// Verify the parameters flow to the validator
 			sc := args.Get(2).(*runtime.StageConfiguration)
+			assert.Equal(t, testRecipe.ToolVersions, sc.Ctx.ToolVersions)
 			assert.Equal(t, sc.Ctx.ParamValues, parameters.BoundParameters{
 				Parameters: testRecipe.Parameters,
 				Values: parameters.ParameterValues{
@@ -964,7 +966,7 @@ func TestRecipeParameterValidation(t *testing.T) {
 				{Parameter: parameters.Parameter{ID: "param1"}},
 			}},
 			// Param's valid options are computed dynamically
-			ParameterOptionsStages: []recipe.ScriptedStage{&recipeparser.GojaRadioParameterOptionStage{}},
+			ParameterOptionsStages: []recipe.ParameterOptionsStage{&recipeparser.GojaRadioParameterOptionStage{}},
 		}
 
 		server := ApapServer{
@@ -1137,45 +1139,38 @@ func TestRecipeList(t *testing.T) {
 		}
 	})
 
-	t.Run("filters GPU recipe when disabled", func(t *testing.T) {
-		reader := MockRecipeReader{}
-		recipes := map[string]recipe.Recipe{
-			gpuRecipeName:     {Name: gpuRecipeName, Status: recipe.RecipeStatusExperimental},
-			"BrilliantRecipe": {Name: "BrilliantRecipe"},
-		}
-		reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
-		server := ApapServer{
-			featureFlags: featureflags.Flags{ExperimentalRecipes: true, GPURecipe: false},
-			recipeReader: &reader,
-		}
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("Graphics recipe with experimental recipes enabled=%t", enabled), func(t *testing.T) {
+			// Given
+			reader := MockRecipeReader{}
+			recipes := map[string]recipe.Recipe{
+				"graphics":        {Name: "graphics", Status: recipe.RecipeStatusExperimental},
+				"BrilliantRecipe": {Name: "BrilliantRecipe"},
+			}
+			reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
+			server := ApapServer{
+				featureFlags: featureflags.Flags{ExperimentalRecipes: enabled},
+				recipeReader: &reader,
+			}
 
-		response, err := server.ListRecipes(context.Background(), &emptypb.Empty{})
-		require.NoError(t, err)
-		assert.NotContains(t, response.RecipeNames, &apapproto.RecipeNameEntry{
-			Identifier: &apapproto.RecipeNameEntry_Name{Name: gpuRecipeName},
-		})
-		assert.Contains(t, response.RecipeNames, &apapproto.RecipeNameEntry{
-			Identifier: &apapproto.RecipeNameEntry_Name{Name: "BrilliantRecipe"},
-		})
-	})
+			// When
+			response, err := server.ListRecipes(context.Background(), &emptypb.Empty{})
 
-	t.Run("includes GPU recipe when enabled", func(t *testing.T) {
-		reader := MockRecipeReader{}
-		recipes := map[string]recipe.Recipe{
-			gpuRecipeName: {Name: gpuRecipeName, Status: recipe.RecipeStatusExperimental},
-		}
-		reader.On("ReadRecipes", mock.Anything).Return(recipes, nil)
-		server := ApapServer{
-			featureFlags: featureflags.Flags{ExperimentalRecipes: true, GPURecipe: true},
-			recipeReader: &reader,
-		}
-
-		response, err := server.ListRecipes(context.Background(), &emptypb.Empty{})
-		require.NoError(t, err)
-		assert.Contains(t, response.RecipeNames, &apapproto.RecipeNameEntry{
-			Identifier: &apapproto.RecipeNameEntry_Name{Name: gpuRecipeName},
+			// Then
+			require.NoError(t, err)
+			graphicsEntry := &apapproto.RecipeNameEntry{
+				Identifier: &apapproto.RecipeNameEntry_Name{Name: "graphics"},
+			}
+			if enabled {
+				assert.Contains(t, response.RecipeNames, graphicsEntry)
+			} else {
+				assert.NotContains(t, response.RecipeNames, graphicsEntry)
+			}
+			assert.Contains(t, response.RecipeNames, &apapproto.RecipeNameEntry{
+				Identifier: &apapproto.RecipeNameEntry_Name{Name: "BrilliantRecipe"},
+			})
 		})
-	})
+	}
 
 	t.Run("includes experimental recipe when enabled", func(t *testing.T) {
 		reader := MockRecipeReader{}
@@ -1643,7 +1638,7 @@ func TestParseRecipe(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		assert.Len(t, resp.Parameters, 1)
-		assert.Len(t, resp.PlatformSupport, 1)
+		assert.Empty(t, resp.PlatformSupport)
 	})
 }
 
@@ -2505,7 +2500,7 @@ func TestListDirectories(t *testing.T) {
 
 func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
 	server := &ApapServer{
-		config: ApapServerConfig{
+		config: &ApapServerConfig{
 			ParallelJobs:  3,
 			DataDirectory: "/var/lib/apap",
 			FeatureFlags: featureflags.Flags{
@@ -2551,9 +2546,10 @@ func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
 		"enable-rerendering":                true,
 		"enable-experimental-recipes":       true,
 		"enable-secondary-run-paths":        true,
-		"enable-gpu-recipe":                 false,
+		"enable-profiling-focus":            false,
 		"enable-render-db-sandbox":          false,
 		"enable-neoprof-timeline":           true,
+		"enable-custom-pmu-capture":         false,
 		"enable-neoprof-system-utilization": true,
 		"enable-jfr-capture":                true,
 		"enable-run-component-compression":  true,
@@ -2579,7 +2575,7 @@ func TestNewSessionFactoryUsesRenderDBSandboxFlag(t *testing.T) {
 
 func TestBuildSupportPackageConfigIncludesEmptyFields(t *testing.T) {
 	server := &ApapServer{
-		config: ApapServerConfig{},
+		config: &ApapServerConfig{},
 	}
 
 	cfg := server.buildSupportPackageConfig()
@@ -2595,7 +2591,7 @@ func TestBuildSupportPackageConfigIncludesEmptyFields(t *testing.T) {
 func TestCreateSupportPackage_ReturnsRunExportUnavailableWhenRunsMissing(t *testing.T) {
 	rc, err := run.NewRunCollection(t.TempDir())
 	require.NoError(t, err)
-	server := &ApapServer{runs: rc}
+	server := &ApapServer{runs: rc, config: &ApapServerConfig{}}
 
 	req := &apapproto.CreateSupportPackageRequest{
 		RunIds: []*apapproto.RunId{
@@ -2636,7 +2632,7 @@ func TestCreateSupportPackage_SucceedsWhenNoEngineLogs(t *testing.T) {
 
 	rc, err := run.NewRunCollection(t.TempDir())
 	require.NoError(t, err)
-	server := &ApapServer{runs: rc}
+	server := &ApapServer{runs: rc, config: &ApapServerConfig{}}
 
 	req := &apapproto.CreateSupportPackageRequest{
 		OutputDirectory: t.TempDir(),
@@ -2658,7 +2654,6 @@ func TestResolvedFeaturesReachExecutionContext(t *testing.T) {
 		configured := featureflags.Flags{
 			Rerendering:             true,
 			ExperimentalRecipes:     true,
-			GPURecipe:               true,
 			RenderDBSandbox:         true,
 			NeoprofTimeline:         true,
 			JfrCapture:              true,
@@ -2666,7 +2661,7 @@ func TestResolvedFeaturesReachExecutionContext(t *testing.T) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		server, err := NewApapServer(ctx, ApapServerConfig{
+		server, err := NewApapServer(ctx, &ApapServerConfig{
 			DataDirectory: dataDir,
 			FeatureFlags:  configured,
 		}, deployer.BaseToolDeploymentPaths{}, cancel)

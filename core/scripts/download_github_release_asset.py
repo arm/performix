@@ -8,18 +8,12 @@ This script is used to download a GitHub release asset. Set GITHUB_TOKEN for aut
 """
 
 import argparse
-import certifi
-import json
 import os
 import sys
-import ssl
 import time
 from typing import Dict, List
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
-# Use certifi's CA bundle for SSL verification, not system defaults which may be outdated or missing (e.g. on Windows).
-ctx = ssl.create_default_context(cafile=certifi.where())
+import requests
 
 ACCEPT_JSON = "application/vnd.github+json"
 ACCEPT_BINARY = "application/octet-stream"
@@ -33,14 +27,15 @@ def with_retries(operation, description: str):
     for retry in range(MAX_RETRIES + 1):
         try:
             return operation()
-        except HTTPError as exc:
-            if exc.code not in RETRYABLE_HTTP_CODES or retry == MAX_RETRIES:
+        except requests.HTTPError as exc:
+            status = exc.response.status_code
+            if status not in RETRYABLE_HTTP_CODES or retry == MAX_RETRIES:
                 raise
-            reason = f"HTTP {exc.code} {exc.reason}"
-        except (URLError, TimeoutError, ConnectionError) as exc:
+            reason = f"HTTP {status} {exc.response.reason}"
+        except requests.RequestException as exc:
             if retry == MAX_RETRIES:
                 raise
-            reason = getattr(exc, "reason", exc)
+            reason = exc
 
         delay = INITIAL_BACKOFF_SECONDS * (2**retry)
         print(
@@ -73,24 +68,25 @@ def headers(token: str, accept: str) -> dict:
 
 def fetch_release(repo: str, tag: str, token: str) -> dict:
     url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
-    req = Request(url, headers=headers(token, ACCEPT_JSON))
 
     def fetch():
-        with urlopen(req, context=ctx) as resp:
-            charset = resp.headers.get_content_charset() or "utf-8"
-            data = resp.read().decode(charset)
-            return json.loads(data)
+        response = requests.get(url, headers=headers(token, ACCEPT_JSON), timeout=120)
+        response.raise_for_status()
+        return response.json()
 
     try:
         return with_retries(fetch, "GitHub API request")
-    except HTTPError as exc:
-        if exc.code == 403:
+    except requests.HTTPError as exc:
+        if exc.response.status_code == 403:
             sys.exit(
                 "Error 403 (forbidden): is your token authorised for Arm-Debug SSO?"
             )
-        sys.exit(f"GitHub API request failed: {exc.code} {exc.reason}")
-    except (URLError, TimeoutError, ConnectionError) as exc:
-        sys.exit(f"Unable to reach GitHub: {getattr(exc, 'reason', exc)}")
+        sys.exit(
+            f"GitHub API request failed: {exc.response.status_code} "
+            f"{exc.response.reason}"
+        )
+    except requests.RequestException as exc:
+        sys.exit(f"Unable to reach GitHub: {exc}")
 
 
 def pick_asset(assets: List[Dict], name: str) -> Dict:
@@ -104,30 +100,32 @@ def pick_asset(assets: List[Dict], name: str) -> Dict:
 
 
 def download_asset(asset: dict, token: str, out_dir: str) -> str:
-    req = Request(asset["url"], headers=headers(token, ACCEPT_BINARY), method="GET")
     target = os.path.join(out_dir, asset["name"])
     target_dir = os.path.dirname(target)
     if target_dir:
         os.makedirs(target_dir, exist_ok=True)
 
     def download():
-        with urlopen(req, context=ctx) as resp, open(target, "wb") as fh:
-            while True:
-                chunk = resp.read(CHUNK_SIZE)
-                if not chunk:
-                    break
-                fh.write(chunk)
+        with requests.get(
+            asset["url"], headers=headers(token, ACCEPT_BINARY), stream=True, timeout=120
+        ) as response:
+            response.raise_for_status()
+            with open(target, "wb") as fh:
+                for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
+                    fh.write(chunk)
 
     try:
         with_retries(download, "Asset download")
-    except HTTPError as exc:
-        if exc.code == 403:
+    except requests.HTTPError as exc:
+        if exc.response.status_code == 403:
             sys.exit(
                 "Error 403 (forbidden): is your token authorised for Arm-Debug SSO?"
             )
-        sys.exit(f"Asset download failed: {exc.code} {exc.reason}")
-    except (URLError, TimeoutError, ConnectionError) as exc:
-        sys.exit(f"Unable to download asset: {getattr(exc, 'reason', exc)}")
+        sys.exit(
+            f"Asset download failed: {exc.response.status_code} {exc.response.reason}"
+        )
+    except requests.RequestException as exc:
+        sys.exit(f"Unable to download asset: {exc}")
 
     return target
 

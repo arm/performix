@@ -6,7 +6,9 @@ package recipes
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -338,4 +340,102 @@ func assertCombinedFlagsQuery(t *testing.T, query string) {
 		{"UnsignedLong", "18446744073709551615", "Default"},
 		{"UseG1GC", "true", "Command line"},
 	}, actual)
+}
+
+func TestJavaRawFlagsQuery(t *testing.T) {
+	h := jstest.LoadJSModule(t, "recipes/lib/java_analysis_render.js")
+	ctx := &javaRenderContext{}
+	ctx.On("GetRunDescriptions").Return([]recipeparser.RunDescription{{WorkloadType: "System Wide"}}, nil)
+	ctx.On("GetRenderParameter", "filter_pid").Return(nil, nil)
+	ctx.On("ListRunComponents", 0, mock.Anything).Return([]recipeparser.RunComponentDescription{{}}, nil)
+	ctx.On("ReadRunComponent", 0, "java/metadata/jfr_recordings.json").Return(`[{"recording_id":0,"jvm_pid":42},{"recording_id":1,"jvm_pid":99}]`, nil)
+	output, err := h.Call[map[string]any](t, "buildJavaAnalysisRender", ctx, "java")
+	require.NoError(t, err)
+	var query string
+	for _, value := range output["renderers"].([]any) {
+		r := value.(map[string]any)
+		if r["id"] == "jvm_flags" {
+			query = r["config"].(map[string]any)["sql"].(string)
+		}
+	}
+	require.NotEmpty(t, query)
+	ctx.AssertExpectations(t)
+
+	db, err := (&render.DuckDBFactory{}).Connect(t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	path := filepath.Join(t.TempDir(), "jvm_flags.parquet")
+	quotedPath := "'" + strings.ReplaceAll(path, "'", "''") + "'"
+	// #nosec G202 -- fixture SQL and the SQL-escaped temporary path are test-controlled.
+	_, err = db.Conn.ExecContext(context.Background(), `COPY (
+		SELECT recording_id::UBIGINT recording_id, event_start_epoch_ns::BIGINT event_start_epoch_ns,
+		       name, value, origin, type FROM (VALUES
+		(0, 10, 'UseG1GC', 'false', 'Default', 'Boolean'),
+		(0, 20, 'UseG1GC', 'true', 'Command line', 'Boolean'),
+		(1, 30, 'UseG1GC', 'false', 'Default', 'Boolean'),
+		(0, 20, 'MaxHeapSize', '268435456', 'Command line', 'UnsignedLong'),
+		(1, 20, 'MaxHeapSize', '32178700288', 'Ergonomic', 'UnsignedLong'),
+		(0, 20, 'UnsignedLong', '18446744073709551615', 'Default', 'UnsignedLong'),
+		(0, 20, 'SignedLong', '-9223372036854775808', 'Default', 'Long'),
+		(0, 20, 'EmptyString', '', 'Default', 'String'),
+		(0, 20, 'NullString', NULL, 'Default', 'String')
+		) flags(recording_id, event_start_epoch_ns, name, value, origin, type)
+	) TO `+quotedPath+` (FORMAT PARQUET)`)
+	require.NoError(t, err)
+	query = strings.ReplaceAll(query, "{{path:java/events/jvm_flags.parquet}}", quotedPath)
+	// #nosec G202 -- renderer SQL and the quoted temporary fixture path are test-controlled.
+	_, err = db.Conn.ExecContext(context.Background(), "CREATE VIEW flags AS "+query)
+	require.NoError(t, err)
+	rows, err := db.Conn.QueryContext(context.Background(), `SELECT CAST("Recording" AS BIGINT), "Event Start (epoch ns)", "Flag", "Value", "Origin", "Type" FROM flags`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var actual [][]any
+	for rows.Next() {
+		var recording, timestamp int64
+		var name, origin, flagType string
+		var value any
+		require.NoError(t, rows.Scan(&recording, &timestamp, &name, &value, &origin, &flagType))
+		actual = append(actual, []any{recording, timestamp, name, value, origin, flagType})
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	assert.Equal(t, [][]any{
+		{int64(0), int64(20), "EmptyString", "", "Default", "String"},
+		{int64(0), int64(20), "MaxHeapSize", "268435456", "Command line", "UnsignedLong"},
+		{int64(0), int64(20), "NullString", nil, "Default", "String"},
+		{int64(0), int64(20), "SignedLong", "-9223372036854775808", "Default", "Long"},
+		{int64(0), int64(20), "UnsignedLong", "18446744073709551615", "Default", "UnsignedLong"},
+		{int64(0), int64(10), "UseG1GC", "false", "Default", "Boolean"},
+		{int64(0), int64(20), "UseG1GC", "true", "Command line", "Boolean"},
+		{int64(1), int64(20), "MaxHeapSize", "32178700288", "Ergonomic", "UnsignedLong"},
+		{int64(1), int64(30), "UseG1GC", "false", "Default", "Boolean"},
+	}, actual)
+
+	// Execute the guide's real SQL example to check latest-value and recording isolation.
+	guide, err := os.ReadFile("../../../../apap-cli/service/mcpserver/guides/jvm-guidance.md")
+	require.NoError(t, err)
+	examples := regexp.MustCompile("(?s)```sql\\n(.*?)\\n```").FindAllStringSubmatch(strings.ReplaceAll(string(guide), "\r\n", "\n"), -1)
+	var example string
+	for _, match := range examples {
+		if strings.Contains(match[1], "<jvm_flags_table>") {
+			example = strings.ReplaceAll(strings.ReplaceAll(match[1], "<jvm_flags_table>", "flags"), "<recording_id>", "0")
+		}
+	}
+	require.NotEmpty(t, example)
+	// #nosec G202 -- SQL comes from the repository guide with test-controlled substitutions.
+	rows, err = db.Conn.QueryContext(context.Background(), example)
+	require.NoError(t, err)
+	defer rows.Close()
+	var selected [][]any
+	for rows.Next() {
+		var name, value, origin, flagType string
+		var timestamp int64
+		require.NoError(t, rows.Scan(&name, &value, &origin, &flagType, &timestamp))
+		selected = append(selected, []any{name, value, origin, flagType, timestamp})
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, [][]any{
+		{"MaxHeapSize", "268435456", "Command line", "UnsignedLong", int64(20)},
+		{"UseG1GC", "true", "Command line", "Boolean", int64(20)},
+	}, selected)
 }

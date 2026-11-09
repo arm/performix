@@ -494,6 +494,7 @@ func TestBuildErrorChain(t *testing.T) {
 
 func TestReconstructFromChain(t *testing.T) {
 	t.Run("reconstructs complete error chain", func(t *testing.T) {
+		// Given
 		// Structure
 		//     msgNode2
 		//         |
@@ -550,14 +551,16 @@ func TestReconstructFromChain(t *testing.T) {
 			Message:  msgDet2,
 			Children: []*apapproto.ErrorNode{msgNode1},
 		}
+		// When
 		resp := ReconstructFromChain(&apapproto.ErrorChain{Root: msgNode2})
 
+		// Then
 		// Rebuilding expected error
 		err1 := errors.New("this is an error 1")
 		err2 := errors.New("this is an error 2")
 		err3 := errors.Join(err1, err2)
 
-		err4 := fmt.Errorf("%s: %w", err3, err3)
+		err4 := plainFrom(err3.Error(), []error{err1, err2})
 
 		msg1 := New(EngineTargetConfigDoesNotExist).WithCause(err4).WithMetadata(map[string]string{"meta1": "thing", "meta2": "thing again"})
 		msg2 := New(EngineSshKeyFileNotFound).WithMetadata(map[string]string{"meta3": "another thing"}).WithCause(msg1)
@@ -567,4 +570,31 @@ func TestReconstructFromChain(t *testing.T) {
 		resp := ReconstructFromChain(nil)
 		assert.Nil(t, resp)
 	})
+}
+
+func TestErrorChainRoundTripPreservesPlainErrorText(t *testing.T) {
+	// Given
+	cause := errors.New("android device is not visible and no device IP address is configured")
+	for _, original := range []error{
+		cause,
+		fmt.Errorf("health check for Android target failed: %w", cause),
+		fmt.Errorf("target connection failed: %w", fmt.Errorf("health check failed: %w", cause)),
+		errors.Join(cause, errors.New("another failure")),
+		fmt.Errorf("connection failed: %w", New(EngineTargetConfigDoesNotExist)),
+	} {
+		t.Run(original.Error(), func(t *testing.T) {
+			// When
+			reconstructed := ReconstructFromChain(BuildErrorChain(original))
+
+			// Then
+			require.EqualError(t, reconstructed, original.Error())
+			assert.Equal(t, len(DirectChildren(original)) > 0, len(DirectChildren(reconstructed)) > 0)
+			if originalMessage := IsMessage(original); originalMessage != nil {
+				require.NotNil(t, IsMessage(reconstructed))
+				assert.Equal(t, originalMessage.Code(), IsMessage(reconstructed).Code())
+			}
+			// Repeated transport must not append causes again.
+			assert.EqualError(t, ReconstructFromChain(BuildErrorChain(reconstructed)), original.Error())
+		})
+	}
 }

@@ -4,12 +4,15 @@
 package pidfiles
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/apap-engine/userdirs"
@@ -92,4 +95,36 @@ func TestDeletePid(t *testing.T) {
 	DeletePid(host, port)
 
 	assert.NoFileExists(t, pidFilePath)
+}
+
+func TestDeleteMissingPid(t *testing.T) {
+	// Given
+	pidFilePath, err := ConstructPidFilePath(t.Name(), 1)
+	require.NoError(t, err)
+	require.NoFileExists(t, pidFilePath)
+	var output bytes.Buffer
+	previousOutput := log.StandardLogger().Out
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+
+	// When
+	DeletePid(t.Name(), 1)
+
+	// Then
+	assert.Empty(t, output.String())
+}
+
+func TestWriteFileCreatesParentsAndOverwritesPid(t *testing.T) {
+	// Given
+	path := filepath.Join(t.TempDir(), "nested", "state", "daemon.pid")
+	require.NoError(t, writeFile(path, "123456"))
+
+	// When
+	err := writeFile(path, "42")
+
+	// Then
+	require.NoError(t, err)
+	pid, err := GetPid(path)
+	require.NoError(t, err)
+	assert.Equal(t, 42, pid)
 }

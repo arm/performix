@@ -27,6 +27,7 @@ func NewRegistry() *RendererRegistry {
 		"StreamlineAnalyzeFlatFunctions":            func() render.Renderer { return &StreamlineAnalyzeFlatFunctionProfileRenderer{} },
 		"StreamlineAnalyzeFlatFunctions2":           func() render.Renderer { return &StreamlineAnalyzeFlatFunctionProfileRenderer2{} },
 		"CSV":                                       func() render.Renderer { return &CSVRenderer{} },
+		"ASCTCSV":                                   func() render.Renderer { return &ASCTCSVRenderer{} },
 		"SQL":                                       func() render.Renderer { return &SQLRenderer{} },
 		"Log":                                       func() render.Renderer { return &LogRenderer{} },
 		"LatencyBreakdown":                          func() render.Renderer { return &LatencyBreakdownRenderer{} },
@@ -40,6 +41,7 @@ func NewRegistry() *RendererRegistry {
 		"SysutilTimelineCanonicalRenderer":          func() render.Renderer { return &SysutilTimelineCanonicalRenderer{} },
 		"DisassemblyRenderer":                       func() render.Renderer { return &DisassemblyRenderer{} },
 		"TimeRangeParser":                           func() render.Renderer { return &TimeRangeRenderer{} },
+		"TraceViewportRenderer":                     func() render.Renderer { return &TraceViewportRenderer{} },
 		"TraceDataRenderer":                         func() render.Renderer { return &TraceDataRenderer{} },
 		"DummyRenderer":                             func() render.Renderer { return &DummyRenderer{} },
 	}}

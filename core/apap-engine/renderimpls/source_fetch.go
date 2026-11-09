@@ -26,7 +26,7 @@ import (
 
 const (
 	// These failures are detected while resolving the requested source IDs,
-	// before files are passed to SourceFilesFetcher.
+	// before files are passed to FetchSourceFiles.
 	sourceContentsFailureInvalidSourceFileID = "invalid_source_file_id"
 	sourceContentsFailureSourceFileNotFound  = "source_file_not_found"
 )
@@ -370,7 +370,7 @@ func (f *loadSourceContentsUDF) execute(ctx context.Context, values []driver.Val
 			return nil, err
 		}
 		// Prefer the mapped host file while retaining the target path as a
-		// fallback when the host mapping is missing, unreadable, or mismatched.
+		// fallback when the host mapping is missing or unreadable.
 		locations := []sourcecontent.SourceFileLocation{{
 			Location: sourcecontent.SourceLocationHost,
 			Path:     hostLocation,
@@ -393,12 +393,12 @@ func (f *loadSourceContentsUDF) execute(ctx context.Context, values []driver.Val
 	if len(files) == 0 {
 		return results, nil
 	}
-	fetcher := sourcecontent.NewSourceFilesFetcher(
+	contents := sourcecontent.FetchSourceFiles(
 		ctx,
+		files,
 		f.runTargets[runID],
 		f.targetSessions,
 	)
-	contents := fetcher(files)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -508,34 +508,10 @@ func (f *loadSourceContentUDF) Executor() duckdb.ScalarFuncExecutor {
 	}
 }
 
-// existingConnConnector lets us reuse an existing duckdb.Conn with sql.OpenDB, avoiding sqldblogger wrappers.
-type existingConnConnector struct {
-	conn driver.Conn
-}
-
-func (c existingConnConnector) Connect(ctx context.Context) (driver.Conn, error) { return c.conn, nil }
-func (c existingConnConnector) Driver() driver.Driver                            { return duckdb.Driver{} }
-
-// registerScalarUDFUnwrapped registers a UDF against the underlying duckdb.Conn, even if the sql.Conn is wrapped.
-func registerScalarUDFUnwrapped(db *sql.Conn, name string, udf duckdb.ScalarFunc) error {
-	return db.Raw(func(dc any) error {
-		driverConn, ok := dc.(driver.Conn)
-		if !ok {
-			return fmt.Errorf("unexpected conn type %T", dc)
-		}
-		rawConn, err := render.GetRawDuckDBConn(driverConn)
-		if err != nil {
-			return err
-		}
-
-		// Use a temporary *sql.Conn that exposes the raw *duckdb.Conn to RegisterScalarUDF.
-		tempDB := sql.OpenDB(existingConnConnector{conn: rawConn})
-		tempConn, err := tempDB.Conn(context.Background())
-		if err != nil {
-			return err
-		}
-		// Do not close tempConn/tempDB here to avoid closing the shared raw connection.
-		return duckdb.RegisterScalarUDF(tempConn, name, udf)
+// registerScalarUDFUnwrapped registers a UDF on a native connection, even when SQL logging is enabled.
+func registerScalarUDFUnwrapped(db *render.Database, name string, udf duckdb.ScalarFunc) error {
+	return db.WithNativeConnection(context.Background(), func(conn *sql.Conn) error {
+		return duckdb.RegisterScalarUDF(conn, name, udf)
 	})
 }
 
@@ -554,7 +530,7 @@ func registerScalarUDFUnwrapped(db *sql.Conn, name string, udf duckdb.ScalarFunc
 //
 //	SELECT source_file_id, content, failure_reasons
 //	FROM load_source_contents('0123456789ab', [12, 34]);
-func registerLoadSourceContentFunction(db *sql.Conn, sourceFilesViewName string, ts targetsession.TargetSessionProvider, runTargets map[string]target.Target, sessionID string) error {
+func registerLoadSourceContentFunction(db *render.Database, sourceFilesViewName string, ts targetsession.TargetSessionProvider, runTargets map[string]target.Target, sessionID string) error {
 	singularUDFName := fmt.Sprintf("load_source_content_udf_%s", sessionID)
 	udf := &loadSourceContentUDF{
 		ctx: &sourceFetchContext{
@@ -623,6 +599,6 @@ CREATE OR REPLACE MACRO load_source_contents(run_id_param, source_ids) AS TABLE 
     result.failure_reasons
   FROM batch, UNNEST(results) AS fetched(result)
 );`, singularUDFName, sourceFilesViewName, sourceFilesViewName, batchUDFName)
-	_, err := db.ExecContext(context.Background(), stmt)
+	_, err := db.Conn.ExecContext(context.Background(), stmt)
 	return err
 }

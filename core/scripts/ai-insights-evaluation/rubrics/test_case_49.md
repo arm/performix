@@ -25,9 +25,9 @@ SPDX-License-Identifier: Apache-2.0
   work for data access or execution-unit delays to be the main cause.
 
 ## What The LLM Should Suggest
-- Classify and batch packets before the hot loops.
-- Branch-free selection or a lookup table is also acceptable when doing so is
-  cheaper than repeatedly predicting the packet type.
+- Recommend a concrete change that avoids repeated protocol dispatch, such as
+  batching, branch-free selection or eliminating repeated dispatch when source
+  semantics support it.
 - Do not recommend `likely` or `unlikely`; neither outcome is favoured.
 
 ## Expected Profiling Characteristics
@@ -40,11 +40,14 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Scoring Guidance
 - Pass:
-  - Identifies discarded CPU work and the unpredictable packet-type branch.
+  - Identifies discarded CPU work and the packet-type branch as its likely
+    source, with appropriate attribution caveats.
   - Uses incorrect branch prediction measurements and connects them to the
     packet-processing code.
-  - Recommends batching, separating packet types or otherwise avoiding the
-    unpredictable branch.
+  - Recommends a concrete way to avoid or remove repeated protocol dispatch.
+    Eliminating repeated packet calculations counts when the recommendation
+    states the conditions needed to preserve results and required behaviour.
+    Batching and branch-free selection are examples, not requirements.
 - Fail:
   - Recommends `likely` or `unlikely` for the 50/50 branch.
   - Blames the data cache even though the packet data fits in cache.

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,17 +84,22 @@ func TestMLAnalysisSingleRunUsesTheRunOperatorCalls(t *testing.T) {
 	model := newMLTraceModel(t)
 	output := executeMLAnalysisRenderStage(t, []cdf.ModelView{model})
 
-	require.Len(t, output.Renderers, 4)
-	sql := output.Renderers[0].Config["sql"].(string)
+	sql := findMLRenderer(t, output, "operator_summary").Config["sql"].(string)
 	require.Contains(t, sql, "{{path:"+mlOperatorCallsPath+"}}")
 	require.NotContains(t, sql, "{{path:0:")
-	require.Equal(t, "pytorch_api_call_spans", output.Renderers[1].ID)
-	require.Equal(t, "pytorch_operator_call_spans", output.Renderers[2].ID)
-	require.Equal(t, "pytorch_trace_data", output.Renderers[3].ID)
+	require.Equal(t, "pytorch_api_call_spans", findMLRenderer(t, output, "pytorch_api_call_spans").ID)
+	require.Equal(t, "pytorch_operator_call_spans", findMLRenderer(t, output, "pytorch_operator_call_spans").ID)
+	require.Equal(t, "pytorch_trace_data", findMLRenderer(t, output, "pytorch_trace_data").ID)
 	require.Len(t, output.Widgets, 2)
 	require.Equal(t, "Operator Summary", output.Widgets[0].Title)
-	require.Equal(t, []any{"num_calls_percent", "total_time_percent"}, output.Widgets[0].Config["percentageColumns"])
+	require.Equal(t, "call_stack", output.Widgets[0].Type)
+	require.Equal(t, "operators", output.Widgets[0].Config["presentation"])
+	require.Equal(t, true, output.Widgets[0].Config["grouping"])
 	require.Equal(t, "PyTorch Trace", output.Widgets[1].Title)
+	traceGroups := output.Widgets[1].Config["groups"].(map[string]any)
+	traceGroup := traceGroups["pytorch"].(map[string]any)
+	traceConfig := traceGroup["config"].(map[string]any)
+	require.Equal(t, "pytorch", traceConfig["tooltip"])
 	timeDomain := output.Widgets[1].Config["timeDomain"].(map[string]any)
 	require.Equal(t, int64(0), timeDomain["start"])
 	require.Equal(t, mlTraceEndNs-mlTraceStartNs, timeDomain["end"])
@@ -101,6 +107,17 @@ func TestMLAnalysisSingleRunUsesTheRunOperatorCalls(t *testing.T) {
 
 	session := newRenderSession(t, "ml-trace-run", model.BasePath(), model)
 	initializeRenderers(t, session, output, nil)
+
+	summary := findMLOperatorTable(t, session, "operator_summary")
+	var group string
+	require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(),
+		fmt.Sprintf("SELECT operator_group FROM %s WHERE operator = 'aten.add.Tensor'", summary)).Scan(&group))
+	require.Equal(t, "Elementwise arithmetic and activations", group)
+
+	var representativeCount int
+	require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(),
+		fmt.Sprintf("SELECT count(*) FROM trace_viewport('pytorch_trace',0,%d,1,[%d,%d])", mlTraceEndNs-mlTraceStartNs, mlTraceAPITrackID, mlTraceOperatorTrackID)).Scan(&representativeCount))
+	require.Equal(t, 2, representativeCount)
 
 	spans := findTableByComponentName(t, session.Manifest(), "trace_spans")
 	rows, err := session.Database().Conn.QueryContext(context.Background(), fmt.Sprintf(`
@@ -162,40 +179,37 @@ func TestMLAnalysisComparisonSummarizesBothRuns(t *testing.T) {
 	models := []cdf.ModelView{baseline, current}
 	output := executeMLAnalysisRenderStage(t, models)
 
-	require.Len(t, output.Renderers, 1)
-	sql := output.Renderers[0].Config["sql"].(string)
+	sql := findMLRenderer(t, output, "operator_summary").Config["sql"].(string)
 	require.Contains(t, sql, "{{path:0:"+mlOperatorCallsPath+"}}")
 	require.Contains(t, sql, "{{path:1:"+mlOperatorCallsPath+"}}")
 	require.Contains(t, sql, "FULL OUTER JOIN")
 	require.Len(t, output.Widgets, 1)
 	require.Equal(t, "Operator Summary Comparison", output.Widgets[0].Title)
-	require.Equal(t, []any{"num_calls_percent", "total_time_percent"}, output.Widgets[0].Config["percentageColumns"])
+	require.Equal(t, "call_stack_comparison", output.Widgets[0].Type)
+	require.Equal(t, "operators", output.Widgets[0].Config["presentation"])
+	require.Equal(t, true, output.Widgets[0].Config["grouping"])
 
 	session := newMLComparisonRenderSession(t, models)
 	initializeRenderers(t, session, output, nil)
-	table := findTableByComponentName(t, session.Manifest(), "flat_table")
+	table := findMLOperatorTable(t, session, "operator_summary")
 
 	rows, err := session.Database().Conn.QueryContext(context.Background(), fmt.Sprintf(`
 		SELECT operator,
 		       num_calls,
-		       num_calls_delta,
 		       average_time_ms,
-		       average_time_ms_delta,
-		       total_time_ms,
-		       total_time_ms_delta
+		       total_time_ms
 		FROM %s
 		ORDER BY operator`, table))
 	require.NoError(t, err)
 	defer rows.Close()
 
 	type comparisonRow struct {
-		operator         string
-		numCalls         int64
-		numCallsDelta    int64
-		averageTime      *float64
-		averageTimeDelta *float64
-		totalTime        float64
-		totalTimeDelta   float64
+		operator string
+		numCalls int64
+
+		averageTime *float64
+
+		totalTime float64
 	}
 
 	var got []comparisonRow
@@ -204,11 +218,10 @@ func TestMLAnalysisComparisonSummarizesBothRuns(t *testing.T) {
 		require.NoError(t, rows.Scan(
 			&row.operator,
 			&row.numCalls,
-			&row.numCallsDelta,
+
 			&row.averageTime,
-			&row.averageTimeDelta,
+
 			&row.totalTime,
-			&row.totalTimeDelta,
 		))
 		got = append(got, row)
 	}
@@ -217,27 +230,24 @@ func TestMLAnalysisComparisonSummarizesBothRuns(t *testing.T) {
 
 	require.Equal(t, "baseline_only", got[0].operator)
 	require.Equal(t, int64(0), got[0].numCalls)
-	require.Equal(t, int64(-1), got[0].numCallsDelta)
+
 	require.Nil(t, got[0].averageTime)
-	require.Nil(t, got[0].averageTimeDelta)
+
 	require.InDelta(t, 0, got[0].totalTime, 0.001)
-	require.InDelta(t, -1, got[0].totalTimeDelta, 0.001)
 
 	require.Equal(t, "current_only", got[1].operator)
 	require.Equal(t, int64(1), got[1].numCalls)
-	require.Equal(t, int64(1), got[1].numCallsDelta)
+
 	require.InDelta(t, 2, *got[1].averageTime, 0.001)
-	require.Nil(t, got[1].averageTimeDelta)
+
 	require.InDelta(t, 2, got[1].totalTime, 0.001)
-	require.InDelta(t, 2, got[1].totalTimeDelta, 0.001)
 
 	require.Equal(t, "shared", got[2].operator)
 	require.Equal(t, int64(1), got[2].numCalls)
-	require.Equal(t, int64(-1), got[2].numCallsDelta)
+
 	require.InDelta(t, 6, *got[2].averageTime, 0.001)
-	require.InDelta(t, 3, *got[2].averageTimeDelta, 0.001)
+
 	require.InDelta(t, 6, got[2].totalTime, 0.001)
-	require.InDelta(t, 0, got[2].totalTimeDelta, 0.001)
 
 	var callsShare, durationShare float64
 	require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf(
@@ -250,6 +260,90 @@ func TestMLAnalysisComparisonSummarizesBothRuns(t *testing.T) {
 	)).Scan(&callsShare, &durationShare))
 	require.Zero(t, callsShare)
 	require.Zero(t, durationShare)
+
+	// The comparison hierarchy includes operators found in either run.
+	deltas := findMLOperatorTable(t, session, "operator_deltas")
+	symbols := findMLOperatorTable(t, session, "operator_symbols")
+	nodes := findMLOperatorTable(t, session, "operator_nodes")
+	for _, test := range []struct {
+		operator    string
+		measurement int
+		want        float64
+		missing     bool
+	}{
+		{"baseline_only", 1, -1, false}, {"baseline_only", 3, 0, true}, {"baseline_only", 4, -1, false},
+		{"current_only", 1, 1, false}, {"current_only", 3, 0, true}, {"current_only", 4, 2, false},
+		{"shared", 1, -1, false}, {"shared", 3, 3, false}, {"shared", 4, 0, false},
+	} {
+		t.Run(fmt.Sprintf("%s/measurement_%d", test.operator, test.measurement), func(t *testing.T) {
+			var value *float64
+			require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf(`
+	  SELECT delta_value FROM %s d JOIN %s s ON d.symbol_id_2 = s.symbol_id
+	  WHERE s.name = ? AND measurement_id = ?`, deltas, symbols), test.operator, test.measurement).Scan(&value))
+			if test.missing {
+				require.Nil(t, value)
+			} else {
+				require.NotNil(t, value)
+				require.InDelta(t, test.want, *value, 0.000001)
+			}
+		})
+	}
+	var count int
+	require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf(`
+	 SELECT COUNT(*) FROM %s d JOIN %s s ON d.symbol_id_2 = s.symbol_id
+	 WHERE d.node_type = 'operator' AND d.measurement_id = 4`, deltas, symbols)).Scan(&count))
+	require.Equal(t, 3, count)
+	var baseTotal, currentTotal float64
+	require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf(`
+	 SELECT measurement_value_1, measurement_value_2 FROM %s d
+	 JOIN %s s ON d.symbol_id_2 = s.symbol_id
+	 WHERE s.name = 'baseline_only' AND measurement_id = 4`, deltas, symbols)).Scan(&baseTotal, &currentTotal))
+	require.Equal(t, float64(1), baseTotal)
+	require.Zero(t, currentTotal)
+	var baseAverage, currentAverage float64
+	require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf(`
+	 SELECT average_time_ms_baseline, average_time_ms FROM %s WHERE node_type = 'category'`, nodes)).Scan(&baseAverage, &currentAverage))
+	require.InDelta(t, 7.0/3, baseAverage, 0.000001)
+	require.InDelta(t, 4, currentAverage, 0.000001)
+}
+
+func TestMLAnalysisComparisonWithEmptyRuns(t *testing.T) {
+	for _, empty := range []string{"baseline", "current", "both"} {
+		t.Run(empty, func(t *testing.T) {
+			calls := "SELECT 'aten.mm.default' AS operator_name, 0::BIGINT AS ts_begin_ns, 2000000::BIGINT AS ts_end_ns"
+			baseline, current := calls, calls
+			if empty != "current" {
+				baseline = "SELECT * FROM (" + calls + ") WHERE FALSE"
+			}
+			if empty != "baseline" {
+				current = "SELECT * FROM (" + calls + ") WHERE FALSE"
+			}
+			models := []cdf.ModelView{newMLOperatorCallsModel(t, baseline), newMLOperatorCallsModel(t, current)}
+			output := executeMLAnalysisRenderStage(t, models)
+			session := newMLComparisonRenderSession(t, models)
+			initializeRenderers(t, session, output, nil)
+			deltas := findMLOperatorTable(t, session, "operator_deltas")
+			var count int
+			require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM %s", deltas)).Scan(&count))
+			if empty == "both" {
+				require.Zero(t, count)
+				return
+			}
+			require.Equal(t, 10, count)
+			var baselineValue, currentValue float64
+			var relative *float64
+			require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf("SELECT measurement_value_1, measurement_value_2, delta_percentage FROM %s WHERE node_type = 'operator' AND measurement_id = 4", deltas)).Scan(&baselineValue, &currentValue, &relative))
+			if empty == "baseline" {
+				require.Zero(t, baselineValue)
+				require.Equal(t, float64(2), currentValue)
+				require.Nil(t, relative)
+			} else {
+				require.Equal(t, float64(2), baselineValue)
+				require.Zero(t, currentValue)
+				require.Equal(t, float64(-100), *relative)
+			}
+		})
+	}
 }
 
 func TestMLAnalysisSummaryPercentagesAndNumericValues(t *testing.T) {
@@ -269,11 +363,10 @@ func TestMLAnalysisSummaryPercentagesAndNumericValues(t *testing.T) {
 			model := newMLOperatorCallsModel(t, tc.rows)
 			output := executeMLAnalysisRenderStage(t, []cdf.ModelView{model})
 			// Only the summary is needed; these fixtures deliberately contain no API trace.
-			output.Renderers = output.Renderers[:1]
-			output.Widgets = output.Widgets[:1]
+			output.Renderers = selectMLRenderers(t, output, "operator_summary")
 			session := newRenderSession(t, "ml-summary", model.BasePath(), model)
 			initializeRenderers(t, session, output, nil)
-			table := findTableByComponentName(t, session.Manifest(), "flat_table")
+			table := findMLOperatorTable(t, session, "operator_summary")
 			rows, err := session.Database().Conn.QueryContext(context.Background(), fmt.Sprintf(
 				`SELECT num_calls, num_calls_percent, average_time_ms, total_time_ms, total_time_percent FROM %s ORDER BY operator`, table,
 			))
@@ -304,6 +397,164 @@ func TestMLAnalysisSummaryPercentagesAndNumericValues(t *testing.T) {
 				require.InDelta(t, 100, callsShares[0]+callsShares[1], 0.000001)
 				require.InDelta(t, 100, durationShares[0]+durationShares[1], 0.000001)
 			}
+		})
+	}
+}
+
+func TestMLAnalysisOperatorGrouping(t *testing.T) {
+	cases := []struct{ operator, group string }{
+		{"aten.mm.default", "Matrix operations"},
+		{"aten.add.Tensor", "Elementwise arithmetic and activations"},
+		{"aten.max.other", "Elementwise arithmetic and activations"},
+		{"aten.min.other_out", "Elementwise arithmetic and activations"},
+		{"aten.lt.Scalar", "Comparisons and logical operations"},
+		{"aten.max.default", "Reductions"},
+		{"aten.cumsum.default", "Cumulative operations"},
+		{"aten._unsafe_view.default", "Shape and indexing"},
+		{"aten._to_copy.default", "Copy and assembly"},
+		{"aten.empty.memory_format", "Tensor creation and initialization"},
+		{"aten.arange.default", "Tensor creation and initialization"},
+		{"aten.normal_.default", "Random sampling"},
+		{"aten.native_layer_norm.default", "Normalization"},
+		{"aten._scaled_dot_product_flash_attention_for_cpu.default", "Attention"},
+		{"aten.embedding.default", "Embedding"},
+		{"aten._local_scalar_dense.default", "Framework and scalar operations"},
+		{"aten.conv2d.default", "Convolution"},
+		{"aten.avg_pool2d.default", "Pooling"},
+		{"aten.quantize_per_tensor.default", "Quantization"},
+		{"custom.mm.default", "Other"},
+		{"aten.unknown.default", "Other"},
+	}
+	// Alternating records exercise operators present only in either run. The
+	// first record is shared to check the joined category as well.
+	baselineRows, currentRows := []string{}, []string{}
+	expected := map[string]string{}
+	for i, tc := range cases {
+		row := fmt.Sprintf("SELECT %s::VARCHAR AS operator_name, 0::BIGINT AS ts_begin_ns, 1000000::BIGINT AS ts_end_ns", util.SQLQuoteStringLiteral(tc.operator))
+		if i%2 == 0 {
+			baselineRows = append(baselineRows, row)
+		} else {
+			currentRows = append(currentRows, row)
+		}
+		if i == 0 {
+			currentRows = append(currentRows, row)
+		}
+		expected[tc.operator] = tc.group
+	}
+	models := []cdf.ModelView{
+		newMLOperatorCallsModel(t, strings.Join(baselineRows, " UNION ALL ")),
+		newMLOperatorCallsModel(t, strings.Join(currentRows, " UNION ALL ")),
+	}
+	output := executeMLAnalysisRenderStage(t, models)
+	session := newMLComparisonRenderSession(t, models)
+	initializeRenderers(t, session, output, nil)
+	table := findMLOperatorTable(t, session, "operator_summary")
+	rows, err := session.Database().Conn.QueryContext(context.Background(), fmt.Sprintf("SELECT operator, operator_group FROM %s", table))
+	require.NoError(t, err)
+	defer rows.Close()
+	got := map[string]string{}
+	for rows.Next() {
+		var operator, group string
+		require.NoError(t, rows.Scan(&operator, &group))
+		got[operator] = group
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, expected, got)
+}
+
+func findMLRenderer(t *testing.T, output recipe.RenderOutput, id string) recipe.RendererConfig {
+	t.Helper()
+	for _, renderer := range output.Renderers {
+		if renderer.ID == id {
+			return renderer
+		}
+	}
+	t.Fatalf("renderer %s not found", id)
+	return recipe.RendererConfig{}
+}
+
+func selectMLRenderers(t *testing.T, output recipe.RenderOutput, ids ...string) []recipe.RendererConfig {
+	t.Helper()
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	selected := make([]recipe.RendererConfig, 0, len(ids))
+	// Keep the recipe's dependency order while selecting only this fixture's stages.
+	for _, renderer := range output.Renderers {
+		if wanted[renderer.ID] {
+			selected = append(selected, renderer)
+			delete(wanted, renderer.ID)
+		}
+	}
+	require.Empty(t, wanted, "required renderers are missing")
+	return selected
+}
+
+func findMLOperatorTable(t *testing.T, session render.Session, rendererID string) string {
+	t.Helper()
+	for _, entry := range session.Manifest().Entries() {
+		if id := entry.Info().RendererIdentity().ID; id != nil && *id == rendererID {
+			return entry.TableName()
+		}
+	}
+	t.Fatalf("renderer %s not found", rendererID)
+	return ""
+}
+
+func TestMLAnalysisCategorySummaries(t *testing.T) {
+	for _, empty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("empty=%t", empty), func(t *testing.T) {
+			rowsSQL := `SELECT 'aten.mm.default' AS operator_name, 0::BIGINT AS ts_begin_ns, 2000000::BIGINT AS ts_end_ns
+			 UNION ALL SELECT 'aten.mm.default', 0::BIGINT, 2000000::BIGINT
+			 UNION ALL SELECT 'aten.bmm.default', 0::BIGINT, 8000000::BIGINT
+			 UNION ALL SELECT 'unknown', 0::BIGINT, 0::BIGINT`
+			if empty {
+				rowsSQL = "SELECT * FROM (" + rowsSQL + ") WHERE FALSE"
+			}
+			model := newMLOperatorCallsModel(t, rowsSQL)
+			output := executeMLAnalysisRenderStage(t, []cdf.ModelView{model})
+			output.Renderers = selectMLRenderers(t, output,
+				"operator_summary", "operator_nodes", "operator_drilldown", "operator_symbols",
+				"operator_measurements", "operator_measurement_order", "operator_images", "operator_source_files",
+			)
+			session := newRenderSession(t, "ml-categories", model.BasePath(), model)
+			initializeRenderers(t, session, output, nil)
+			nodes := findMLOperatorTable(t, session, "operator_nodes")
+			drilldown := findMLOperatorTable(t, session, "operator_drilldown")
+			symbols := findMLOperatorTable(t, session, "operator_symbols")
+			var count int
+			require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(),
+				fmt.Sprintf("SELECT COUNT(*) FROM %s", drilldown)).Scan(&count))
+			if empty {
+				require.Zero(t, count)
+				return
+			}
+			var idType, parentType, symbolType, sourceType string
+			require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf(`
+			 SELECT typeof(d.call_tree_id), typeof(d.call_tree_parent_id), typeof(d.symbol_id), typeof(s.source_file_id)
+			 FROM %s d JOIN %s s USING (symbol_id) LIMIT 1`, drilldown, symbols)).Scan(
+				&idType, &parentType, &symbolType, &sourceType))
+			// Arrow maps BIGINT to bigint; the call stack row schemas require number IDs.
+			require.Equal(t, []string{"INTEGER", "INTEGER", "INTEGER", "INTEGER"}, []string{idType, parentType, symbolType, sourceType})
+			require.Equal(t, 25, count) // Two category nodes and three operators, five measurements each.
+			var calls int64
+			var average, total, callsPercent, timePercent float64
+			require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf(`
+			 SELECT num_calls, average_time_ms, total_time_ms, num_calls_percent, total_time_percent
+			 FROM %s WHERE node_type = 'category' AND label = 'Matrix operations'`, nodes)).Scan(
+				&calls, &average, &total, &callsPercent, &timePercent))
+			require.Equal(t, int64(3), calls)
+			require.InDelta(t, 4, average, 0.000001)
+			require.InDelta(t, 12, total, 0.000001)
+			require.InDelta(t, 75, callsPercent, 0.000001)
+			require.InDelta(t, 100, timePercent, 0.000001)
+			// Exercise the viewer's pivot and symbol join against real renderer output.
+			require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), fmt.Sprintf(`
+			 WITH p AS (PIVOT %s ON measurement_id IN (1,2,3,4,5) USING MAX(measurement_value))
+			 SELECT COUNT(*) FROM p JOIN %s s USING (symbol_id)
+			 WHERE s.name IS NOT NULL AND (call_tree_parent_id = -1 OR node_type = 'operator')`, drilldown, symbols)).Scan(&count))
+			require.Equal(t, 5, count)
 		})
 	}
 }

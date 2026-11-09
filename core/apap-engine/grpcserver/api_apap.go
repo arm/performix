@@ -25,7 +25,6 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
 	"github.com/Arm-Debug/apap-cli/apap-engine/collector"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
-	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpclogging"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
@@ -58,26 +57,11 @@ import (
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
 )
 
-type ApapServerConfig struct {
-	ParallelJobs         uint               `json:"jobs"`
-	DataDirectory        string             `json:"data-dir"`
-	FeatureFlags         featureflags.Flags `json:"-"`
-	ServerHostname       string             `json:"server-hostname"`
-	ServerGRPCPort       int                `json:"server-port"`
-	ServerHTTPPort       int                `json:"http-port"`
-	ServerHTTPChunkBytes int                `json:"http-chunk-bytes"`
-	LogLevel             string             `json:"log-level"`
-	LogFile              string             `json:"log-file"`
-	SourceToolsDir       string             `json:"source-tools-dir"`
-	ConfigDirectory      string             `json:"config-dir"`
-	ADBPath              string             `json:"adb-path"`
-}
-
 type ApapServer struct {
 	apapproto.UnimplementedApapServer
 	ctx                  context.Context
 	shutdownCb           func()
-	config               ApapServerConfig
+	config               *ApapServerConfig
 	featureFlags         featureflags.Flags // Resolved once; config retains requested values for diagnostics.
 	deploymentPaths      deployer.BaseToolDeploymentPaths
 	runs                 *run.RunCollection
@@ -106,10 +90,9 @@ type MCPClientInstaller interface {
 	Uninstall(context.Context, string) (*mcpclientinstaller.UninstallResult, error)
 }
 
-const gpuRecipeName = "gpu"
-
-func NewApapServer(ctx context.Context, config ApapServerConfig, deploymentPaths deployer.BaseToolDeploymentPaths, shutdownCb func()) (*ApapServer, error) {
+func NewApapServer(ctx context.Context, config *ApapServerConfig, deploymentPaths deployer.BaseToolDeploymentPaths, shutdownCb func()) (*ApapServer, error) {
 	featureFlags := featureflags.Resolve(config.FeatureFlags)
+	recipeReader := &recipeparser.FileRecipeReader{FeatureFlags: featureFlags}
 	runDir := filepath.Join(config.DataDirectory, run.RunDirName)
 
 	secondaryPaths := []string{}
@@ -176,13 +159,13 @@ func NewApapServer(ctx context.Context, config ApapServerConfig, deploymentPaths
 		adbRunner: adbRunner,
 		execPath:  execPath,
 		recipeFinder: func(recipeName string) (*recipe.Recipe, error) {
-			return recipeparser.ParseRecipeHelper(recipeparser.FileRecipeReader{}, recipeName)
+			return recipeparser.ParseRecipeHelper(recipeReader, recipeName)
 		},
 		parameterPipeline: &runtime.ParameterPipelineConcrete{
 			OptionsEvaluator: optionsEvaluator,
 			Validator:        validator,
 		},
-		recipeReader:         &recipeparser.FileRecipeReader{},
+		recipeReader:         recipeReader,
 		packageManager:       packageManager,
 		compatibilityChecker: &compatibility.ConcreteCompatibilityChecker{},
 		mcpClientInstaller:   mcpClientInstaller,
@@ -210,9 +193,6 @@ func (s *ApapServer) SetAdbPath(ctx context.Context, in *apapproto.SetAdbPathReq
 }
 
 func (s *ApapServer) recipeAllowed(recipeInfo recipe.Recipe) bool {
-	if recipeInfo.Name == gpuRecipeName && !s.featureFlags.GPURecipe {
-		return false
-	}
 	if recipeInfo.Status == recipe.RecipeStatusExperimental {
 		return s.featureFlags.ExperimentalRecipes
 	}
@@ -491,7 +471,7 @@ func (s *ApapServer) buildSupportPackageConfig() map[string]any {
 	// Preserve the server config values in the support package. Utilise struct marshalling so that changes to the config
 	// are automatically included without needing to manually update this function.
 	// Ignore the error to simplify the signature, the error will rise if config is amended to include unmarshalable fields, unit tests will catch it.
-	vars, _ := util.StructToMap(&s.config)
+	vars, _ := util.StructToMap(s.config)
 	configuredFeatureFlags, _ := util.StructToMap(&s.config.FeatureFlags)
 	for key, value := range configuredFeatureFlags {
 		vars[key] = value
@@ -618,6 +598,7 @@ func (s *ApapServer) TargetTest(ctx context.Context, in *apapproto.TargetTestReq
 		return nil, message.New(message.CommonUnknownError).WithCause(err)
 	}
 
+	ctx = withAndroidAddressTrailer(ctx, tgt)
 	targetSession, err := s.targetSessions.TargetSession(tgt)
 	if err != nil {
 		return nil, err
@@ -635,6 +616,7 @@ func (s *ApapServer) TargetPrepare(ctx context.Context, in *apapproto.TargetPrep
 		return nil, message.New(message.CommonUnknownError).WithCause(err)
 	}
 
+	ctx = withAndroidAddressTrailer(ctx, tgt)
 	lock := s.targetAccess.LockWithCancellation(tgt, "target prepare", ctx.Done())
 	if lock == nil {
 		return nil, message.New(message.EngineCommonUserCanceled)
@@ -985,14 +967,13 @@ func (s *ApapServer) RecipeReady(context context.Context, request *apapproto.Rec
 
 // ParseRecipe - parse the named recipe and return its definition, and platform support.
 // If a target is provided, parameter value functions will be executed and the target info will be exposed. Additionally,
-// platform suopport information will be specific to the target.
+// platform support information will be specific to the target.
 func (s *ApapServer) ParseRecipe(context context.Context, request *apapproto.ParseRecipeMessage) (*apapproto.ParseRecipeResponse, error) {
 	parsedRecipe, err := s.getRecipe(request.GetName())
 	if err != nil {
 		return nil, err
 	}
 	targetSupportCollector := &runtime.TargetSupportCollector{}
-	var platformSupport deploymentsupport.PlatformSupport
 
 	if request.Target != nil {
 		tgt, err := TargetFromProto(request.Target)
@@ -1022,14 +1003,16 @@ func (s *ApapServer) ParseRecipe(context context.Context, request *apapproto.Par
 		}
 
 		options := stageContext.ParameterOptions
-		if s.parameterPipeline != nil {
-			options, err = s.parameterPipeline.EvaluateOptions(context, config, stageContext)
-			if err != nil {
-				return nil, err
-			}
+		if s.parameterPipeline == nil {
+			return RecipeInfoToProto(parsedRecipe, options, s.featureFlags.Rerendering)
 		}
-		// Retrieve the platform support information collected during parameter option stages
-		platformSupport = targetSupportCollector.PlatformSupport
+		options, err = s.parameterPipeline.EvaluateOptions(context, config, stageContext)
+		if err != nil {
+			return nil, err
+		}
+
+		// Retrieve the platform support information collected during recipe-info stages.
+		platformSupport := targetSupportCollector.PlatformSupport
 		return RecipeInfoToProto(parsedRecipe, options, s.featureFlags.Rerendering, platformSupport)
 	} else {
 		// No target provided, so get generic platform support from the recipe deployments
@@ -1205,6 +1188,7 @@ func (s *ApapServer) RecipeValidateParameters(ctx context.Context, req *apapprot
 
 	stageConfig.Ctx = &recipe.RecipeCtx{
 		OrigWorkload: workload,
+		ToolVersions: parsedRecipe.ToolVersions,
 		RecipeMetadata: recipe.RecipeMetadata{
 			Name:       parsedRecipe.Name,
 			Version:    parsedRecipe.Version,

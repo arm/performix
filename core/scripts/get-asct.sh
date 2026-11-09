@@ -20,14 +20,15 @@ fi
 source "$SCRIPT_DIR/constants.sh"
 
 ASCT_NAME="asct"
-ASCT_VERSION="0.7.0"
-ASCT_RELEASE_COMMIT_ID="dbf3ee9"
+ASCT_VERSION="0.7.1"
+ASCT_RELEASE_COMMIT_ID="77461b3"
 
 ARTIFACTORY_ARCHIVE_NAME="${ASCT_NAME}-${ASCT_VERSION}+${ASCT_RELEASE_COMMIT_ID}-release.tar.gz"   # archive name pulled from artifactory
 ARTIFACTORY_INTERNAL_PACKAGE_NAME="${ASCT_NAME}-${ASCT_VERSION}+${ASCT_RELEASE_COMMIT_ID}.tar.gz"   # package name pulled from artifactory
 STATIC_ARCHIVE_NAME_AARCH64="${ASCT_NAME}-Linux-aarch64.tar.gz"
 STATIC_ARCHIVE_NAME_X86_64="${ASCT_NAME}-Linux-x86_64.tar.gz"
 ASCT_DOCS_PAYLOAD_DIR="${ASCT_NAME}_docs"                                           # docs directory inside the top-level release archive
+INSTALL_SCRIPT_NAME="install.sh"
 TOOL_DST_DIR=${TOOL_DST_BASE}/${ASCT_NAME}/${ASCT_VERSION}
 
 # ASCT artifacts are downloaded from the internal ASCT Artifactory repository.
@@ -92,21 +93,36 @@ extract_package() {
   tar -xOzf "${TOOL_DST_DIR}/${ARTIFACTORY_ARCHIVE_NAME}" "${installable_entry}" > "${TOOL_DST_DIR}/${ARTIFACTORY_INTERNAL_PACKAGE_NAME}"
 }
 
-# ASCT ships a single package tarball, but the CLI expects per-architecture
-# filenames. Copy and rename the same package to satisfy that interface.
+extract_install_script() {
+  local install_script_entry=""
+
+  install_script_entry=$(tar -tzf "${TOOL_DST_DIR}/${ARTIFACTORY_ARCHIVE_NAME}" | grep -E "(^|/)${INSTALL_SCRIPT_NAME}$" | head -n 1 || true)
+  if [ -z "${install_script_entry}" ]; then
+    echo "Could not find ${INSTALL_SCRIPT_NAME} in ${ARTIFACTORY_ARCHIVE_NAME}"
+    return 1
+  fi
+
+  tar -xOzf "${TOOL_DST_DIR}/${ARTIFACTORY_ARCHIVE_NAME}" "${install_script_entry}" > "${TOOL_DST_DIR}/${INSTALL_SCRIPT_NAME}"
+  chmod +x "${TOOL_DST_DIR}/${INSTALL_SCRIPT_NAME}"
+}
+
+# ASCT ships one platform-independent package and installer, but the CLI expects
+# per-architecture bundle names. Package the same pair under both aliases.
 create_static_bundle_aliases() {
 
-  tar -czvf "${TOOL_DST_DIR}/${STATIC_ARCHIVE_NAME_AARCH64}" -C ${TOOL_DST_DIR} ${ARTIFACTORY_INTERNAL_PACKAGE_NAME}
-  tar -czvf "${TOOL_DST_DIR}/${STATIC_ARCHIVE_NAME_X86_64}" -C ${TOOL_DST_DIR} ${ARTIFACTORY_INTERNAL_PACKAGE_NAME}
+  tar -czvf "${TOOL_DST_DIR}/${STATIC_ARCHIVE_NAME_AARCH64}" -C ${TOOL_DST_DIR} ${ARTIFACTORY_INTERNAL_PACKAGE_NAME} ${INSTALL_SCRIPT_NAME}
+  tar -czvf "${TOOL_DST_DIR}/${STATIC_ARCHIVE_NAME_X86_64}" -C ${TOOL_DST_DIR} ${ARTIFACTORY_INTERNAL_PACKAGE_NAME} ${INSTALL_SCRIPT_NAME}
   
   # Clean-up intermediate files
   rm "${TOOL_DST_DIR}/${ARTIFACTORY_INTERNAL_PACKAGE_NAME}"
+  rm "${TOOL_DST_DIR}/${INSTALL_SCRIPT_NAME}"
   rm "${TOOL_DST_DIR}/${ARTIFACTORY_ARCHIVE_NAME}"
 }
 
 generate_target_directory || exit 1
 fetch_tools_from_artifactory || exit 1
 extract_package || exit 1
+extract_install_script || exit 1
 retrieve_license_terms || exit 1
 create_static_bundle_aliases || exit 1
 

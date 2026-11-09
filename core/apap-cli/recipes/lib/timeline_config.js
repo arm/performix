@@ -19,9 +19,32 @@ const NANOSECONDS_PER_SECOND = 1_000_000_000;
  * @returns {string}
  */
 function buildTimelinePivotQuery(binOrigin) {
-  if (binOrigin !== undefined) {
+  const rangeCTEs = buildTimelineRangeCTEs({
+    binOrigin,
+    columns: 'source.value',
+    // Hotspots delta rows cover their complete compressed interval.
+    projection: `relevant_rows.value * ${NANOSECONDS_PER_SECOND}.0 /
+      (relevant_rows.end_timestamp - relevant_rows.start_timestamp) AS value`,
+  });
+  return `WITH ${rangeCTEs},
+    aggregated_rows AS (
+      SELECT x_start, SUM(value) AS value FROM expanded GROUP BY x_start
+    )
+    SELECT bin_grid.x_start, COALESCE(aggregated_rows.value, 0) AS value
+    FROM bin_grid
+    LEFT JOIN aggregated_rows ON aggregated_rows.x_start = bin_grid.x_start
+    ORDER BY bin_grid.x_start`.trim();
+}
+
+/**
+ * Build SQL to select and expand bins in the requested time range.
+ * The caller supplies the value calculation.
+ * @param {{binOrigin?: number, columns: string, projection: string}} args
+ * @returns {string}
+ */
+function buildTimelineRangeCTEs({ binOrigin, columns, projection }) {
+  if (binOrigin !== undefined)
     assertSafeInteger(binOrigin, 'Timeline binOrigin');
-  }
   // All intervals for one LoD share an alignment. If no explicit origin is
   // configured, any relevant interval start provides the same grid anchor.
   const binOriginExpression =
@@ -29,7 +52,7 @@ function buildTimelinePivotQuery(binOrigin) {
       ? 'MIN(start_timestamp)'
       : `CAST(${binOrigin} AS BIGINT)`;
   return `
-    WITH requested_range AS (
+    requested_range AS (
       SELECT
         CAST(${RANGE_START_PLACEHOLDER} AS BIGINT) AS range_start,
         CAST(${RANGE_END_PLACEHOLDER} AS BIGINT) AS range_end
@@ -39,7 +62,7 @@ function buildTimelinePivotQuery(binOrigin) {
         source.start_timestamp,
         source.end_timestamp,
         source.bin_duration,
-        source.value,
+        ${columns},
         requested_range.range_start,
         requested_range.range_end
       FROM ${TABLE_PLACEHOLDER} AS source
@@ -50,10 +73,7 @@ function buildTimelinePivotQuery(binOrigin) {
     expanded AS (
       SELECT
         CAST(generated.x_start AS BIGINT) AS x_start,
-        -- A compressed delta row's value covers its complete interval. Convert
-        -- that delta directly to a per-second rate for every represented bin.
-        relevant_rows.value * ${NANOSECONDS_PER_SECOND}.0 /
-          (relevant_rows.end_timestamp - relevant_rows.start_timestamp) AS value
+        ${projection}
       FROM relevant_rows
       CROSS JOIN LATERAL generate_series(
         CASE
@@ -66,13 +86,6 @@ function buildTimelinePivotQuery(binOrigin) {
         LEAST(end_timestamp - bin_duration, range_end - 1),
         bin_duration
       ) AS generated(x_start)
-    ),
-    aggregated_rows AS (
-      SELECT
-        x_start,
-        SUM(value) AS value
-      FROM expanded
-      GROUP BY x_start
     ),
     bin_grid AS (
       SELECT CAST(generated.x_start AS BIGINT) AS x_start
@@ -100,13 +113,6 @@ function buildTimelinePivotQuery(binOrigin) {
         bin_duration
       ) AS generated(x_start)
     )
-    SELECT
-      bin_grid.x_start,
-      COALESCE(aggregated_rows.value, 0) AS value
-    FROM bin_grid
-    LEFT JOIN aggregated_rows
-      ON aggregated_rows.x_start = bin_grid.x_start
-    ORDER BY bin_grid.x_start
   `.trim();
 }
 
@@ -143,18 +149,13 @@ function assertSafeInteger(value, name) {
  */
 
 /**
- * Build one logical Timeline group per raw neoprof series.
- *
- * Each renderer source represents one bin duration. The catalogue maps those
- * sources into a group with a shared presentation query.
- *
- * @param {TimelineConfigArgs} args
- * @returns {{visualizations: any[]}}
+ * Group sources by counter, sort their bin sizes, and check that all required sizes exist.
+ * @param {Pick<TimelineConfigArgs, 'timelineSources'|'expectedBinDurations'|'incompleteCatalogueMessageCode'>} args
  */
-function buildTimelineVisualization(args) {
+function buildValidatedTimelineCatalogue(args) {
   const timelineSources = args.timelineSources ?? [];
   if (timelineSources.length === 0) {
-    return { visualizations: [] };
+    return [];
   }
 
   /** @type {Map<string, {keyType?: number, seriesId: number, sources: TimelineSource[]}>} */
@@ -265,6 +266,39 @@ function buildTimelineVisualization(args) {
     }
   }
 
+  return logicalGroups;
+}
+
+/**
+ * Add table references and return the bin-size-to-source mappings.
+ * Sources must already be sorted.
+ * @param {Record<string, any[]>} tables
+ * @param {string} groupKey
+ * @param {Array<{binDuration: number, rendererId: string, output: string}>} sources
+ */
+function buildTimelineLods(tables, groupKey, sources) {
+  return sources.map((source) => {
+    const sourceKey = `${groupKey}_${source.binDuration}`;
+    tables[sourceKey] = [
+      { renderer_id: source.rendererId, output: source.output },
+    ];
+    return { binDuration: source.binDuration, sourceKey };
+  });
+}
+
+/**
+ * Build one logical Timeline group per raw neoprof series.
+ *
+ * Each renderer source represents one bin duration. The catalogue maps those
+ * sources into a group with a shared presentation query.
+ *
+ * @param {TimelineConfigArgs} args
+ * @returns {{visualizations: any[]}}
+ */
+function buildTimelineVisualization(args) {
+  const logicalGroups = buildValidatedTimelineCatalogue(args);
+  if (logicalGroups.length === 0) return { visualizations: [] };
+
   /** @type {Record<string, any[]>} */
   const tables = {};
   /** @type {Record<string, any>} */
@@ -272,20 +306,7 @@ function buildTimelineVisualization(args) {
   const query = buildTimelinePivotQuery(args.binOrigin);
 
   for (const [groupIndex, group] of logicalGroups.entries()) {
-    const lods = [];
-    for (const source of group.sources) {
-      const sourceKey = `${group.groupKey}_${source.binDuration}`;
-      tables[sourceKey] = [
-        {
-          renderer_id: source.rendererId,
-          output: source.output,
-        },
-      ];
-      lods.push({
-        binDuration: source.binDuration,
-        sourceKey,
-      });
-    }
+    const lods = buildTimelineLods(tables, group.groupKey, group.sources);
 
     const seriesMetadata =
       args.metadataBySeriesKey?.get(group.groupKey) ??
@@ -353,20 +374,11 @@ function buildTimelineVisualization(args) {
 }
 
 /**
- * Convert neoprof capture metadata into the Timeline domain.
- *
- * @param {{
- *   timelineSources: TimelineSource[],
- *   captureMetadata: unknown,
- *   expectedBinDurations?: readonly number[],
- *   incompleteCatalogueMessageCode?: string,
- *   metadataBySeriesKey?: Map<string, {title: string, description: string, units: string}>,
- *   metadataBySeriesId?: Map<number, {title: string, description: string, units: string}>
- * }} args
- * @returns {{visualizations: any[]}}
+ * Read the capture duration and return the full time range in nanoseconds.
+ * @param {unknown} captureMetadata
  */
-function buildNeoprofTimelineVisualization(args) {
-  const captureRow = args.captureMetadata;
+function getNeoprofTimelineDomain(captureMetadata) {
+  const captureRow = captureMetadata;
   if (
     !captureRow ||
     typeof captureRow !== 'object' ||
@@ -385,13 +397,26 @@ function buildNeoprofTimelineVisualization(args) {
     throw new Error('Timeline capture time_unit must be nanoseconds');
   }
 
+  return { start: 0, end: capture.duration, unit: /** @type {'ns'} */ ('ns') };
+}
+
+/**
+ * Convert neoprof capture metadata into the Timeline domain.
+ *
+ * @param {{
+ *   timelineSources: TimelineSource[],
+ *   captureMetadata: unknown,
+ *   expectedBinDurations?: readonly number[],
+ *   incompleteCatalogueMessageCode?: string,
+ *   metadataBySeriesKey?: Map<string, {title: string, description: string, units: string}>,
+ *   metadataBySeriesId?: Map<number, {title: string, description: string, units: string}>
+ * }} args
+ * @returns {{visualizations: any[]}}
+ */
+function buildNeoprofTimelineVisualization(args) {
   return buildTimelineVisualization({
     timelineSources: args.timelineSources,
-    timeDomain: {
-      start: 0,
-      end: capture.duration,
-      unit: 'ns',
-    },
+    timeDomain: getNeoprofTimelineDomain(args.captureMetadata),
     binOrigin: 0,
     expectedBinDurations: args.expectedBinDurations,
     incompleteCatalogueMessageCode: args.incompleteCatalogueMessageCode,
@@ -401,6 +426,10 @@ function buildNeoprofTimelineVisualization(args) {
 }
 
 module.exports = {
+  buildTimelineRangeCTEs,
+  buildTimelineLods,
+  buildValidatedTimelineCatalogue,
+  getNeoprofTimelineDomain,
   buildNeoprofTimelineVisualization,
   buildTimelinePivotQuery,
   buildTimelineVisualization,

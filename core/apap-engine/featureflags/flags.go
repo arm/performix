@@ -15,9 +15,10 @@ type Flags struct {
 	Rerendering              bool `json:"enable-rerendering"`
 	ExperimentalRecipes      bool `json:"enable-experimental-recipes"`
 	SecondaryRunPaths        bool `json:"enable-secondary-run-paths"`
-	GPURecipe                bool `json:"enable-gpu-recipe"`
+	ProfilingFocus           bool `json:"enable-profiling-focus"`
 	RenderDBSandbox          bool `json:"enable-render-db-sandbox"`
 	NeoprofTimeline          bool `json:"enable-neoprof-timeline"`
+	CustomPMUCapture         bool `json:"enable-custom-pmu-capture"`
 	NeoprofSystemUtilization bool `json:"enable-neoprof-system-utilization"`
 	JfrCapture               bool `json:"enable-jfr-capture"`
 	RunComponentCompression  bool `json:"enable-run-component-compression"`
@@ -27,5 +28,6 @@ type Flags struct {
 // the values used by the engine.
 func Resolve(configured Flags) Flags {
 	configured.FullCaptureSupport = configured.FullCaptureSupport || configured.Rerendering
+	configured.NeoprofTimeline = configured.NeoprofTimeline || configured.CustomPMUCapture
 	return configured
 }

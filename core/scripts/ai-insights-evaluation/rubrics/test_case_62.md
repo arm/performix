@@ -19,12 +19,12 @@ SPDX-License-Identifier: Apache-2.0
 ## What The LLM Should Report
 - Identify the affected CPU pair and both measured latencies, quantifying that
   the lower-numbered source-CPU direction is about six times its reverse.
-- Establish that source-node and memory-binding values are comparable in both
-  directions before treating the asymmetry as meaningful.
+- Confirm both directions were measured under comparable topology and
+  memory-binding conditions.
 - Describe the result as worth investigating, not proof of hardware failure or
   a particular root cause.
-- Do not treat `MEMBIND_NODE` as the node of `CPUB` or label the pair intra- or
-  inter-NUMA without a target-CPU node mapping.
+- Target-CPU locality may be established from separate system-topology
+  evidence, but do not infer it from memory-binding data alone.
 
 ## Expected Profiling Characteristics
 - The modified fixture contains one comparable CPU pair whose lower-numbered
@@ -36,6 +36,6 @@ SPDX-License-Identifier: Apache-2.0
   - Finds and quantifies the directional pair and verifies comparable binding.
   - Handles topology fields correctly and qualifies possible causes.
 - Fail:
-  - Omits the asymmetry, invents pair locality or treats memory binding as the
-    target CPU's node.
+  - Omits the asymmetry or infers target-CPU locality solely from memory-binding
+    data.
   - Claims a proven fault or application bottleneck.

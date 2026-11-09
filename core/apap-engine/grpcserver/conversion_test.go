@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -512,10 +513,17 @@ func TestTargetToProto(t *testing.T) {
 		assert.NotNil(t, localConfig)
 	})
 
-	t.Run("successfully convert from AndroidConfig", func(t *testing.T) {
+	t.Run("prefers configured address over last known ADB address", func(t *testing.T) {
+		// Given an Android target with both a configured address and a different last known address.
 		deviceIP := "android-target.invalid:5555"
-		androidTarget := &target.AndroidTarget{SerialNumber: "device-123", DeviceIPAddress: &deviceIP}
+		lastKnownAddress := "saved-address:5555"
+		androidTarget := &target.AndroidTarget{
+			SerialNumber:        "device-123",
+			DeviceIPAddress:     &deviceIP,
+			LastKnownADBAddress: &lastKnownAddress,
+		}
 
+		// When the target is converted to a proto for the engine.
 		protoTarget := TargetToProto(androidTarget)
 		require.NotNil(t, protoTarget)
 		require.NotNil(t, protoTarget.Connection)
@@ -524,7 +532,24 @@ func TestTargetToProto(t *testing.T) {
 		require.NotNil(t, androidConfig)
 		assert.Equal(t, "device-123", androidConfig.SerialNumber)
 		require.NotNil(t, androidConfig.DeviceIpAddress)
+		// Then the configured address remains authoritative.
 		assert.Equal(t, deviceIP, *androidConfig.DeviceIpAddress)
+	})
+
+	t.Run("uses last known ADB address when no configured address exists", func(t *testing.T) {
+		// Given a saved Android target with only a last known address.
+		lastKnownAddress := "saved-address:5555"
+		androidTarget := &target.AndroidTarget{SerialNumber: "device-123", LastKnownADBAddress: &lastKnownAddress}
+
+		// When the target is converted to a proto for the engine.
+		protoTarget := TargetToProto(androidTarget)
+
+		// Then the last known address is passed as the connection hint.
+		require.NotNil(t, protoTarget)
+		androidConfig := protoTarget.GetAndroidConfig()
+		require.NotNil(t, androidConfig)
+		require.NotNil(t, androidConfig.DeviceIpAddress)
+		assert.Equal(t, lastKnownAddress, *androidConfig.DeviceIpAddress)
 	})
 
 	t.Run("returns nil on unsupported type", func(t *testing.T) {
@@ -1009,16 +1034,20 @@ func TestRecipeCtxFromProto(t *testing.T) {
 	})
 
 	t.Run("defaults missing timeout to zero", func(t *testing.T) {
+		// Given
 		recipeFile := filepath.Join(t.TempDir(), "code_hotspots.js")
 		require.NoError(t, os.WriteFile(recipeFile, nil, 0600))
 
+		// When
 		recipeCtx, err := RecipeCtxFromProto(&apapproto.RecipeStartCommand{
 			Target: &apapproto.Target{
 				Connection: &apapproto.Target_LocalConfig{
 					LocalConfig: &apapproto.LocalConnectionConfig{},
 				},
 			},
-			Name: recipeFile,
+			Name:      recipeFile,
+			RunName:   "Benchmark",
+			GroupName: "Benchmarks",
 			Workload: &apapproto.RecipeWorkload{
 				SpecificWorkload: &apapproto.RecipeWorkload_SystemWideWorkload{
 					SystemWideWorkload: &apapproto.SystemWideWorkload{},
@@ -1026,7 +1055,10 @@ func TestRecipeCtxFromProto(t *testing.T) {
 			},
 		})
 
+		// Then
 		require.NoError(t, err)
+		assert.Equal(t, "Benchmark", recipeCtx.RunName)
+		assert.Equal(t, "Benchmarks", recipeCtx.GroupName)
 		assert.Equal(t, uint32(0), recipeCtx.Timeout)
 	})
 }
@@ -1072,4 +1104,44 @@ func TestSSHKeyResponseFromProto(t *testing.T) {
 		assert.Equal(t, ".ssh/keyB", out[1].Path)
 		assert.False(t, out[1].HasPassphrase)
 	})
+}
+
+func TestRecipeCtxFromProtoRunName(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, want string
+		invalid           bool
+	}{
+		{name: "omitted"},
+		{name: "whitespace is omitted", input: " \t\n\u2003 "},
+		{name: "trimmed", input: " \tBenchmark run \n", want: "Benchmark run"},
+		{name: "maximum length", input: strings.Repeat("a", 100), want: strings.Repeat("a", 100)},
+		{name: "too long", input: strings.Repeat("a", 101), invalid: true},
+		{name: "UTF-16 length limit", input: strings.Repeat("😀", 51), invalid: true},
+		{name: "two dots", input: " .. ", invalid: true},
+		{name: "forward slash", input: "run/name", invalid: true},
+		{name: "backslash", input: `run\name`, invalid: true},
+		{name: "embedded dots", input: "run..name", want: "run..name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			recipeFile := filepath.Join(t.TempDir(), "code_hotspots.js")
+			require.NoError(t, os.WriteFile(recipeFile, nil, 0600))
+			request := &apapproto.RecipeStartCommand{
+				Name: recipeFile, RunName: tc.input,
+				Target:   &apapproto.Target{Connection: &apapproto.Target_LocalConfig{LocalConfig: &apapproto.LocalConnectionConfig{}}},
+				Workload: &apapproto.RecipeWorkload{SpecificWorkload: &apapproto.RecipeWorkload_SystemWideWorkload{SystemWideWorkload: &apapproto.SystemWideWorkload{}}},
+			}
+			// When
+			ctx, err := RecipeCtxFromProto(request)
+			// Then
+			if tc.invalid {
+				require.Error(t, err)
+				assert.Nil(t, ctx)
+				assert.Equal(t, message.BuildErrorChain(message.New(message.EngineRunInvalidName)), message.BuildErrorChain(err))
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, ctx.RunName)
+		})
+	}
 }

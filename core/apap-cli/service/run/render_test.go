@@ -158,14 +158,13 @@ func TestListPendingRenderersForDisplay(t *testing.T) {
 
 func TestRenderServicePrepareRender(t *testing.T) {
 	t.Run("includes render parameters", func(t *testing.T) {
+		// Given
 		client := apapprotomocks.NewApapClient(t)
 		service := RenderService{}
 		content := &apapproto.ContentSelection{}
 
-		policy := apapproto.RecipeSelectionPolicyType_OVERRIDE_BY_NAME
 		params := RenderPreparationParams{
-			RecipeSelectionPolicy: &policy,
-			OverrideRecipeName:    "my-recipe",
+			OverrideRecipeName: "my-recipe",
 			RenderParameterValues: map[string]*structpb.Value{
 				"threshold": structpb.NewStringValue("10"),
 			},
@@ -175,7 +174,7 @@ func TestRenderServicePrepareRender(t *testing.T) {
 			if req == nil || req.RecipeSelectionPolicy == nil {
 				return false
 			}
-			if req.RecipeSelectionPolicy.GetPolicy() != policy {
+			if req.RecipeSelectionPolicy.GetPolicy() != apapproto.RecipeSelectionPolicyType_OVERRIDE_BY_NAME {
 				return false
 			}
 			if req.RecipeSelectionPolicy.GetOverrideName() != "my-recipe" {
@@ -187,11 +186,14 @@ func TestRenderServicePrepareRender(t *testing.T) {
 			return req.RenderParameters["threshold"].GetStringValue() == "10"
 		})).Return(&apapproto.PrepareRenderResponse{}, nil)
 
+		// When
 		_, err := service.PrepareRender(client, content, params)
+		// Then
 		require.NoError(t, err)
 	})
 
-	t.Run("omits render parameters when empty", func(t *testing.T) {
+	t.Run("uses the engine default recipe when no override is set", func(t *testing.T) {
+		// Given
 		client := apapprotomocks.NewApapClient(t)
 		service := RenderService{}
 		content := &apapproto.ContentSelection{}
@@ -199,10 +201,12 @@ func TestRenderServicePrepareRender(t *testing.T) {
 		params := RenderPreparationParams{}
 
 		client.On("PrepareRender", mock.Anything, mock.MatchedBy(func(req *apapproto.PrepareRenderRequest) bool {
-			return req != nil && req.RenderParameters == nil
+			return req != nil && req.RecipeSelectionPolicy == nil && req.RenderParameters == nil
 		})).Return(&apapproto.PrepareRenderResponse{}, nil)
 
+		// When
 		_, err := service.PrepareRender(client, content, params)
+		// Then
 		require.NoError(t, err)
 	})
 }

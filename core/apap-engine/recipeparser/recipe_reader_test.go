@@ -5,6 +5,7 @@ package recipeparser
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,8 +13,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
+	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
 
 type mockRecipeReader struct {
@@ -109,6 +113,48 @@ func TestParseInlineRecipeUsesInlineSourceName(t *testing.T) {
 	assert.Equal(t, "const recipe = {name: 'inline'};", parser.content)
 }
 
+func TestFileRecipeReaderFeatureFlags(t *testing.T) {
+	t.Setenv(util.ApplyEnvPrefix("DATA_DIR"), t.TempDir())
+	extensionsDir, err := packages.GetExtensionsDir()
+	require.NoError(t, err)
+	recipeDir := filepath.Join(extensionsDir, "flag-test", "recipes")
+	require.NoError(t, os.MkdirAll(recipeDir, 0o700))
+	recipePath := filepath.Join(recipeDir, "flag_test.js")
+	require.NoError(t, os.WriteFile(recipePath, []byte(`
+var recipe = {
+  name: 'flag_test', title: 'Flag test', description: 'Flag test',
+  version: '1.0', api_version: '1.0.2',
+  parameters: performix.customPMUCaptureEnabled ? [{
+    id: 'events', label: 'Events', description: 'Events', required: false,
+    config: {type: 'multi_select', defaultValue: [], options: () => []},
+  }] : [],
+  readyStages: [], runStages: [], renderStages: [],
+};
+`), 0o600))
+
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			reader := FileRecipeReader{FeatureFlags: featureflags.Flags{CustomPMUCapture: enabled}}
+			single, err := reader.ReadRecipe(recipePath)
+			require.NoError(t, err)
+			all, err := reader.ReadRecipes(func(path string, err error) {
+				t.Errorf("reading %s: %v", path, err)
+			})
+			require.NoError(t, err)
+			require.Contains(t, all, "flag_test")
+			for _, parsed := range []recipe.Recipe{single, all["flag_test"]} {
+				if enabled {
+					require.Len(t, parsed.Parameters.MultiSelect, 1)
+					require.Len(t, parsed.ParameterOptionsStages, 1)
+				} else {
+					require.Empty(t, parsed.Parameters.MultiSelect)
+					require.Empty(t, parsed.ParameterOptionsStages)
+				}
+			}
+		})
+	}
+}
+
 func TestReadRecipeSupportsRelativeHelperImport(t *testing.T) {
 	recipeDir := t.TempDir()
 	helperPath := filepath.Join(recipeDir, "helper.js")
@@ -149,7 +195,7 @@ const recipe = {
 		readFile: os.ReadFile,
 	}
 
-	parsed, err := ReadRecipe(reader, recipePath)
+	parsed, err := ReadRecipe(reader, recipePath, featureflags.Flags{})
 	require.NoError(t, err)
 	assert.Equal(t, "read_recipe_helper", parsed.Name)
 }

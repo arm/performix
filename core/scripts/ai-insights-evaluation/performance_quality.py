@@ -25,6 +25,7 @@ QUALITY_INDETERMINABLE = "INDETERMINABLE"
 THRESHOLD_FIELD = "performance_thresholds"
 REQUIRED_THRESHOLD_KEYS = ("duration_seconds", "input_tokens", "output_tokens")
 PERFORMANCE_EVALUATED_PROPERTY = "ai_performance_evaluated"
+PerformanceThresholds = dict[str, dict[str, dict[str, int | float]]]
 
 
 @dataclass(frozen=True)
@@ -74,15 +75,20 @@ class MetricQuality:
     threshold: int | float
     quality: str
 
+    @property
+    def is_warning(self) -> bool:
+        """Exceeded wall-clock targets are advisory; missing measurements still fail."""
+        return self.key == "duration_seconds" and self.quality == QUALITY_POOR
+
 
 def performance_metrics_for_attempt(
     attempt: dict[str, str],
     *,
-    performance_thresholds: dict[str, dict[str, int | float]] | None = None,
+    performance_thresholds: PerformanceThresholds | None = None,
 ) -> list[MetricQuality]:
     """Return threshold assessments for one performance-evaluated attempt.
 
-    A testcase must provide all required performance thresholds in the manifest
+    A testcase must provide all required thresholds for the model configuration
     before any assessment is made. Missing or partial thresholds return an
     empty list so callers can omit quality output without treating the attempt
     as a failed or indeterminate performance check.
@@ -114,9 +120,9 @@ def performance_metrics_for_attempt(
 def performance_failures_for_attempt(
     attempt: dict[str, str],
     *,
-    performance_thresholds: dict[str, dict[str, int | float]] | None = None,
+    performance_thresholds: PerformanceThresholds | None = None,
 ) -> list[MetricQuality]:
-    """Return configured performance metrics that are not GOOD."""
+    """Return configured performance metrics that cause test failures."""
     if not is_performance_evaluated_mode(attempt.get("ai_mode")):
         return []
 
@@ -126,7 +132,7 @@ def performance_failures_for_attempt(
             attempt,
             performance_thresholds=performance_thresholds,
         )
-        if metric.quality != QUALITY_GOOD
+        if metric.quality != QUALITY_GOOD and not metric.is_warning
     ]
 
 
@@ -180,22 +186,23 @@ def recorded_performance_metrics_for_attempt(attempt: dict[str, str]) -> list[Me
 
 
 def recorded_performance_failures_for_attempt(attempt: dict[str, str]) -> list[MetricQuality]:
-    """Return recorded performance metrics that pytest classified as not GOOD."""
+    """Return recorded performance metrics that cause test failures."""
     return [
         metric
         for metric in recorded_performance_metrics_for_attempt(attempt)
-        if metric.quality != QUALITY_GOOD
+        if metric.quality != QUALITY_GOOD and not metric.is_warning
     ]
 
 
 def thresholds_for_attempt(
     attempt: dict[str, str],
     *,
-    performance_thresholds: dict[str, dict[str, int | float]] | None = None,
+    performance_thresholds: PerformanceThresholds | None = None,
 ) -> dict[str, int | float] | None:
-    """Return a testcase's complete threshold set, if one is available."""
+    """Return the testcase/model configuration's complete threshold set, if available."""
     thresholds_by_test_id = performance_thresholds or {}
-    thresholds = thresholds_by_test_id.get(attempt.get("ai_test_id", ""), {})
+    model_thresholds = thresholds_by_test_id.get(attempt.get("ai_test_id", ""), {})
+    thresholds = model_thresholds.get(attempt.get("ai_model_config", ""), {})
     if all(key in thresholds for key in REQUIRED_THRESHOLD_KEYS):
         return dict(thresholds)
     return None
@@ -227,8 +234,8 @@ def quality_distribution(values: list[str]) -> dict[str, int]:
     return {key: int(round((count / total) * 100)) for key, count in counts.items()}
 
 
-def performance_thresholds_from_manifest(manifest_path: Path) -> dict[str, dict[str, int | float]]:
-    """Read per-test performance thresholds from ai_insights_evaluation.json.
+def performance_thresholds_from_manifest(manifest_path: Path) -> PerformanceThresholds:
+    """Read per-test/model configuration thresholds from ai_insights_evaluation.json.
 
     Threshold blocks are optional so new tests can be added before performance
     limits are agreed. When present, each field is validated, but completeness is
@@ -243,7 +250,7 @@ def performance_thresholds_from_manifest(manifest_path: Path) -> dict[str, dict[
     if not isinstance(tests, list):
         raise ValueError(f"{manifest_path}: 'tests' must be a list")
 
-    thresholds_by_test_id: dict[str, dict[str, int | float]] = {}
+    thresholds_by_test_id: PerformanceThresholds = {}
     for test in tests:
         if not isinstance(test, dict) or THRESHOLD_FIELD not in test:
             continue
@@ -254,18 +261,20 @@ def performance_thresholds_from_manifest(manifest_path: Path) -> dict[str, dict[
         if not isinstance(raw_thresholds, dict):
             raise ValueError(f"{manifest_path}: {test_id}.{THRESHOLD_FIELD} must be an object")
 
-        unknown_keys = sorted(set(raw_thresholds) - set(REQUIRED_THRESHOLD_KEYS))
-        if unknown_keys:
-            raise ValueError(
-                f"{manifest_path}: {test_id}.{THRESHOLD_FIELD} has unknown keys: {', '.join(unknown_keys)}"
-            )
+        for model_config, thresholds in raw_thresholds.items():
+            context = f"{manifest_path}: {test_id}.{THRESHOLD_FIELD}.{model_config}"
+            if not model_config or not isinstance(thresholds, dict):
+                raise ValueError(f"{context} must be a threshold object keyed by model-reasoning effort")
+            unknown_keys = sorted(set(thresholds) - set(REQUIRED_THRESHOLD_KEYS))
+            if unknown_keys:
+                raise ValueError(f"{context} has unknown keys: {', '.join(unknown_keys)}")
 
-        parsed = {}
-        for key in REQUIRED_THRESHOLD_KEYS:
-            if key in raw_thresholds:
-                parsed[key] = _manifest_threshold(raw_thresholds[key], manifest_path, test_id, key)
-        if parsed:
-            thresholds_by_test_id[test_id] = parsed
+            parsed = {
+                key: _manifest_threshold(value, context, key)
+                for key, value in thresholds.items()
+            }
+            if parsed:
+                thresholds_by_test_id.setdefault(test_id, {})[model_config] = parsed
     return thresholds_by_test_id
 
 
@@ -282,10 +291,10 @@ def number(value: str | None) -> int | float | None:
     return int(parsed) if parsed.is_integer() else parsed
 
 
-def _manifest_threshold(value: Any, manifest_path: Path, test_id: str, key: str) -> int | float:
+def _manifest_threshold(value: Any, context: str, key: str) -> int | float:
     """Validate and normalize one manifest threshold value."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{manifest_path}: {test_id}.{THRESHOLD_FIELD}.{key} must be a number")
+        raise ValueError(f"{context}.{key} must be a number")
     if not math.isfinite(float(value)) or value < 0:
-        raise ValueError(f"{manifest_path}: {test_id}.{THRESHOLD_FIELD}.{key} must be non-negative")
+        raise ValueError(f"{context}.{key} must be non-negative")
     return int(value) if float(value).is_integer() else float(value)

@@ -4,7 +4,6 @@
 package recipe
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,10 +25,6 @@ const (
 	// UseInstalledVersion selects the recipe based on the name from the runs,
 	// and uses the version installed with the application.
 	UseInstalledVersion SelectionPolicy = iota
-
-	// FromContent selects the recipe stored inside the run content itself and returns the path
-	// to that file, or falls back to the installed version if none is stored.
-	FromContent
 
 	// OverrideByName explicitly overrides the recipe selection by specifying a name directly.
 	OverrideByName
@@ -78,10 +73,6 @@ func preserveRecipeInRun(runBuilder *run.RunBuilder, recipePath string, recipe *
 //
 // Behavior:
 //   - If OverrideByName is used, returns the explicitly provided recipe name.
-//   - If FromContent is used:
-//   - Attempts to return the recipe path from the newest run's content.
-//   - If unavailable, falls back to UseInstalledVersion.
-//   - If both fail, returns a combined error.
 //   - If UseInstalledVersion is used, returns the recipe name from the newest run, intended
 //     for use with the application's installed recipes.
 //
@@ -93,14 +84,12 @@ func preserveRecipeInRun(runBuilder *run.RunBuilder, recipePath string, recipe *
 // - runIDs: The IDs of the runs to consider.
 //
 // Returns:
-// - A recipe name or path, depending on the strategy used.
+// - The selected recipe name.
 // - An error if the selection cannot be completed.
 func SelectRenderSourceRecipe(c run.RunRecipeLookup, opts SelectionOptions, runIDs []run.RunID) (string, error) {
 	switch opts.Policy {
 	case OverrideByName:
 		return selectRenderSourceRecipeOverrideByName(opts.OverrideName)
-	case FromContent:
-		return selectRenderSourceRecipeFromContent(c, runIDs)
 	case UseInstalledVersion:
 		return selectRenderSourceRecipeUseInstalledVersion(c, runIDs)
 	default:
@@ -113,31 +102,6 @@ func selectRenderSourceRecipeOverrideByName(name string) (string, error) {
 		return "", message.New(message.CommonUnknownError).WithCause(fmt.Errorf("override name cannot be empty when using OverrideByName strategy"))
 	}
 	return name, nil
-}
-
-func selectRenderSourceRecipeFromContent(c run.RunRecipeLookup, runIDs []run.RunID) (string, error) {
-	if err := c.CheckRunsUseSameRecipe(runIDs); err != nil {
-		return "", err
-	}
-
-	runToUse, err := c.GetNewestRun(runIDs)
-	if err != nil {
-		return "", err
-	}
-
-	recipe, err := c.GetRecipeComponentPath(runToUse)
-	// Note: flipped condition to usual! Returning if NO error; if error, we continue to fallback
-	if err == nil {
-		return recipe, nil
-	}
-
-	// Fallback: try UseInstalledVersion
-	fallbackName, fallbackErr := selectRenderSourceRecipeUseInstalledVersion(c, runIDs)
-	if fallbackErr != nil {
-		return "", errors.Join(fallbackErr, err)
-	}
-
-	return fallbackName, nil
 }
 
 func selectRenderSourceRecipeUseInstalledVersion(c run.RunRecipeLookup, runIDs []run.RunID) (string, error) {

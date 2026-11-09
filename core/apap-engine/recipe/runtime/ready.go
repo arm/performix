@@ -94,6 +94,7 @@ func isPermittedReadyFailure(result run.RunResult) bool {
 	switch result {
 	case run.RecipeFailureConnectAgent,
 		run.RecipeFailureUnsupportedPlatform,
+		run.RecipeFailureToolsMissing,
 		run.RecipeFailureNoShell:
 		return true
 	default:
@@ -143,17 +144,15 @@ func ConfigureRecipeReadyStages(config *StageConfiguration, scriptedReadyStages 
 	workloadOptionsStage := stages.NewWorkloadOptionsStage(config.Ctx.OrigWorkload, &config.Ctx.ResolvedWorkload, connectStage.TargetSessionSupplier, connectStage.CommandRunnerSupplier)
 	s = append(s, workloadOptionsStage)
 
-	toolBundleResolutionStage := stages.NewToolBundleResolutionStage(
-		config.PackageManager,
-		targetArchitectureStage.PlatformConfigurationSupplier,
-		&config.Ctx.ParamValues,
-		config.Recipe,
-	)
-	hostArchitectureStage := stages.NewHostArchitectureStage(
-		config.TargetSessions,
-		toolBundleResolutionStage.ToolBundlesSupplier,
-	)
-	s = append(s, toolBundleResolutionStage, hostArchitectureStage)
+	requiresTools := config.Recipe.ParameterValidationStage != nil && parameterOptionsRequireTools(config.Recipe.ParameterOptionsStages)
+	deployment := newRecipeToolDeployment(config, connectStage, targetArchitectureStage, deployer.ToolDeployENSURE)
+	toolBundleResolutionStage := deployment.resolution
+	hostArchitectureStage := deployment.hostArchitecture
+	if requiresTools {
+		s = append(s, deployment.stages()...)
+	} else {
+		s = append(s, toolBundleResolutionStage, hostArchitectureStage)
+	}
 
 	connectingToAgentStage := stages.NewConnectingToTargetAgentStage(
 		config.Ctx.Target,
@@ -163,7 +162,7 @@ func ConfigureRecipeReadyStages(config *StageConfiguration, scriptedReadyStages 
 
 	getTargetInfoStage := stages.NewCollectTargetInfoStage(nil, nil, nil, agentSupplier, connectStage.TargetSessionSupplier, targetArchitectureStage.TargetPlatformSupplier)
 
-	targetLockStage := stages.NewTargetLockStage(agentSupplier, time.Second*3)
+	targetLockStage := stages.NewTargetLockStage(agentSupplier, 10*time.Second)
 	releaseTargetLockStage := stages.NewReleaseTargetLockStage(targetLockStage.Release)
 	connectingToHostAgentStage := stages.NewConnectingToHostAgentStage(
 		toolBundleResolutionStage.ToolBundlesSupplier,
@@ -206,7 +205,7 @@ func ConfigureRecipeReadyStages(config *StageConfiguration, scriptedReadyStages 
 
 // ConfigureRecipeInfoStages is responsible for creating the Stage list for the "parameter options" stages, as well as
 // the target platform support check for the given target
-func ConfigureRecipeInfoStages(config *StageConfiguration, scriptedReadyStage []recipe.ScriptedStage) []recipe.Stage {
+func ConfigureRecipeInfoStages(config *StageConfiguration, optionStages []recipe.ParameterOptionsStage) []recipe.Stage {
 	connectStage := stages.NewTargetConnectStage(config.Ctx.Target, config.TargetSessions)
 	toolPathsSupplier := func() deployer.BaseToolDeploymentPaths {
 		ts := connectStage.TargetSessionSupplier()
@@ -216,9 +215,17 @@ func ConfigureRecipeInfoStages(config *StageConfiguration, scriptedReadyStage []
 	targetSupportStage := stages.NewTargetPlatformSupportStage(config.PackageManager, targetArchitectureStage.PlatformConfigurationSupplier, config.Ctx.ParamValues, config.Recipe, false)
 
 	s := []recipe.Stage{connectStage, targetArchitectureStage, targetSupportStage}
+	if len(optionStages) == 0 {
+		return s
+	}
 
 	workloadOptionsStage := stages.NewWorkloadOptionsStage(config.Ctx.OrigWorkload, &config.Ctx.ResolvedWorkload, connectStage.TargetSessionSupplier, connectStage.CommandRunnerSupplier)
 	s = append(s, workloadOptionsStage)
+
+	if parameterOptionsRequireTools(optionStages) {
+		deployment := newRecipeToolDeployment(config, connectStage, targetArchitectureStage, deployer.ToolDeployENSURE)
+		s = append(s, deployment.stages()...)
+	}
 
 	connectingToAgentStage := stages.NewConnectingToTargetAgentStage(
 		config.Ctx.Target,
@@ -242,7 +249,7 @@ func ConfigureRecipeInfoStages(config *StageConfiguration, scriptedReadyStage []
 	execCtx.PackageManager = config.PackageManager
 	execCtx.ToolPathsSupplier = toolPathsSupplier
 
-	for _, scripted := range scriptedReadyStage {
+	for _, scripted := range optionStages {
 		recipeStage := &stages.CustomRecipeStage{StageName: scripted.Name(), ScriptedStage: scripted, Ctx: execCtx}
 		s = append(s, recipeStage)
 	}

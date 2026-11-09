@@ -12,6 +12,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/afero"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
@@ -119,8 +120,8 @@ func GetRecipePath(recipeName string) (string, error) {
 	return "", nil
 }
 
-func ReadRecipe(reader FileReader, file string) (recipe.Recipe, error) {
-	parser := &RecipeParserJS{APIFactory: CreateConcreteAPI}
+func ReadRecipe(reader FileReader, file string, flags featureflags.Flags) (recipe.Recipe, error) {
+	parser := &RecipeParserJS{APIFactory: CreateConcreteAPI, FeatureFlags: flags}
 	newRecipe := recipe.Recipe{}
 
 	recipeData, err := reader.ReadFile(file)
@@ -182,14 +183,16 @@ type RecipeReader interface {
 	IsRecipeValidFile(name string) bool
 }
 
-type FileRecipeReader struct{}
+type FileRecipeReader struct {
+	FeatureFlags featureflags.Flags
+}
 
 func (s FileRecipeReader) ReadRecipes(errHandler func(string, error)) (map[string]recipe.Recipe, error) {
-	return ReadRecipes(RecipeFileReader{}, &RecipeParserJS{APIFactory: CreateConcreteAPI}, errHandler)
+	return ReadRecipes(RecipeFileReader{}, &RecipeParserJS{APIFactory: CreateConcreteAPI, FeatureFlags: s.FeatureFlags}, errHandler)
 }
 
 func (s FileRecipeReader) ReadRecipe(file string) (recipe.Recipe, error) {
-	return ReadRecipe(RecipeFileReader{}, file)
+	return ReadRecipe(RecipeFileReader{}, file, s.FeatureFlags)
 }
 
 func (s FileRecipeReader) IsRecipeValidFile(name string) bool {

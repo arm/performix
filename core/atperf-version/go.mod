@@ -3,7 +3,7 @@
 
 module github.com/Arm-Debug/apap-cli/atperf-version
 
-go 1.27.2
+go 1.27.3
 
 replace (
 	github.com/Arm-Debug/apap-cli/apap-engine => ../apap-engine

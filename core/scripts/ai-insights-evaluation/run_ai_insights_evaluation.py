@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 HARNESS_DIR = Path(__file__).resolve().parent
-TEST_MODULE = HARNESS_DIR / "test_ai_insights_evaluation.py"
+TEST_DIR = HARNESS_DIR / "tests" / "evaluation"
 REPORT_GENERATOR = HARNESS_DIR / "ai_insights_performance_report.py"
 LOCAL_REPORTING_DIR = HARNESS_DIR / "results" / "reporting"
 JUNIT_XML_NAME = "ai-insights-evaluation.xml"
@@ -60,7 +60,7 @@ def run_evaluation(
         python,
         "-m",
         "pytest",
-        TEST_MODULE.name,
+        str(TEST_DIR.relative_to(HARNESS_DIR)),
         "--verbose",
         *pytest_args,
     ]

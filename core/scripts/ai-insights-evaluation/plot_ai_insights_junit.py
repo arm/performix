@@ -64,10 +64,15 @@ class Observation:
     mcp_calls_failed: int
     mcp_tool_duration_seconds_succeeded: float
     mcp_tool_duration_seconds_failed: float
+    model_config: str = ""
+
+    @property
+    def test_label(self) -> str:
+        return f"{self.test_id} [{self.model_config}]" if self.model_config else self.test_id
 
     @property
     def pair_key(self) -> tuple[str, int]:
-        return (self.test_id, self.attempt)
+        return (self.test_label, self.attempt)
 
     @property
     def passed(self) -> bool:
@@ -255,6 +260,7 @@ def load_observations(junit_xml: Path) -> list[Observation]:
         observations.append(
             Observation(
                 test_id=_required(attempt, "ai_test_id"),
+                model_config=attempt.get("ai_model_config", ""),
                 mode=mode,
                 attempt=_integer(attempt, "ai_attempt"),
                 score=_single_value(attempt, "ai_display_scores").lower(),
@@ -822,7 +828,7 @@ def _plot_cost_quality(
         axis.set_title(_mode_label(mode).replace("\n", " "), loc="left")
         axis.set_xlabel("Runtime relative to Performix MCP")
     axes[0].set_ylabel("Input tokens relative to Performix MCP")
-    figure.suptitle("Cost and quality relative to the curated implementation", x=0.06, ha="left", fontsize=13)
+    figure.suptitle("Cost and quality relative to the baseline", x=0.06, ha="left", fontsize=13)
     figure.text(
         0.5,
         0.015,
@@ -1270,6 +1276,7 @@ def _write_observations_csv(observations: list[Observation], path: Path) -> None
         writer.writerow(
             (
                 "test_id",
+                "model_config",
                 "mode",
                 "attempt",
                 "score",
@@ -1292,6 +1299,7 @@ def _write_observations_csv(observations: list[Observation], path: Path) -> None
             writer.writerow(
                 (
                     observation.test_id,
+                    observation.model_config,
                     observation.mode,
                     observation.attempt,
                     observation.score,
@@ -1327,7 +1335,7 @@ def _write_html_report(
         pass_rate = passed / len(mode_observations)
         observations_by_test: dict[str, list[Observation]] = {}
         for observation in mode_observations:
-            observations_by_test.setdefault(observation.test_id, []).append(observation)
+            observations_by_test.setdefault(observation.test_label, []).append(observation)
         attempt_counts = [
             len(test_observations)
             for test_observations in observations_by_test.values()

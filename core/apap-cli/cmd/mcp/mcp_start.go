@@ -80,6 +80,7 @@ func newMCPStartCmd(newRunner func(mcpserver.MCPServerOptions) MCPRunner) *cobra
 
 			options := mcpserver.MCPServerOptions{
 				AndroidTargetsEnabled:     viper.GetBool(serverconfig.EnableAndroidTargetsConfigKey),
+				ProfilingFocusEnabled:     viper.GetBool(serverconfig.EnableProfilingFocusConfigKey),
 				SourceSharingAcknowledged: acknowledgeSourceSharing,
 			}
 			err := newRunner(options).Run(ctx, readCloser(cmd.InOrStdin()), cmd.OutOrStdout(), cmd.ErrOrStderr())

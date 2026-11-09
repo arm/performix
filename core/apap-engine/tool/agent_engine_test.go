@@ -208,7 +208,9 @@ func TestAgentEngine_StartProcessAndStream(t *testing.T) {
 	mockClient.On("WriteToStdin", procCtx, &targetagentproto.StdinChunk{Pid: 123, Data: []byte("input")}).Return(&emptypb.Empty{}, nil)
 	mockClient.On("KillProcess", mock.MatchedBy(func(ctx context.Context) bool { _, bounded := ctx.Deadline(); return ctx.Err() == nil && bounded }), &targetagentproto.KillProcessRequest{Pid: 123}).Return(&emptypb.Empty{}, nil)
 	mockClient.On("InterruptProcess", procCtx, &targetagentproto.InterruptProcessRequest{Pid: 123}).Return(&emptypb.Empty{}, nil)
-	mockClient.On("WaitProcess", procCtx, &targetagentproto.WaitProcessRequest{Pid: 123}).Return(&targetagentproto.WaitProcessResponse{ExitCode: 22}, nil)
+	mockClient.On("WaitProcess", mock.MatchedBy(func(ctx context.Context) bool {
+		return ctx.Err() == nil && ctx.Done() != nil && ctx.Done() != procCtx.Done()
+	}), &targetagentproto.WaitProcessRequest{Pid: 123}).Return(&targetagentproto.WaitProcessResponse{ExitCode: 22}, nil)
 
 	handle, err := engine.StartProcess(&process.StartProcess{
 		Ctx: procCtx,

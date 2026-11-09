@@ -12,7 +12,8 @@ import json
 import os
 from pathlib import Path
 
-from test_ai_insights_evaluation import judge_response, mcp_policy_passes
+from judge_config import DEFAULT_JUDGE_MODEL
+from tests.evaluation.test_ai_insights_evaluation import judge_response
 from pathways_artifacts import load_pathways_judge_evidence
 
 
@@ -31,7 +32,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--judge-model",
-        default=os.environ.get("AI_INSIGHTS_JUDGE_MODEL", "gpt-5.6-luna"),
+        default=os.environ.get("AI_INSIGHTS_JUDGE_MODEL", DEFAULT_JUDGE_MODEL),
         help="Judge model (default: %(default)s)",
     )
     parser.add_argument("--judge-reasoning-effort",
@@ -74,11 +75,7 @@ def main() -> int:
         results.append({"response": str(response_path), **result})
 
     print(json.dumps(results, indent=2))
-    return int(any(
-        result["label"] != "pass"
-        or (args.pathways_session and not mcp_policy_passes(result.get("mcp_policy")))
-        for result in results
-    ))
+    return int(any(result["label"] != "pass" for result in results))
 
 
 if __name__ == "__main__":

@@ -143,6 +143,29 @@ func validateCPUDiscovery(result ProbeResult, optedIn, required bool) error {
 			return invalidCounterCollectionError(fmt.Errorf("CPU discovery did not return %s", id))
 		}
 	}
+	native := make(map[string]capabilities.NativeCPUCounterValue)
+	for id, value := range result.Capabilities {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return invalidCounterCollectionError(err)
+		}
+		var descriptor struct {
+			ComponentType struct {
+				Name string `json:"name"`
+			} `json:"componentType"`
+		}
+		if json.Unmarshal(raw, &descriptor) != nil || descriptor.ComponentType.Name != capabilities.NativeCPUCounter {
+			continue
+		}
+		parsed, err := capabilities.ParseNativeCPUCounterValue(id, value, false)
+		if err != nil {
+			return invalidCounterCollectionError(err)
+		}
+		native[id] = parsed
+	}
+	if err := capabilities.ValidateNativeCPUCounterDiscovery(native); err != nil {
+		return invalidCounterCollectionError(err)
+	}
 	return nil
 }
 

@@ -355,11 +355,14 @@ unauthorized-device	unauthorized
 
 `
 
-		targets := parseADBDevices(stdout)
-
+		runner := &discoveryADBRunner{devices: stdout, serials: map[string]string{
+			"emulator-5556": "emulator-physical", "192.0.2.1:5555": "phone-physical",
+		}}
+		targets, err := discoverAndroidTargets(runner)
+		require.NoError(t, err)
 		assert.Equal(t, []*engine_target.AndroidTarget{
-			{SerialNumber: "emulator-5556"},
-			{SerialNumber: "192.0.2.1:5555"},
+			{SerialNumber: "emulator-physical", LastKnownADBAddress: ptr("emulator-5556")},
+			{SerialNumber: "phone-physical", LastKnownADBAddress: ptr("192.0.2.1:5555")},
 		}, targets)
 	})
 
@@ -512,4 +515,19 @@ emulator-5556  no       android  n/a              emulator-5556
 		assert.False(t, errors.As(err, &msgErr))
 		assert.Equal(t, 1, discoverer.calls)
 	})
+}
+
+type discoveryADBRunner struct {
+	devices string
+	serials map[string]string
+}
+
+func (r *discoveryADBRunner) Run(args ...string) (string, string, error) {
+	if len(args) == 1 && args[0] == "devices" {
+		return r.devices, "", nil
+	}
+	if len(args) == 5 && args[3] == "getprop" {
+		return r.serials[args[1]], "", nil
+	}
+	return "", "", nil
 }

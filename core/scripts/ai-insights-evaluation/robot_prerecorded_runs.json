@@ -60,6 +60,19 @@
       "suites": ["render/render.robot"]
     },
     {
+      "id": "memory-access-baseline-linux-aarch64",
+      "logical_id": "memory-access-baseline",
+      "platform": "linux",
+      "arch": "aarch64",
+      "instance_type": "c8g.metal-24xl",
+      "instance_os": "Ubuntu 24.04 (arm64)",
+      "workload_command": "dd if=/dev/zero of=/dev/null bs=1M count=102400",
+      "recipe": "memory_access",
+      "prerecord": {"timeout_seconds": 10},
+      "acts": ["robot"],
+      "suites": ["render/render.robot"]
+    },
+    {
       "id": "system-utilization-baseline-linux-aarch64",
       "logical_id": "system-utilization-baseline",
       "platform": "linux",

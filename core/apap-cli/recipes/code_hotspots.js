@@ -9,6 +9,7 @@ const {
   buildTimelineSQLRendererBundle,
 } = require('./lib/timeline_sql_renderer');
 const { buildNeoprofTimelineVisualization } = require('./lib/timeline_config');
+const { buildSchedulerTrace } = require('./lib/scheduler_trace');
 const { buildJavaAnalysisRender } = require('./lib/java_analysis_render');
 const {
   NEOPROF_TIMELINE_BIN_DURATIONS_NS,
@@ -16,6 +17,7 @@ const {
 const {
   CPU_CYCLES,
   COUNTER_CAPABILITY_COMPONENT_TYPE,
+  NATIVE_CPU_COUNTER_CAPABILITY_COMPONENT_TYPE,
 } = require('../tool-integrations/tool_capabilities');
 
 const TOOL_NEOPROF = { name: 'neoprof', version: '1.1.0' };
@@ -33,6 +35,9 @@ const telemetrySpecificationUnavailableMessageCode =
 const timelineDataIncompleteMessageCode =
   'recipes.code_hotspots.TIMELINE_DATA_INCOMPLETE';
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
+const performixGlobal = /** @type {import("./docs/jsdocs").PerformixGlobal} */ (
+  globalThis['performix']
+);
 
 /**
  * @type {import("./docs/jsdocs").Recipe}
@@ -74,6 +79,23 @@ var recipe = {
     },
   ],
   parameters: [
+    ...(performixGlobal.customPMUCaptureEnabled
+      ? [
+          {
+            id: 'additional_events',
+            required: false,
+            label: 'Additional Events',
+            description:
+              'Select additional CPU PMU events available on the target.',
+            config: {
+              type: 'multi_select',
+              options: additionalEventOptions,
+              defaultValue: [],
+              requiresTools: true,
+            },
+          },
+        ]
+      : []),
     {
       id: 'sampling_freq',
       required: false,
@@ -190,6 +212,36 @@ var recipe = {
     },
   ],
 };
+
+/**
+ * @param {import("./docs/jsdocs").ReadyExecutionContext} context
+ * @returns {import("./docs/jsdocs").ParameterOptions[]}
+ */
+function additionalEventOptions(context) {
+  const targetInfo = context.targetInfo();
+  if (!isLinuxTarget(targetInfo) && !isAndroidTarget(targetInfo)) return [];
+
+  const tools = generateNeoprofConfig(
+    { Type: 'systemWide', Data: '' },
+    { compute_cpu_pmu_events: true },
+  );
+  const [probe] = context.probeTools(tools);
+
+  const options = [];
+  for (const [id, capability] of Object.entries(probe.capabilities)) {
+    const isNativeCPUCounter =
+      capability.componentType?.name ===
+      NATIVE_CPU_COUNTER_CAPABILITY_COMPONENT_TYPE.name;
+    if (!isNativeCPUCounter || capability.state !== 'available') continue;
+    const { payload } = capability;
+    options.push({
+      value: id,
+      label: `${payload.title} (${payload.pmu.name} / ${payload.pmu.id}, ${payload.eventCode})`,
+      description: payload.description,
+    });
+  }
+  return options.sort((a, b) => a.label.localeCompare(b.label));
+}
 
 /**
  * @param {string} samplingFreq
@@ -337,6 +389,16 @@ function isWindowsTarget(targetInfo) {
 function isAndroidTarget(targetInfo) {
   const family = targetInfo?.Os?.OSFamily ?? '';
   return family.toLowerCase() === 'android';
+}
+
+/**
+ * Determine whether the current target OS is Linux.
+ * @param {import("./docs/jsdocs").TargetInfoDescription} targetInfo
+ * @returns {boolean}
+ */
+function isLinuxTarget(targetInfo) {
+  const family = targetInfo?.Os?.OSFamily ?? '';
+  return family.toLowerCase() === 'linux';
 }
 
 /**
@@ -1497,11 +1559,16 @@ function renderHotspots(context) {
         },
   ];
 
+  let timelineOffsetEpochNs;
   if (
     tool.name === TOOL_NEOPROF.name &&
     context.isNeoprofTimelineEnabled() &&
     !isComparison
   ) {
+    const scheduler = buildSchedulerTrace(context);
+    renderers.push(...scheduler.renderers);
+    visualizations.push(...scheduler.visualizations);
+
     const timelineBindings = getHotspotsTimelineBindings(context);
     if (timelineBindings.length > 0) {
       const metadataBySeriesKey = getTimelineCounterMetadata(context);
@@ -1543,6 +1610,15 @@ function renderHotspots(context) {
             metadataBySeriesKey,
           });
 
+          // Keep the epoch as a string for exact arithmetic in the Java renderer.
+          // Missing fields and "0" retain recording-relative timestamps.
+          // This approximates the origin; clock drift and NeoProf's unexported
+          // capture trim offset remain uncorrected.
+          if (captureMetadata.start_capture_clock_realtime_str !== '0') {
+            timelineOffsetEpochNs =
+              captureMetadata.start_capture_clock_realtime_str;
+          }
+
           renderers.push(...timelineSourceBundle.renderers);
           visualizations.push(...timelineVisualization.visualizations);
         }
@@ -1570,6 +1646,7 @@ function renderHotspots(context) {
     context,
     'tool/neoprof/0/java/parquet',
     visualizations,
+    timelineOffsetEpochNs,
   );
 
   // Code Hotspots uses the shared zoom bar as its only time-axis title.

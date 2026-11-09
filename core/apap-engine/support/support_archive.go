@@ -54,7 +54,7 @@ func createArchive(ctx context.Context, sourceDir, outputDir, archiveBase string
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := os.Rename(tmpPath, dest); err != nil {
+	if err := util.AtomicReplaceFile(tmpPath, dest); err != nil {
 		return "", fmt.Errorf("failed to move support package archive to %s: %w", dest, err)
 	}
 	return dest, nil

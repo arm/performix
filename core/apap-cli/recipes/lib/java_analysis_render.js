@@ -43,12 +43,14 @@ function getSelectedProcessId(context) {
  * @param {import("../docs/jsdocs").RenderExecutionContext} context
  * @param {string} ownerParquetRoot
  * @param {any[]} existingVisualizations
+ * @param {string} [timelineOffsetEpochNs] Timeline offset in nanoseconds as a decimal-string epoch timestamp. Used to align Java timeline events with another timeline. Defaults to recording_start_epoch_ns when omitted.
  * @returns {import("../docs/jsdocs").RecipeRenderOutput} Includes the existing visualizations with Java data composed in, without modifying the inputs.
  */
 function buildJavaAnalysisRender(
   context,
   ownerParquetRoot,
   existingVisualizations = [],
+  timelineOffsetEpochNs,
 ) {
   if (context.getRunDescriptions().length !== 1) {
     return emptyJavaRender(existingVisualizations);
@@ -66,7 +68,12 @@ function buildJavaAnalysisRender(
 
   const visible = predicate !== 'FALSE';
   const summary = buildJavaSummary(components, predicate, visible);
-  const heap = buildHeapTimeline(components, predicate, visible);
+  const heap = buildHeapTimeline(
+    components,
+    predicate,
+    visible,
+    timelineOffsetEpochNs,
+  );
   const hasTimeline = existingVisualizations.some(
     ({ id }) => id === 'timeline',
   );
@@ -194,6 +201,19 @@ function buildRawJavaRenderers(JFR_COMPONENTS) {
     ORDER BY recording_id, property_key`,
   );
 
+  const flagsRenderer = makeSQLRenderer(
+    'jvm_flags',
+    `SELECT
+      CAST(recording_id AS HUGEINT) AS "Recording",
+      CAST(event_start_epoch_ns AS BIGINT) AS "Event Start (epoch ns)",
+      name AS "Flag",
+      CAST(value AS VARCHAR) AS "Value",
+      origin AS "Origin",
+      type AS "Type"
+    FROM read_parquet({{path:${JFR_COMPONENTS.flags}}})
+    ORDER BY recording_id, name, event_start_epoch_ns`,
+  );
+
   const heapSummaryRenderer = makeSQLRenderer(
     'jvm_heap_summary',
     `WITH heap_phases AS (
@@ -285,6 +305,7 @@ function buildRawJavaRenderers(JFR_COMPONENTS) {
     recordingsRenderer,
     jvmInfoRenderer,
     systemPropertiesRenderer,
+    flagsRenderer,
     heapSummaryRenderer,
     garbageCollectionRenderer,
   ];
@@ -372,7 +393,26 @@ function buildJavaSummary(JFR_COMPONENTS, recordingPredicate, visible) {
   return { renderer: summaryRenderer, visualization: summaryVisualization };
 }
 
-function buildHeapTimeline(JFR_COMPONENTS, recordingPredicate, visible) {
+function buildHeapTimeline(
+  JFR_COMPONENTS,
+  recordingPredicate,
+  visible,
+  timelineOffsetEpochNs,
+) {
+  if (
+    timelineOffsetEpochNs !== undefined &&
+    (typeof timelineOffsetEpochNs !== 'string' ||
+      !/^\d+$/.test(timelineOffsetEpochNs))
+  ) {
+    throw new Error(
+      'JFR timeline offset must be a decimal-string epoch timestamp',
+    );
+  }
+  const origin =
+    timelineOffsetEpochNs === undefined
+      ? 'recording.recording_start_epoch_ns'
+      : `'${timelineOffsetEpochNs}'`;
+  // Keep epoch arithmetic exact and allow events before the timeline origin.
   const heapTimelineRenderer = makeSQLRenderer(
     'jvm_heap_timeline',
     `WITH selected_recording AS (
@@ -383,7 +423,7 @@ function buildHeapTimeline(JFR_COMPONENTS, recordingPredicate, visible) {
       WHERE ${recordingPredicate}
     )
     SELECT
-      CAST(heap.after_event_start_epoch_ns - recording.recording_start_epoch_ns AS BIGINT) AS time_ns,
+      CAST(heap.after_event_start_epoch_ns AS BIGINT) - CAST(${origin} AS BIGINT) AS time_ns,
       CAST(heap.after_used_bytes AS DOUBLE) / 1048576.0 AS used_after_gc_mib,
       CAST(heap.after_heap_space_committed_size_bytes AS DOUBLE) /
         1048576.0 AS committed_mib,

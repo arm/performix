@@ -112,6 +112,8 @@ func workloadToProto(workload Workload, includeEnvironment bool) *apapproto.Reci
 type RecipeExecutionCtx struct {
 	Target                    engine_target.Target
 	TargetName                string
+	GroupName                 string
+	RunName                   string
 	RecipeName                string
 	Workload                  Workload
 	ToolInstallPath           string // user should be able to specify this
@@ -242,6 +244,8 @@ func (s RecipeRunner) SendRecipeRunToEngine(client apapproto.ApapClient, recipeI
 		TargetName:      &recipeCtx.TargetName,
 		OutputDirectory: recipeCtx.Output,
 		Name:            recipeCtx.RecipeName,
+		RunName:         recipeCtx.RunName,
+		GroupName:       recipeCtx.GroupName,
 		InstallPath:     recipeCtx.ToolInstallPath,
 		DeploymentType:  recipeCtx.ToolDeploymentType,
 	}
@@ -461,6 +465,8 @@ func ProcessRunRecipe(
 	readerService recipeparser.RecipeReader,
 	runnerService Runner,
 	recipeName string,
+	runName string,
+	groupName string,
 	workload Workload,
 	params []string,
 	out io.Writer,
@@ -517,6 +523,8 @@ func ProcessRunRecipe(
 		Workload:                  workload,
 		Params:                    recipeParams,
 		RecipeName:                recipeName,
+		RunName:                   runName,
+		GroupName:                 groupName,
 		HostSourceCodePaths:       hostSourceCodePaths,
 		NoCleanupWorkingArea:      noCleanupWorkingArea,
 		DetachBackgroundTransfers: detachBackgroundTransfers,

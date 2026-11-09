@@ -8,13 +8,16 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/grouping"
+	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/clijson"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/mcpserver"
 )
@@ -114,6 +117,50 @@ func TestMCPStartSourceSharingFlag(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, runner.called)
 			assert.Equal(t, tc.acknowledged, gotOptions.SourceSharingAcknowledged)
+		})
+	}
+}
+
+func TestMCPStartProfilingFocusConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		yaml    string
+		env     string
+		enabled bool
+	}{
+		{name: "default disabled"},
+		{name: "YAML enabled", yaml: "enable-profiling-focus: true", enabled: true},
+		{name: "environment enabled", env: "true", enabled: true},
+		{name: "GUI disabled overrides YAML", yaml: "enable-profiling-focus: true", env: "0"},
+		{name: "GUI enabled overrides YAML", yaml: "enable-profiling-focus: false", env: "1", enabled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			serverconfig.RegisterFeatureDefaults(viper.GetViper())
+			viper.SetEnvPrefix("APXD")
+			viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+			viper.AutomaticEnv()
+			t.Setenv("APXD_ENABLE_PROFILING_FOCUS", tc.env)
+			viper.SetConfigType("yaml")
+			require.NoError(t, viper.ReadConfig(strings.NewReader(tc.yaml)))
+
+			runner := &fakeRunner{}
+			var gotOptions mcpserver.MCPServerOptions
+			cmd := newMCPStartCmd(func(options mcpserver.MCPServerOptions) MCPRunner {
+				gotOptions = options
+				return runner
+			})
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs([]string{})
+
+			_, err := cmd.ExecuteC()
+
+			require.NoError(t, err)
+			require.True(t, runner.called)
+			assert.Equal(t, tc.enabled, gotOptions.ProfilingFocusEnabled)
+			assert.Equal(t, gotOptions.ProfilingFocusEnabled, serverconfig.FromViper().FeatureFlags.ProfilingFocus)
 		})
 	}
 }

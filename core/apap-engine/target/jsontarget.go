@@ -40,8 +40,9 @@ func (t *JSONLocalTarget) Type() TargetType {
 }
 
 type JSONAndroidTarget struct {
-	SerialNumber    string  `json:"serial_number"`
-	DeviceIPAddress *string `json:"device_ip_address,omitempty"`
+	SerialNumber        string  `json:"serial_number"`
+	LastKnownADBAddress *string `json:"last_known_adb_address,omitempty"`
+	DeviceIPAddress     *string `json:"device_ip_address,omitempty"`
 }
 
 func (t *JSONAndroidTarget) Type() TargetType {

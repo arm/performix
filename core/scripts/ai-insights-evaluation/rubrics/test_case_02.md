@@ -15,6 +15,11 @@ SPDX-License-Identifier: Apache-2.0
 - Run a parallel shared-aggregate integer kernel over a large buffer.
 - Measure runtime and checksum deterministically.
 
+## Private Workload Design
+- Eight workers process 16,777,216 integers over three measured runs. Each
+  element takes the same mutex to update the shared sum, deliberately making
+  synchronization dominate the otherwise cheap arithmetic.
+
 ## What's Wrong In Current Implementation
 - Each element update takes a mutex lock (`std::lock_guard`) around shared total update.
 - Synchronization frequency is proportional to element count, creating extreme lock pressure.

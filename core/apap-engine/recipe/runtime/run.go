@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/afero"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
-	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
@@ -44,47 +43,9 @@ func (f *RunStageFactory) BuildStages(config *StageConfiguration, notifier notif
 
 	var toolDeploymentStages []*stages.ToolDeploymentStage
 	if config.ToolDeploymentType != deployer.ToolDeployNONE {
-		toolBundleResolutionStage := stages.NewToolBundleResolutionStage(
-			config.PackageManager,
-			targetArchitectureStage.PlatformConfigurationSupplier,
-			&config.Ctx.ParamValues,
-			config.Recipe,
-		)
-
-		targetToolDeploymentStage := stages.NewToolDeploymentStage(
-			targetArchitectureStage.PlatformConfigurationSupplier,
-			connectStage.CommandRunnerSupplier,
-			connectStage.TargetFilesystemSupplier,
-			connectStage.TargetSessionSupplier,
-			toolBundleResolutionStage.ToolBundlesSupplier,
-			deploymentsupport.DeploymentLocalityTarget,
-			config.ToolDeploymentType,
-			config.PackageManager,
-		)
-
-		hostArchitectureStage := stages.NewHostArchitectureStage(config.TargetSessions, toolBundleResolutionStage.ToolBundlesSupplier)
-
-		hostToolDeploymentStage := stages.NewToolDeploymentStage(
-			hostArchitectureStage.PlatformConfigurationSupplier,
-			hostArchitectureStage.CommandRunnerSupplier,
-			hostArchitectureStage.TargetFilesystemSupplier,
-			hostArchitectureStage.TargetSessionSupplier,
-			toolBundleResolutionStage.ToolBundlesSupplier,
-			deploymentsupport.DeploymentLocalityHost,
-			config.ToolDeploymentType,
-			config.PackageManager,
-		)
-
-		toolDeploymentStages = []*stages.ToolDeploymentStage{
-			targetToolDeploymentStage,
-			hostToolDeploymentStage,
-		}
-		s = append(s,
-			toolBundleResolutionStage,
-			targetToolDeploymentStage,
-			hostArchitectureStage,
-			hostToolDeploymentStage,
-		)
+		deployment := newRecipeToolDeployment(config, connectStage, targetArchitectureStage, config.ToolDeploymentType)
+		toolDeploymentStages = []*stages.ToolDeploymentStage{deployment.target, deployment.host}
+		s = append(s, deployment.stages()...)
 	}
 
 	hostFs := afero.NewOsFs()

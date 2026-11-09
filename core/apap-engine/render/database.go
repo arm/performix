@@ -22,9 +22,11 @@ import (
 )
 
 type Database struct {
-	DB      *sql.DB   // logged DB (may be wrapped)
-	Conn    *sql.Conn // logged connection
-	release func()
+	DB            *sql.DB   // logged DB (may be wrapped)
+	Conn          *sql.Conn // logged connection
+	release       func()
+	instanceState *sync.Map
+	connector     *duckdb.Connector
 }
 
 // CheckpointDatabase asks DuckDB to checkpoint the session database, which also triggers compression
@@ -76,6 +78,7 @@ func (d driverWithPreOpenedConnector) Open(name string) (driver.Conn, error) {
 type DuckDBConnector struct {
 	connector *duckdb.Connector
 	db        *sql.DB
+	state     sync.Map
 }
 
 // DuckDBCompressedCatalogName is the attached in-memory catalog used for compressed ATP render storage.
@@ -297,10 +300,13 @@ func (f *DuckDBFactory) Connect(key string) (*Database, error) {
 	defer sc.MaybeCleanup(func() { conn.Close() })
 
 	sc.CancelCleanup()
+	state, connector := globalInstanceMap.state(key)
 	return &Database{
-		DB:      db,
-		Conn:    conn,
-		release: releaseDb,
+		DB:            db,
+		Conn:          conn,
+		release:       releaseDb,
+		instanceState: state,
+		connector:     connector,
 	}, nil
 }
 
@@ -339,4 +345,40 @@ func GetRawDuckDBConn(dc driver.Conn) (*duckdb.Conn, error) {
 		}
 	}
 	return nil, fmt.Errorf("cannot unwrap to *duckdb.Conn from %T", dc)
+}
+
+// LoadOrStoreInstanceState retains extension state for exactly the lifetime of this shared
+// DuckDB instance. Values must not retain session data after its owner closes. If the value is
+// already present, it is returned and the new value is discarded.
+func (d *Database) LoadOrStoreInstanceState(key string, value any) any {
+	actual, _ := d.instanceState.LoadOrStore(key, value)
+	return actual
+}
+
+func (c *DuckDBInstanceMap) state(key string) (*sync.Map, *duckdb.Connector) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return &c.connector[key].state, c.connector[key].connector
+}
+
+// borrowedConnector opens new native connections without transferring ownership
+// of the shared DuckDB connector to the temporary SQL pool.
+type borrowedConnector struct{ connector *duckdb.Connector }
+
+func (c borrowedConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	return c.connector.Connect(ctx)
+}
+func (c borrowedConnector) Driver() driver.Driver { return duckdb.Driver{} }
+
+// WithNativeConnection runs registration APIs requiring an unwrapped DuckDB
+// connection, including when normal queries use the SQL logging adapter.
+func (d *Database) WithNativeConnection(ctx context.Context, fn func(*sql.Conn) error) error {
+	db := sql.OpenDB(borrowedConnector{connector: d.connector})
+	defer db.Close()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return fn(conn)
 }

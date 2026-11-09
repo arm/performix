@@ -12,7 +12,6 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
-from urllib.error import HTTPError
 
 from fastcore.foundation import L
 from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import Trace, TrackEvent
@@ -1316,12 +1315,16 @@ jobs:
 
 class GitHubClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_workflow_access_errors_are_classified_without_hiding_server_errors(self):
+        class FakeHTTPError(Exception):
+            def __init__(self, code):
+                self.code = code
+
         class FakeApi:
             def __init__(self):
                 self.repos = self
 
             async def get_content(self, **params):
-                raise HTTPError("https://api.github.com/contents", code, "failure", {}, None)
+                raise FakeHTTPError(code)
 
         for code in (401, 403, 404, 500):
             with self.subTest(code=code), patch.dict(os.environ, {"GITHUB_TOKEN": "test"}), patch(

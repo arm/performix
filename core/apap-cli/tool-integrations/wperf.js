@@ -4,7 +4,7 @@
 // @ts-check
 
 // The bundle version should be updated manually when either wperf or the wperf helper is updated.
-const wperfBundleVersion = '1.0.1';
+const wperfBundleVersion = '1.0.2';
 const wperfExecutableName = 'wperf.exe';
 const wperfHelperExecutableName = 'wperf-helper.exe';
 const wperfDriverLauncherExecutableName = 'wperf-devgen.exe';
@@ -56,11 +56,14 @@ let tool = {
     {
       id: 'mode',
       label: 'Profiling mode',
-      description: `Select the profiling mode used when invoking \`${toolNameWperf}\`. Currently, only \`samples\` is supported - collect CPU samples.`,
+      description: `Select the profiling mode used when invoking \`${toolNameWperf}\`. Choose \`samples\` for hotspots or \`metrics\` for sampled CPU metrics.`,
       config: {
         type: 'radio',
         defaultValue: 'samples',
-        options: [{ value: 'samples', label: 'Samples' }],
+        options: [
+          { value: 'samples', label: 'Samples' },
+          { value: 'metrics', label: 'Metrics' },
+        ],
       },
     },
     {
@@ -78,6 +81,13 @@ let tool = {
         defaultValue: 'normal',
       },
     },
+    {
+      id: 'metrics_group',
+      label: 'Metric groups',
+      description:
+        'Comma-separated CPU metric groups. Omit to collect all supported groups.',
+      config: { type: 'input', defaultValue: '' },
+    },
   ],
 
   probe: async (engine, ctx) => {
@@ -85,7 +95,8 @@ let tool = {
     let available = true;
     let deployment = await setupEnv(engine, ctx);
 
-    if (ctx.workload.type === 'systemWide') {
+    if (ctx.workload?.type === 'systemWide') {
+      available = false;
       advice.push({
         level: 'error',
         messageCode: readinessMessageCode,
@@ -114,7 +125,30 @@ let tool = {
         },
       });
     }
-    return { available: available, advice: advice, capabilities: {} };
+    if (available && ctx.params.mode === 'metrics') {
+      try {
+        // The target-specific catalog also opens the WindowsPerf driver.
+        const setupResult = await setup(engine, ctx, false);
+        if (setupResult.error) {
+          throw setupResult.error;
+        }
+        const result = await engine.execCommand(
+          buildWperfHelperRecordArgs(ctx, deployment, true),
+          {},
+        );
+        if (result.rc !== 0) {
+          throw wperfHelperRetCodeToError(result.rc, result.stderr);
+        }
+      } catch (error) {
+        available = false;
+        advice.push({
+          level: 'error',
+          messageCode: error.code || readinessMessageCode,
+          metadata: error.metadata || { message: String(error) },
+        });
+      }
+    }
+    return { available, advice, capabilities: {} };
   },
 
   run: async (engine, ctx) => {
@@ -262,14 +296,17 @@ function escapeForPowerShellLiteral(path) {
  * Shared setup logic for probe and other operations.
  * @param {import("../recipes/docs/jsdocs").Engine} engine
  * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ * @param {boolean} reportProgress Readiness probes have no run progress tracker.
  * @returns {Promise<{error: WperfError | null, deployment: WperfDeployment}>}
  */
-async function setup(engine, ctx) {
+async function setup(engine, ctx, reportProgress = true) {
   const deployment = await setupEnv(engine, ctx);
   const progressStage = `Getting ready for ${toolNameWperf} collection`;
 
-  engine.startProgressTracker(progressStage);
-  engine.updateProgress(progressStage, 'Checking deployment', 0.0);
+  if (reportProgress) {
+    engine.startProgressTracker(progressStage);
+    engine.updateProgress(progressStage, 'Checking deployment', 0.0);
+  }
   try {
     const deploymentDirExists = await checkDirExists(
       engine,
@@ -303,18 +340,22 @@ async function setup(engine, ctx) {
       };
     }
 
-    engine.updateProgress(progressStage, `Setting up ${toolNameWperf}`, 20.0);
+    if (reportProgress) {
+      engine.updateProgress(progressStage, `Setting up ${toolNameWperf}`, 20.0);
+    }
     const setupResult = await runWperfHelperSetup(engine, deployment);
     if (setupResult.rc !== 0) {
       throw wperfHelperRetCodeToError(setupResult.rc, setupResult.stderr);
     }
 
     for (let attempt = 0; attempt < 2; attempt++) {
-      engine.updateProgress(
-        progressStage,
-        `Checking ${toolNameWperf} driver`,
-        40.0 + attempt * 40.0,
-      );
+      if (reportProgress) {
+        engine.updateProgress(
+          progressStage,
+          `Checking ${toolNameWperf} driver`,
+          40.0 + attempt * 40.0,
+        );
+      }
 
       const wperfCheckError = await runWperfSanityCheck(engine, deployment);
       if (!wperfCheckError) {
@@ -328,11 +369,13 @@ async function setup(engine, ctx) {
           // If we've already attempted to launch the driver, return the error instead of trying again
           return { error: wperfCheckError, deployment };
         }
-        engine.updateProgress(
-          progressStage,
-          `Starting ${toolNameWperf} driver`,
-          60.0,
-        );
+        if (reportProgress) {
+          engine.updateProgress(
+            progressStage,
+            `Starting ${toolNameWperf} driver`,
+            60.0,
+          );
+        }
 
         const result = await launchWperfDriver(engine, deployment);
         if (result.rc !== 0) {
@@ -359,7 +402,9 @@ async function setup(engine, ctx) {
       deployment,
     };
   } finally {
-    engine.endProgress(progressStage);
+    if (reportProgress) {
+      engine.endProgress(progressStage);
+    }
   }
 
   return { error: null, deployment };
@@ -614,8 +659,8 @@ function checkRunRequestConfiguration(ctx) {
   const samplingFrequency = ctx.params['sampling_frequency'];
   const workloadType = ctx.workload.type;
 
-  if (mode !== 'samples') {
-    return "Only 'samples' collection  is currently supported.";
+  if (mode !== 'samples' && mode !== 'metrics') {
+    return "Only 'samples' and 'metrics' collection are supported.";
   }
 
   if (
@@ -650,7 +695,7 @@ function checkRunRequestConfiguration(ctx) {
  * @param {WperfDeployment} deployment
  * @returns {string[]}
  */
-function buildWperfHelperRecordArgs(ctx, deployment) {
+function buildWperfHelperRecordArgs(ctx, deployment, dryRun = false) {
   const mode = ctx.params['mode'];
   const samplingFrequency = ctx.params['sampling_frequency'];
   const timeout = ctx.timeout ? ctx.timeout.toString() : '0';
@@ -659,15 +704,23 @@ function buildWperfHelperRecordArgs(ctx, deployment) {
     deployment.wperfHelperExecutablePath,
     'record',
     mode,
-    '--output-dir',
-    ctx.metadata.captureDirectory,
     '--frequency',
     samplingFrequency,
+  ];
+
+  if (mode === 'metrics' && ctx.params.metrics_group) {
+    args.push('--metrics-group', ctx.params.metrics_group);
+  }
+
+  if (dryRun) return [...args, '--dry-run'];
+
+  args.push(
+    '--output-dir',
+    ctx.metadata.captureDirectory,
     '--duration',
     timeout,
     '--callstacks',
-  ];
-
+  );
   if (ctx.workload.type === 'launch') {
     args.push('--cmd');
     args.push(normalizeWindowsPath(ctx.workload.rawCommand)); // Make sure paths are Windows-style
@@ -711,18 +764,21 @@ function emitCommonFiles(engine, outputDir) {
     { name: 'sl-collect-symbols', version: '1.1' },
   );
   engine.emitOutput(
-    pathJoin(outputDir, 'sources-capture-periodic_sampling*'),
-    pathJoin('output', 'sources-capture-periodic_sampling*'),
-    { name: 'sl-collect-source-line-attribution', version: '1.0' },
+    pathJoin(outputDir, 'wperf_stdout.txt'),
+    'capture_log.txt',
+    {
+      name: 'log-text',
+      version: '1.0',
+    },
   );
-  engine.emitOutput(pathJoin(outputDir, 'stdout.txt'), 'capture_log.txt', {
-    name: 'log-text',
-    version: '1.0',
-  });
-  engine.emitOutput(pathJoin(outputDir, 'stderr.txt'), 'capture_err.txt', {
-    name: 'log-text',
-    version: '1.0',
-  });
+  engine.emitOutput(
+    pathJoin(outputDir, 'wperf_stderr.txt'),
+    'capture_err.txt',
+    {
+      name: 'log-text',
+      version: '1.0',
+    },
+  );
   for (let log_type of ['helper', 'analysis']) {
     engine.emitOutput(
       pathJoin(outputDir, `${log_type}_log.txt`),
@@ -744,6 +800,11 @@ function emitCommonFiles(engine, outputDir) {
  * @returns {void}
  */
 function emitHotspotFiles(engine, outputDir) {
+  engine.emitOutput(
+    pathJoin(outputDir, 'sources-capture-periodic_sampling*'),
+    pathJoin('output', 'sources-capture-periodic_sampling*'),
+    { name: 'sl-collect-source-line-attribution', version: '1.0' },
+  );
   engine.emitOutput(
     pathJoin(outputDir, 'call_tree_samples.json'),
     pathJoin('output', 'call_tree_samples.json'),
@@ -776,6 +837,8 @@ function emitAllFiles(ctx, engine) {
   emitCommonFiles(engine, ctx.metadata.captureDirectory);
   if (ctx.params['mode'] === 'samples') {
     emitHotspotFiles(engine, ctx.metadata.captureDirectory);
+  } else if (ctx.params.mode === 'metrics') {
+    emitMetricsFiles(engine, ctx.metadata.captureDirectory);
   }
 }
 
@@ -816,4 +879,33 @@ function pathJoin(...parts) {
  */
 function normalizeWindowsPath(path) {
   return path.replace(/\//g, '\\').replace(/\\\\+/g, '\\');
+}
+
+function emitMetricsFiles(engine, outputDir) {
+  for (const [filename, name, version] of [
+    ['call_tree.json', 'sl-collect-call-tree', '1.0'],
+    ['callpath_self_metrics.json', 'sl-collect-metrics', '1.0'],
+    ['callpath_total_metrics.json', 'sl-collect-metrics', '1.0'],
+    ['functions-capture-metrics.csv', 'sl-collect-flat-functions-csv', '1.1'],
+    ['sampling_metadata.json', 'wperf-sampling-metadata', '1.0'],
+  ]) {
+    engine.emitOutput(
+      pathJoin(outputDir, filename),
+      pathJoin('output', filename),
+      { name, version },
+    );
+  }
+  for (const filename of ['wperf_data.json', 'sampling_config.json']) {
+    engine.emitOutput(
+      pathJoin(outputDir, filename),
+      pathJoin('raw', filename),
+      { name: 'wperf-native-capture', version: '1.0' },
+    );
+  }
+  for (const filename of ['workload_stdout.txt', 'workload_stderr.txt']) {
+    engine.emitOutput(pathJoin(outputDir, filename), filename, {
+      name: 'log-text',
+      version: '1.0',
+    });
+  }
 }

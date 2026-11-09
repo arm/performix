@@ -25,3 +25,6 @@ type InitializeCompletionListener interface {
 type RendererFactory interface {
 	NewRenderer(rendererName string) (Renderer, error)
 }
+
+// RendererCloser releases session-owned renderer state before its schema is removed.
+type RendererCloser interface{ Close() }

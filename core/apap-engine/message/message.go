@@ -544,15 +544,24 @@ func ReconstructFromChain(chain *apapproto.ErrorChain) error {
 	return fromNode(chain.GetRoot())
 }
 
-// plainErr is a helper function that builds a plain node.
+// reconstructedPlainError retains the serialized text, which already includes
+// its causes, while keeping those causes available for error traversal.
+type reconstructedPlainError struct {
+	text  string
+	cause error
+}
+
+func (e *reconstructedPlainError) Error() string { return e.text }
+func (e *reconstructedPlainError) Unwrap() error { return e.cause }
+
 func plainFrom(msg string, children []error) error {
 	switch len(children) {
 	case 0:
 		return errors.New(msg)
 	case 1:
-		return fmt.Errorf("%s: %w", msg, children[0])
+		return &reconstructedPlainError{text: msg, cause: children[0]}
 	default:
-		return fmt.Errorf("%s: %w", msg, errors.Join(children...))
+		return &reconstructedPlainError{text: msg, cause: errors.Join(children...)}
 	}
 }
 

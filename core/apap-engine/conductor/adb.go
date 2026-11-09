@@ -5,6 +5,7 @@ package conductor
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -25,6 +26,8 @@ type ADBClient struct {
 	runner          ADBRunner
 	mu              sync.Mutex
 	connected       bool
+	adbAddress      string
+	forwards        map[*adbForwardConn]struct{}
 }
 
 func NewADBClient(serialNumber string, deviceIPAddress *string, runner ADBRunner) *ADBClient {
@@ -36,17 +39,46 @@ func NewADBClient(serialNumber string, deviceIPAddress *string, runner ADBRunner
 }
 
 func (c *ADBClient) CheckHealth() error {
-	if _, _, err := c.adbDevice("get-state"); err != nil {
-		if adbError := message.IsMessage(err); adbError != nil && adbError.Code() == message.EngineConductorAdbAdbNotFound {
-			return adbError
-		}
-		return fmt.Errorf("health check for Android target failed: %w", err)
+	return c.CheckHealthContext(context.Background())
+}
+
+// CheckHealthContext also reports the identity resolved during this check.
+func (c *ADBClient) CheckHealthContext(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	device, err := ResolveADBDeviceBySerial(c.serialNumber, c.deviceIPAddress, c.runner)
+	if err != nil {
+		c.connected = false
+		return err
+	}
+	reportADBDevice(ctx, device)
+	if c.adbAddress != "" && c.adbAddress != device.Address {
+		c.connected = false
+		// The session must discard cached agents and their forwarded connections.
+		return fmt.Errorf("android ADB transport changed from %q to %q", c.adbAddress, device.Address)
+	}
+	c.adbAddress = device.Address
+	_, _, err = c.runner.Run("-s", c.adbAddress, "get-state")
+	c.connected = err == nil
+	if err != nil {
+		return message.New(message.EngineConductorAdbDeviceNotFound).WithMetadata(map[string]string{"serial": c.serialNumber}).WithCause(err)
 	}
 	return nil
 }
 
 func (c *ADBClient) Close() error {
-	return nil
+	c.mu.Lock()
+	forwards := make([]*adbForwardConn, 0, len(c.forwards))
+	for forward := range c.forwards {
+		forwards = append(forwards, forward)
+	}
+	c.connected = false
+	c.mu.Unlock()
+	var errs []error
+	for _, forward := range forwards {
+		errs = append(errs, forward.Close())
+	}
+	return errors.Join(errs...)
 }
 
 func (c *ADBClient) CommandRunner() CommandRunner {
@@ -61,60 +93,31 @@ func (c *ADBClient) ensureConnected() error {
 	if c.connected {
 		return nil
 	}
-	devices, err := c.adbDevices()
+	device, err := ResolveADBDeviceBySerial(c.serialNumber, c.deviceIPAddress, c.runner)
 	if err != nil {
 		return err
 	}
-	if adbDevicesHasDevice(devices, c.serialNumber) {
-		c.connected = true
-		return nil
-	}
-	if c.deviceIPAddress == nil || *c.deviceIPAddress == "" {
-		return fmt.Errorf("android device %q is not visible in adb devices and no device IP address is configured", c.serialNumber)
-	}
-	if err := c.adbConnect(*c.deviceIPAddress); err != nil {
-		return err
-	}
+	c.adbAddress = device.Address
 	c.connected = true
 	return nil
 }
 
-func (c *ADBClient) adbDevices() (string, error) {
-	stdout, _, err := c.runner.Run("devices")
-	return stdout, err
-}
-
-func (c *ADBClient) adbConnect(deviceIPAddress string) error {
-	_, _, err := c.runner.Run("connect", deviceIPAddress)
-	return err
-}
-
-func adbDevicesHasDevice(output string, serialNumber string) bool {
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == serialNumber && fields[1] == "device" {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *ADBClient) adb(args ...string) (string, string, error) {
+func (c *ADBClient) adbDevice(args ...string) (string, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.adbDeviceLocked(args...)
+}
+
+func (c *ADBClient) adbDeviceLocked(args ...string) (string, string, error) {
 	if err := c.ensureConnected(); err != nil {
 		return "", "", err
 	}
-	stdout, stderr, err := c.runner.Run(args...)
+	deviceArgs := append([]string{"-s", c.adbAddress}, args...)
+	stdout, stderr, err := c.runner.Run(deviceArgs...)
 	if err != nil {
 		c.connected = false
 	}
 	return stdout, stderr, err
-}
-
-func (c *ADBClient) adbDevice(args ...string) (string, string, error) {
-	deviceArgs := append([]string{"-s", c.serialNumber}, args...)
-	return c.adb(deviceArgs...)
 }
 
 // COMMAND RUNNER
@@ -152,7 +155,7 @@ func (r *ExecADBRunner) Run(args ...string) (string, string, error) {
 	if adb == "" {
 		return "", "", message.Wrap(message.EngineConductorAdbAdbNotFound, exec.ErrNotFound)
 	}
-	cmd := exec.Command(adb, args...)
+	cmd := newLocalCommand(adb, args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
@@ -174,6 +177,7 @@ type adbForwardConn struct {
 	net.Conn
 	client    *ADBClient
 	localSpec string
+	address   string
 	once      sync.Once
 	closeErr  error
 }
@@ -189,25 +193,37 @@ func (c *ADBClient) Dial(network, addr string) (net.Conn, error) {
 		return nil, err
 	}
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	localSpec := fmt.Sprintf("tcp:%d", localPort)
 	remoteSpec := fmt.Sprintf("tcp:%d", remotePort)
-	if _, _, err := c.adbDevice("forward", localSpec, remoteSpec); err != nil {
+	if _, _, err := c.adbDeviceLocked("forward", localSpec, remoteSpec); err != nil {
 		return nil, err
 	}
 
 	conn, err := net.Dial(network, net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)))
 	if err != nil {
-		_, _, _ = c.adbDevice("forward", "--remove", localSpec)
+		_, _, _ = c.runner.Run("-s", c.adbAddress, "forward", "--remove", localSpec)
 		return nil, err
 	}
 
-	return &adbForwardConn{Conn: conn, client: c, localSpec: localSpec}, nil
+	forward := &adbForwardConn{Conn: conn, client: c, localSpec: localSpec, address: c.adbAddress}
+	if c.forwards == nil {
+		c.forwards = make(map[*adbForwardConn]struct{})
+	}
+	c.forwards[forward] = struct{}{}
+	return forward, nil
 }
 
 func (c *adbForwardConn) Close() error {
 	c.once.Do(func() {
 		connErr := c.Conn.Close()
-		_, _, forwardErr := c.client.adbDevice("forward", "--remove", c.localSpec)
+		// Cleanup belongs to the transport that created the forward, even after a
+		// device reconnects at a different address.
+		c.client.mu.Lock()
+		defer c.client.mu.Unlock()
+		_, _, forwardErr := c.client.runner.Run("-s", c.address, "forward", "--remove", c.localSpec)
+		delete(c.client.forwards, c)
 		c.closeErr = errors.Join(connErr, forwardErr)
 	})
 	return c.closeErr

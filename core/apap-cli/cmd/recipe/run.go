@@ -34,6 +34,8 @@ func NewRunCommand(cc client.ClientConnector,
 	runnerService recipe.Runner,
 	targetService target.TargetManagerService,
 	loginService targetlogin.TargetLoginService) *cobra.Command {
+	var runName string
+	var groupName string
 	var params []string
 	var envs []string
 	var workingDir string
@@ -117,6 +119,8 @@ func NewRunCommand(cc client.ClientConnector,
 				readerService,
 				runnerService,
 				args[0],
+				runName,
+				groupName,
 				workloadCtx,
 				params,
 				cmd.OutOrStdout(),
@@ -129,6 +133,8 @@ func NewRunCommand(cc client.ClientConnector,
 				target)
 		},
 	}
+	runCmd.Flags().StringVar(&groupName, "group", "", "Specifies the run group (defaults to ungrouped)")
+	runCmd.Flags().StringVar(&runName, "name", "", "Specifies the run name (defaults to a generated name)")
 	runCmd.Flags().StringArrayVar(&params, "param", nil, "Changes the default recipe parameters")
 	runCmd.Flags().StringArrayVar(&envs, "env", nil, "Specifies the environment variables to expose to the launched workload (repeat for multiple variables)")
 	runCmd.Flags().StringVar(&workingDir, "working-dir", "", "Specifies the working directory for the launch workload (defaults to your home directory on the target)")

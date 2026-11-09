@@ -11,6 +11,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/userdirs"
 )
@@ -67,15 +68,19 @@ func TestCreateFile(t *testing.T) {
 	})
 
 	t.Run("Does nothing if file already exists", func(t *testing.T) {
-		tempDir := filepath.Join(os.TempDir(), "foo")
-		defer os.RemoveAll(tempDir)
-		filePath := filepath.Join(tempDir, "bar.txt")
+		// Given
+		filePath := filepath.Join(t.TempDir(), "bar.txt")
+		content := []byte("existing log contents\n")
+		require.NoError(t, os.WriteFile(filePath, content, 0o600))
 
+		// When
 		err := createFile(filePath)
-		assert.NoError(t, err)
 
-		err = createFile(filePath)
+		// Then
 		assert.NoError(t, err)
+		actual, err := os.ReadFile(filePath)
+		require.NoError(t, err)
+		assert.Equal(t, content, actual)
 	})
 }
 

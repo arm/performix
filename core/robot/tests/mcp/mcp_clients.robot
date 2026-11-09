@@ -89,10 +89,10 @@ Codex Can Call Run Query
   ${succeeded} =  When Codex Can Call Run Query
   Then Should Be True  ${succeeded}
 
-Codex Can Generate Curated AI Insights
-  [Documentation]  Verify curated insight generation and payload-details retrieval.
+Codex Can Generate Code Hotspots AI Insights
+  [Documentation]  Verify Code Hotspots insight generation returns a render session and query guidance.
   Given MCP Client Smoke Tests Are Prepared
-  ${succeeded} =  When Codex Can Generate Curated AI Insights
+  ${succeeded} =  When Codex Can Generate Code Hotspots AI Insights
   Then Should Be True  ${succeeded}
 
 Codex Can Generate Query-Based AI Insights

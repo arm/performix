@@ -13,6 +13,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
@@ -33,7 +34,10 @@ const (
 	ToolDeployNONE      ToolDeploymentMode = 0
 	ToolDeployAUTO      ToolDeploymentMode = 1
 	ToolDeployAUTOFORCE ToolDeploymentMode = 2
-	ToolDeployCHECK     ToolDeploymentMode = 3
+	// ToolDeployCHECK reports whether tools are deployed or not, without deploying them.
+	ToolDeployCHECK ToolDeploymentMode = 3
+	// ToolDeployENSURE fails if tools are not deployed.
+	ToolDeployENSURE ToolDeploymentMode = 4
 )
 
 type ToolPaths struct {
@@ -92,24 +96,29 @@ func getToolTargetPath(targetType conductor.PlatformConfiguration, toolInfo tool
 	}
 }
 
-func ReconcileTool(targetType conductor.PlatformConfiguration, toolInfo tool.ToolInfo, deployMode ToolDeploymentMode, cmdRunner conductor.CommandRunner, remoteFS conductor.TargetFilesystem, toolStore ToolPaths, progUpdate []conductor.ReportProgressRequest) (ReconcileResult, error) {
+func ReconcileTool(targetType conductor.PlatformConfiguration, toolInfo tool.ToolInfo, locality deploymentsupport.DeploymentLocality, deployMode ToolDeploymentMode, cmdRunner conductor.CommandRunner, remoteFS conductor.TargetFilesystem, toolStore ToolPaths, progUpdate []conductor.ReportProgressRequest) (ReconcileResult, error) {
 	normalisedDstDir := filepath.ToSlash(toolStore.DstDir)
 
 	log.Infof("Checking tool deployment %s %s", toolInfo.Name, toolInfo.Version)
 	toolDeployed := isToolDeployed(toolStore, toolInfo, targetType, remoteFS)
 
-	// Handle check deployment type first
-	if deployMode == ToolDeployCHECK {
-		log.Infof("Checking tool deployment %s %s", toolInfo.Name, toolInfo.Version)
+	// Handle modes that only check deployment first.
+	if deployMode == ToolDeployCHECK || deployMode == ToolDeployENSURE {
 		if toolDeployed {
 			// Tool already deployed, no action is needed
 			log.Infof("Tool already deployed, no deployment required")
 			return NoAction, nil
-		} else {
-			// Tool not deployed, deploy action is needed
-			log.Infof("Tool not deployed, deployment needed")
-			return Deploy, nil
 		}
+		// Tool not deployed, deploy action is needed
+		log.Infof("Tool not deployed, deployment needed")
+		if deployMode == ToolDeployENSURE {
+			return Deploy, message.New(message.ToolIntegrationsCommonToolNotDeployed).WithMetadata(map[string]string{
+				"tool":       toolInfo.Name,
+				"deployPath": normalisedDstDir,
+				"locality":   string(locality),
+			})
+		}
+		return Deploy, nil
 	}
 
 	// Handle auto (force) deployment

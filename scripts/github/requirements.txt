@@ -4,3 +4,4 @@
 PyYAML>=6.0,<7
 perfetto>=0.58.2,<0.59
 ghapi>=2.1.4,<3
+requests>=2.32.0

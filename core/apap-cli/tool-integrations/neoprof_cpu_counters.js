@@ -3,8 +3,9 @@
 
 // Adapt the deployed collector's native CPU counters to counter.cpu_cycles.
 // Lifecycle:
-// - discover reads counters.xml and events.xml with sl-collect --print, then
+// - discover reads counters.xml and events.xml with sl-record --print, then
 //   resolves a logical availability descriptor and retains the native catalogue.
+// - discoverNativeEvents lists programmable events for available CPU PMUs.
 // - prepare resolves the requested native selections and supplies the collector
 //   configuration. An omitted request preserves defaults; an empty request
 //   explicitly disables counters.
@@ -20,6 +21,7 @@ const { parse: parseXML } = require('performix/xml');
 const {
   CPU_CYCLES: ID,
   CPU_COUNTER_CAPABILITY_COMPONENT_TYPE: TYPE,
+  NATIVE_CPU_COUNTER_CAPABILITY_COMPONENT_TYPE,
 } = require('./tool_capabilities');
 const EMPTY_XML =
   '<?xml version="1.0" encoding="UTF-8"?>\n<configurations revision="3">\n</configurations>\n';
@@ -91,6 +93,22 @@ function integer(text) {
   return number;
 }
 
+function eventDefinitions(events) {
+  const definitions = [];
+  function visit(node) {
+    if (node.name === 'category') {
+      for (const event of children(node, 'event'))
+        definitions.push({
+          category: node.attributes,
+          event: event.attributes,
+        });
+    }
+    for (const child of node.children) visit(child);
+  }
+  visit(events);
+  return definitions;
+}
+
 // counters.xml identifies the actual CPU groups and selectable names; events.xml
 // also contains unrelated catalogue entries and must never determine availability.
 function resolveCatalogue(catalogue) {
@@ -115,18 +133,7 @@ function resolveCatalogue(catalogue) {
     );
     if (available.some((name) => typeof name !== 'string'))
       throw new Error('Missing native counter identity');
-    const definitions = [];
-    function visit(node) {
-      if (node.name === 'category') {
-        for (const event of children(node, 'event'))
-          definitions.push({
-            category: node.attributes,
-            event: event.attributes,
-          });
-      }
-      for (const child of node.children) visit(child);
-    }
-    visit(events);
+    const definitions = eventDefinitions(events);
     const native = new Map();
     let reason;
     for (const cluster of clusters) {
@@ -186,8 +193,78 @@ function resolveCatalogue(catalogue) {
     return { capability: value('available'), native: [...native.values()] };
   } catch (error) {
     throw failure(
-      'common.UNKNOWN_ERROR',
-      `Invalid CPU counter catalogue: ${String(error)}`,
+      'tool_integrations.neoprof.CPU_COUNTER_CATALOGUE_INVALID',
+      error,
+    );
+  }
+}
+
+function resolveNativeEvents(catalogue) {
+  return resolveNativeCatalogue(catalogue).capabilities;
+}
+
+function resolveNativeCatalogue(catalogue) {
+  try {
+    const counters = xmlRoot(catalogue.counters, 'counters');
+    const definitions = eventDefinitions(xmlRoot(catalogue.events, 'events'));
+    const cpus = children(counters, 'cpu').map((node) => node.attributes);
+    const available = children(counters, 'counter').map(
+      (node) => node.attributes.name,
+    );
+    const capabilities = {};
+    const pmus = new Map();
+    for (const { attributes: cluster } of children(counters, 'cluster')) {
+      const pmuID = cluster.name.toLowerCase();
+      const devices = [];
+      for (const cpu of cpus) {
+        if (integer(cpu.cluster) === integer(cluster.id)) {
+          devices.push(integer(cpu.id));
+        }
+      }
+      if (!devices.length) throw new Error('CPU group has no CPU membership');
+      const counterSet = `${cluster.name}_cnt`.toLowerCase();
+      const slots = new Map();
+      for (const name of available) {
+        if (!name.toLowerCase().startsWith(counterSet)) continue;
+        // Programmable counters end in a slot number, for example _cnt0.
+        const slot = name.slice(counterSet.length);
+        if (/^\d+$/.test(slot)) slots.set(Number(slot), name);
+      }
+      pmus.set(pmuID, {
+        name: cluster.name,
+        counters: [...slots].sort(([a], [b]) => a - b).map(([, name]) => name),
+      });
+      // A programmable counter slot must be available on this PMU.
+      if (!slots.size) continue;
+
+      for (const { category, event } of definitions) {
+        if (category.per_cpu !== 'yes') continue;
+        if (category.counter_set?.toLowerCase() !== counterSet) continue;
+        // Expose programmable events.
+        if (event.counter) continue;
+        const hexCode = integer(event.event).toString(16);
+        const eventCode = `0x${hexCode}`;
+        const id = `${pmuID}.${hexCode}`;
+        if (capabilities[id]) continue;
+        const payload = {
+          title: `${event.title}: ${event.name}`,
+          pmu: { id: pmuID, name: category.name },
+          eventCode,
+        };
+        if (event.description) payload.description = event.description;
+        if (event.units) payload.units = event.units;
+        capabilities[id] = {
+          componentType: NATIVE_CPU_COUNTER_CAPABILITY_COMPONENT_TYPE,
+          state: 'available',
+          payload,
+        };
+      }
+    }
+    return { capabilities, pmus };
+  } catch (error) {
+    throw failure(
+      'tool_integrations.neoprof.CPU_COUNTER_CATALOGUE_INVALID',
+      error,
     );
   }
 }
@@ -225,33 +302,56 @@ async function readCatalogue(engine, ctx, command) {
   }
 }
 
-async function discover(engine, ctx, slRecordPath) {
+async function loadCatalogue(engine, ctx, slRecordPath) {
   const catalogue = {};
   for (const name of ['counters', 'events']) {
-    const result = await readCatalogue(engine, ctx, [
-      slRecordPath,
-      '--print',
-      `${name}.xml`,
-    ]);
+    let result;
+    try {
+      result = await readCatalogue(engine, ctx, [
+        slRecordPath,
+        '--print',
+        `${name}.xml`,
+      ]);
+    } catch (error) {
+      if (error?.code) throw error;
+      throw failure(
+        'tool_integrations.neoprof.CPU_COUNTER_DISCOVERY_FAILED',
+        error,
+      );
+    }
     if (result.rc !== 0)
       throw failure(
-        'common.UNKNOWN_ERROR',
-        `CPU counter discovery failed: ${JSON.stringify(result)}`,
+        'tool_integrations.neoprof.CPU_COUNTER_DISCOVERY_FAILED',
+        JSON.stringify(result),
       );
     // Catalogues describe discovered counters, not a guarantee of collection.
     // Individual PMU diagnostics do not invalidate a successful XML response.
-    for (const line of result.stderr
-      .split(/\r?\n/)
-      .map((line) => line.trim())) {
-      if (line) engine.log('warn', line);
+    for (const line of result.stderr.split(/\r?\n/)) {
+      const warning = line.trim();
+      if (warning) engine.log('warn', warning);
     }
     catalogue[name] = result.stdout.replace(/^(?:WARN:[^\r\n]*\r?\n)+/, '');
   }
+  return catalogue;
+}
+
+async function discover(engine, ctx, slRecordPath) {
+  const catalogue = await loadCatalogue(engine, ctx, slRecordPath);
   const resolved = resolveCatalogue(catalogue);
   return {
     [ID]: resolved.capability,
     neoprof_cpu_counter_catalogue: catalogue,
   };
+}
+
+async function discoverNativeEvents(engine, ctx, slRecordPath) {
+  const catalogue = await loadCatalogue(engine, ctx, slRecordPath);
+  const capabilities = resolveNativeEvents(catalogue);
+  if (discoveryRequested(ctx)) {
+    capabilities[ID] = resolveCatalogue(catalogue).capability;
+    capabilities.neoprof_cpu_counter_catalogue = catalogue;
+  }
+  return capabilities;
 }
 
 async function save(engine, ctx, outcome) {
@@ -569,7 +669,9 @@ module.exports = {
   initialProbeCapabilities,
   validateOptions,
   resolveCatalogue,
+  resolveNativeEvents,
   discover,
+  discoverNativeEvents,
   prepare,
   loadSeriesRegistry,
   verify,

@@ -7,6 +7,9 @@
 const { getComparisonFilters } = require('./lib/comparison_filters');
 let tool_name = 'neoprof';
 let tool_version = '1.1.0';
+const TOOL_WPERF = { name: 'wperf', version: '1.0.1' };
+const readinessMessageCode =
+  'engine.recipeparser.js_recipe_stage.READINESS_MESSAGE';
 const CORE_TYPE_RENDER_PARAMETER = 'filter_core_type';
 const {
   collectToolAdvice,
@@ -26,6 +29,12 @@ var recipe = {
   description:
     'Analyze CPU execution efficiency to identify bottlenecks, for example, pipeline stalls and branch mispredictions.',
   deployments: [
+    {
+      appliesTo: [{ architecture: 'aarch64', os: 'Windows' }],
+      dependencies: [
+        { type: 'tool', ...TOOL_WPERF, requiredWhen: { type: 'always' } },
+      ],
+    },
     {
       appliesTo: [{ architecture: 'aarch64', os: 'Linux' }],
       dependencies: [
@@ -418,13 +427,14 @@ function generateNeoprofConfig(workload, params) {
  * @param {import("./docs/jsdocs").ReadyExecutionContext} context
  */
 function readyCPUMicroarchitecture(context) {
+  const windowsTarget = isWindowsTarget(context.targetInfo());
   const firstSupportedCPUTelemetry = getFirstSupportedCPUTelemetry(context);
   if (!firstSupportedCPUTelemetry.telemetrySpecification) {
     return {
       status: 'error',
       advice: [
         {
-          ToolName: tool_name,
+          ToolName: windowsTarget ? TOOL_WPERF.name : tool_name,
           AdviceSeverity: 'error',
           MessageCode: telemetrySpecificationUnavailableMessageCode,
           Metadata: { cpuName: firstSupportedCPUTelemetry.cpuName },
@@ -433,6 +443,8 @@ function readyCPUMicroarchitecture(context) {
       ],
     };
   }
+
+  if (windowsTarget) return readyWindowsMicroarchitecture(context);
 
   let workload = context.getWorkload();
   let samplingFreq = context.getParameter('sampling_freq');
@@ -514,6 +526,16 @@ function computeValidValues(context) {
  * @param {import("./docs/jsdocs").RunExecutionContext} context
  */
 function runCPUMicroarchitecture(context) {
+  if (isWindowsTarget(context.targetInfo())) {
+    const unsupported = unsupportedWindowsOptions(context);
+    if (unsupported.length)
+      throw {
+        code: readinessMessageCode,
+        metadata: { message: unsupported.join(' ') },
+      };
+    context.runTools(generateWindowsConfig(context));
+    return;
+  }
   const sampling_freq = context.getParameter('sampling_freq');
   const workload = context.getWorkload();
   const firstSupportedCPUTelemetry = getFirstSupportedCPUTelemetry(context);
@@ -719,10 +741,25 @@ function enableCoreTypeFilterIfAvailable(
  * @param {import("./docs/jsdocs").RenderExecutionContext} context
  */
 function renderCPUMicroarchitecture(context) {
+  const runTools = context
+    .getRunDescriptions()
+    .map((run) =>
+      run.ToolsUsed?.includes(TOOL_WPERF.name) ? TOOL_WPERF.name : 'neoprof',
+    );
+  if (new Set(runTools).size > 1)
+    throw {
+      code: readinessMessageCode,
+      metadata: {
+        message:
+          'Compare CPU Microarchitecture runs collected with the same tool.',
+      },
+    };
+  const tool_name = runTools[0];
+  const windowsCapture = tool_name === TOOL_WPERF.name;
   const isComparison = context.getRunDescriptions().length === 2;
   const runDescription = context.getRunDescriptions()[0];
   const supportsCoreTypeFiltering =
-    context.isRerenderingEnabled() && !isComparison;
+    context.isRerenderingEnabled() && !isComparison && !windowsCapture;
   const hasRichCapture =
     supportsCoreTypeFiltering &&
     context
@@ -1185,8 +1222,9 @@ function renderCPUMicroarchitecture(context) {
           id: 'node_graph',
           rendererId: 'drilldown',
           title: 'Summary',
-          description:
-            'View a summary of frontend, backend, retiring, and bad speculation metrics.',
+          description: windowsCapture
+            ? 'Estimated CPU metrics from WindowsPerf samples across all cores. Multiplexing uses nominal exposure. Missing measurements remain unavailable.'
+            : 'View a summary of frontend, backend, retiring, and bad speculation metrics.',
           config: {
             ...noDataMessageConfig,
             data_source: {
@@ -1413,13 +1451,83 @@ function renderCPUMicroarchitecture(context) {
     );
   }
   return {
-    renderers,
+    renderers: windowsCapture
+      ? renderers.filter((renderer) => renderer.id !== 'disassembly')
+      : renderers,
     ui: {
       visualizations,
       side_panel_filters:
-        isComparison && context.isRerenderingEnabled()
+        isComparison && context.isRerenderingEnabled() && !windowsCapture
           ? getComparisonFilters(context)
           : filters,
     },
   };
+}
+
+function isWindowsTarget(targetInfo) {
+  return targetInfo.Os?.OSFamily?.toLowerCase() === 'windows';
+}
+
+function generateWindowsConfig(context) {
+  const groups = context.getParameter('collect_all')
+    ? ''
+    : context.getParameter('metrics_group').join(',').toLowerCase();
+  return {
+    toolConfigs: [
+      {
+        name: TOOL_WPERF.name,
+        workload: context.getWorkload(),
+        env: {},
+        params: {
+          mode: 'metrics',
+          metrics_group: groups,
+          sampling_frequency: context.getParameter('sampling_freq'),
+        },
+      },
+    ],
+  };
+}
+
+function unsupportedWindowsOptions(context) {
+  const messages = [];
+  if (
+    context.getParameter('collect_java_stacks') ||
+    context.getParameter('collect_dotnet_stacks')
+  ) {
+    messages.push(
+      'Managed-code stack collection is not supported by Windows CPU Microarchitecture.',
+    );
+  }
+  if (context.getParameter('rich_data_capture')) {
+    messages.push(
+      'Rich capture and process, thread or time-range filtering are not supported by Windows CPU Microarchitecture.',
+    );
+  }
+  return messages;
+}
+
+function readyWindowsMicroarchitecture(context) {
+  const unsupported = unsupportedWindowsOptions(context);
+  const tools = generateWindowsConfig(context);
+  const responses = context.probeTools(tools);
+  const advice = collectToolAdvice(tools, responses);
+  for (const message of unsupported)
+    advice.push({
+      ToolName: TOOL_WPERF.name,
+      AdviceSeverity: 'error',
+      MessageCode: readinessMessageCode,
+      Metadata: { message },
+      Cause: '',
+    });
+  advice.push({
+    ToolName: TOOL_WPERF.name,
+    AdviceSeverity: 'warning',
+    MessageCode: readinessMessageCode,
+    Metadata: {
+      message:
+        'Windows CPU metrics are estimates from samples across all cores. Missing events stay unavailable. Multiplexing uses nominal exposure and sample loss is not corrected.',
+    },
+    Cause: '',
+  });
+  return { status: toolStatusToRecipeStatus(advice), advice };
 }

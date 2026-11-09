@@ -38,6 +38,13 @@ Its main areas are:
 - `recipes/`, `data/`, `tools/`, and `tool-integrations/` — runtime content packaged with release archives.
 - `main.go` — executable entry point.
 
+NeoProf timelines in Code Hotspots and System Utilization share bin-catalogue,
+capture-domain and viewport-range helpers in `apap-cli/recipes/lib/`. Sources
+retain compressed counter intervals; chart queries select a bin level and expand
+only the requested range. Each recipe owns its metric calculations and chart
+groups. System Utilization keeps its Summary and embedded overview on a separate
+100 ms table; its Python/CSV collector uses the existing timeline path.
+
 ### Engine
 
 [`apap-engine/`](apap-engine/) is the shared Go implementation shipped by the core release. It is compiled into the daemon started by `apx`, rather than distributed as a second user-facing executable.

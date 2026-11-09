@@ -33,7 +33,8 @@ SPDX-License-Identifier: Apache-2.0
   available evidence.
 - Attribute material TLB-walk activity to `lookup_paged_values` and recommend
   reducing its translation footprint. Compact storage or huge pages are
-  acceptable qualified options.
+  acceptable qualified options. A conditional recommendation to check the
+  current page mapping before testing larger pages is sufficient.
 - Keep the diagnoses and recommendations separate. Do not add the latency
   potential and TLB Walk Score or treat them as a combined elapsed-time cost.
 
@@ -51,8 +52,9 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Scoring Guidance
 - Pass:
-  - Identifies both material problems, attributes each to the correct function
-    and evidence set, and proposes an appropriately scoped remedy for each.
+  - Quantifies both problems, attributes each to the correct function and
+    evidence, and proposes a scoped remedy for each. A cautious impact rating is
+    acceptable when workload benefit is unmeasured.
 - Fail:
   - Reports only one of the two diagnosis-worthy problems.
   - Swaps the latency and TLB attribution or applies one generic recommendation

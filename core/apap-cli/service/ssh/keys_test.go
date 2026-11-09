@@ -10,9 +10,11 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -21,6 +23,7 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 )
 
 func TestGenerateAndWriteKeys(t *testing.T) {
@@ -173,13 +176,10 @@ func TestEnsureKnownHostsFile(t *testing.T) {
 		fs := afero.NewMemMapFs()
 		prov := &DefaultSSHKeyProvisioner{
 			FS: fs,
-			HostKeyCallbackFactoryFunc: func(fs afero.Fs, path string) (ssh.HostKeyCallback, error) {
-				return ssh.InsecureIgnoreHostKey(), nil // #nosec G106 -- test-only override
-			},
 		}
 
 		path := "/tmp/test-known_hosts"
-		_, err := prov.createKnownHostsFile(path)
+		err := prov.createKnownHostsFile(path)
 		require.NoError(t, err)
 
 		exists, err := afero.Exists(fs, path)
@@ -191,12 +191,9 @@ func TestEnsureKnownHostsFile(t *testing.T) {
 		brokenFs := afero.NewReadOnlyFs(afero.NewMemMapFs())
 		prov := &DefaultSSHKeyProvisioner{
 			FS: brokenFs,
-			HostKeyCallbackFactoryFunc: func(fs afero.Fs, path string) (ssh.HostKeyCallback, error) {
-				return ssh.InsecureIgnoreHostKey(), nil // #nosec G106 -- test-only override
-			},
 		}
 		path := "/readonly/ssh/known_hosts"
-		_, err := prov.createKnownHostsFile(path)
+		err := prov.createKnownHostsFile(path)
 		var msgErr message.Message
 		ok := errors.As(err, &msgErr)
 		assert.True(t, ok)
@@ -209,29 +206,9 @@ func TestEnsureKnownHostsFile(t *testing.T) {
 		fs := &failingStatFs{afero.NewMemMapFs()}
 		prov := &DefaultSSHKeyProvisioner{
 			FS: fs,
-			HostKeyCallbackFactoryFunc: func(fs afero.Fs, path string) (ssh.HostKeyCallback, error) {
-				return ssh.InsecureIgnoreHostKey(), nil // #nosec G106 -- test-only override
-			},
 		}
 
-		_, err := prov.createKnownHostsFile("/some/path/known_hosts")
-		var msgErr message.Message
-		ok := errors.As(err, &msgErr)
-		assert.True(t, ok)
-		assert.Equal(t, message.CommonUnknownError, msgErr.Code())
-		assert.NotNil(t, msgErr.Unwrap())
-	})
-
-	t.Run("fails if host key callback returns error", func(t *testing.T) {
-		fs := afero.NewMemMapFs()
-		prov := &DefaultSSHKeyProvisioner{
-			FS: fs,
-			HostKeyCallbackFactoryFunc: func(fs afero.Fs, path string) (ssh.HostKeyCallback, error) {
-				return nil, fmt.Errorf("simulated hostkey callback error")
-			},
-		}
-
-		_, err := prov.createKnownHostsFile("/tmp/some/known_hosts")
+		err := prov.createKnownHostsFile("/some/path/known_hosts")
 		var msgErr message.Message
 		ok := errors.As(err, &msgErr)
 		assert.True(t, ok)
@@ -266,7 +243,7 @@ func TestConnectWithPasswordSetsHostKeyAlgorithms(t *testing.T) {
 		return nil, errors.New("stub dial error")
 	}
 
-	_, err = prov.connectWithPassword("example.com", 22, "testuser", "password", knownHostsPath, ssh.InsecureIgnoreHostKey()) // #nosec G106 -- test-only callback
+	_, err = prov.connectWithPassword("example.com", 22, "testuser", func(string) ([]byte, error) { return []byte("password"), nil }, knownHostsPath, ssh.InsecureIgnoreHostKey()) // #nosec G106 -- test-only callback
 	require.Error(t, err)
 	require.NotNil(t, capturedConfig)
 	require.NotEmpty(t, capturedConfig.HostKeyAlgorithms)
@@ -295,4 +272,99 @@ func (f *failWriteFs) OpenFile(name string, flag int, perm os.FileMode) (afero.F
 		return nil, err
 	}
 	return f.Fs.OpenFile(name, flag, perm)
+}
+
+// Verify the provisioning path enforces trust before requesting a password.
+func TestProvisionPasswordFollowsHostPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		policy      target.HostKeyPolicy
+		answer      string
+		fallback    bool
+		wantPrompts int
+	}{
+		{"strict rejects an unknown server without requesting a password", target.RejectHostKeyIfMissing, "", false, 0},
+		{"accept-new trusts the server before requesting a password", target.AcceptNewHost, "", false, 1},
+		{"declining trust does not request a password", target.AskNewHost, "no", false, 0},
+		{"accepting trust allows password authentication", target.AskNewHost, "yes", false, 1},
+		{"authentication fallback reuses the password", target.AcceptNewHost, "", true, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			if tc.answer != "" {
+				input, err := os.CreateTemp(t.TempDir(), "stdin")
+				require.NoError(t, err)
+				defer input.Close()
+				_, err = input.WriteString(tc.answer + "\n")
+				require.NoError(t, err)
+				_, err = input.Seek(0, 0)
+				require.NoError(t, err)
+				originalStdin := os.Stdin
+				os.Stdin = input
+				defer func() { os.Stdin = originalStdin }()
+			}
+			_, key, err := ed25519.GenerateKey(rand.Reader)
+			require.NoError(t, err)
+			signer, err := ssh.NewSignerFromKey(key)
+			require.NoError(t, err)
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			defer listener.Close()
+			server := &ssh.ServerConfig{PasswordCallback: func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
+				return nil, errors.New("stop before installation")
+			}}
+			var fallbackPassword string
+			if tc.fallback {
+				server.KeyboardInteractiveCallback = func(_ ssh.ConnMetadata, challenge ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+					answers, err := challenge("user", "", []string{"Password:"}, []bool{false})
+					if err != nil {
+						return nil, err
+					}
+					fallbackPassword = answers[0]
+					return nil, errors.New("stop before installation")
+				}
+			}
+			server.AddHostKey(signer)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+				_, _, _, _ = ssh.NewServerConn(conn, server)
+			}()
+			dir := t.TempDir()
+			prompts := 0
+			var trustedBeforePassword bool
+			var readHostsErr error
+			promptSecret := func(string) ([]byte, error) {
+				prompts++
+				var contents []byte
+				contents, readHostsErr = os.ReadFile(filepath.Join(dir, "ssh", "known_hosts"))
+				trustedBeforePassword = len(contents) > 0
+				return []byte("secret"), nil
+			}
+			host := target.SSHHostConfig{
+				Host: "127.0.0.1", Port: int32(listener.Addr().(*net.TCPAddr).AddrPort().Port()), Username: "user", HostKeyPolicy: tc.policy,
+			}
+
+			// When
+			err = NewDefaultSSHKeyProvisioner().ProvisionPublicKeyWithPassword(dir, host, promptSecret, "unused")
+			<-done
+
+			// Then
+			require.Error(t, err)
+			assert.Equal(t, tc.wantPrompts, prompts)
+			if tc.wantPrompts > 0 {
+				require.NoError(t, readHostsErr)
+				assert.True(t, trustedBeforePassword)
+			}
+			if tc.fallback {
+				assert.Equal(t, "secret", fallbackPassword)
+			}
+		})
+	}
 }

@@ -42,7 +42,7 @@ func ReadVarcharDoubleCSVIntoDB(filename string, varcharColumns []string, db *re
 	query := fmt.Sprint(
 		`SELECT UNNEST(LIST_TRANSFORM(
 				Columns, 
-				c -> case when c.name in (`, strings.Join(quoted, ", "), `) then 'varchar' else 'double' end
+				lambda c: case when c.name in (`, strings.Join(quoted, ", "), `) then 'varchar' else 'double' end
 		  )) from sniff_csv(?)`,
 	)
 	result, err := db.Conn.QueryContext(context.Background(), query, filename)

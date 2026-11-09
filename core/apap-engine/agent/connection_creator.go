@@ -329,6 +329,9 @@ func launchAgent(
 ) (int, error) {
 	scriptFile := GetAgentLaunchScript(tp)
 	cmd := tp.Path.GenerateRunScriptCommand(scriptFile, agentPath)
+	if tp.OS == conductor.Win && localityName == locality.Host {
+		cmd += " -RequestHighestPrivileges 0"
+	}
 
 	out, err := tp.Actions.RunCommand(cmd)
 

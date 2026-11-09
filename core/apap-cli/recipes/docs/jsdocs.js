@@ -8,6 +8,7 @@
  * and tool integrations.
  * @typedef {Object} PerformixGlobal
  * @property {string} engineVersion The current Performix engine version.
+ * @property {boolean} [customPMUCaptureEnabled] Resolved custom PMU capture flag.
  */
 
 /**
@@ -326,6 +327,7 @@
 /**
  * @typedef {Object} SingleSelectConfig
  * @property {"single_select"} type
+ * @property {boolean} [requiresTools=false] - Requires recipe tools to be deployed for options callbacks.
  * @property {ParameterOptions[]|function(ReadyExecutionContext): (ParameterOptions[])} options - List of detailed options with value, label, and optional description, either static or computed at runtime. Legacy recipes with `api_version: "1.0.0"` may also use string arrays.
  * @property {string} defaultValue - Default selected option.
  * @augments BaseConfig
@@ -334,6 +336,7 @@
 /**
  * @typedef {Object} MultiSelectConfig
  * @property {"multi_select"} type
+ * @property {boolean} [requiresTools=false] - Requires recipe tools to be deployed for options callbacks.
  * @property {ParameterOptions[]|function(ReadyExecutionContext): (ParameterOptions[])} options - List of detailed options with value, label, and optional description, either static or computed at runtime. Legacy recipes with `api_version: "1.0.0"` may also use string arrays.
  * @property {string[]} [defaultValue] - Default selected options.
  * @augments BaseConfig
@@ -342,6 +345,7 @@
 /**
  * @typedef {Object} RadioConfig
  * @property {"radio"} type
+ * @property {boolean} [requiresTools=false] - Requires recipe tools to be deployed for options callbacks.
  * @property {ParameterOptions[]|function(ReadyExecutionContext): (ParameterOptions[])} options - List of detailed options with value, label, and optional description, either static or computed at runtime. Legacy recipes with `api_version: "1.0.0"` may also use string arrays.
  * @property {string} defaultValue - Default selected option.
  * @augments BaseConfig
@@ -743,6 +747,7 @@
  * @property {() => number} pid
  * @property {() => Promise<void>} kill
  * Send SIGKILL (or platform equivalent).
+ * If the request fails, local waits and streams are canceled; remote termination is not confirmed.
  * @property {() => Promise<void>} interrupt
  * Send SIGINT (or platform equivalent).
  * @property {() => Promise<{exitCode:number}>} wait
@@ -885,7 +890,7 @@
 
 /**
  * @typedef {Object} SlRecordProbeReport
- * @property {{gpu_id: string, model: string}[]} [gpus]
+ * @property {{device_number: number, product_id: string, model: string}[]} [gpus]
  * @property {boolean} [supports_strobing]
  * @property {boolean} [supports_event_inherit]
  * @property {{severity: string, message: string}[]} advice
@@ -916,6 +921,33 @@
  * bindings to saved collected tool_capabilities/counter v1.0 values from this invocation.
  * Reason is required for unavailable (not_supported, ambiguous) and incomplete
  * (record_failed, reformat_failed, output_unverified); it is absent otherwise.
+ */
+
+/**
+ * A native CPU PMU counter capability.
+ * Describes the metadata and collection state of a PMU event.
+ * The event is identified by PMU ID and event code.
+ * Probe states are available or unavailable. Saved outcomes are unavailable,
+ * collected or incomplete.
+ * @typedef {Object} NativeCPUCounterCapability
+ * @property {{name: "tool_capabilities/native_cpu_counter", version: "1.0"}} componentType
+ * @property {"available"|"unavailable"|"collected"|"incomplete"} state
+ * @property {NativeCPUCounterPayload} payload
+ */
+
+/**
+ * A CPU PMU event and a reference to its collected data.
+ * @typedef {Object} NativeCPUCounterPayload
+ * @property {string} title Event display name.
+ * @property {string} [description] Event description.
+ * @property {string} [units] Counter units.
+ * @property {{id: string, name: string}} pmu PMU ID and display name.
+ * @property {string} eventCode Event code in lowercase hex.
+ * @property {{seriesCapabilityId: string}} [binding]
+ * Binding to saved collected tool_capabilities/counter v1.0 series.
+ * @property {string} [reason]
+ * Required when unavailable (not_supported or ambiguous) or incomplete
+ * (record_failed, reformat_failed, output_unverified). Omitted for other states.
  */
 
 export {};

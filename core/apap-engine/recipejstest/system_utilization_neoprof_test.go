@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dop251/goja"
 	"github.com/stretchr/testify/require"
@@ -30,7 +31,13 @@ const (
 	neoprofSysutilMetadataPath = "tool/neoprof/0/output/parquet/metadata/counter_series_metadata.json"
 	neoprofSysutilCounterPath  = "tool/neoprof/0/output/parquet/timeline/**/counter.parquet"
 	neoprofSysutilBinDuration  = int64(100_000_000)
+	neoprofSysutilCapturePath  = "tool/neoprof/0/output/parquet/metadata/capture_metadata.json"
 )
+
+var neoprofSysutilBinDurations = []int64{
+	10_000_000, 50_000_000, 100_000_000, 500_000_000,
+	1_000_000_000, 5_000_000_000, 10_000_000_000,
+}
 
 type neoprofSysutilSeriesFixture struct {
 	SeriesID        int64
@@ -100,6 +107,7 @@ func TestSystemUtilizationNeoprofConfiguration(t *testing.T) {
 		goja.Undefined(),
 		vm.ToValue(workload),
 		vm.ToValue(targetInfo),
+		vm.ToValue("1"),
 	)
 	require.NoError(t, err)
 
@@ -116,6 +124,8 @@ func TestSystemUtilizationNeoprofConfiguration(t *testing.T) {
 		"mode":                    "samples",
 		"sampling_frequency":      "normal",
 		"workflow":                "sys_util",
+		"requested_gpu_metrics":   `["GPUFront-end.GPUCycles.GPUActive","GPUFront-end.GPUUtilization"]`,
+		"poll_interval":           "1000",
 		"reformat_on_host":        true,
 		"timeline_device_numbers": `[0,1]`,
 		"rich_data_capture":       false,
@@ -170,7 +180,7 @@ func testSystemUtilizationNeoprofTimeline(t *testing.T, reusedID bool) {
 		false,
 	)
 
-	require.Len(t, output.Renderers, 1)
+	require.Len(t, output.Renderers, 8)
 	require.Equal(t, "SQL", output.Renderers[0].Type)
 	require.Equal(t, "timeline_csv", output.Renderers[0].ID)
 	rendererSQL, ok := output.Renderers[0].Config["sql"].(string)
@@ -313,7 +323,7 @@ func testSystemUtilizationNeoprofTimeline(t *testing.T, reusedID bool) {
 
 	queryCount := 0
 	for _, widget := range output.Widgets {
-		if widget.ID != "system_utilization_summary" && widget.ID != "timeline" {
+		if widget.ID != "system_utilization_summary" {
 			continue
 		}
 		queryCount += executeTimelineQueries(t, session, timelineTable, widget.Config)
@@ -407,7 +417,7 @@ func writeNeoprofSysutilTimelineFixture(t *testing.T, runRoot string, reusedSeri
 	return writeNeoprofSysutilSeriesFixture(t, runRoot, series, reusedSeriesID...)
 }
 
-func writeNeoprofSysutilSeriesFixture(t *testing.T, runRoot string, series []neoprofSysutilSeriesFixture, reusedSeriesID ...bool) cdf.ModelView {
+func writeNeoprofSysutilSeriesFixture(t *testing.T, runRoot string, series []neoprofSysutilSeriesFixture, reusedSeriesID ...bool) *cdf.OnDiskModel {
 	t.Helper()
 
 	db, err := (&render.DuckDBFactory{}).Connect(t.Name() + "_neoprof_sysutil_fixture")
@@ -435,25 +445,26 @@ func writeNeoprofSysutilSeriesFixture(t *testing.T, runRoot string, series []neo
 	for _, counterSeries := range series {
 		counters = append(counters, map[string]any{"id": counterSeries.SeriesID, "title": counterSeries.Title, "name": counterSeries.Name})
 
-		counterPath := filepath.Join(
-			runRoot,
-			"tool", "neoprof", "0", "output", "parquet", "timeline",
-			"key_type=8",
-			fmt.Sprintf("series_id=%d", counterSeries.SeriesID),
-			fmt.Sprintf("bin_duration=%d", neoprofSysutilBinDuration),
-			"counter.parquet",
-		)
-		require.NoError(t, os.MkdirAll(filepath.Dir(counterPath), 0o755))
-		counterRowsSQL := buildCounterAggregateRowsSelectSQL(counterSeries.Rows)
-		if counterSeries.UsesValueColumn {
-			counterRowsSQL = buildCounterRowsSelectSQL(counterSeries.Rows)
+		for _, duration := range neoprofSysutilBinDurations {
+			rows := append([]timelineCounterRowFixture(nil), counterSeries.Rows...)
+			for index := range rows {
+				rows[index].StartTimestamp = rows[index].StartTimestamp * duration / neoprofSysutilBinDuration
+				rows[index].EndTimestamp = rows[index].EndTimestamp * duration / neoprofSysutilBinDuration
+				if counterSeries.UsesValueColumn {
+					rows[index].Value *= float64(duration) / float64(neoprofSysutilBinDuration)
+				}
+			}
+			counterPath := filepath.Join(runRoot, "tool/neoprof/0/output/parquet/timeline/key_type=8",
+				fmt.Sprintf("series_id=%d", counterSeries.SeriesID), fmt.Sprintf("bin_duration=%d", duration), "counter.parquet")
+			require.NoError(t, os.MkdirAll(filepath.Dir(counterPath), 0o755))
+			counterRowsSQL := buildCounterAggregateRowsSelectSQL(rows)
+			if counterSeries.UsesValueColumn {
+				counterRowsSQL = buildCounterRowsSelectSQL(rows)
+			}
+			_, err = db.Conn.ExecContext(context.Background(), fmt.Sprintf(
+				`COPY (%s) TO %s (FORMAT PARQUET)`, counterRowsSQL, util.SQLQuoteStringLiteral(counterPath)))
+			require.NoError(t, err)
 		}
-		_, err = db.Conn.ExecContext(context.Background(), fmt.Sprintf(
-			`COPY (%s) TO %s (FORMAT PARQUET)`,
-			counterRowsSQL,
-			util.SQLQuoteStringLiteral(counterPath),
-		))
-		require.NoError(t, err)
 	}
 
 	metadataPath := filepath.Join(runRoot, filepath.FromSlash(neoprofSysutilMetadataPath))
@@ -465,18 +476,24 @@ func writeNeoprofSysutilSeriesFixture(t *testing.T, runRoot string, series []neo
 		groups = append(groups, map[string]any{"key_type": 9, "counters": []any{
 			map[string]any{"id": 1, "title": "Swap", "name": "Total"},
 		}})
-		counterPath := filepath.Join(runRoot, "tool/neoprof/0/output/parquet/timeline/key_type=9/series_id=1/bin_duration=100000000/counter.parquet")
-		require.NoError(t, os.MkdirAll(filepath.Dir(counterPath), 0o755))
-		_, err = db.Conn.ExecContext(context.Background(), fmt.Sprintf(
-			"COPY (%s) TO %s (FORMAT PARQUET)",
-			buildCounterAggregateRowsSelectSQL(twoNeoprofCounterRows(0, 2_097_152, 2_097_152)),
-			util.SQLQuoteStringLiteral(counterPath)))
-		require.NoError(t, err)
+		for _, duration := range neoprofSysutilBinDurations {
+			counterPath := filepath.Join(runRoot, "tool/neoprof/0/output/parquet/timeline/key_type=9/series_id=1", fmt.Sprintf("bin_duration=%d", duration), "counter.parquet")
+			require.NoError(t, os.MkdirAll(filepath.Dir(counterPath), 0o755))
+			_, err = db.Conn.ExecContext(context.Background(), fmt.Sprintf(
+				"COPY (%s) TO %s (FORMAT PARQUET)",
+				buildCounterAggregateRowsSelectSQL([]timelineCounterRowFixture{{StartTimestamp: 0, EndTimestamp: duration * 2, Value: 2_097_152}}),
+				util.SQLQuoteStringLiteral(counterPath)))
+			require.NoError(t, err)
+		}
 	}
 	data, err := json.Marshal(map[string]any{"counter_groups": groups})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(metadataPath, data, 0o600))
 
+	capturePath := filepath.Join(runRoot, filepath.FromSlash(neoprofSysutilCapturePath))
+	require.NoError(t, os.WriteFile(capturePath, []byte(`{"duration":50000000000,"time_unit":"nanoseconds"}`), 0o600))
+	manifestEntries = append(manifestEntries, cdf.ManifestEntry{Path: neoprofSysutilCapturePath,
+		ComponentType: cdf.ComponentType{Name: "timeline-capture-metadata-json", SchemaVersion: "1.0"}})
 	return cdf.NewOnDiskModel(
 		runRoot,
 		&cdf.Manifest{Entries: manifestEntries},
@@ -570,7 +587,11 @@ func TestSystemUtilizationSavedCollectorIgnoresFeatureFlag(t *testing.T) {
 					[]cdf.ModelView{model}, map[string]any{}, []run.RunCapabilities{{}},
 					renderStageOptions{neoprofSystemUtilizationEnabled: enabled})
 				require.NoError(t, err)
-				require.Len(t, output.Renderers, 1)
+				expectedRenderers := 1
+				if collector == "neoprof" {
+					expectedRenderers = 8
+				}
+				require.Len(t, output.Renderers, expectedRenderers)
 				require.Equal(t, expectedType, output.Renderers[0].Type)
 			})
 		}
@@ -664,4 +685,202 @@ func TestSystemUtilizationNeoprofFillsOnlyCollectedDeltaCounterGaps(t *testing.T
 	}
 	require.NoError(t, rows.Err())
 	require.Equal(t, 5, index)
+}
+
+func TestSystemUtilizationNeoprofChartsUseAllBinSizes(t *testing.T) {
+	expectedMetricColumns := map[string][]string{
+		"total_cpu_mem": {"cpu_total_percent", "mem_used_percent"},
+		"per_core_cpu":  {"cpu0_percent", "cpu1_percent"},
+		"net_bw":        {"rx_bps_series_10"},
+		"disk_bw":       {"read_bps_series_13"},
+		"swap_kb":       {"swap_total_kb"},
+	}
+	runRoot := t.TempDir()
+	model := writeNeoprofSysutilTimelineFixture(t, runRoot, true)
+	capabilities := run.ToolCapabilities{
+		"cpu":  neoprofSysutilCounterCapability(2, "Proc Stat CPU Per-core", "Utilization"),
+		"irq":  neoprofSysutilCounterCapability(9, "Interrupts", "Total"),
+		"rx":   neoprofSysutilCounterCapability(10, "Network", "Receive"),
+		"disk": neoprofSysutilCounterCapability(13, "Disk Read Bandwidth", "Read"),
+	}
+	output := executeRenderStageWithCapabilities(t, parseRecipeFile(t, "system_utilization.js"),
+		[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
+		[]cdf.ModelView{model}, map[string]any{}, []run.RunCapabilities{{
+			CapabilitiesPerTool: map[string]run.ToolCapabilities{"tool/neoprof/0": capabilities},
+		}}, false)
+	timeline := requireTimelineWidget(t, output)
+	require.Equal(t, 1e-9, timeline.Config["xAxisDisplayScale"])
+	require.Equal(t, map[string]any{"start": int64(0), "end": int64(50_000_000_000), "unit": "ns"}, timeline.Config["timeDomain"])
+	groups := timeline.Config["groups"].(map[string]any)
+	require.Len(t, groups, 14)
+	require.Equal(t, "heatmap", groups["per_core_cpu"].(map[string]any)["type"])
+	require.Equal(t, "line", groups["total_cpu_mem"].(map[string]any)["type"])
+	session := newRenderSession(t, "sysutil-lod-all-groups", runRoot, model)
+	renderers := initializeRenderers(t, session, output, func(config recipe.RendererConfig) bool {
+		return strings.HasPrefix(config.ID, "sysutil_lod_")
+	})
+	for _, duration := range neoprofSysutilBinDurations {
+		t.Run(time.Duration(duration).String(), func(t *testing.T) {
+			for groupKey := range groups {
+				query := resolveTimelineGroupQuery(t, session, renderers, timeline, groupKey, duration, duration/2, duration*2)
+				rows, err := session.Database().Conn.QueryContext(context.Background(), query)
+				require.NoError(t, err, "group %s", groupKey)
+				require.True(t, rows.Next(), "group %s", groupKey)
+				columns, err := rows.Columns()
+				require.NoError(t, err)
+				require.Contains(t, columns, "uptime_s", "group %s", groupKey)
+				for _, column := range expectedMetricColumns[groupKey] {
+					require.Contains(t, columns, column, "group %s", groupKey)
+				}
+				values := make([]any, len(columns))
+				pointers := make([]any, len(columns))
+				for index := range pointers {
+					pointers[index] = &values[index]
+				}
+				require.NoError(t, rows.Scan(pointers...))
+				for index, column := range columns {
+					switch column {
+					case "uptime_s":
+						require.EqualValues(t, duration, values[index], "chart timestamps should be in nanoseconds")
+					case "cpu_total_percent":
+						require.InDelta(t, 70.0, values[index], 1e-9)
+					case "mem_used_percent":
+						require.InDelta(t, 62.5, values[index], 1e-9)
+					case "cpu0_percent":
+						require.InDelta(t, 50.0, values[index], 1e-9)
+					case "cpu1_percent":
+						require.InDelta(t, 90.0, values[index], 1e-9)
+					case "rx_bps_series_10":
+						require.InDelta(t, 12_000.0, values[index], 1e-9)
+					case "read_bps_series_13":
+						require.InDelta(t, 36_000.0, values[index], 1e-9)
+					case "swap_total_kb":
+						require.InDelta(t, 2048.0, values[index], 1e-9)
+					}
+				}
+				require.False(t, rows.Next(), "only one bin should fall inside this time range")
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+			}
+			for _, renderer := range output.Renderers {
+				if renderer.ID != fmt.Sprintf("sysutil_lod_%d", duration) {
+					continue
+				}
+				sourceSQL := renderer.Config["sql"].(string)
+				for _, other := range neoprofSysutilBinDurations {
+					path := fmt.Sprintf("/bin_duration=%d/", other)
+					if other == duration {
+						require.Contains(t, sourceSQL, path)
+					} else {
+						require.NotContains(t, sourceSQL, path)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSystemUtilizationNeoprofCalculatesRatesAndFillsIdleBinsWithZero(t *testing.T) {
+	runRoot := t.TempDir()
+	bin := neoprofSysutilBinDuration
+	delta, absolute := 0, 2
+	series := []neoprofSysutilSeriesFixture{
+		// This stored row covers a long period. The queries below request
+		// only the first five bins.
+		{SeriesID: 1, Title: "Proc Stat CPU Total", Name: "Utilization", CounterClass: &absolute, State: "collected", Rows: []timelineCounterRowFixture{{StartTimestamp: 0, EndTimestamp: 1_000_000_000_000, Value: 4000}}},
+		{SeriesID: 2, Title: "Network", Name: "Receive", CounterClass: &delta, State: "collected", UsesValueColumn: true, Rows: []timelineCounterRowFixture{{StartTimestamp: bin, EndTimestamp: 4 * bin, Value: 30}}},
+		{SeriesID: 3, Title: "Network", Name: "Transmit", CounterClass: &delta, State: "unavailable", UsesValueColumn: true},
+		{SeriesID: 4, Title: "Disk IOPS", Name: "Reads: idle", CounterClass: &delta, State: "collected", UsesValueColumn: true},
+		{SeriesID: 5, Title: "Interrupts", Name: "Total", CounterClass: &delta, State: "collected", UsesValueColumn: true, Rows: []timelineCounterRowFixture{{StartTimestamp: bin, EndTimestamp: 2 * bin, DeviceNo: 0, Value: 7}}},
+		{SeriesID: 6, Title: "Swap", Name: "Used", CounterClass: &absolute, State: "collected"},
+	}
+	model := writeNeoprofSysutilSeriesFixture(t, runRoot, series)
+	capabilities := run.ToolCapabilities{}
+	for _, counter := range series {
+		capability := neoprofSysutilCounterCapability(counter.SeriesID, counter.Title, counter.Name)
+		capability.State = counter.State
+		capability.Payload["counter_class"] = *counter.CounterClass
+		capabilities[fmt.Sprint(counter.SeriesID)] = capability
+	}
+	output := executeRenderStageWithCapabilities(t, parseRecipeFile(t, "system_utilization.js"),
+		[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}}, []cdf.ModelView{model}, map[string]any{},
+		[]run.RunCapabilities{{CapabilitiesPerTool: map[string]run.ToolCapabilities{"tool/neoprof/0": capabilities}}}, false)
+	session := newRenderSession(t, "sysutil-lod-sparse", runRoot, model)
+	renderers := initializeRenderers(t, session, output, func(config recipe.RendererConfig) bool { return strings.HasPrefix(config.ID, "sysutil_lod_") })
+	timeline := requireTimelineWidget(t, output)
+	for groupKey, expected := range map[string][]float64{"net_bw": {0, 100, 100, 100, 0}, "per_core_irq": {0, 70, 0, 0, 0}, "disk_iops": {0, 0, 0, 0, 0}} {
+		query := resolveTimelineGroupQuery(t, session, renderers, timeline, groupKey, bin, 0, bin*5)
+		rows, err := session.Database().Conn.QueryContext(context.Background(), query)
+		require.NoError(t, err)
+		index := 0
+		for rows.Next() {
+			var timestamp, value float64
+			var missing sql.NullFloat64
+			require.NoError(t, rows.Scan(&timestamp, &value, &missing))
+			require.Equal(t, float64(int64(index)*bin), timestamp)
+			require.Equal(t, expected[index], value, groupKey)
+			if groupKey == "per_core_irq" {
+				require.Equal(t, sql.NullFloat64{Valid: true}, missing)
+			} else {
+				require.False(t, missing.Valid)
+			}
+			index++
+		}
+		require.Equal(t, 5, index)
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+	}
+}
+
+func TestSystemUtilizationNeoprofRejectsMissingOrInvalidData(t *testing.T) {
+	for _, scenario := range []string{"missing bin size", "missing capture metadata", "invalid capture duration"} {
+		t.Run(scenario, func(t *testing.T) {
+			runRoot := t.TempDir()
+			model := writeNeoprofSysutilTimelineFixture(t, runRoot)
+			switch scenario {
+			case "missing bin size":
+				require.NoError(t, os.Remove(filepath.Join(runRoot, "tool/neoprof/0/output/parquet/timeline/key_type=8/series_id=1/bin_duration=10000000/counter.parquet")))
+			case "missing capture metadata":
+				require.NoError(t, os.Remove(filepath.Join(runRoot, neoprofSysutilCapturePath)))
+			case "invalid capture duration":
+				require.NoError(t, os.WriteFile(filepath.Join(runRoot, neoprofSysutilCapturePath), []byte(`{"duration":-1,"time_unit":"nanoseconds"}`), 0o600))
+			}
+			_, err := executeRenderStageWithResolvedCapabilities(t, parseRecipeFile(t, "system_utilization.js"),
+				[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}}, []cdf.ModelView{model}, map[string]any{}, []run.RunCapabilities{{}}, renderStageOptions{})
+			require.Error(t, err)
+			if scenario == "missing bin size" {
+				var messageError *message.MessageImpl
+				require.ErrorAs(t, err, &messageError)
+				require.Equal(t, message.RecipesSystemUtilizationTimelineDataIncomplete, messageError.Code())
+			}
+		})
+	}
+}
+
+func TestSystemUtilizationNeoprofShowsZeroForEmptyCollectedCounters(t *testing.T) {
+	runRoot := t.TempDir()
+	model := writeNeoprofSysutilSeriesFixture(t, runRoot, []neoprofSysutilSeriesFixture{
+		{SeriesID: 1, Title: "Network", Name: "Receive", UsesValueColumn: true},
+		{SeriesID: 2, Title: "Network", Name: "Transmit", UsesValueColumn: true},
+	})
+	collected := neoprofSysutilCounterCapability(1, "Network", "Receive")
+	collected.Payload["counter_class"] = 0
+	unavailable := neoprofSysutilCounterCapability(2, "Network", "Transmit")
+	unavailable.Payload["counter_class"] = 0
+	unavailable.State = "unavailable"
+	output := executeRenderStageWithCapabilities(t, parseRecipeFile(t, "system_utilization.js"),
+		[]*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}}, []cdf.ModelView{model}, map[string]any{},
+		[]run.RunCapabilities{{CapabilitiesPerTool: map[string]run.ToolCapabilities{"tool/neoprof/0": {"rx": collected, "tx": unavailable}}}}, false)
+	session := newRenderSession(t, "sysutil-lod-empty", runRoot, model)
+	renderers := initializeRenderers(t, session, output, func(config recipe.RendererConfig) bool { return strings.HasPrefix(config.ID, "sysutil_lod_") })
+	timeline := requireTimelineWidget(t, output)
+	for _, duration := range neoprofSysutilBinDurations {
+		query := resolveTimelineGroupQuery(t, session, renderers, timeline, "net_bw", duration, duration, duration*2)
+		var timestamp, receive float64
+		var transmit sql.NullFloat64
+		require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(), query).Scan(&timestamp, &receive, &transmit))
+		require.Equal(t, float64(duration), timestamp)
+		require.Zero(t, receive)
+		require.False(t, transmit.Valid)
+	}
 }

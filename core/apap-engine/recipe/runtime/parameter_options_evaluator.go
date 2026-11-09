@@ -21,7 +21,7 @@ func (*ParameterOptionsEvaluatorConcrete) Evaluate(ctx context.Context, sc *Stag
 		return recipe.ParameterOptions{}, err
 	}
 
-	if sc.Ctx == nil || sc.Ctx.Target == nil || len(sc.Recipe.ParameterOptionsStages) == 0 {
+	if sc.Ctx == nil || sc.Ctx.Target == nil {
 		return stageContext.ParameterOptions, nil
 	}
 

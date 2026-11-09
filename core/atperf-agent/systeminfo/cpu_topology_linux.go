@@ -13,8 +13,6 @@ import (
 	"strings"
 
 	"github.com/spf13/afero"
-
-	armcpus "github.com/Arm-Debug/apap-cli/atperf-agent/systeminfo/armcpus"
 )
 
 const cpuSysfsPath = "/sys/devices/system/cpu"
@@ -25,12 +23,6 @@ type SysfsCPUTopologyProvider struct {
 
 func NewSysfsCPUTopologyProvider(fs afero.Fs) CPUTopologyProvider {
 	return &SysfsCPUTopologyProvider{fs: fs}
-}
-
-type cpuInfo struct {
-	modelName      string
-	cpuImplementer string
-	cpuPart        string
 }
 
 type detectedCPU struct {
@@ -250,50 +242,4 @@ func readTrimmedFile(fs afero.Fs, path string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(bytes)), nil
-}
-
-func convertImplementer(implementer uint32, part uint32) uint32 {
-	// Bare metal Cobalt 100 platforms may show a MIDR with Microsoft's implemeter code (0x6d) for the N2 CPU part number (d49).
-	// This is a special case to map the implementor code back to Arm's, so the CPUs are correctly identified.
-	if (implementer<<12)|part == 0x6dd49 {
-		implementer = 0x41
-	}
-	return implementer
-}
-
-func resolveCPUName(info cpuInfo, midr string) string {
-	rawMIDR, ok := parseUintField(midr)
-	if ok {
-		implementer := (rawMIDR >> 24) & 0xff
-		part := (rawMIDR >> 4) & 0xfff
-		converted := convertImplementer(implementer, part)
-		if name := armcpus.CpuidToName[(converted<<12)|part]; name != "" {
-			return name
-		}
-	}
-	implementer, ok := parseUintField(info.cpuImplementer)
-	if ok {
-		part, ok := parseUintField(info.cpuPart)
-		if ok {
-			converted := convertImplementer(implementer, part)
-			if name := armcpus.CpuidToName[(converted<<12)|part]; name != "" {
-				return name
-			}
-		}
-	}
-	if info.modelName != "" {
-		return info.modelName
-	}
-	return "Unknown CPU"
-}
-
-func parseUintField(value string) (uint32, bool) {
-	if strings.TrimSpace(value) == "" {
-		return 0, false
-	}
-	parsed, err := strconv.ParseUint(strings.TrimSpace(value), 0, 32)
-	if err != nil {
-		return 0, false
-	}
-	return uint32(parsed), true
 }

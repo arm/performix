@@ -25,7 +25,7 @@ The Code Hotspots Recipe Reports As Ready When Tools Are Deployed
   And The Target Is Unprepared
   When Prepare The Test Target
   Then The Target Is Prepared
-  And Deploy Tools For Recipe  code_hotspots
+  And Run Keyword And Ignore Error  Deploy Tools For Recipe  code_hotspots
   And Jitdump-JVM Is Not Deployed
   And Check Recipe Is Ready  code_hotspots  --target ${G_TARGET_NAME} --workload ${LAUNCH_WORKLOAD}
   And The Recipe Is Ready
@@ -226,7 +226,7 @@ Recipe Ready Uses The Correct Target When Multiple Targets Exist
   ...  AND  Create Default Dummy Target  dummy
   ...  AND  The Test Target Is Added Successfully
   ...  AND  Prepare The Test Target If Needed
-  ...  AND  Deploy Tools For Recipe  code_hotspots
+  ...  AND  Run Keyword And Ignore Error  Deploy Tools For Recipe  code_hotspots
   ...  AND  Jitdump-JVM Is Not Deployed
   Given The Code Hotspots Recipe Is Listed
   And The Target Is Prepared

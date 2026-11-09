@@ -5,7 +5,7 @@ WITH ids(id) AS (VALUES __PLACEHOLDERS__),
 tags AS (
   SELECT
     measurement_id,
-    COALESCE(FILTER(LIST(tag ORDER BY tag), x -> x <> ''), []) AS tags
+    COALESCE(FILTER(LIST(tag ORDER BY tag), lambda x: x <> ''), []) AS tags
   FROM ref_measurement_tags
   GROUP BY measurement_id
 ),

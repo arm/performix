@@ -118,7 +118,7 @@ func (r *SourceCodeAttributionRenderer) Initialize(session render.Session, resol
 		return fmt.Errorf("failed to create source_files_union view: %v", err)
 	}
 	// Do NOT create an unqualified view; macro/UDF use the qualified table to avoid schema ambiguity.
-	if err := registerLoadSourceContentFunction(session.Database().Conn, unionViewName, session.TargetSessions(), runTargets, session.ID()); err != nil {
+	if err := registerLoadSourceContentFunction(session.Database(), unionViewName, session.TargetSessions(), runTargets, session.ID()); err != nil {
 		return fmt.Errorf("failed to register load_source_content udf: %v", err)
 	}
 

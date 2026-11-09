@@ -87,9 +87,13 @@ func targetTestCommand(cmd *cobra.Command, out io.Writer, args []string, cc clie
 		return err
 	}
 
-	if err := loginService.LoginToTarget(context.Background(), target, serverconfig.FromViperForBackground()); err != nil {
-		return err
+	// Android requires no interactive login; the test RPC establishes its connection.
+	if _, android := target.(*engine_target.AndroidTarget); !android {
+		if err := loginService.LoginToTarget(context.Background(), target, serverconfig.FromViperForBackground()); err != nil {
+			return err
+		}
 	}
+	client = withAndroidAddressPersistence(client, targetName, target, ts)
 
 	if !viper.GetBool("json") {
 		fmt.Fprintf(out, "Testing target: %v\n", targetName)

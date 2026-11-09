@@ -5,14 +5,22 @@ package runtime
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/spf13/afero"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cmdsync"
+	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
+	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
+	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
 )
 
 func TestParameterOptionsEvaluatorMissingConfig(t *testing.T) {
@@ -139,7 +147,7 @@ func TestParameterOptionsEvaluatorReturnsOptions(t *testing.T) {
 	}
 	sc := &StageConfiguration{
 		Recipe: recipeDef,
-		Ctx:    &recipe.RecipeCtx{Target: &target.LocalTarget{}},
+		Ctx:    &recipe.RecipeCtx{},
 	}
 
 	options, err := evaluator.Evaluate(ctx, sc, stageContext)
@@ -147,4 +155,64 @@ func TestParameterOptionsEvaluatorReturnsOptions(t *testing.T) {
 	require.Len(t, options.SingleSelectOptions, 1)
 	require.Len(t, options.MultiSelectOptions, 1)
 	require.Len(t, options.RadioOptions, 2)
+}
+
+func TestParameterOptionsEvaluatorChecksTargetSupportWithoutDynamicOptions(t *testing.T) {
+	evaluator := &ParameterOptionsEvaluatorConcrete{}
+	linux := conductor.Linux
+	aarch64 := conductor.AArch64
+	recipeDef := &recipe.Recipe{
+		Deployments: []deploymentsupport.DeploymentDeclaration{
+			{
+				AppliesTo: []deploymentsupport.PlatformConfigurationFilter{
+					{OS: &linux, Architecture: &aarch64},
+				},
+			},
+		},
+	}
+	targetPlatform := &conductor.TargetPlatform{
+		PlatformConfiguration: conductor.PlatformConfiguration{
+			OS:           conductor.Linux,
+			Architecture: conductor.X86_64,
+		},
+	}
+	targetSession := &targetsessionmocks.MockTargetSession{}
+	targetSession.On("Connect", mock.Anything).Return(
+		&stubTargetConnection{fs: afero.NewMemMapFs()},
+		nil,
+	)
+	targetSession.On("TargetPlatform").Return(targetPlatform, nil)
+	targetSessionProvider := &stubTargetSessionProvider{session: targetSession}
+	target := &target.LocalTarget{}
+	collector := &TargetSupportCollector{}
+	packageRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(packageRoot, "tools"), 0o755))
+	require.NoError(t, os.Mkdir(filepath.Join(packageRoot, "tool-integrations"), 0o755))
+	ctx := context.Background()
+	stageContext := &recipe.StageContext{
+		Context:               ctx,
+		CommandState:          &cmdsync.CommandState{},
+		ReadinessNotifier:     &recipe.NullReadinessNotifier{},
+		RendererNotifier:      &recipe.NullRenderNotifier{},
+		StageNotifier:         &recipe.NullStageNotifier{},
+		TargetSupportNotifier: collector,
+		ParameterOptions: recipe.ParameterOptions{
+			SingleSelectOptions: [][]parameters.ParameterOption{},
+			MultiSelectOptions:  [][]parameters.ParameterOption{},
+			RadioOptions:        [][]parameters.ParameterOption{},
+		},
+	}
+	stageConfiguration := &StageConfiguration{
+		Recipe:         recipeDef,
+		Ctx:            &recipe.RecipeCtx{Target: target},
+		TargetSessions: targetSessionProvider,
+		PackageManager: packages.NewPackageManager(packageRoot, ""),
+	}
+
+	_, err := evaluator.Evaluate(ctx, stageConfiguration, stageContext)
+
+	require.NoError(t, err)
+	require.Equal(t, deploymentsupport.PlatformNotSupported, collector.PlatformSupport.Result)
+	require.Equal(t, targetPlatform.PlatformConfiguration, collector.PlatformSupport.Platform)
+	targetSession.AssertExpectations(t)
 }

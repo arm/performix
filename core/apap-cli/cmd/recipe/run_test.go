@@ -160,6 +160,60 @@ func TestRunRecipe(t *testing.T) {
 		assert.Contains(t, cmdBuf.String(), "complete")
 	})
 
+	t.Run("Run uses the supplied name", func(t *testing.T) {
+		// Given
+		recipeInfo := recipes["cpu_microarchitecture"]
+		workload := recipe.Workload{Command: testWorkload, PID: -2, Environment: map[string]string{}}
+		recipeCtx.Target = &engine_target.SSHTarget{Jumps: []engine_target.SSHHostConfig{{Host: testHost, Port: testPort}}}
+		recipeCtx.Workload = workload
+		loginService := targetloginmocks.NewMockLoginService(t).WithLogin(t, recipeCtx.Target, nil)
+		cmd := NewRunCommand(cc, &mr, recipeRunner, &mtm, loginService)
+		cmdBuf := &bytes.Buffer{}
+		cmd.SetOut(cmdBuf)
+		utils.SetPersistentFlags(cmd)
+		recipeParams := make(map[string]*structpb.Value)
+		recipeParams["metrics_group"] = structpb.NewStringValue("backend_bound")
+		recipeCtx.Params = recipeParams
+		recipeCtx.RecipeName = "cpu_microarchitecture"
+		recipeCtx.RunName = "Baseline run"
+		t.Cleanup(func() { recipeCtx.RunName = "" })
+		recipeRunner.On("SendRecipeRunToEngine", client, &recipeInfo, &recipeCtx).Return(recipe.RunResponse{Stage: "complete", Progress: 100, RunID: &apapproto.RunId{Value: "123"}}, nil)
+
+		cmd.SetArgs([]string{testRecipeName, "--param", "metrics_group=backend_bound", "--workload", testWorkload, "--json", "--name", "Baseline run"})
+		// When
+		err := cmd.Execute()
+		// Then
+		assert.NoError(t, err)
+		assert.Contains(t, cmdBuf.String(), "complete")
+	})
+
+	t.Run("Run uses the supplied group", func(t *testing.T) {
+		// Given
+		recipeInfo := recipes["cpu_microarchitecture"]
+		workload := recipe.Workload{Command: testWorkload, PID: -2, Environment: map[string]string{}}
+		recipeCtx.Target = &engine_target.SSHTarget{Jumps: []engine_target.SSHHostConfig{{Host: testHost, Port: testPort}}}
+		recipeCtx.Workload = workload
+		loginService := targetloginmocks.NewMockLoginService(t).WithLogin(t, recipeCtx.Target, nil)
+		cmd := NewRunCommand(cc, &mr, recipeRunner, &mtm, loginService)
+		cmdBuf := &bytes.Buffer{}
+		cmd.SetOut(cmdBuf)
+		utils.SetPersistentFlags(cmd)
+		recipeParams := make(map[string]*structpb.Value)
+		recipeParams["metrics_group"] = structpb.NewStringValue("backend_bound")
+		recipeCtx.Params = recipeParams
+		recipeCtx.RecipeName = "cpu_microarchitecture"
+		recipeCtx.GroupName = "Benchmarks"
+		t.Cleanup(func() { recipeCtx.GroupName = "" })
+		recipeRunner.On("SendRecipeRunToEngine", client, &recipeInfo, &recipeCtx).Return(recipe.RunResponse{Stage: "complete", Progress: 100, RunID: &apapproto.RunId{Value: "123"}}, nil)
+
+		cmd.SetArgs([]string{testRecipeName, "--param", "metrics_group=backend_bound", "--workload", testWorkload, "--json", "--group", "Benchmarks"})
+		// When
+		err := cmd.Execute()
+		// Then
+		assert.NoError(t, err)
+		assert.Contains(t, cmdBuf.String(), "complete")
+	})
+
 	t.Run("Parse recipe gathers repeating parameters into a list", func(t *testing.T) {
 		recipeInfo := recipes["cpu_microarchitecture"]
 		workload := recipe.Workload{Command: testWorkload, PID: -2, Environment: map[string]string{}}

@@ -28,6 +28,17 @@ var (
 	procGetProcessAffinityMask = modKernel32.NewProc("GetProcessAffinityMask")
 )
 
+// A tool must have a hidden console while retaining the console and process group
+// flags required by the existing CTRL+C cancellation mechanism.
+func TestBuildCmdHidesToolConsole(t *testing.T) {
+	manager := &WindowsProcessManager{}
+	cmd, err := manager.buildCmd(&LaunchCommand{Command: []string{"cmd.exe", "/c", "exit 0"}})
+	require.NoError(t, err)
+	require.NotNil(t, cmd.command.SysProcAttr)
+	require.True(t, cmd.command.SysProcAttr.HideWindow)
+	require.Equal(t, uint32(syscall.CREATE_NEW_PROCESS_GROUP|windows.CREATE_NEW_CONSOLE), cmd.command.SysProcAttr.CreationFlags)
+}
+
 // startDummySleepProcess starts a powershell sleep process with its own process group and console.
 func startDummySleepProcess(sleepTime int) (*os.Process, error) {
 	cmd := exec.Command("powershell", "-Command", fmt.Sprintf("Start-Sleep %d", sleepTime))

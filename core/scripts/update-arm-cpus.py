@@ -3,13 +3,11 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
-from urllib.error import URLError
-from urllib.request import urlopen
+
+import requests
 
 CPUS_JSON_URL = "https://raw.githubusercontent.com/ARM-software/data/master/cpus.json"
 
@@ -19,10 +17,11 @@ def main():
 
     print(f"Downloading {CPUS_JSON_URL} to {target}")
     try:
-        with urlopen(CPUS_JSON_URL) as response, target.open("wb") as out:
-            shutil.copyfileobj(response, out)
-    except URLError as exc:
-        sys.exit(f"Unable to download cpus.json: {exc.reason}")
+        response = requests.get(CPUS_JSON_URL, timeout=120)
+        response.raise_for_status()
+        target.write_bytes(response.content)
+    except requests.RequestException as exc:
+        sys.exit(f"Unable to download cpus.json: {exc}")
 
     print("Generating atperf-agent/systeminfo/armcpus/cpus.go")
     try:

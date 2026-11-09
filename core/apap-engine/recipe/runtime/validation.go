@@ -56,6 +56,11 @@ func (vsf *ValidationStageFactoryImpl) BuildStages(config *StageConfiguration, n
 		workloadOptionsStage := stages.NewWorkloadOptionsStage(config.Ctx.OrigWorkload, &config.Ctx.ResolvedWorkload, connectStage.TargetSessionSupplier, connectStage.CommandRunnerSupplier)
 		s = append(s, workloadOptionsStage)
 
+		if vsf.shouldIncludeOptionStages() && parameterOptionsRequireTools(config.Recipe.ParameterOptionsStages) {
+			deployment := newRecipeToolDeployment(config, connectStage, targetArchitectureStage, deployer.ToolDeployENSURE)
+			s = append(s, deployment.stages()...)
+		}
+
 		connectingToAgentStage := stages.NewConnectingToTargetAgentStage(
 			config.Ctx.Target,
 			connectStage.TargetSessionSupplier,

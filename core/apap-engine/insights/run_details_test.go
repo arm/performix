@@ -202,7 +202,7 @@ func newRunDetailsCPUsTestSession(t *testing.T, rows tableRows) *testSummarySess
 	t.Helper()
 
 	session := newTestSummarySession(t)
-	tableNames := addManifestTableFixtures(t, session, "run_details", []manifestTableFixture{
+	tableNames := addManifestTableFixtures(t, session, []manifestTableFixture{
 		{key: "cpus", componentType: runDetailsCPUsComponentType, schemaVersion: "0.1"},
 	})
 
@@ -221,7 +221,7 @@ func newRunDetailsTestSession(t *testing.T) *testSummarySession {
 	t.Helper()
 
 	session := newTestSummarySession(t)
-	tableNames := addManifestTableFixtures(t, session, "run_details", []manifestTableFixture{
+	tableNames := addManifestTableFixtures(t, session, []manifestTableFixture{
 		{key: "os", componentType: runDetailsOSComponentType, schemaVersion: "0.2"},
 		{key: "cpus", componentType: runDetailsCPUsComponentType, schemaVersion: "0.1"},
 	})

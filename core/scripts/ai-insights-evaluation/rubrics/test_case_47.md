@@ -26,9 +26,11 @@ SPDX-License-Identifier: Apache-2.0
   about 1 MiB and fit in the CPU's nearby Level 2 cache.
 
 ## What The LLM Should Suggest
-- Store the frequently read values in a separate packed array, or split
-  frequently used and rarely used record fields.
-- Keep the recommendation tied to the application record layout.
+- Pack or gather the frequently read values into contiguous storage, split
+  frequently used and rarely used fields, or propose an equivalent layout
+  change that reduces cache traffic.
+- Keep the recommendation tied to the measured indexed traversal and its cache
+  behaviour.
 
 ## Expected Profiling Characteristics
 - Backend Bound is the largest top-level CPU category and leads the next
@@ -43,12 +45,14 @@ SPDX-License-Identifier: Apache-2.0
 - Pass:
   - Identifies data-cache or data-fetch delays after the CPU has received the
     instructions.
-  - Connects the measurements to loading one frequently read value through
-    oversized records.
-  - Recommends a separate packed array or a split between frequently and rarely
-    used fields.
+  - Connects the measurements to the indexed pointer traversal and its poor
+    spatial locality.
+  - Recommends contiguous storage for the frequently read values, a split
+    between frequently and rarely used fields, or an equivalent concrete layout
+    change.
 - Fail:
   - Says that virtual-address translation is the main cause.
-  - Recommends loading data early without addressing the unnecessary record
-    data brought into cache.
-  - Gives a generic memory answer without connecting it to the record layout.
+  - Recommends loading data early without reducing the cache footprint of the
+    indexed traversal.
+  - Gives a generic memory answer without connecting it to the measured cache
+    evidence and hot loop.

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	duckdb "github.com/duckdb/duckdb-go/v2"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
@@ -23,6 +23,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcconnection"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/apap-engine/render"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
@@ -134,39 +135,45 @@ func TestSourceFetchTargetAgentNotDeployed(t *testing.T) {
 }
 
 func TestRegisterLoadSourceContentFunctionPerSessionName(t *testing.T) {
-	tmp, err := os.CreateTemp("", "source-fetch-*")
-	require.NoError(t, err)
-	defer os.Remove(tmp.Name())
-	require.NoError(t, os.WriteFile(tmp.Name(), []byte("hello"), 0o600))
+	oldLevel := logrus.GetLevel()
+	t.Cleanup(func() { logrus.SetLevel(oldLevel) })
+	for _, level := range []logrus.Level{logrus.InfoLevel, logrus.DebugLevel} {
+		t.Run(level.String(), func(t *testing.T) {
+			logrus.SetLevel(level)
 
-	connector, err := duckdb.NewConnector("", nil)
-	require.NoError(t, err)
-	db := sql.OpenDB(connector)
-	t.Cleanup(func() { _ = db.Close() })
+			tmp, err := os.CreateTemp("", "source-fetch-*")
+			require.NoError(t, err)
+			defer os.Remove(tmp.Name())
+			require.NoError(t, os.WriteFile(tmp.Name(), []byte("hello"), 0o600))
 
-	sqlConn, err := db.Conn(context.Background())
-	require.NoError(t, err)
-	defer sqlConn.Close()
+			db, err := (&render.DuckDBFactory{}).Connect(t.Name())
+			require.NoError(t, err)
+			t.Cleanup(db.Close)
+			sqlConn := db.Conn
+			_, err = sqlConn.ExecContext(context.Background(), `CREATE SCHEMA atp_memory.source_session; USE atp_memory.source_session`)
+			require.NoError(t, err)
 
-	ctx := context.Background()
-	_, err = sqlConn.ExecContext(ctx, `
+			ctx := context.Background()
+			_, err = sqlConn.ExecContext(ctx, `
 CREATE TABLE source_files (source_file_id INTEGER, host_location VARCHAR, target_location VARCHAR);
 `)
-	require.NoError(t, err)
-	_, err = sqlConn.ExecContext(ctx, `INSERT INTO source_files VALUES (1, ?, NULL);`, tmp.Name())
-	require.NoError(t, err)
+			require.NoError(t, err)
+			_, err = sqlConn.ExecContext(ctx, `INSERT INTO source_files VALUES (1, ?, NULL);`, tmp.Name())
+			require.NoError(t, err)
 
-	runTables := map[string]string{"run1": "source_files"}
-	runTargets := map[string]target.Target{"run1": fakeTarget{}}
+			runTables := map[string]string{"run1": "source_files"}
+			runTargets := map[string]target.Target{"run1": fakeTarget{}}
 
-	require.NoError(t, createSourceFilesUnionView(sqlConn, "source_files_union", runTables))
-	require.NoError(t, registerLoadSourceContentFunction(sqlConn, "source_files_union", nil, runTargets, "s1"))
-	// Register with another session ID on the same connection; should succeed because the UDF name differs.
-	require.NoError(t, registerLoadSourceContentFunction(sqlConn, "source_files_union", nil, runTargets, "s2"))
+			require.NoError(t, createSourceFilesUnionView(sqlConn, "source_files_union", runTables))
+			require.NoError(t, registerLoadSourceContentFunction(db, "source_files_union", nil, runTargets, "s1"))
+			// Register with another session ID on the same connection; should succeed because the UDF name differs.
+			require.NoError(t, registerLoadSourceContentFunction(db, "source_files_union", nil, runTargets, "s2"))
 
-	var content string
-	require.NoError(t, sqlConn.QueryRowContext(context.Background(), `SELECT load_source_content('run1', 1)`).Scan(&content))
-	require.Equal(t, "hello", content)
+			var content string
+			require.NoError(t, sqlConn.QueryRowContext(context.Background(), `SELECT load_source_content('run1', 1)`).Scan(&content))
+			require.Equal(t, "hello", content)
+		})
+	}
 }
 
 func TestLoadSourceContentsReturnsPartialResults(t *testing.T) {
@@ -177,14 +184,10 @@ func TestLoadSourceContentsReturnsPartialResults(t *testing.T) {
 	require.NoError(t, os.WriteFile(firstPath, []byte("first"), 0o600))
 	require.NoError(t, os.WriteFile(thirdPath, []byte("third\r\nline\n"), 0o600))
 
-	connector, err := duckdb.NewConnector("", nil)
+	db, err := (&render.DuckDBFactory{}).Connect(t.Name())
 	require.NoError(t, err)
-	db := sql.OpenDB(connector)
-	t.Cleanup(func() { _ = db.Close() })
-
-	sqlConn, err := db.Conn(context.Background())
-	require.NoError(t, err)
-	defer sqlConn.Close()
+	t.Cleanup(db.Close)
+	sqlConn := db.Conn
 
 	_, err = sqlConn.ExecContext(context.Background(), `
 CREATE TABLE source_files (source_file_id INTEGER, host_location VARCHAR, target_location VARCHAR);
@@ -204,7 +207,7 @@ CREATE TABLE source_files (source_file_id INTEGER, host_location VARCHAR, target
 		map[string]string{"run1": "source_files"},
 	))
 	require.NoError(t, registerLoadSourceContentFunction(
-		sqlConn,
+		db,
 		"source_files_union",
 		nil,
 		nil,
@@ -394,14 +397,10 @@ func TestLoadSourceContentsUDFCancellation(t *testing.T) {
 }
 
 func TestRegisterLoadSourceContentFunctionSameSessionCollides(t *testing.T) {
-	connector, err := duckdb.NewConnector("", nil)
+	db, err := (&render.DuckDBFactory{}).Connect(t.Name())
 	require.NoError(t, err)
-	db := sql.OpenDB(connector)
-	t.Cleanup(func() { _ = db.Close() })
-
-	sqlConn, err := db.Conn(context.Background())
-	require.NoError(t, err)
-	defer sqlConn.Close()
+	t.Cleanup(db.Close)
+	sqlConn := db.Conn
 
 	_, err = sqlConn.ExecContext(context.Background(), `
 CREATE TABLE source_files (run_id VARCHAR, source_file_id INTEGER, host_location VARCHAR, target_location VARCHAR);
@@ -413,8 +412,8 @@ INSERT INTO source_files VALUES ('run1', 1, '/tmp/a', NULL);
 	// Minimal target map; we don't actually execute the UDF here.
 	runTargets := map[string]target.Target{"run1": fakeTarget{}}
 
-	require.NoError(t, registerLoadSourceContentFunction(sqlConn, "source_files_union", nil, runTargets, "same"))
-	err = registerLoadSourceContentFunction(sqlConn, "source_files_union", nil, runTargets, "same")
+	require.NoError(t, registerLoadSourceContentFunction(db, "source_files_union", nil, runTargets, "same"))
+	err = registerLoadSourceContentFunction(db, "source_files_union", nil, runTargets, "same")
 	require.Error(t, err)
 }
 
@@ -529,16 +528,12 @@ func TestCreateSourceFilesUnionViewError(t *testing.T) {
 }
 
 func TestRegisterLoadSourceContentFunctionError(t *testing.T) {
-	const driverName = "errdrv_udf"
-	sql.Register(driverName, errDriver{execErr: errors.New("boom")})
-	db, err := sql.Open(driverName, "")
+	db, err := (&render.DuckDBFactory{}).Connect(t.Name())
 	require.NoError(t, err)
-	t.Cleanup(func() { db.Close() })
-	conn, err := db.Conn(context.Background())
-	require.NoError(t, err)
+	t.Cleanup(db.Close)
 
-	err = registerLoadSourceContentFunction(conn, "view", nil, map[string]target.Target{"r1": fakeTarget{}}, "s1")
-	require.Error(t, err)
+	err = registerLoadSourceContentFunction(db, "missing_source_files_view", nil, map[string]target.Target{"r1": fakeTarget{}}, "s1")
+	require.ErrorContains(t, err, "missing_source_files_view")
 }
 
 func TestTargetFetchLinuxTargetPathNormalizationFromWindowsHost(t *testing.T) {

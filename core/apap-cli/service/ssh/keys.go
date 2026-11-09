@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,15 +16,18 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pkg/sftp"
 	"github.com/spf13/afero"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/Arm-Debug/apap-cli/apap-cli/service/targetlogin"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
+	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
 
@@ -42,27 +44,21 @@ type SSHKeyProvisioner interface {
 	// ProvisionPublicKeyWithPassword provisions the public key to the target over SSH using a password.
 	ProvisionPublicKeyWithPassword(
 		dataDir string,
-		host string,
-		port int,
-		username string,
-		password string,
+		host target.SSHHostConfig,
+		promptSecret targetlogin.SecretPrompter,
 		pubKey string,
 	) error
 }
 
 // DefaultSSHKeyProvisioner is the production implementation using an Afero filesystem.
 type DefaultSSHKeyProvisioner struct {
-	FS                         afero.Fs
-	HostKeyCallbackFactoryFunc func(fs afero.Fs, path string) (ssh.HostKeyCallback, error)
+	FS afero.Fs
 }
 
 // NewDefaultSSHKeyProvisioner returns a DefaultSSHKeyProvisioner using the real OS filesystem.
 func NewDefaultSSHKeyProvisioner() *DefaultSSHKeyProvisioner {
 	return &DefaultSSHKeyProvisioner{
 		FS: afero.NewOsFs(),
-		HostKeyCallbackFactoryFunc: func(fs afero.Fs, path string) (ssh.HostKeyCallback, error) {
-			return conductor.TrustNewOrFailMismatchKnownHostsWithFs(fs, path)
-		},
 	}
 }
 
@@ -184,15 +180,18 @@ func generateRandomSuffix() string {
 //   - public key must be in OpenSSH format
 //
 // Returns an error on connection failure, SFTP error, or key write failure.
-func (p *DefaultSSHKeyProvisioner) ProvisionPublicKeyWithPassword(configDir, host string, port int, username, password, pubKey string) error {
+func (p *DefaultSSHKeyProvisioner) ProvisionPublicKeyWithPassword(configDir string, host target.SSHHostConfig, promptSecret targetlogin.SecretPrompter, pubKey string) error {
 	knownHostsPath := filepath.Join(configDir, "ssh", "known_hosts")
 
-	hostKeyCallback, err := p.createKnownHostsFile(knownHostsPath)
-	if err != nil {
+	if err := p.createKnownHostsFile(knownHostsPath); err != nil {
 		return err
 	}
 
-	client, err := p.connectWithPassword(host, port, username, password, knownHostsPath, hostKeyCallback)
+	hostKeyCallback, err := conductor.HostKeyCallback(p.FS, knownHostsPath, host, targetlogin.PromptHostKey)
+	if err != nil {
+		return err
+	}
+	client, err := p.connectWithPassword(host.Host, int(host.Port), host.Username, promptSecret, knownHostsPath, hostKeyCallback)
 	if err != nil {
 		return err
 	}
@@ -206,36 +205,28 @@ func (p *DefaultSSHKeyProvisioner) ProvisionPublicKeyWithPassword(configDir, hos
 }
 
 // createKnownHostsFile makes sure the ssh/known_hosts file exists under the given path
-// and returns a host key callback for SSH verification. Creates parent directories if needed.
+// and creates parent directories if needed.
 //
-// Returns an error if the file cannot be created or the callback cannot be initialized.
-func (p *DefaultSSHKeyProvisioner) createKnownHostsFile(knownHostsPath string) (ssh.HostKeyCallback, error) {
+// Returns an error if the file cannot be created.
+func (p *DefaultSSHKeyProvisioner) createKnownHostsFile(knownHostsPath string) error {
 	metadata := map[string]string{
 		"path": knownHostsPath,
 	}
 	if err := p.FS.MkdirAll(filepath.Dir(knownHostsPath), perms.SshDirPerm); err != nil {
-		return nil, message.New(message.CliServiceSshKeysCreateKnownHostsFile).WithCause(err).WithMetadata(metadata)
+		return message.New(message.CliServiceSshKeysCreateKnownHostsFile).WithCause(err).WithMetadata(metadata)
 	}
 
 	exists, err := afero.Exists(p.FS, knownHostsPath)
 	if err != nil {
-		return nil, message.New(message.CommonUnknownError).WithCause(err)
+		return message.New(message.CommonUnknownError).WithCause(err)
 	}
 	if !exists {
 		if err := afero.WriteFile(p.FS, knownHostsPath, []byte{}, perms.PrivateKeyPerm); err != nil {
-			return nil, message.New(message.CliServiceSshKeysCreateKnownHostsFile).WithCause(err).WithMetadata(metadata)
+			return message.New(message.CliServiceSshKeysCreateKnownHostsFile).WithCause(err).WithMetadata(metadata)
 		}
 	}
 
-	if p.HostKeyCallbackFactoryFunc == nil {
-		return nil, message.New(message.CommonUnknownError).WithCause(errors.New("HostKeyCallbackFactoryFunc is not set"))
-	}
-	hostKeyCallback, err := p.HostKeyCallbackFactoryFunc(p.FS, knownHostsPath)
-	if err != nil {
-		return nil, message.New(message.CommonUnknownError).WithCause(err)
-	}
-
-	return hostKeyCallback, nil
+	return nil
 }
 
 // connectWithPassword establishes an SSH connection to the given host:port using
@@ -247,12 +238,26 @@ func (p *DefaultSSHKeyProvisioner) createKnownHostsFile(knownHostsPath string) (
 // Host key verification is enforced using the provided hostKeyCallback.
 //
 // Returns an error if the connection fails or times out.
-func (p *DefaultSSHKeyProvisioner) connectWithPassword(host string, port int, username, password string, knownHostsPath string, hostKeyCallback ssh.HostKeyCallback) (*ssh.Client, error) {
+func (p *DefaultSSHKeyProvisioner) connectWithPassword(host string, port int, username string, promptSecret targetlogin.SecretPrompter, knownHostsPath string, hostKeyCallback ssh.HostKeyCallback) (*ssh.Client, error) {
+	// Both authentication methods share one prompt, invoked only after host verification.
+	passwordCallback := sync.OnceValues(func() (string, error) {
+		secret, err := promptSecret("Enter password: ")
+		if err != nil {
+			return "", message.New(message.CliServiceTargetloginPromptFailed).WithCause(err)
+		}
+		password := string(secret)
+		clear(secret)
+		return password, nil
+	})
 	config := &ssh.ClientConfig{
 		User: username,
 		Auth: []ssh.AuthMethod{
-			ssh.Password(password),
+			ssh.PasswordCallback(passwordCallback),
 			ssh.KeyboardInteractive(func(user, instruction string, questions []string, echos []bool) ([]string, error) {
+				password, err := passwordCallback()
+				if err != nil {
+					return nil, err
+				}
 				answers := make([]string, len(questions))
 				for i := range questions {
 					answers[i] = password

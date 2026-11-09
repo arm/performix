@@ -90,6 +90,7 @@ def build_payloads(
         "input_tokens_quality",
         "output_tokens_quality",
         "ignored_for_quality",
+        "model_config",
     ]
     rows = []
     quality_values = []
@@ -128,9 +129,11 @@ def build_payloads(
                 key: metric.threshold
                 for key, metric in metrics.items()
             }
-            existing_thresholds = performance_thresholds.setdefault(test_id, attempt_thresholds)
+            model_config = attempt.get("ai_model_config", "")
+            model_thresholds = performance_thresholds.setdefault(test_id, {})
+            existing_thresholds = model_thresholds.setdefault(model_config, attempt_thresholds)
             if existing_thresholds != attempt_thresholds:
-                raise ValueError(f"conflicting recorded performance thresholds for {test_id}")
+                raise ValueError(f"conflicting recorded performance thresholds for {test_id}/{model_config}")
             duration_quality = metrics["duration_seconds"].quality
             input_quality = metrics["input_tokens"].quality
             output_quality = metrics["output_tokens"].quality
@@ -158,6 +161,7 @@ def build_payloads(
             input_quality,
             output_quality,
             not evaluated,
+            attempt.get("ai_model_config", ""),
         ])
 
     warnings = []
@@ -228,6 +232,9 @@ def build_dashboard_benchmarks(report: dict[str, Any]) -> list[dict[str, Any]]:
         name_prefix = test_id
         if isinstance(attempts_total, int) and attempts_total > 1 and isinstance(attempt, int):
             name_prefix = f"{test_id} attempt {attempt}"
+        model_config = cell(row, "model_config")
+        if model_config:
+            name_prefix = f"{name_prefix} [{model_config}]"
         for metric, label, unit in (
             ("duration_seconds", "wall-clock time", "s"),
             ("input_tokens", "input tokens", "tokens"),

@@ -49,7 +49,7 @@ type Recipe struct {
 	RunStages                []ScriptedStage
 	ReadyStages              []ScriptedStage
 	RenderStages             []ScriptedStage
-	ParameterOptionsStages   []ScriptedStage
+	ParameterOptionsStages   []ParameterOptionsStage
 	ParameterValidationStage ScriptedStage
 	Deployments              []deploymentsupport.DeploymentDeclaration
 	ToolVersions             map[string]string

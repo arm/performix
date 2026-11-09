@@ -35,7 +35,7 @@ const DefaultADBPath = "adb"
 const DefaultDaemonAutostart = true
 
 const EnableAndroidTargetsConfigKey = "enable-android-targets"
-const EnableGPURecipeConfigKey = "enable-gpu-recipe"
+const EnableProfilingFocusConfigKey = "enable-profiling-focus"
 const DaemonAutostartConfigKey = "daemon-autostart"
 
 const minPort = 1

@@ -131,8 +131,8 @@ class PerformixAttempt:
                         process.kill()
                         process.wait(timeout=15)
 
-    def import_fixture(self, cli, archive, source_root):
-        """Import into this attempt's store before its mode starts a daemon."""
+    def import_fixture(self, cli, archive, source_root, validate_run=None):
+        """Import and optionally validate a run in this attempt's private store."""
         with self.daemon(cli) as env:
             def cli_call(*args):
                 return run_cli([str(cli), *args], env=env, timeout=120).stdout
@@ -143,4 +143,6 @@ class PerformixAttempt:
             listing = json.loads(cli_call("run", "list", "--json"))["data"]
             if [run["id"] for run in listing["runs"]] != [run_id]:
                 raise RuntimeError("private Performix store contains unexpected runs")
+            if validate_run:
+                validate_run(run_id, env)
             return run_id

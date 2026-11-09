@@ -22,16 +22,21 @@ SPDX-License-Identifier: Apache-2.0
 
 ## What The LLM Should Suggest
 - Identify the dominant loop hotspot and tie it to the transform body.
-- Suggest branch-friendly/SIMD-friendly reformulation of the transform path.
-- Optionally suggest candidate build/target tuning and verification steps (for example vectorization report/asm check), labeled as candidate actions.
+- Recommend a SIMD-oriented experiment for this loop.
+- Compiler vectorization diagnostics or a branch/reduction reformulation are useful
+  options; an explicit code rewrite is not required.
 
 ## Expected Profiling Characteristics
 - Most samples should land in `kernel_1`.
 - One dominant loop hotspot should be visible.
 
 ## Scoring Guidance
+- Explicit correctness-check advice is useful but not required. Accept recommendations
+  conditional on preserving the required numerical semantics.
 - Pass:
-  - Diagnoses vectorization/SIMD opportunity in the hot loop and gives concrete code-level suggestions.
+  - Identifies the scalar hot loop and proposes a targeted SIMD experiment or
+    concrete reformulation.
 - Fail:
   - Notes the hotspot but gives only generic optimization advice.
   - Or misidentifies the primary bottleneck or suggests an unrelated main fix.
+  - Or recommends materially changing required output semantics without qualification.

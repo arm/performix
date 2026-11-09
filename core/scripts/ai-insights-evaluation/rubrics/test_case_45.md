@@ -23,9 +23,9 @@ SPDX-License-Identifier: Apache-2.0
 
 ## What The LLM Should Suggest
 
-- Identify 3 dense filesystem-syscall bursts separated by quiet processing intervals.
 - Connect the closely matched `openat`, `read` and `close` counts and repeated path to redundant settings reloads.
-- Recommend caching settings and reloading on change, reducing the refresh cadence, or safely reusing a descriptor.
+- Recommend caching, change-driven reloads, lower refresh cadence or descriptor
+  reuse that preserves application freshness and correctness.
 
 ## Expected Profiling Characteristics
 
@@ -35,8 +35,11 @@ SPDX-License-Identifier: Apache-2.0
 ## Scoring Guidance
 
 - Pass:
-  - Identifies the 3 reload bursts and uses repeated open/read/close activity to diagnose redundant reloads of the same file.
-  - Recommends a concrete cache, reuse, lower-cadence or change-driven reload strategy.
+  - Uses repeated open/read/close activity to diagnose redundant reloads of the same file.
+    Exact burst counts, timings and per-burst syscall counts are not required.
+  - Recommends at least one concrete cache, reuse, lower-cadence or change-driven reload strategy.
+    Conditional recommendations and a low-impact assessment are acceptable when
+    tied to the same-file reload diagnosis and measured cost.
 - Fail:
-  - Gives generic filesystem advice without identifying repeated settings reloads and the burst pattern.
+  - Gives generic filesystem advice without identifying repeated settings reloads.
   - Recommends a larger read buffer or faster storage as the primary fix.

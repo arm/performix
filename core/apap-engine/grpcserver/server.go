@@ -50,6 +50,10 @@ type GrpcServerConfig struct {
 	FeatureFlags       featureflags.Flags
 	ConfigDirectory    string
 	RunContext         func() context.Context
+
+	ConfigFile          string
+	TelemetryEnabled    bool
+	TelemetryConfigured bool
 }
 
 type GrpcServer struct {
@@ -148,7 +152,7 @@ func (s *GrpcServer) runServer() error {
 	)
 
 	// Create the APAP service
-	packsServerConfig := ApapServerConfig{
+	packsServerConfig := &ApapServerConfig{
 		ParallelJobs:         s.Config.ParallelJobs,
 		DataDirectory:        s.Config.DataDirectory,
 		FeatureFlags:         s.Config.FeatureFlags,
@@ -161,6 +165,9 @@ func (s *GrpcServer) runServer() error {
 		SourceToolsDir:       s.Config.SrcToolsDirectory,
 		ConfigDirectory:      s.Config.ConfigDirectory,
 		ADBPath:              s.Config.ADBPath,
+		ConfigFile:           s.Config.ConfigFile,
+		TelemetryEnabled:     s.Config.TelemetryEnabled,
+		TelemetryConfigured:  s.Config.TelemetryConfigured,
 	}
 
 	deploymentPaths := deployer.BaseToolDeploymentPaths{

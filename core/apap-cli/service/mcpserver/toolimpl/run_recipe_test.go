@@ -105,7 +105,7 @@ var expectedBundledRecipeNames = []string{
 	"cmn_analysis",
 	"code_hotspots",
 	"cpu_microarchitecture",
-	"gpu",
+	"graphics",
 	"instruction_mix",
 	"memory_access",
 	"ml_analysis",
@@ -244,6 +244,7 @@ func TestRunRecipeTool(t *testing.T) {
 	})
 
 	t.Run("runs a system-wide recipe to completion", func(t *testing.T) {
+		// Given
 		ctx := context.Background()
 		targets := &targetservice.MockTargetManager{}
 		expectTarget(targets, "myhost", "10.0.0.1")
@@ -264,11 +265,13 @@ func TestRunRecipeTool(t *testing.T) {
 		defer clientSession.Close()
 		defer serverSession.Close()
 
+		// When
 		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 			Name:      "run_recipe",
-			Arguments: map[string]any{"recipe": "code_hotspots", "target": "myhost", "system": map[string]any{}},
+			Arguments: map[string]any{"recipe": "code_hotspots", "target": "myhost", "system": map[string]any{}, "run_name": "Benchmark", "group_name": "Benchmarks"},
 		})
 
+		// Then
 		require.NoError(t, err)
 		require.False(t, result.IsError)
 		decoded := decodeRunRecipeResult(t, result)
@@ -280,6 +283,8 @@ func TestRunRecipeTool(t *testing.T) {
 		require.NotNil(t, issuedCmd)
 		startCommand := issuedCmd.GetStartCommand()
 		require.NotNil(t, startCommand)
+		assert.Equal(t, "Benchmark", startCommand.GetRunName())
+		assert.Equal(t, "Benchmarks", startCommand.GetGroupName())
 		assert.Equal(t, apapproto.ToolDeploy_AUTO, startCommand.GetDeploymentType())
 		assert.NotNil(t, startCommand.GetWorkload().GetSystemWideWorkload())
 		require.NotNil(t, startCommand.Timeout)

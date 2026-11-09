@@ -48,6 +48,11 @@ func (m *MockTargetManager) UpdateTarget(name string, fields *engine_target.Upda
 	return m.Called(name, fields).Error(0)
 }
 
+func (m *MockTargetManager) UpdateAndroidTargetLastKnownADBAddress(name string, serialNumber string, address string) (bool, error) {
+	args := m.Called(name, serialNumber, address)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockTargetManager) GetDefaultTargetName() (string, error) {
 	mockArgs := m.Called()
 	return mockArgs.Get(0).(string), mockArgs.Error(1)

@@ -217,9 +217,10 @@ func (w *WindowsProcessManager) buildCmd(lc *LaunchCommand) (*launchCommand, err
 
 	launch := newLaunchCommand(lc)
 
-	// Always create a process group and a dedicated console for CTRL+C handling
+	// Keep a dedicated console for CTRL+C handling, but hide it when the agent
+	// runs in the user's interactive desktop session.
 	creationFlags := uint32(syscall.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NEW_CONSOLE)
-	launch.command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: creationFlags}
+	launch.command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: creationFlags, HideWindow: true}
 
 	log.WithFields(launchLogFields(lc)).Info("Launch command")
 

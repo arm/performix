@@ -125,7 +125,7 @@ func TestTranslateGPUCountersLoadsMatchedMetricSet(t *testing.T) {
 }
 
 func TestQueryGPUInfo(t *testing.T) {
-	// Replace model-format cases with GPU ID cases when NEOPROF-1008 is available.
+	// GPU selection currently uses model names from the sl-record probe report.
 	for _, tc := range []struct {
 		name     string
 		model    string
@@ -146,7 +146,7 @@ func TestQueryGPUInfo(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := jstest.LoadToolIntegration(t, "neoprof")
-			report := map[string]any{"gpus": []map[string]string{{"model": tc.model, "gpu_id": "0xe8800010"}}}
+			report := map[string]any{"gpus": []map[string]any{{"device_number": 0, "product_id": "0xe000", "model": tc.model}}}
 			result, err := h.Call[*string](t, "queryGPUInfo", report)
 
 			require.NoError(t, err)

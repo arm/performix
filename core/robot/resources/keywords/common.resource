@@ -28,7 +28,7 @@ ${G_LAST_RESULT}                ${EMPTY}  # Global to track last command result 
 ${G_LAST_PROCESS}               ${EMPTY}  # Global to track process handle of last launched process
 ${G_WORKLOADS}                  ${EMPTY}  # Global to track available workloads
 ${LAUNCH_WORKLOAD}              ${EMPTY}  # User override or resolved workload for the current target
-${G_LAUNCH_WORKLOAD_OVERRIDE}    ${None}  # Initial user override; None until the first workload selection
+${G_LAUNCH_WORKLOAD_OVERRIDE}   ${None}  # Initial user override; None until the first workload selection
 ${USE_PRERECORDED_RUNS}         True
 ${JSON_FLAG}                    --json
 ${CLI_BIN_DIR}                  ${CURDIR}${/}..${/}..${/}..${/}apap-cli

@@ -8,5 +8,9 @@ package conductor
 import "os/exec"
 
 func runLocalCommand(cmd string) (string, string, error) {
-	return runCmd(exec.Command("/bin/sh", "-c", cmd))
+	return runCmd(newLocalCommand("/bin/sh", "-c", cmd))
+}
+
+func newLocalCommand(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
 }

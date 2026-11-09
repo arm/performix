@@ -6,6 +6,7 @@ package recipeparser
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1555,6 +1556,27 @@ func TestParameterOptionsStage(t *testing.T) {
 		assert.Equal(t, expectedErr, err)
 		assert.NoError(t, message.ValidateMetadataPlaceholders(err))
 	})
+}
+
+func TestParameterOptionsStageRequiresTools(t *testing.T) {
+	for _, configType := range []string{"single_select", "multi_select", "radio"} {
+		for _, flag := range []string{"", "requiresTools: false,", "requiresTools: true,"} {
+			t.Run(configType+"/"+flag, func(t *testing.T) {
+				parser := RecipeParserJS{APIFactory: CreateConcreteAPI}
+				parsed, err := ParseInlineRecipe(&parser, fmt.Sprintf(`
+					const recipe = {
+						name: 'test', title: 'Test', description: 'Test', version: '1.0', api_version: '1.0.2',
+						parameters: [{id: 'events', label: 'Events', description: 'Events', required: false, config: {
+							type: '%s', %s options: () => [{value: 'event', label: 'Event'}],
+						}}],
+						readyStages: [], runStages: [], renderStages: [],
+					};`, configType, flag))
+				require.NoError(t, err)
+				require.Len(t, parsed.ParameterOptionsStages, 1)
+				assert.Equal(t, flag == "requiresTools: true,", parsed.ParameterOptionsStages[0].RequiresTools())
+			})
+		}
+	}
 }
 
 func TestParamaterValidationStage(t *testing.T) {

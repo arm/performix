@@ -49,14 +49,8 @@ var renderSessionOutputSchema = &jsonschema.Schema{
 	Type: "object",
 	OneOf: []*jsonschema.Schema{
 		{
-			Required: []string{
-				"session_id",
-				"connection_string",
-				"manifest",
-				"invocation_statuses",
-				"visualization_resolved_tables",
-			},
-			Not: &jsonschema.Schema{Required: []string{"error"}},
+			Required: []string{"session_id", "connection_string", "invocation_statuses", "table_schemas"},
+			Not:      &jsonschema.Schema{Required: []string{"error"}},
 		},
 		{
 			Required: []string{"error"},
@@ -72,27 +66,54 @@ var renderSessionOutputSchema = &jsonschema.Schema{
 			Type:        "string",
 			Description: "Daemon connection string for the rendered database.",
 		},
-		"manifest": {
-			AnyOf: []*jsonschema.Schema{
-				{Type: "object"},
-				{Type: "null"},
-			},
-			Description: "Components available in the rendered database.",
-		},
 		"invocation_statuses": {
 			Type:        "array",
 			Description: "Outcome of each renderer invocation.",
 			Items:       &jsonschema.Schema{Type: "object"},
 		},
-		"visualization_resolved_tables": {
-			AnyOf: []*jsonschema.Schema{
-				{Type: "object"},
-				{Type: "null"},
-			},
-			Description: "Mapping from visualization data sources to rendered table names.",
+		"table_schemas": renderTableSchemasOutputSchema,
+		"guidance": {
+			Type:        "string",
+			Description: "Guidance for interpreting rendered data. Read linked resources when applicable.",
+		},
+		"table_schemas_query": {
+			Type:        "string",
+			Description: "Present when table schemas were omitted to keep the response within 24 KiB. Pass this SQL and session_id to run_query to discover columns. Filter by table or column name when possible; otherwise increase OFFSET by 50 until fewer than 50 rows are returned.",
 		},
 		"compatibility_warning": toolErrorSchema(),
 		"error":                 toolErrorSchema(),
+	},
+}
+
+var renderTableSchemasOutputSchema = &jsonschema.Schema{
+	Type:        "array",
+	Description: "Non-hidden tables published by the render, including their columns and any visualization data sources that use them. When table_schemas_query is present, column maps are empty; the table list is also empty if its metadata cannot fit. Hidden inputs and internal helper views remain queryable but are omitted.",
+	Items: &jsonschema.Schema{
+		Type:     "object",
+		Required: []string{"name", "columns", "visualization_data_sources"},
+		Properties: map[string]*jsonschema.Schema{
+			"name": {
+				Type:        "string",
+				Description: "Physical relation name to use in SQL.",
+			},
+			"columns": {
+				Type:                 "object",
+				Description:          "Column names mapped to their DuckDB data types.",
+				AdditionalProperties: &jsonschema.Schema{Type: "string"},
+			},
+			"visualization_data_sources": {
+				Type:        "array",
+				Description: "Logical visualization data sources that resolve to this relation. Empty for other queryable relations.",
+				Items: &jsonschema.Schema{
+					Type:     "object",
+					Required: []string{"visualization_id", "data_source"},
+					Properties: map[string]*jsonschema.Schema{
+						"visualization_id": {Type: "string", Description: "Visualization identifier."},
+						"data_source":      {Type: "string", Description: "Data-source name within the visualization."},
+					},
+				},
+			},
+		},
 	},
 }
 
@@ -133,11 +154,15 @@ func executeOpenRenderSession(
 		return renderSessionErrorResult(openedRenderSession{}, err), err
 	}
 
-	session, result, err := openRenderSessionResult(ctx, engine, runID, renderParameters)
+	opened, err := openRenderSessionResult(ctx, engine, runID, renderParameters)
 	if err != nil {
-		return renderSessionErrorResult(session, err), err
+		return renderSessionErrorResult(opened.Session, err), err
 	}
-	return result, nil
+	if err := fitRenderTableSchemas(opened.Details, opened.Details); err != nil {
+		err = joinRenderSessionCleanupError(ctx, engine, opened.Session.Invocation.GetSessionId(), err)
+		return renderSessionErrorResult(opened.Session, err), err
+	}
+	return opened.Details, nil
 }
 
 // renderParameterValues converts JSON render parameters to the protobuf values

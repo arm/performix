@@ -51,6 +51,10 @@ func FromViper() grpcserver.GrpcServerConfig {
 		ADBPath:            viper.GetString("adb-path"),
 		FeatureFlags:       LoadFeatureFlags(viper.GetViper()),
 		ConfigDirectory:    DefaultConfigDir,
+
+		ConfigFile:          viper.ConfigFileUsed(),
+		TelemetryEnabled:    viper.GetBool("telemetry-enabled"),
+		TelemetryConfigured: viper.InConfig("telemetry-enabled"),
 	}
 }
 

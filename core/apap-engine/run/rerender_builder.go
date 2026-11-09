@@ -16,6 +16,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
+	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
 
 const renderDirName = "render"
@@ -134,7 +135,7 @@ func (b *RunRenderFS) MoveTempFile(ctx context.Context, renderID string, tempFil
 	}
 	// Move the file from temp to final destination, within the same file system.
 	logx.FromContext(ctx).Debugf("Moving render file from temp path %s to final destination %s", srcPath, destPath)
-	return os.Rename(srcPath, destPath)
+	return util.AtomicReplaceFile(srcPath, destPath)
 }
 
 // ListRenderDirs lists all render dirs in this run.

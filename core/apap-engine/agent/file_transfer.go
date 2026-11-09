@@ -180,7 +180,7 @@ func ReceiveFile(ctx context.Context, remotePath string, destination TransferDes
 		return fmt.Errorf("close %q: %w", tmpFileName, cerr)
 	}
 
-	if rerr := os.Rename(tmpFileName, localPath); rerr != nil {
+	if rerr := util.AtomicReplaceFile(tmpFileName, localPath); rerr != nil {
 		return fmt.Errorf("rename %q -> %q: %w", tmpFileName, localPath, rerr)
 	}
 

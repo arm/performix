@@ -43,6 +43,8 @@ SPDX-License-Identifier: Apache-2.0
     labelling their source or explaining numeric differences, provided the
     measurements correspond to queried ASCT output. Ratios derived directly
     from quoted measurements are also acceptable.
+  - Hardware cache capacities reported by system metadata need not equal the
+    summary's selected working-set sizes. That difference alone is not a failure.
 - Fail:
   - Treats the sweep as aggregate bandwidth or draws a misleading conclusion
     from unlike measurements.

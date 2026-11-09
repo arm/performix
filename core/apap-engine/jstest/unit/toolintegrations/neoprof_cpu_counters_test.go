@@ -11,10 +11,62 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 	"github.com/Arm-Debug/apap-cli/apap-engine/jstest"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 )
 
 const cpuCounterID = "counter.cpu_cycles"
+
+func TestNeoprofNativeEvents(t *testing.T) {
+	h := jstest.LoadJSModule(t, "tool-integrations/neoprof_cpu_counters.js", jstest.WithXMLModule)
+	catalogue := map[string]any{
+		"counters": `<counters>
+			<cluster id="0" name="ARMv8_Cortex_A78"/><cpu id="0" cluster="0"/><counter name="ARMv8_Cortex_A78_cnt0"/>
+			<cluster id="1" name="ARMv8_Cortex_A55"/><cpu id="1" cluster="1"/><counter name="ARMv8_Cortex_A55_cnt0"/>
+			<cluster id="2" name="Unavailable"/><cpu id="2" cluster="2"/><counter name="Unavailable_ccnt"/>
+			<counter name="GPU_cnt0"/>
+		</counters>`,
+		"events": `<events>
+			<category name="Cortex-A78" counter_set="ARMv8_Cortex_A78_cnt" per_cpu="yes">
+				<event counter="ARMv8_Cortex_A78_ccnt" event="0x11" title="Cycles" name="CPU Cycles"/>
+				<event event="0x08" title="Instructions" name="Retired" description="Retired instructions" units="instructions"/>
+				<event event="8" title="Instructions" name="Retired" description="Retired instructions" units="instructions"/>
+			</category>
+			<category name="Cortex-A55" counter_set="ARMv8_Cortex_A55_cnt" per_cpu="yes">
+				<event event="0x08" title="Instructions" name="Retired"/>
+			</category>
+			<category name="Unavailable" counter_set="Unavailable_cnt" per_cpu="yes">
+				<event event="0x08" title="Instructions" name="Retired"/>
+			</category>
+			<category name="GPU" counter_set="GPU_cnt" per_cpu="no">
+				<event event="0x08" title="GPU" name="Busy"/>
+			</category>
+		</events>`,
+	}
+	values, err := h.Call[map[string]capabilities.NativeCPUCounterValue](t, "resolveNativeEvents", catalogue)
+	require.NoError(t, err)
+	require.Len(t, values, 2)
+	require.NoError(t, capabilities.ValidateNativeCPUCounterDiscovery(values))
+	a78 := values["armv8_cortex_a78.8"]
+	assert.Equal(t, "Instructions: Retired", a78.Payload.Title)
+	assert.Equal(t, capabilities.NativeCPUCounterScope{ID: "armv8_cortex_a78", Name: "Cortex-A78"}, a78.Payload.PMU)
+	assert.Equal(t, "0x8", a78.Payload.EventCode)
+	require.NotNil(t, a78.Payload.Description)
+	assert.Equal(t, "Retired instructions", *a78.Payload.Description)
+	require.NotNil(t, a78.Payload.Units)
+	assert.Equal(t, "instructions", *a78.Payload.Units)
+	assert.Nil(t, values["armv8_cortex_a55.8"].Payload.Units)
+
+	catalogue["counters"] = `<counters><cluster id="0" name="ARMv8_Cortex_A78"/><counter name="ARMv8_Cortex_A78_cnt0"/></counters>`
+	_, err = h.Call[map[string]capabilities.NativeCPUCounterValue](t, "resolveNativeEvents", catalogue)
+	require.ErrorContains(t, err, "CPU group has no CPU membership")
+
+	catalogue["counters"] = "<counters/>"
+	values, err = h.Call[map[string]capabilities.NativeCPUCounterValue](t, "resolveNativeEvents", catalogue)
+	require.NoError(t, err)
+	assert.Empty(t, values)
+}
 
 func cpuCatalogue(name, event string, cluster int) map[string]any {
 	return map[string]any{
@@ -146,8 +198,13 @@ func TestNeoprofCPUCounterDiscoveryFailuresPropagate(t *testing.T) {
 	}
 
 	_, err := h.CallAwait[map[string]any](t, "discover", engine, ctx, "/tools/sl-record")
-	assert.ErrorContains(t, err, "common.UNKNOWN_ERROR")
-	assert.ErrorContains(t, err, "permission denied")
+	var msg message.Message
+	require.ErrorAs(t, err, &msg)
+	assert.Equal(t, message.ToolIntegrationsNeoprofCpuCounterDiscoveryFailed, msg.Code())
+	assert.Equal(t, cpuCounterID, msg.Metadata()["capability"])
+	assert.ErrorContains(t, msg.Unwrap(), `"rc":1`)
+	assert.ErrorContains(t, msg.Unwrap(), `"stdout":""`)
+	assert.ErrorContains(t, msg.Unwrap(), "permission denied")
 }
 
 func TestNeoprofCPUCounterRegistryLoadsRowsFromGroupedJSON(t *testing.T) {

@@ -13,9 +13,14 @@ const COUNTER_CAPABILITY_COMPONENT_TYPE = Object.freeze({
   name: 'tool_capabilities/counter',
   version: '1.0',
 });
+const NATIVE_CPU_COUNTER_CAPABILITY_COMPONENT_TYPE = Object.freeze({
+  name: 'tool_capabilities/native_cpu_counter',
+  version: '1.0',
+});
 
 module.exports = {
   CPU_CYCLES,
   CPU_COUNTER_CAPABILITY_COMPONENT_TYPE,
   COUNTER_CAPABILITY_COMPONENT_TYPE,
+  NATIVE_CPU_COUNTER_CAPABILITY_COMPONENT_TYPE,
 };

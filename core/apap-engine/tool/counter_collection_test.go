@@ -4,12 +4,31 @@
 package tool
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 )
+
+func TestValidateNativeCPUDiscovery(t *testing.T) {
+	value := json.RawMessage(`{
+		"componentType":{"name":"tool_capabilities/native_cpu_counter","version":"1.0"},
+		"state":"available",
+		"payload":{"title":"Instructions retired","pmu":{"id":"pmu0","name":"Cortex-A78"},"eventCode":"0x8"}
+	}`)
+	result := ProbeResult{Capabilities: map[string]any{
+		"pmu0.8":    value,
+		"unrelated": map[string]any{"componentType": map[string]any{"name": "other"}},
+		"legacy":    true,
+	}}
+	require.NoError(t, validateCPUDiscovery(result, true, false))
+
+	// Native counters with invalid capability IDs must still be validated and rejected.
+	result.Capabilities["wrong_id"] = value
+	require.ErrorContains(t, validateCPUDiscovery(result, true, false), "invalid native CPU counter capability ID")
+}
 
 func TestValidateCounterOutcomesAppliesSelectionPolicy(t *testing.T) {
 	outputUnverified := capabilities.CPUCounterReasonOutputUnverified

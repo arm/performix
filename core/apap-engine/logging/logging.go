@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ARM-software/golang-utils/utils/filesystem"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
@@ -27,20 +26,17 @@ var logLevels = map[string]log.Level{
 }
 
 func createFile(path string) error {
-	err := filesystem.MkDir(filepath.Dir(path))
+	err := os.MkdirAll(filepath.Dir(path), perms.LocalDirPerm)
 	if err != nil {
 		return err
 	}
 
-	if !filesystem.Exists(path) {
-		f, err := filesystem.CreateFile(path)
-		if err != nil {
-			return err
-		}
-		f.Close()
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, perms.LocalFilePerm)
+	if err != nil {
+		return err
 	}
 
-	return nil
+	return f.Close()
 }
 
 func GetNewLogFilePath() (string, error) {
@@ -94,7 +90,7 @@ func SetLogLevel(level string) error {
 }
 
 func ReadLogFile(file string) (string, error) {
-	content, err := filesystem.ReadFile(file)
+	content, err := os.ReadFile(file)
 	if err != nil {
 		return "", err
 	}

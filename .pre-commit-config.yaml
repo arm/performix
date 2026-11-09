@@ -14,8 +14,8 @@ repos:
       - id: lint-all
         name: lint-all
         description: Linting all files
-        entry: ./core/scripts/lint-all.sh
-        language: script
+        entry: task core:lint
+        language: system
         pass_filenames: false
         stages: [pre-commit]
   - repo: https://github.com/pre-commit/pre-commit-hooks

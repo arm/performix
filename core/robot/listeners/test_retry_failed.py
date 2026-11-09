@@ -18,17 +18,13 @@ from robot.api import ExecutionResult
 
 LISTENER_DIR = Path(__file__).resolve().parent
 ROBOT_DIR = LISTENER_DIR.parent
-RUN_ROBOT_PATH = ROBOT_DIR.parent / "scripts" / "run-robot.py"
+RUN_ROBOT_PATH = ROBOT_DIR / "run-robot.py"
 
 
 def load_run_robot():
     spec = importlib.util.spec_from_file_location("run_robot", RUN_ROBOT_PATH)
     module = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(RUN_ROBOT_PATH.parent))
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.path.pop(0)
+    spec.loader.exec_module(module)
     return module
 
 
@@ -77,6 +73,8 @@ class RetryFailedIntegrationTests(unittest.TestCase):
         )
         output_dir = self.root / "results"
         command = [
+            sys.executable,
+            "-m",
             "robot",
             "--outputdir",
             str(output_dir),
@@ -163,6 +161,8 @@ class RetryFailedIntegrationTests(unittest.TestCase):
         output_dir = self.root / "multi-suite-results"
         completed = subprocess.run(
             [
+                sys.executable,
+                "-m",
                 "robot",
                 "--outputdir",
                 str(output_dir),

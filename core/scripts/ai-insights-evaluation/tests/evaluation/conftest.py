@@ -1,0 +1,994 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+"""Pytest integration for the AI Insights evaluation harness.
+
+Pytest loads a `conftest.py` file automatically for tests in the same
+directory tree. This file is therefore the harness-local place to add command
+line options, validate suite-wide configuration before any testcase starts,
+and customise the terminal summary printed after pytest has run.
+
+The AI Insights tests themselves live in `test_ai_insights_evaluation.py`.
+That module owns the Performix run import, MCP invocation, LLM judging, and
+recorded pytest properties. This file deliberately stays at the pytest
+integration boundary: it defines how a user configures the suite and how those
+recorded properties are presented in normal pytest output.
+
+Pathways test cases use a disposable target supplied by CI or the developer.
+Only one Pathways attempt may execute per invocation; CI recruits a fresh target
+for every testcase/attempt. Local developers select one attempt and run with
+`-n 0`; collection rejects larger Pathways selections or xdist execution before
+setup. Ordinary Insights tests keep their configured pytest workers. There is
+no separate scheduling phase for Pathways inside the harness.
+
+The most important pytest concepts used here are:
+
+- `pytest_addoption`: called during pytest startup to register custom
+  `--ai-*` options.
+- `pytest_collection_modifyitems`: called after pytest has discovered and
+  parametrised tests, but before it runs them. This lets us fail early for
+  missing suite-level inputs such as API keys.
+- `pytest_sessionfinish`: called after test execution to generate graphs from
+  the completed JUnit report.
+- `pytest_terminal_summary`: called after test execution to add a concise
+  human-readable summary derived from pytest's standard recorded properties.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import stat
+import sys
+import uuid
+import zipfile
+from pathlib import Path
+from typing import Any
+
+import pytest
+import requests
+
+from evaluation_summary import render_console_summary
+from judge_config import DEFAULT_JUDGE_MODEL
+from performance_quality import (
+    PerformanceThresholds,
+    QUALITY_GOOD,
+    performance_metrics_for_attempt,
+    performance_thresholds_from_manifest,
+    recorded_performance_properties,
+)
+from recipe_support import PRERECORD_MODES, requires_source_archive, resolve_evaluation_inputs, resolve_prerecord_config
+
+
+HARNESS_DIR = Path(__file__).resolve().parents[2]
+ROOT = HARNESS_DIR.parents[2]
+CORE_DIR = ROOT / "core"
+SCRIPTS_DIR = CORE_DIR / "scripts"
+AI_PROPERTY_PREFIX = "ai_"
+DEFAULT_MODES = "performix_mcp"
+DEFAULT_PRERECORDED_RUN_CACHE = (
+    Path.home() / ".cache" / "performix" / "ai-insights-evaluation" / "pre-recorded-runs"
+)
+DEFAULT_ARTIFACTORY_RUN_BASE = "its.apx-prerecorded-runs/ai-insights-evaluation"
+AI_XDIST_PREPARED_ATTR = "_ai_insights_xdist_prepared"
+AI_GRAPH_REPORT_ATTR = "_ai_insights_graph_report"
+AI_INSIGHTS_TEST_NODEID_MARKER = "::test_ai_insights["
+
+sys.path.append(str(SCRIPTS_DIR))
+from junit_attempts import attempts_from_junit
+from run_export_helper import sha256_file
+
+
+def get_artifactory_url() -> str:
+    constants_path = SCRIPTS_DIR / "constants.sh"
+    with constants_path.open(encoding="utf-8") as constants:
+        for line in constants:
+            match = re.match(r'^\s*export\s+readonly\s+ARTIFACTORY_BASE_URL="([^"]+)"', line)
+            if match:
+                return match.group(1)
+    sys.exit(f"Error: ARTIFACTORY_BASE_URL not found in {constants_path}")
+
+
+# Options that are required for at least one supported mode are declared as
+# small data records. Keeping the environment variable, CLI flag, and help text
+# together makes the pytest help output and collection-time validation use the
+# same source of truth.
+OPENAI_API_KEY_OPT = {
+    "option": "--ai-openai-api-key",
+    "env_var": "OPENAI_API_KEY",
+    "help": "OpenAI API key used by the Codex coding agent and the judge.",
+}
+PRERECORDED_RUN_CACHE_OPT = {
+    "option": "--ai-prerecorded-run-cache",
+    "aliases": ("--ai-run-artifact-base",),
+    "env_var": "AI_INSIGHTS_PRERECORDED_RUN_CACHE",
+    "fallback_env_var": "AI_INSIGHTS_RUN_ARTIFACT_BASE",
+    "default": str(DEFAULT_PRERECORDED_RUN_CACHE),
+    "help": "Directory used as the local cache for pre-recorded AI Insights run inputs.",
+}
+ARTIFACTORY_RUN_BASE_OPT = {
+    "option": "--ai-artifactory-run-base",
+    "env_var": "AI_INSIGHTS_ARTIFACTORY_RUN_BASE",
+    "default": DEFAULT_ARTIFACTORY_RUN_BASE,
+    "help": "Artifactory path containing pre-recorded AI Insights run archives.",
+}
+TARGET_HOST_OPT = {
+    "option": "--ai-target-host",
+    "env_var": "AI_INSIGHTS_TARGET_HOST",
+    "help": "Target SSH hostname or IP address required for pathways attempts.",
+}
+TARGET_PORT_OPT = {
+    "option": "--ai-target-port",
+    "env_var": "AI_INSIGHTS_TARGET_PORT",
+    "help": "Target SSH port for pathways attempts (default: 22).",
+}
+TARGET_USER_OPT = {
+    "option": "--ai-target-user",
+    "env_var": "AI_INSIGHTS_TARGET_USER",
+    "help": "Target SSH username for pathways attempts; requires passwordless sudo.",
+}
+TARGET_PRIVATE_KEY_PATH_OPT = {
+    "option": "--ai-target-private-key-path",
+    "env_var": "AI_INSIGHTS_TARGET_PRIVATE_KEY_PATH",
+    "help": "Target SSH private-key path shared with the evaluated agent.",
+}
+
+
+def pytest_addoption(parser) -> None:
+    """Register AI Insights command line options with pytest.
+
+    Pytest calls this hook before collection. Each option can be supplied on
+    the command line, or via the matching environment variable. The test suite
+    resolves the final configuration from these options plus manifest defaults.
+    """
+    group = parser.getgroup("ai-insights")
+    group.addoption(
+        "--ai-manifest",
+        default=os.environ.get("AI_INSIGHTS_MANIFEST", str(HARNESS_DIR / "ai_insights_evaluation.json")),
+    )
+    group.addoption("--ai-act", default=os.environ.get("AI_INSIGHTS_ACT", "act1"))
+    group.addoption("--ai-recipe", default=os.environ.get("AI_INSIGHTS_RECIPE", ""))
+    group.addoption(
+        "--ai-workload-ref",
+        default=os.environ.get("AI_INSIGHTS_WORKLOAD_REF", ""),
+        help="Override the manifest workload branch or tag for Pathways source checkouts.",
+    )
+    group.addoption(
+        "--ai-modes",
+        default=os.environ.get("AI_INSIGHTS_MODES", DEFAULT_MODES),
+        help=(
+            "Comma-separated AI Insights modes to run. Overrides manifest modes. "
+            "Supported mode is performix_mcp. "
+            f"Defaults to {DEFAULT_MODES}."
+        ),
+    )
+    _add_env_option(group, PRERECORDED_RUN_CACHE_OPT)
+    _add_env_option(group, ARTIFACTORY_RUN_BASE_OPT)
+    group.addoption(
+        "--ai-cli-bin",
+        default=os.environ.get("AI_INSIGHTS_CLI_BIN", str(ROOT / "core" / "apap-cli" / "apx")),
+    )
+    group.addoption(
+        "--ai-results-dir",
+        default=os.environ.get("AI_INSIGHTS_RESULTS_DIR", str(HARNESS_DIR / "results")),
+    )
+    _add_env_option(group, TARGET_HOST_OPT)
+    _add_env_option(group, TARGET_PORT_OPT)
+    _add_env_option(group, TARGET_USER_OPT)
+    _add_env_option(group, TARGET_PRIVATE_KEY_PATH_OPT)
+    group.addoption("--ai-model-config", action="append", nargs=2, metavar=("MODEL", "EFFORT"),
+                    help="Model and reasoning effort; repeat for multiple configurations. Defaults to the first manifest configuration.")
+    group.addoption("--ai-judge-model", default=os.environ.get("AI_INSIGHTS_JUDGE_MODEL", DEFAULT_JUDGE_MODEL))
+    group.addoption("--ai-judge-reasoning-effort", default=os.environ.get("AI_INSIGHTS_JUDGE_REASONING_EFFORT", "medium"),
+                    help="Reasoning effort for the judge model (default: medium).")
+    _add_env_option(group, OPENAI_API_KEY_OPT)
+    group.addoption("--ai-attempts", type=int, default=int(os.environ.get("AI_INSIGHTS_ATTEMPTS", "0")))
+    # Pathways CI collects exact test IDs (including repetition numbers) to build
+    # its job matrix. Each job replays one ID against its own disposable target.
+    group.addoption("--ai-collect-selection", help="Internal: write the filtered execution selection as JSON.")
+    group.addoption("--ai-selected-nodeids", help="Internal: execute exactly the selected JSON node IDs.")
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_node_collection_finished(node, ids) -> None:
+    """Prepare selected inputs after an xdist worker has collected tests.
+
+    xdist workers collect the same filtered node IDs before any test is
+    scheduled. The first collection is enough to know which run inputs are
+    needed, and the prepared flag prevents later worker callbacks doing the
+    same shared filesystem work again.
+    """
+
+    config = node.config
+    if config.option.collectonly or not _is_ai_insights_collection(ids):
+        return
+
+    if getattr(config, AI_XDIST_PREPARED_ATTR, False):
+        return
+
+    testcases = _selected_testcases_from_nodeids(config, ids)
+    if any(case.get("pathways_execution") for case in testcases):
+        pytest.exit(
+            "Pathways attempts require serial execution. Select one attempt and pass -n 0.",
+            returncode=4,
+        )
+    setattr(config, AI_XDIST_PREPARED_ATTR, True)
+    _prepare_selected_testcases(config, testcases)
+
+
+def _add_env_option(group, option_spec: dict[str, str]) -> None:
+    env_value = os.environ.get(option_spec["env_var"])
+    fallback_env_var = option_spec.get("fallback_env_var")
+    if env_value is None and fallback_env_var:
+        env_value = os.environ.get(fallback_env_var)
+    default = env_value if env_value is not None else option_spec.get("default")
+    help_parts = [option_spec["help"]]
+    if fallback_env_var:
+        help_parts.append(
+            f"Can be set with {option_spec['env_var']} or {fallback_env_var}."
+        )
+    else:
+        help_parts.append(f"Can be set with {option_spec['env_var']}.")
+    if option_spec.get("default"):
+        help_parts.append(f"Defaults to {option_spec['default']}.")
+    group.addoption(
+        option_spec["option"],
+        *option_spec.get("aliases", ()),
+        default=default,
+        help=" ".join(help_parts),
+    )
+
+
+@pytest.hookimpl(wrapper=True, trylast=True)
+def pytest_collection_modifyitems(config, items):
+    """Validate suite-level runtime inputs after test parametrisation.
+
+    The evaluation tests are parametrised by testcase, mode, and attempt. At
+    this point pytest has already expanded the manifest into concrete test
+    items, so we can validate only the inputs required by the selected items.
+
+    This hook runs after pytest has applied normal filtering, such as `-k`. In
+    serial pytest, downloads can run here. In xdist workers, this hook only
+    validates options; the controller downloads inputs when the first worker
+    reports its filtered test list.
+    """
+    yield
+
+    selected_path = getattr(config.option, "ai_selected_nodeids", None)
+    if selected_path:
+        selected = set(json.loads(Path(selected_path).read_text(encoding="utf-8")))
+        available = {item.nodeid for item in items}
+        if selected - available:
+            raise pytest.UsageError("AI Insights selection changed between collection and execution")
+        deselected = [item for item in items if item.nodeid not in selected]
+        items[:] = [item for item in items if item.nodeid in selected]
+        config.hook.pytest_deselected(items=deselected)
+
+    selection_path = getattr(config.option, "ai_collect_selection", None)
+    if selection_path:
+        if not config.option.collectonly:
+            raise pytest.UsageError("--ai-collect-selection requires --collect-only")
+        Path(selection_path).write_text(json.dumps({
+            "items": [{"nodeid": item.nodeid} for item in items],
+        }), encoding="utf-8")
+
+    if config.option.collectonly:
+        return
+
+    pathways_count = sum(_is_pathways_item(item) for item in items)
+    if pathways_count and hasattr(config, "workerinput"):
+        # Let the xdist controller reject Pathways before scheduling any tests.
+        # Errors raised inside workers obscure the useful -n 0 message.
+        return
+    if pathways_count > 1:
+        raise pytest.UsageError(
+            "Each Pathways attempt requires a fresh disposable target. Select one "
+            "testcase and attempt (-k and --ai-attempts 1), or use Pathways Evaluation CI."
+        )
+
+    if not _is_ai_insights_collection(item.nodeid for item in items):
+        return
+
+    if pathways_count:
+        # Preserve earlier local evidence even when the same case is run again.
+        # Reports use the requested JUnit destination; attempt files use this root.
+        root = Path(config.getoption("--ai-results-dir")).expanduser().resolve()
+        invocation = root / "invocations" / uuid.uuid4().hex
+        invocation.mkdir(parents=True)
+        config.option.ai_results_dir = str(invocation)
+        _terminal_write_line(config)(f"AI Insights invocation results: {invocation}")
+
+    testcases = _selected_testcases(items)
+    needs_fixture = any(case.get("run_artifact") for case in testcases)
+    missing = []
+    for option_spec in (
+        OPENAI_API_KEY_OPT,
+        PRERECORDED_RUN_CACHE_OPT,
+    ):
+        if option_spec is PRERECORDED_RUN_CACHE_OPT and not needs_fixture:
+            continue
+        if not (config.getoption(option_spec["option"]) or "").strip():
+            missing.append(option_spec)
+
+    prerecorded_run_cache = config.getoption("--ai-prerecorded-run-cache")
+    if prerecorded_run_cache:
+        if not missing and not os.environ.get("PYTEST_XDIST_WORKER"):
+            # Serial pytest downloads here. xdist workers skip this because the
+            # controller downloads after seeing the filtered worker collection.
+            _prepare_selected_testcases(config, testcases)
+
+    if missing:
+        raise pytest.UsageError(_format_missing_config(missing, []))
+
+
+def _is_pathways_item(item) -> bool:
+    callspec = getattr(item, "callspec", None)
+    test_case = callspec.params.get("test_case", {}) if callspec else {}
+    return bool(test_case.get("pathways_execution"))
+
+
+def _selected_testcases(items) -> list[dict[str, str]]:
+    testcases = []
+    seen = set()
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        test_case = callspec.params.get("test_case") if callspec else None
+        if not isinstance(test_case, dict):
+            continue
+        test_id = test_case.get("id")
+        if not test_id or test_id in seen:
+            continue
+        testcases.append(test_case)
+        seen.add(test_id)
+    return testcases
+
+
+def _selected_testcases_from_nodeids(config, nodeids) -> list[dict[str, str]]:
+    """Map filtered pytest node IDs back to manifest testcases."""
+
+    manifest_path = Path(config.getoption("--ai-manifest")).expanduser().resolve()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_by_id = {}
+    defaults = manifest.get("defaults", {})
+    for test_case in manifest.get("tests", []):
+        if not isinstance(test_case, dict):
+            continue
+        test_id = test_case.get("id")
+        if test_id:
+            manifest_by_id[test_id] = resolve_evaluation_inputs(test_case, defaults)
+
+    # xdist gives the controller node IDs, not pytest Items. Match the
+    # parameter id back to the longest manifest id so ids such as
+    # "test_case_2" do not steal "test_case_26-...".
+    testcases = []
+    seen = set()
+    manifest_ids = sorted(manifest_by_id, key=len, reverse=True)
+    for nodeid in nodeids:
+        marker_index = nodeid.find(AI_INSIGHTS_TEST_NODEID_MARKER)
+        if marker_index < 0:
+            continue
+        param_start = marker_index + len(AI_INSIGHTS_TEST_NODEID_MARKER)
+        param_end = nodeid.rfind("]")
+        if param_end < param_start:
+            raise pytest.UsageError(f"AI Insights pytest node ID is missing its parameter id: {nodeid}")
+        param_id = nodeid[param_start:param_end]
+        test_id = next(
+            (
+                test_id
+                for test_id in manifest_ids
+                if param_id == test_id or param_id.startswith(f"{test_id}-")
+            ),
+            None,
+        )
+        if test_id is None:
+            raise pytest.UsageError(
+                f"Could not map AI Insights pytest node ID to a manifest testcase: {nodeid}"
+            )
+        if test_id in seen:
+            continue
+        testcases.append(manifest_by_id[test_id])
+        seen.add(test_id)
+    return testcases
+
+
+def _is_ai_insights_collection(nodeids) -> bool:
+    """Return whether collected node IDs include AI Insights evaluation tests."""
+    return any(AI_INSIGHTS_TEST_NODEID_MARKER in nodeid for nodeid in nodeids)
+
+
+def _terminal_write_line(config):
+    terminalreporter = config.pluginmanager.get_plugin("terminalreporter")
+    if terminalreporter is None:
+        return None
+    return terminalreporter.write_line
+
+
+def _prepare_selected_testcases(
+    config,
+    testcases: list[dict[str, str]],
+    write_line=None,
+) -> None:
+    """Download and extract selected run inputs once.
+
+    These steps write to shared input cache paths. Running them in
+    one process avoids races when xdist runs modes for the same testcase on
+    different workers.
+    """
+
+    testcases = [case for case in testcases if case.get("run_artifact")]
+    if not testcases:
+        return
+    if write_line is None:
+        write_line = _terminal_write_line(config)
+    run_cache = Path(config.getoption("--ai-prerecorded-run-cache")).expanduser().resolve()
+    results_dir = Path(config.getoption("--ai-results-dir")).expanduser().resolve()
+    artifactory_run_base = (config.getoption("--ai-artifactory-run-base") or "").strip()
+    _prepare_run_inputs(
+        testcases,
+        run_cache,
+        artifactory_run_base,
+        results_dir,
+        write_line,
+    )
+
+
+def _prepare_run_inputs(
+    testcases: list[dict[str, str]],
+    prerecorded_run_cache: Path,
+    artifactory_run_base: str,
+    results_dir: Path,
+    write_line=None,
+) -> None:
+    """Download, check, and extract selected run inputs before tests start."""
+    if artifactory_run_base:
+        _download_missing_run_artifacts(
+            testcases,
+            prerecorded_run_cache,
+            artifactory_run_base,
+            write_line,
+        )
+
+    missing_artifacts = _missing_run_artifacts_for_testcases(testcases, prerecorded_run_cache)
+    if missing_artifacts:
+        raise pytest.UsageError(_format_missing_config([], missing_artifacts))
+
+    _validate_prerecorded_metadata(testcases, prerecorded_run_cache)
+    _extract_source_archives(testcases, prerecorded_run_cache, results_dir, write_line)
+
+
+def _download_missing_run_artifacts(
+    testcases: list[dict[str, str]],
+    prerecorded_run_cache: Path,
+    artifactory_run_base: str,
+    write_line=None,
+) -> None:
+    """Fetch missing pre-recorded inputs for the selected testcases.
+
+    Pytest has already selected the tests by this point. If a download fails
+    here, the selected test cannot run, so report it as a setup error.
+    """
+
+    wrote_header = False
+    for test_case in testcases:
+        test_id = test_case["id"]
+        archive = prerecorded_run_cache / test_case["run_artifact"]
+        artifact_dir = Path(test_case["run_artifact"]).parent.as_posix()
+        source_archive = archive.parent / "test_src.zip"
+        needs_source = _requires_source_archive(test_case)
+        missing_files = []
+        if not archive.is_file():
+            missing_files.append("latest.zip")
+        if needs_source and not source_archive.is_file():
+            missing_files.append("test_src.zip")
+        metadata = archive.parent / "metadata.json"
+        if not metadata.is_file():
+            missing_files.append("metadata.json")
+
+        if missing_files and write_line:
+            if not wrote_header:
+                write_line(f"AI Insights evaluation: downloading missing inputs to {prerecorded_run_cache}")
+                wrote_header = True
+            write_line(f"AI Insights evaluation: {test_id}: {', '.join(missing_files)}")
+
+        if not archive.is_file():
+            _download_artifactory_input(
+                artifactory_run_base,
+                artifact_dir,
+                "latest.zip",
+                archive.parent,
+                "latest.zip",
+            )
+        if needs_source and not source_archive.is_file():
+            _download_artifactory_input(
+                artifactory_run_base,
+                artifact_dir,
+                "test_src.zip",
+                archive.parent,
+                "test_src.zip",
+            )
+        if not metadata.is_file():
+            if not _download_artifactory_input(
+                artifactory_run_base,
+                artifact_dir,
+                "latest.metadata.json",
+                archive.parent,
+                "metadata.json",
+                required=False,
+            ):
+                _download_artifactory_input(
+                    artifactory_run_base,
+                    artifact_dir,
+                    "metadata.json",
+                    archive.parent,
+                    "metadata.json",
+                )
+
+
+def _extract_source_archives(
+    testcases: list[dict[str, str]],
+    prerecorded_run_cache: Path,
+    results_dir: Path,
+    write_line=None,
+) -> None:
+    wrote_header = False
+    for test_case in testcases:
+        if not _requires_source_archive(test_case):
+            continue
+        test_id = test_case["id"]
+        archive = prerecorded_run_cache / test_case["run_artifact"]
+        source_archive = archive.parent / "test_src.zip"
+        source_sha = sha256_file(source_archive)
+        extract_dir = results_dir / "imported_sources" / test_id / source_sha
+        source_root = extract_dir / "test_src"
+        if source_root.is_dir():
+            continue
+
+        if write_line:
+            if not wrote_header:
+                write_line(f"AI Insights evaluation: extracting source inputs to {results_dir}")
+                wrote_header = True
+            write_line(f"AI Insights evaluation: {test_id}: test_src.zip")
+
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
+        try:
+            _safe_extract_zip(source_archive, extract_dir)
+        except Exception as exc:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+            raise pytest.UsageError(
+                f"Failed to extract AI Insights source input for {test_id}: {source_archive}"
+            ) from exc
+        if not source_root.is_dir():
+            raise pytest.UsageError(
+                f"AI Insights source input did not contain test_src for {test_id}: {source_archive}"
+            )
+
+
+def _validate_prerecorded_metadata(
+    testcases: list[dict[str, str]],
+    prerecorded_run_cache: Path,
+) -> None:
+    """Validate recorded recipe provenance against the manifest."""
+
+    for test_case in testcases:
+        archive = prerecorded_run_cache / test_case["run_artifact"]
+        metadata_path = archive.parent / "metadata.json"
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise pytest.UsageError(
+                f"Invalid pre-recorded run metadata for {test_case['id']}: {metadata_path}"
+            ) from exc
+        recorded_recipe = str(metadata.get("recipe", "")).strip()
+        expected_recipe = test_case["recipe"]
+        if recorded_recipe != expected_recipe:
+            raise pytest.UsageError(
+                f"Pre-recorded recipe mismatch for {test_case['id']}: "
+                f"manifest={expected_recipe!r}, metadata={recorded_recipe or '<missing>'!r}"
+            )
+        expected_recipe_params = test_case.get("recipe_params", [])
+        recorded_recipe_params = metadata.get("recipe_params", [])
+        if recorded_recipe_params != expected_recipe_params:
+            raise pytest.UsageError(
+                f"Pre-recorded recipe params mismatch for {test_case['id']}: "
+                f"manifest={test_case.get('recipe_params', [])!r}, "
+                f"metadata={metadata.get('recipe_params', [])!r}"
+            )
+        expected_run_modification = test_case.get("run_modification")
+        recorded_run_modification = metadata.get("run_modification")
+        if recorded_run_modification != expected_run_modification:
+            raise pytest.UsageError(
+                f"Pre-recorded run modification mismatch for {test_case['id']}: "
+                f"manifest={expected_run_modification or '<missing>'!r}, "
+                f"metadata={recorded_run_modification or '<missing>'!r}"
+            )
+        try:
+            expected_mode = resolve_prerecord_config(test_case)["mode"]
+        except ValueError as exc:
+            raise pytest.UsageError(f"Invalid testcase profile mode: {exc}") from exc
+        recorded_mode = metadata.get("profile_mode", "launch")
+        if not isinstance(recorded_mode, str) or recorded_mode not in PRERECORD_MODES:
+            raise pytest.UsageError(
+                f"Invalid pre-recorded profile mode for {test_case['id']}: "
+                f"metadata profile_mode={recorded_mode!r}"
+            )
+        if recorded_mode != expected_mode:
+            raise pytest.UsageError(
+                f"Pre-recorded profile mode mismatch for {test_case['id']}: "
+                f"manifest={expected_mode!r}, metadata={recorded_mode!r}"
+            )
+        expected_jfr = test_case.get("prerecord", {}).get("enable_jfr_capture", False)
+        recorded_jfr = metadata.get("enable_jfr_capture", False)
+        if not isinstance(recorded_jfr, bool) or recorded_jfr != expected_jfr:
+            raise pytest.UsageError(
+                f"Pre-recorded JFR capture mismatch for {test_case['id']}: "
+                f"manifest={expected_jfr!r}, metadata={recorded_jfr!r}"
+            )
+
+
+def _requires_source_archive(test_case: dict[str, Any]) -> bool:
+    """Return source-archive requirement or raise a usage error with testcase context."""
+
+    try:
+        return requires_source_archive(test_case["recipe"], test_case.get("recipe_params"))
+    except ValueError as exc:
+        raise pytest.UsageError(
+            f"Invalid testcase configuration for {test_case['id']}: {exc}"
+        ) from exc
+
+
+def _safe_extract_zip(archive: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    destination_root = destination.resolve()
+    with zipfile.ZipFile(archive) as archive_zip:
+        for member in archive_zip.infolist():
+            if stat.S_ISLNK(member.external_attr >> 16):
+                raise ValueError(f"refusing to extract archive link: {member.filename}")
+            target = (destination / member.filename).resolve()
+            if not target.is_relative_to(destination_root):
+                raise ValueError(f"refusing to extract unsafe archive member: {member.filename}")
+        archive_zip.extractall(destination)
+
+
+def _artifactory_base_url() -> str:
+    return get_artifactory_url()
+
+
+def _artifactory_api_token() -> str:
+    token = os.environ.get("ARTIFACTORY_API_TOKEN", "").strip()
+    if not token:
+        raise pytest.UsageError(
+            "ARTIFACTORY_API_TOKEN is required to download AI Insights inputs "
+            "from Artifactory. Set ARTIFACTORY_API_TOKEN to an Artifactory "
+            "identity token, or provide local inputs with --ai-prerecorded-run-cache."
+        )
+    return token
+
+
+def _download_artifactory_input(
+    artifactory_run_base: str,
+    test_id: str,
+    filename: str,
+    destination_dir: Path,
+    destination_name: str,
+    required: bool = True,
+) -> bool:
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    source = f"{artifactory_run_base.rstrip('/')}/{test_id}/{filename}"
+    url = f"{_artifactory_base_url().rstrip('/')}/{source}"
+    destination = destination_dir / destination_name
+    partial = destination_dir / f".{destination_name}.tmp"
+    headers = {"X-JFrog-Art-Api": _artifactory_api_token()}
+
+    try:
+        response = requests.get(url, headers=headers, timeout=120)
+        if response.status_code == 404 and not required:
+            partial.unlink(missing_ok=True)
+            return False
+        response.raise_for_status()
+        # Pre-recorded run inputs are expected to stay in the single-digit MB
+        # range, so writing the response body directly keeps this path simple.
+        partial.write_bytes(response.content)
+        partial.replace(destination)
+    except requests.HTTPError as exc:
+        partial.unlink(missing_ok=True)
+        response = exc.response
+        body = response.text.strip() if response is not None else ""
+        status = f"{response.status_code} {response.reason}" if response is not None else "unknown"
+        raise pytest.UsageError(
+            "\n".join(
+                [
+                    "",
+                    f"Failed to download AI Insights input from Artifactory: {source}",
+                    f"URL: {url}",
+                    f"HTTP status: {status}",
+                    f"Response: {body[:1000]}",
+                ]
+            )
+        ) from exc
+    except requests.RequestException as exc:
+        partial.unlink(missing_ok=True)
+        raise pytest.UsageError(
+            "\n".join(
+                [
+                    "",
+                    f"Failed to download AI Insights input from Artifactory: {source}",
+                    f"URL: {url}",
+                    f"Error: {exc}",
+                ]
+            )
+        ) from exc
+    return True
+
+
+def _missing_run_artifacts_for_testcases(
+    testcases: list[dict[str, str]],
+    prerecorded_run_cache: Path,
+) -> list[tuple[str, str, Path]]:
+    """Find missing pre-recorded run inputs for manifest testcases."""
+    missing = []
+    for test_case in testcases:
+        test_id = test_case.get("id")
+        run_artifact = test_case.get("run_artifact")
+        if not test_id or not run_artifact:
+            continue
+        archive = prerecorded_run_cache / run_artifact
+        if not archive.is_file():
+            missing.append((test_id, "run archive", archive))
+        metadata = archive.parent / "metadata.json"
+        if not metadata.is_file():
+            missing.append((test_id, "metadata", metadata))
+        if _requires_source_archive(test_case):
+            source_archive = archive.parent / "test_src.zip"
+            if not source_archive.is_file():
+                missing.append((test_id, "source archive", source_archive))
+    return missing
+
+
+def _format_missing_config(
+    missing: list[dict[str, str]],
+    missing_artifacts: list[tuple[str, str, Path]],
+) -> str:
+    plural = "s" if len(missing) > 1 else ""
+    lines = [
+        "",
+        "AI Insights evaluation is not configured.",
+        "",
+    ]
+    if missing:
+        lines.append(f"Missing required setting{plural}:")
+        for option_spec in missing:
+            lines.extend(
+                [
+                    f"  * {_option_label(option_spec)}",
+                    f"    {option_spec['help']}",
+                ]
+            )
+    if missing_artifacts:
+        if missing:
+            lines.append("")
+        artifact_plural = "s" if len(missing_artifacts) > 1 else ""
+        lines.append(f"Missing pre-recorded run input{artifact_plural}:")
+        for test_id, label, path in missing_artifacts:
+            lines.append(f"  * {test_id} {label}: {path}")
+        lines.extend(
+            [
+                "    Set --ai-prerecorded-run-cache or AI_INSIGHTS_PRERECORDED_RUN_CACHE",
+                "    to use a different pre-recorded run input directory. To fetch",
+                "    missing inputs from Artifactory, set ARTIFACTORY_API_TOKEN.",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _option_label(option_spec: dict[str, str]) -> str:
+    env_vars = [option_spec["env_var"]]
+    if option_spec.get("fallback_env_var"):
+        env_vars.append(option_spec["fallback_env_var"])
+    return f"{option_spec['option']} or {'/'.join(env_vars)}"
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus) -> None:
+    """Generate the graph report after pytest has written its JUnit XML."""
+    del exitstatus
+    config = session.config
+    if hasattr(config, "workerinput") or config.option.collectonly:
+        return
+
+    try:
+        graph_report = _generate_graph_report(config)
+    except Exception as exc:
+        # Graph reporting is post-processing: record ordinary failures without
+        # replacing an existing pytest result. Process-control exceptions propagate.
+        setattr(config, AI_GRAPH_REPORT_ATTR, {"error": str(exc)})
+        if session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        return
+
+    if graph_report is not None:
+        setattr(config, AI_GRAPH_REPORT_ATTR, graph_report)
+
+
+def _generate_graph_report(config) -> dict[str, str | int] | None:
+    """Generate graphs from the configured JUnit report, if one was requested."""
+    junit_option = getattr(config.option, "xmlpath", None)
+    if not junit_option:
+        return None
+
+    junit_xml = Path(junit_option).expanduser().resolve()
+    if not junit_xml.is_file():
+        raise FileNotFoundError(f"pytest did not create {junit_xml}")
+    # Adjacent pytest suites can also produce JUnit XML. Only AI Insights
+    # evaluation results record an ai_mode property.
+    if not any(attempt.get("ai_mode") for attempt in attempts_from_junit(junit_xml)):
+        return None
+
+    output_dir = junit_xml.parent / "graphs"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+
+    import plot_ai_insights_junit
+
+    observations = plot_ai_insights_junit.load_observations(junit_xml)
+    outputs = plot_ai_insights_junit.generate_graphs(observations, output_dir)
+    return {"output_dir": str(output_dir), "file_count": len(outputs)}
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    """Print the AI Insights summary after normal pytest reporting.
+
+    The testcase records metadata through `record_property`, which pytest
+    stores on each test report. This hook gathers the properties
+    from completed call reports and renders a compact human-readible summary.
+    The same properties remain available to pytest reporters such as JUnit XML.
+    """
+    reports = _ai_call_reports(terminalreporter)
+    if not reports:
+        _write_graph_report_status(terminalreporter, config)
+        return
+
+    terminalreporter.section("AI Insights evaluation")
+    summary = getattr(config, "_ai_insights_suite_summary", None)
+    if summary:
+        terminalreporter.write_line(_format_suite_summary(summary))
+    terminalreporter.write_line("")
+    terminalwriter = getattr(terminalreporter, "_tw", None)
+    # Keep the width pytest recorded at startup for a consistent summary layout.
+    width = getattr(terminalreporter, "_screen_width", getattr(terminalwriter, "fullwidth", None))
+    color = bool(getattr(terminalwriter, "hasmarkup", False))
+    rendered_summary = render_console_summary(
+        _ai_attempts_from_reports(reports),
+        width=width,
+        color=color,
+    )
+    for line in rendered_summary.splitlines():
+        terminalreporter.write_line(line)
+    _write_graph_report_status(terminalreporter, config)
+
+
+def _write_graph_report_status(terminalreporter, config) -> None:
+    """Report graph generation success or failure in the terminal summary."""
+    graph_report = getattr(config, AI_GRAPH_REPORT_ATTR, None)
+    if not graph_report:
+        return
+    if error := graph_report.get("error"):
+        terminalreporter.write_line(f"AI Insights graph generation failed: {error}", red=True)
+        return
+    terminalreporter.write_line(
+        f"AI Insights graphs: {graph_report['output_dir']} "
+        f"({graph_report['file_count']} files)"
+    )
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Record performance checks and fail an otherwise-passing testcase when needed."""
+    outcome = yield
+    report = outcome.get_result()
+    if report.when != "call":
+        return
+
+    attempt = _ai_properties(report)
+    if not attempt:
+        return
+
+    metrics = performance_metrics_for_attempt(
+        attempt,
+        performance_thresholds=_performance_thresholds(item.config),
+    )
+    properties = recorded_performance_properties(metrics)
+    # JUnit reads properties from the teardown report, which copies them from the item.
+    item.user_properties.extend(properties)
+    report.user_properties.extend(properties)
+    failures = [
+        metric for metric in metrics
+        if metric.quality != QUALITY_GOOD and not metric.is_warning
+    ]
+    if not report.passed or not failures:
+        return
+
+    report.outcome = "failed"
+    report.longrepr = "AI Insights performance check failed: " + ", ".join(
+        f"{metric.label}={metric.value!r} ({metric.quality}, threshold={metric.threshold})"
+        for metric in failures
+    )
+
+
+def _ai_call_reports(terminalreporter) -> list:
+    """Collect completed test-call reports that contain AI Insights metadata.
+
+    Pytest creates separate reports for setup, call, and teardown phases. The
+    evaluation metrics are recorded during the call phase, so this summary
+    intentionally ignores setup/teardown reports.
+    """
+    reports = []
+    seen = set()
+
+    for outcome_reports in terminalreporter.stats.values():
+        for report in outcome_reports:
+            if getattr(report, "when", None) != "call":
+                continue
+            if report.nodeid in seen:
+                continue
+            if not _ai_properties(report):
+                continue
+
+            seen.add(report.nodeid)
+            reports.append(report)
+
+    reports.sort(key=lambda report: report.nodeid)
+    return reports
+
+
+def _ai_properties(report) -> dict[str, str]:
+    return {
+        name: str(value)
+        for name, value in getattr(report, "user_properties", [])
+        if name.startswith(AI_PROPERTY_PREFIX)
+    }
+
+
+def _ai_attempts_from_reports(reports: list) -> list[dict[str, str]]:
+    attempts = []
+    for report in reports:
+        properties = _ai_properties(report)
+        if not properties:
+            continue
+        attempts.append(
+            {
+                **properties,
+                "pytest_outcome": str(getattr(report, "outcome", "unknown")),
+            }
+        )
+    return attempts
+
+
+def _performance_thresholds(config) -> PerformanceThresholds:
+    # The report hook runs for every attempt, so parse the manifest only once
+    # and keep its thresholds on the pytest configuration for the rest of the run.
+    cached_thresholds = getattr(config, "_ai_insights_performance_thresholds", None)
+    if cached_thresholds is not None:
+        return cached_thresholds
+    manifest_path = Path(config.getoption("--ai-manifest")).expanduser().resolve()
+    thresholds = performance_thresholds_from_manifest(manifest_path)
+    config._ai_insights_performance_thresholds = thresholds
+    return thresholds
+
+
+def _format_suite_summary(summary: dict[str, str]) -> str:
+    fields = [
+        _format_key_value("model", summary.get("model")),
+        _format_key_value("judge_model", summary.get("judge_model")),
+        _format_key_value("judge_reasoning", summary.get("judge_reasoning_effort")),
+        _format_key_value("results", summary.get("results_dir")),
+    ]
+    return ", ".join(field for field in fields if field)
+
+
+def _format_key_value(key: str, value: str | None) -> str:
+    if not value:
+        return ""
+    return f"{key}={value}"

@@ -62,7 +62,7 @@ class ParquetWriter(Writer):
     Output traced PyTorch API and operator calls to Parquet files.
     """
 
-    schema_version = "1"  # change this value whenever the schema version changes
+    schema_version = "2"  # change this value whenever the schema version changes
 
     @override
     def __init__(self, output: str, flush_limit: int):

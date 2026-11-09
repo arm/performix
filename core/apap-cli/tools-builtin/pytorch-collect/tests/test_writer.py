@@ -82,8 +82,8 @@ def test_parquet_schema_version(tmp_path, pyarrow_parquet_writer):
     api_calls = pq.read_metadata(tmp_path / "api_calls.parquet").metadata
     operator_calls = pq.read_metadata(tmp_path / "operator_calls.parquet").metadata
 
-    assert api_calls[b"schema_version"] == b"1"
-    assert operator_calls[b"schema_version"] == b"1"
+    assert api_calls[b"schema_version"] == b"2"
+    assert operator_calls[b"schema_version"] == b"2"
 
 
 def test_output_files_are_created(tmp_path, pyarrow_parquet_writer):

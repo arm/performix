@@ -807,7 +807,16 @@ func TestCPUMicroarchitectureWarnsAboutSoftLockupRisk(t *testing.T) {
 			}
 
 			if !tt.wantWarning {
-				assert.Equal(t, recipe.ReadyStatusReady, readiness.Status)
+				if tt.osFamily == "Windows" {
+					assert.Equal(t, recipe.ReadyStatusWarning, readiness.Status)
+					require.Len(t, readiness.Advice, 1)
+					assert.Equal(t, "wperf", readiness.Advice[0].ToolName)
+					assert.Equal(t, recipe.AdviceSeverityWarning, readiness.Advice[0].AdviceSeverity)
+					assert.Equal(t, "engine.recipeparser.js_recipe_stage.READINESS_MESSAGE", readiness.Advice[0].AdviceMessage.Code())
+					assert.Contains(t, readiness.Advice[0].AdviceMessage.Metadata()["message"], "Windows CPU metrics are estimates")
+				} else {
+					assert.Equal(t, recipe.ReadyStatusReady, readiness.Status)
+				}
 				assert.Nil(t, riskAdvice)
 				return
 			}
@@ -891,8 +900,9 @@ func executeCPUMicroarchitectureReadiness(t *testing.T, opts cpuMicroarchitectur
 	executionContext := newMockExecutionContext(t, recipeContext, targetInfo)
 	executionContext.On("ToolVersions").Return(recipeDefinition.ToolVersions)
 	executionContext.On("ToolsDir").Return(t.TempDir())
-
-	executionContext.On("LogInfo", mock.Anything, mock.Anything).Return()
+	if osFamily == "Linux" {
+		executionContext.On("LogInfo", mock.Anything, mock.Anything).Return()
+	}
 	executionContext.
 		On("ProbeToolsFromIntegrations", mock.Anything, mock.Anything, mock.Anything).
 		Return([]tool.ProbeResult{{Available: true, Capabilities: map[string]any{}, Advice: opts.toolAdvice}}, []error(nil))

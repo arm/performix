@@ -15,12 +15,13 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Public Intent (safe summary)
 - Process 4 MiB of new input each second for 30 seconds, producing a running
-  checksum. Store the processed blocks in a list; by the end it holds 120 MiB.
+  checksum.
 - Continue working with a separate, fixed-size 8 MiB window for the full
   35 seconds, so GC and heap measurements are available throughout the run.
 
 ## What's Wrong In Current Implementation
-- `processedBlocks` keeps every input block after its value has been used.
+- `processedBlocks` keeps every input block after its value has been used,
+  retaining 120 MiB by the end.
   Nothing reads the stored contents again; the running checksum already holds
   the result the workload needs.
 - The separate working window always has the same size and replaces its old
@@ -29,8 +30,9 @@ SPDX-License-Identifier: Apache-2.0
   real application would grow indefinitely.
 
 ## What The LLM Should Suggest
-- Compare early and late after-GC heap use and report measured GC cost; do not
-  infer cost from heap occupancy alone.
+- Use after-GC heap evidence to describe retained growth; exact early and late
+  values are optional. Report GC cost using pause measurements or CPU samples;
+  either is sufficient. Do not infer cost from heap occupancy alone.
 - Connect the JFR trend to source showing that processed blocks remain stored
   after processing. JFR and CPU samples alone cannot identify their owner.
 - Advise reducing retention of processed blocks if it is unnecessary. A named
@@ -46,14 +48,15 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Scoring Guidance
 - Pass:
-  - Uses CPU samples or sampled call paths to establish application or GC cost
-    and ranks the finding against other hotspots.
-  - Uses measured late JFR heap and GC evidence to distinguish retained growth
-    from temporary allocation in the working window.
+  - GC cost can be measured using pause time or CPU samples.
+  - Uses JFR heap and GC evidence to explain retained growth. A plain description
+    of the trend is sufficient; exact early and late values are not required.
   - Uses source to identify the stored processed blocks as the cause of retained
-    growth and advises reducing that retention if it is unnecessary.
-  - Qualifies the observed time range rather than claiming a proven indefinite
-    leak or a cost that the recording does not show.
+    growth and advises reducing that retention if it is unnecessary. A short
+    explanation of why processed blocks remain in memory is sufficient.
+    Naming the list or explaining that the blocks are no longer needed is optional.
+  - Does not claim a proven indefinite leak or a cost the recording does not
+    show. An explicit disclaimer about the recording's length is not required.
 - Fail:
   - Calls a before-GC sawtooth retained growth, or treats a finite recording
     as proof of an indefinite leak.

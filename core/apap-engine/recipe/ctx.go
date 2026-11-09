@@ -26,6 +26,8 @@ type RecipeMetadata struct {
 
 // RecipeCtx contains configuration data about the recipe invocation
 type RecipeCtx struct {
+	RunName              string
+	GroupName            string
 	RecipePath           string
 	OutputDir            string
 	NoCleanupWorkingArea bool
@@ -86,6 +88,10 @@ func (r *RecipeCtx) CreateMetadata(runBuilder *run.RunBuilder, boundParams param
 		RunResult:     string(run.RecipeInProgress),
 		TargetName:    r.TargetName,
 		TargetConfig:  tgt,
+	}
+
+	if r.RunName != "" {
+		metadata.Name = r.RunName
 	}
 
 	// Capture in the metadata the workload details

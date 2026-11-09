@@ -23,8 +23,8 @@ awk -v boilerplate="$MOCKERY_BOILERPLATE_REF" '
   /^template-data:$/ { printf "  boilerplate-file: \"%s\"\n", boilerplate }
 ' "$MOCKERY_DIR/.mockery.yaml" >"$MOCKERY_CONFIG"
 
-# Start with an empty directory containing only the generated mocks.
-rm -rf -- "$MOCKERY_DIR/mocks"
+# Remove stale generated mocks while preserving the Dependabot package file.
 mkdir -p "$MOCKERY_DIR/mocks"
+find "$MOCKERY_DIR/mocks" -type f -name '*.go' ! -name dependencies.go -delete
 
 (cd "$MOCKERY_DIR" && mockery --config "$MOCKERY_CONFIG")

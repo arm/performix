@@ -71,7 +71,7 @@ flowchart TD
   Choice --> Native[Filesystem or agent operation]
   Choice --> Process[Program plus separate arguments]
   Choice --> Script[Script plus separate data]
-  Process --> Adapter[Local or remote execution helper]
+  Process --> Adapter[Local process API or running agent RPC]
   Script --> Adapter
   Adapter --> Target[Target process]
 ```
@@ -97,16 +97,20 @@ build tooling is migrated in separate changes.
 
 1. Preserve legacy recipe `cmd` as a script and preserve explicit `--use-shell`.
    Values supplied as data must not be interpreted as shell instructions.
-2. `UseShell=false` must run the chosen executable with its separate arguments.
-   Decide once whether to use a shell; later helpers must not add one automatically.
-3. Initial target setup must work without a running target agent, Python installation or
-   PowerShell 7. Verify supported Windows PowerShell environments before selecting
-   how to pass arguments to programs.
+2. `UseShell=false` keeps the executable and arguments separate. Performix-owned
+   direct execution helpers must not add a shell or retry through one after a
+   launch failure. Document external collectors' existing launch behaviour.
+3. Before the target agent starts, support only the defined operations needed to
+   discover, deploy and start it. Initial setup must work without an installed or
+   running target agent, Python or PowerShell 7. After startup, use the existing
+   agent RPC for general program and script execution.
 4. Prefer existing filesystem and agent RPC operations. Existing agent fields
    already represent arguments, environment and working directory. Any public
    workload API with separate argument fields must be reviewed separately and added
    alongside the existing API.
 5. Keep the work within core and the existing GUI bridge. No plugin-system changes.
+6. Defer changes inside collectors and any collector dependency updates or
+   releases needed for those changes. Use and test their existing interfaces.
 
 ### Non-goals
 
@@ -120,7 +124,8 @@ input. General HTML and SQL sanitisation are outside scope.
 ### Process and script requests
 
 Use separate operations for programs and scripts. These names are examples;
-reuse existing types and interfaces where practical.
+reuse existing types and interfaces where practical. These general operations
+apply to local execution and the running agent, not to bootstrap helpers.
 
 ```text
 RunProcess(context, request)
@@ -177,7 +182,7 @@ operations.
 | Area | Required behaviour |
 | --- | --- |
 | Arguments | Preserve order, empty arguments, whitespace, quotes, Unicode and trailing backslashes. Never split or shell-quote an existing argument array. |
-| Executable | Reject a missing or empty executable. Preserve the existing rules for finding the program on the target. Never retry a failed direct launch through a shell automatically. |
+| Executable | Reject a missing or empty executable. Preserve the existing rules for finding the program on the target. Performix-owned direct helpers never retry a failed launch through a shell automatically; document external collector behaviour separately. |
 | Environment | Pass values unchanged. Reject empty names, names containing `=`, and the NUL (zero) character in names or values. Treat Windows environment names consistently regardless of letter case. Report any stricter limits imposed by the execution method. |
 | Paths | Set the working directory through the process API where possible. Adjust path separators for the target only in path fields, never across whole commands or scripts. |
 | PATH | Preserve the target's existing PATH. To use a virtual environment, add its directory to that value without inserting shell instructions. Check both which program is found and the PATH it receives. |
@@ -214,9 +219,11 @@ extension should define whether paths are exact names or patterns, permissions,
 error handling and platform support. It should represent a useful operation,
 rather than provide another way to send arbitrary shell commands.
 
-Keep initial setup separate: operations needed to start the agent cannot depend
-on that agent already running. Once it is available, use its structured process
-and filesystem interfaces where appropriate.
+Keep initial setup limited to discovery, file operations, permissions,
+extraction, agent startup and cleanup. Use filesystem APIs and fixed platform
+scripts without adding a general pre-agent execution service. These operations
+cannot depend on the agent being installed or running. Once connected, use the
+existing agent process and filesystem RPCs for general execution.
 
 ## Local and remote execution
 
@@ -225,9 +232,9 @@ and filesystem interfaces where appropriate.
 | Local Linux/macOS (POSIX) | Use the process API with separate arguments, environment and working directory. Launch a shell only for an explicit script request. |
 | Local Windows | Use the Windows process API to launch programs. Use separate helpers for PowerShell and supported cmd/batch scripts, following each shell's argument rules. |
 | Agent RPC | Keep request fields separate when sending them to the agent. Preserve process start, stop, cleanup and permission handling. |
-| SSH to POSIX | The SSH server still interprets a command string. Use a tested quoting helper to build the final command from fixed script text and separate values. Do not depend on server environment forwarding being enabled. |
-| ADB | Preserve host-side arguments and encode the target command for the supported Android shell. Separate host arguments still need protection from interpretation by the target shell. |
-| SSH to Windows and initial Windows setup | Use a fixed helper script receiving separate data fields. Encode the command for transmission or copy the script to the target first where required. Decode values into process options; do not run them as script text. |
+| POSIX bootstrap over SSH | Use filesystem operations and fixed setup scripts. The SSH server still interprets a command string, so quote separate values for that shell. Do not depend on server environment forwarding. |
+| Android bootstrap over ADB | Use file transfer and fixed setup operations. Preserve host-side arguments and quote values for the supported Android shell; separate host arguments alone do not protect against target-shell interpretation. |
+| Windows bootstrap over SSH | Use filesystem operations and fixed PowerShell setup scripts receiving separate data fields. Support Windows PowerShell 5.1 under the supported cmd.exe and powershell.exe SSH shell configurations. |
 
 For a fixed POSIX script, pass paths as numbered arguments instead of inserting
 them into the script:
@@ -260,7 +267,7 @@ arguments on whitespace after they have already been parsed.
 | Interface or mode | Intended behaviour |
 | --- | --- |
 | CLI with explicit `--use-shell` | Continue to interpret the workload as shell source. |
-| GUI workload with `UseShell=false`, or other direct process request | Launch the resolved executable and arguments without an automatic shell wrapper. |
+| GUI workload with `UseShell=false`, or other direct process request | Preserve the resolved executable and arguments; Performix does not add an automatic shell wrapper. A collector that launches the workload retains its documented existing behaviour. |
 | Explicit interpreter workload, such as `sh -c` with script text as an argument | Continue to allow it as a deliberately selected program. Direct mode does not ban interpreters or sandbox the workload. |
 | Legacy recipe `cmd` | Continue to treat the field as a script. |
 
@@ -272,6 +279,22 @@ during migration and document user-facing corrections in release notes.
 Add recipe operations with separate arguments alongside existing script
 operations. Existing recipe script fields retain their meaning while internal
 callers migrate to direct operations.
+
+Keep the GUI command field and parse direct-mode text once at the existing
+engine boundary. Document its quoting and escaping rules, then preserve the
+resulting argument array through the agent and collector adapters:
+
+```text
+GUI text:       ./a.out "hello world" 2026
+Workload argv:  ["./a.out", "hello world", "2026"]
+perf argv:      ["perf", "record", ..., "--", "./a.out", "hello world", "2026"]
+NeoProf argv:   ["sl-record", ..., "-A", "./a.out", "hello world", "2026"]
+```
+
+Collector markers such as `--` and `-A` separate options from workload arguments;
+they do not parse raw GUI text. Direct GUI mode parses arguments without shell
+expansion. Variables, wildcards, pipes and substitutions require an explicit
+shell request.
 
 ### Legacy command strings and external programs
 
@@ -298,6 +321,12 @@ and test how arguments are converted to text against the tool's documented or
 observed parsing rules. If the external interface cannot preserve the required
 values, document the limitation or the change needed in that external tool.
 
+Test the existing collector interfaces and document their launch behaviour. For
+example, sl-record uses `execvp`, which can invoke a shell after an
+executable-format failure. The no-automatic-shell-fallback rule applies to
+Performix-owned direct helpers; preserving an argument array does not change
+how a collector launches the workload.
+
 ## Delivery plan
 
 Deliver small changes by responsibility. Each phase includes behaviour-focused
@@ -306,13 +335,12 @@ tests and a clear compatibility statement.
 | Phase | Work | Completion criterion |
 | --- | --- | --- |
 | 1. Shared rules and tests | Define shared validation and add a small test program reporting arguments, selected environment values, working directory and exit status. | Tests detect changed data and unintended execution on supported platforms. |
-| 2. Execution helpers | Add local and remote execution helpers that accept separate argument fields and distinguish programs from scripts. Test initial Windows target setup before switching callers to the new helpers. | The same request preserves its meaning through each supported execution helper, including before the agent starts. |
+| 2. Execution helpers | Use native local process APIs and existing agent RPCs to distinguish programs from scripts. Provide small bootstrap operations for setup before the agent is available. | Local and agent requests preserve their meaning; bootstrap works without an installed or running agent. |
 | 3. Target setup | Move file checks, deployment, extraction, cleanup and initial setup to filesystem/agent operations or fixed helper scripts. | Target preparation works with unusual legal paths while preserving permissions, cleanup and startup communication. |
-| 4. Recipes and workloads | Separate environment and directory handling from scripts; preserve virtual environments and permission handling; apply shell selection once and define legacy string parsing and compatibility. | Legacy scripts work, direct workloads stay direct, and data cannot become script instructions. |
-| 5. Tool integrations | Replace repeated filesystem shell logic, use direct program launches, and pass data separately to remaining scripts. Extend agent operations where useful. | Migrated operations preserve output, no-match, permission and failure behaviour; external tools interpret arguments as intended. |
+| 4. Recipes and workloads | Separate environment and directory handling from scripts; preserve virtual environments and permissions; apply shell selection and text parsing once. Keep argument arrays through collector adapters. | Legacy scripts work, Performix adds no implicit shell to direct requests, and existing collector interfaces receive the intended arguments. |
+| 5. Tool integrations | Replace repeated filesystem shell logic, use direct program launches, and pass data separately to remaining scripts. Extend agent operations where useful and test existing collector interfaces. | Migrated operations preserve output, no-match, permission and failure behaviour; external limitations are documented without requiring collector changes. |
 | 6. Test and build tools | Review helpers in test runners, remote setup, evaluation and CI that insert variable inputs into commands. Keep intentional test/build scripts explicit; fix conversions that lose argument information, check setting types and protect target Git credentials. | Automation keeps arguments separate, rejects settings with invalid types, and keeps credentials out of command text, logs and repository configuration. |
-| 7. Retirement and release | Remove obsolete command builders and document the supported interfaces and compatibility changes. | Remaining shell execution is intentional and tested; external limitations and deferred work are documented. |
-
+| 7. Retirement and release | Remove obsolete Performix command builders and document the supported interfaces and compatibility changes. | Performix-owned shell execution is intentional and tested; deferred collector behaviour and other external limitations remain explicit. |
 
 Phase 6 focuses on helpers that insert variable paths, arguments or credentials
 into commands. It does not require replacing all CI or Robot shell scripts with
@@ -362,8 +390,8 @@ that the file is not created. Never use destructive test commands.
 | Intentional scripts | Pipes, redirects and substitutions work when requested; separately supplied data remains literal. Verify CLI shell mode, direct GUI/CLI workloads and explicitly launched interpreters. |
 | Utility behaviour | Leading hyphens, wildcard characters, no matches and partial output. |
 | Process behaviour | Missing programs, nonzero exits, timeouts, cancellation, output streams, privileges and cleanup. |
-| Execution methods | Local macOS/Linux/Windows, supported POSIX/Windows SSH configurations and real Android ADB execution. |
-| External programs | Tools that accept a whole command string preserve the intended workload and directory, or report documented limitations. |
+| Execution methods | Local macOS/Linux/Windows and normal agent RPC. Bootstrap over supported POSIX/Windows SSH configurations and real Android ADB, from no installed agent through a working RPC connection. |
+| External programs | Verify argument boundaries at existing collector interfaces. Tools that accept a whole command string preserve the intended workload and directory, or report documented limitations. |
 
 Test individual helpers and interfaces first, then run tests with real shells
 and targets. Exercise both recipe JavaScript bindings and direct RPC
@@ -373,11 +401,12 @@ duplicating commands in this spec.
 
 ## Acceptance and review
 
-Implementation is complete when ordinary data cannot become extra commands,
-intentional scripts retain their documented behaviour, and the supported
-execution methods pass the tests above. Document external limitations and
-unfinished work. We cannot claim the whole operation is safe unless we have also
-checked how any external tools interpret the commands they receive.
+Implementation is complete when ordinary data remains data in the migrated
+Performix operations, intentional scripts retain their documented behaviour,
+and the supported execution methods pass the tests above. Document external
+limitations and unfinished work, including deferred collector changes. Limit
+safety and compatibility claims to the Performix and external-tool paths
+actually verified.
 
 Each implementation review should state:
 

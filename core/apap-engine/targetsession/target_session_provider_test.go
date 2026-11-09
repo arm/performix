@@ -4,17 +4,21 @@
 package targetsession
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcconnection"
 	"github.com/Arm-Debug/apap-cli/apap-engine/locality"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
+	targetagentmocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
 
 type mockTargetConnection struct {
@@ -114,4 +118,68 @@ func TestTargetSessionProviderShutdownReturnsCloseErrors(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, closeErr)
 	connection.AssertExpectations(t)
+}
+
+func TestTargetSessionProviderSeparatesLocalAgentsByLocality(t *testing.T) {
+	for _, order := range [][]string{{locality.Host, locality.Target}, {locality.Target, locality.Host}} {
+		for _, closeFirst := range []bool{false, true} {
+			name := order[0] + " first/shutdown all"
+			if closeFirst {
+				name = order[0] + " first/close first locality"
+			}
+			t.Run(name, func(t *testing.T) {
+				creator := &mockAgentCreator{}
+				provider := &targetSessionProvider{agentConnectionCreator: creator}
+				hostSession, err := provider.HostSession()
+				require.NoError(t, err)
+				targetSession, err := provider.TargetSession(&target.LocalTarget{})
+				require.NoError(t, err)
+				sessions := map[string]TargetSession{locality.Host: hostSession, locality.Target: targetSession}
+
+				connection := &mockTargetConnection{}
+				connection.On("Dialer").Return(nil).Twice()
+				connection.On("Close").Return(nil).Once()
+				base := hostSession.(*localityScopedTargetSession).base
+				base.connection = connection
+				base.platform = &conductor.TargetPlatform{
+					PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Win, Architecture: conductor.AArch64},
+				}
+				conns := make(map[string]*agent.AgentConn)
+				for _, loc := range order {
+					client := &targetagentmocks.TargetAgentClient{}
+					client.On("GetVersion", mock.Anything, mock.Anything).Return(nil, nil).Once()
+					client.On("Shutdown", mock.Anything, mock.Anything).Return(&emptypb.Empty{}, nil).Once()
+					t.Cleanup(func() { client.AssertExpectations(t) })
+					conn := agent.NewAgentConn(client)
+					conns[loc] = conn
+					creator.On("NewConnection", mock.Anything, loc, *base.platform, mock.Anything).Return(conn, nil).Once()
+				}
+				for _, loc := range order {
+					conn, err := sessions[loc].TargetAgent(context.Background())
+					require.NoError(t, err)
+					require.Same(t, conns[loc], conn)
+				}
+				// Both policies remain cached without shutting down either active agent.
+				for _, loc := range order {
+					conn, err := sessions[loc].TargetAgent(context.Background())
+					require.NoError(t, err)
+					require.Same(t, conns[loc], conn)
+					require.NoError(t, conn.AgentContext().Err())
+				}
+				if closeFirst {
+					require.NoError(t, sessions[order[0]].CloseTargetAgent())
+					require.NoError(t, sessions[order[0]].CloseTargetAgent())
+					require.ErrorIs(t, conns[order[0]].AgentContext().Err(), context.Canceled)
+					require.NoError(t, conns[order[1]].AgentContext().Err())
+				}
+				require.NoError(t, provider.Shutdown())
+				require.Empty(t, base.agents)
+				for _, conn := range conns {
+					require.ErrorIs(t, conn.AgentContext().Err(), context.Canceled)
+				}
+				creator.AssertExpectations(t)
+				connection.AssertExpectations(t)
+			})
+		}
+	}
 }

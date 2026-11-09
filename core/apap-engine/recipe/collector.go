@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
@@ -73,7 +74,7 @@ func (r *CollectionState) CreateRun(ctx context.Context, c *run.RunCollection, r
 	}
 	r.RunMetadataUpdater = run.NewRunMetadataUpdater(newRunID, c, notifier)
 
-	err = run.WriteRunCategorization(categorizationPath, nil)
+	err = run.WriteRunCategorization(categorizationPath, &run.RunCategorization{Group: strings.TrimSpace(rc.GroupName)})
 	if err != nil {
 		_ = release()
 		return run.InvalidRunID, nil, fmt.Errorf("failed to write run categorization, %w", err)

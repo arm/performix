@@ -76,9 +76,10 @@ func TestFromViper(t *testing.T) {
 		viper.Set("log-level", logLevel)
 		viper.Set("enable-experimental-recipes", true)
 		viper.Set("enable-secondary-run-paths", false)
-		viper.Set(EnableGPURecipeConfigKey, true)
+		viper.Set(EnableProfilingFocusConfigKey, true)
 		viper.Set("enable-render-db-sandbox", false)
 		viper.Set("enable-neoprof-timeline", true)
+		viper.Set("enable-custom-pmu-capture", true)
 		viper.Set("enable-neoprof-system-utilization", true)
 		viper.Set("enable-jfr-capture", true)
 		viper.Set("enable-run-component-compression", false)
@@ -97,9 +98,10 @@ func TestFromViper(t *testing.T) {
 			FeatureFlags: featureflags.Flags{
 				ExperimentalRecipes:      true,
 				SecondaryRunPaths:        false,
-				GPURecipe:                true,
+				ProfilingFocus:           true,
 				RenderDBSandbox:          false,
 				NeoprofTimeline:          true,
+				CustomPMUCapture:         true,
 				NeoprofSystemUtilization: true,
 				JfrCapture:               true,
 				RunComponentCompression:  false,
@@ -107,6 +109,25 @@ func TestFromViper(t *testing.T) {
 			ConfigDirectory: DefaultConfigDir,
 		}, config)
 	})
+}
+
+func TestFromViperLoadsTelemetryPreference(t *testing.T) {
+	for _, contents := range []string{"jobs: 4\n", "telemetry-enabled: false\n", "telemetry-enabled: true\n"} {
+		t.Run(contents, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			viper.SetDefault("telemetry-enabled", true)
+			path := filepath.Join(t.TempDir(), "custom.yml")
+			require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
+			viper.SetConfigFile(path)
+			require.NoError(t, viper.ReadInConfig())
+
+			config := FromViper()
+			assert.Equal(t, path, config.ConfigFile)
+			assert.Equal(t, contents != "telemetry-enabled: false\n", config.TelemetryEnabled)
+			assert.Equal(t, strings.Contains(contents, "telemetry-enabled"), config.TelemetryConfigured)
+		})
+	}
 }
 
 func TestBackgroundFromViper(t *testing.T) {

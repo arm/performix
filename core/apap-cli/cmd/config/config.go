@@ -28,8 +28,8 @@ func ViperBindPFlag(cobraCommand *cobra.Command, flagName string, persistent boo
 
 var RootCmd = &cobra.Command{
 	Use:   "config",
-	Short: "View configuration information.",
-	Long:  `This command provides information on configuration options and current values.`,
+	Short: "View and update configuration.",
+	Long:  `View configuration options and current values, and update supported settings.`,
 	Annotations: map[string]string{
 		grouping.GroupAnnotation: grouping.GroupConfig,
 	},

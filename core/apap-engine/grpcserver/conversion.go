@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode/utf16"
 
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
@@ -194,9 +195,14 @@ func TargetToProto(in target.Target) *apapproto.Target {
 		}
 
 	case *target.AndroidTarget:
+		deviceIPAddress := t.DeviceIPAddress
+		// Keep an explicit address authoritative, and fall back to the last verified selector.
+		if deviceIPAddress == nil || *deviceIPAddress == "" {
+			deviceIPAddress = t.LastKnownADBAddress
+		}
 		androidConfig := &apapproto.AndroidConnectionConfig{
 			SerialNumber:    t.SerialNumber,
-			DeviceIpAddress: t.DeviceIPAddress,
+			DeviceIpAddress: deviceIPAddress,
 		}
 		return &apapproto.Target{
 			Connection: &apapproto.Target_AndroidConfig{AndroidConfig: androidConfig},
@@ -414,7 +420,12 @@ func RecipeCtxFromProto(in *apapproto.RecipeStartCommand) (*recipe.RecipeCtx, er
 		return nil, err
 	}
 
-	recipeCtx := &recipe.RecipeCtx{OrigWorkload: wl}
+	// Run name cannot include forward slashes, backslashes, or be equal to "..". It also cannot exceed 100 UTF-16 code units.
+	runName := strings.TrimSpace(in.GetRunName())
+	if runName == ".." || strings.ContainsAny(runName, `/\`) || len(utf16.Encode([]rune(runName))) > 100 {
+		return nil, message.New(message.EngineRunInvalidName)
+	}
+	recipeCtx := &recipe.RecipeCtx{OrigWorkload: wl, RunName: runName, GroupName: in.GetGroupName()}
 
 	tgt, err := TargetFromProto(in.Target)
 	if err != nil {
@@ -832,11 +843,6 @@ func RecipeSelectionOptionsFromProto(policy *apapproto.RecipeSelectionPolicyOpti
 	case apapproto.RecipeSelectionPolicyType_USE_INSTALLED_VERSION:
 		return recipe.SelectionOptions{
 			Policy: recipe.UseInstalledVersion,
-		}, nil
-
-	case apapproto.RecipeSelectionPolicyType_FROM_CONTENT:
-		return recipe.SelectionOptions{
-			Policy: recipe.FromContent,
 		}, nil
 
 	case apapproto.RecipeSelectionPolicyType_OVERRIDE_BY_NAME:

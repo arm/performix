@@ -13,11 +13,13 @@ import (
 	"path/filepath"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/dop251/goja"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
@@ -25,6 +27,8 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	tool_mocks "github.com/Arm-Debug/apap-cli/apap-engine/tool/mocks"
+	api_mocks "github.com/Arm-Debug/apap-cli/api/mocks"
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 )
 
@@ -237,7 +241,7 @@ func TestNeoprofAndroidProbe(t *testing.T) {
 				},
 				Advice: []tool.ProbeAdvice{{
 					Level:       "warning",
-					MessageCode: "engine.recipeparser.js_recipe_stage.READINESS_MESSAGE",
+					MessageCode: "tool_integrations.neoprof.SL_RECORD_PROBE_ADVICE",
 					Metadata:    map[string]string{"message": "Android probe warning"},
 				}},
 			}, result)
@@ -463,6 +467,7 @@ func TestNeoprofBuildAnalyzeArgsForSysUtilWorkflow(t *testing.T) {
 		"none",
 		"--include-empty-columns",
 		"--verbose",
+		"--no-analyze-all-symbols",
 		"--bin-durations",
 		"10000000000,5000000000,1000000000,500000000,100000000,50000000,10000000",
 		"/capture.apc",
@@ -516,6 +521,7 @@ func TestNeoprofBuildAnalyzeArgsDoesNotEnableTimelineForCPURequest(t *testing.T)
 		"none",
 		"--include-empty-columns",
 		"--verbose",
+		"--no-analyze-all-symbols",
 		"--all-images",
 		"--annotate-source",
 		"--disassemble",
@@ -558,6 +564,10 @@ func TestNeoprofEmitsTimelineCountersFromPartitionedLayouts(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, emittedPaths)
+	assert.Contains(t, emittedPaths, [2]string{
+		"/capture.apc/report-new/apx/timeline/scheduler_*.parquet",
+		"output/parquet/timeline/scheduler_*.parquet",
+	})
 	assert.Equal(t, [2]string{
 		"/capture.apc/report-new/apx/timeline/**/counter.parquet",
 		"output/parquet/timeline/**/counter.parquet",
@@ -626,6 +636,264 @@ func TestNeoprofIdentifiesAndroidLaunchFromWorkloadType(t *testing.T) {
 			result, err := isAndroidLaunch(goja.Undefined(), ctx)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result.ToBoolean())
+		})
+	}
+}
+
+func TestNeoprofSlRecordCapturesHostLogs(t *testing.T) {
+	toolPath := filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js")
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+
+	for _, exitCode := range []int{0, 1} {
+		t.Run(fmt.Sprintf("exit code %d", exitCode), func(t *testing.T) {
+			source := string(data) + fmt.Sprintf(`
+startGatorLogMonitor = async () => {};
+stopGatorLogMonitor = async () => {};
+tool.run = async () => {
+  const files = {}, messages = [];
+  const engine = {
+    createRunFile: async (name) => {
+      const path = '/host/run/' + name;
+      const file = files[path] = {data: '', closed: false};
+      return {
+        path: () => path,
+        append: async (chunk) => { file.data += chunk; },
+        close: async () => { file.closed = true; },
+      };
+    },
+    readHostFile: async (path) => {
+      const file = files[path];
+      if (!file || !file.closed) throw new Error('Host log is unavailable: ' + path);
+      return file.data;
+    },
+    startProcess: async (args, options) => {
+      if (options.stdout.redirect !== 'stream' || options.stderr.redirect !== 'stream')
+        throw new Error('Both logs must be streamed');
+      return {stdout, stderr, wait: async () => ({exitCode: %d})};
+    },
+    log: (level, message) => { if (level === 'warn') throw new Error(message); },
+    writeUserMessage: (level, message) => messages.push(message),
+    startProgressTracker: () => {}, endProgress: () => {},
+  };
+  let failure;
+  try {
+    await runSlRecord(engine, {
+      metadata: {outputDirectory: '/target/capture', neoprofAsPrivileged: true},
+      params: {}, workload: {},
+    }, ['sl-record']);
+  } catch (err) { failure = err; }
+  if (%d === 0 ? !!failure : failure?.code !== 'tool_integrations.neoprof.NEOPROF_FAILED')
+    throw new Error('Unexpected capture result: ' + JSON.stringify(failure));
+  if (files['/host/run/capture_log.txt']?.data !== 'Command exited with code 7\n' ||
+      !files['/host/run/capture_log.txt'].closed)
+    throw new Error('Stdout was not preserved');
+  if (files['/host/run/capture_log_err.txt']?.data !== 'capture stderr\n' ||
+      !files['/host/run/capture_log_err.txt'].closed)
+    throw new Error('Stderr was not preserved');
+  if (!messages.includes('Workload exit code: 7'))
+    throw new Error('Stdout workload diagnostic was not reported');
+};
+`, exitCode, exitCode)
+			sts, err := LoadFromSource(source, toolPath)
+			require.NoError(t, err)
+			ti, err := sts.NewIntegration(integrationContext(&tool.AgentEngine{}, nil))
+			require.NoError(t, err)
+			instance := ti.(*GojaToolInstance)
+			for name, contents := range map[string]string{
+				"stdout": "Command exited with code 7\n",
+				"stderr": "capture stderr\n",
+			} {
+				stream, err := instance.asyncHelper.RegisterAsyncIterator(instance.asyncHelper.Vm, bytes.NewBufferString(contents))
+				require.NoError(t, err)
+				require.NoError(t, instance.asyncHelper.Vm.Set(name, stream))
+			}
+			cleanup, err := ti.StartRuntime()
+			require.NoError(t, err)
+			defer cleanup()
+			require.NoError(t, ti.Run())
+		})
+	}
+}
+
+func TestNeoprofSlRecordTerminatesWhenSavingLogsFails(t *testing.T) {
+	toolPath := filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js")
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+
+	for _, failingStream := range []string{"stdout", "stderr"} {
+		t.Run(failingStream, func(t *testing.T) {
+			source := string(data) + fmt.Sprintf(`
+startGatorLogMonitor = async () => {};
+stopGatorLogMonitor = async () => {};
+tool.run = async () => {
+  const failingStream = %q;
+  const failingFile = failingStream === 'stdout' ? 'capture_log.txt' : 'capture_log_err.txt';
+  const closed = {};
+  const writeError = new Error('disk full');
+  let killed = false, waitSettled = false, rejectWait;
+  const exited = new Promise((resolve, reject) => { rejectWait = reject; });
+  const ctx = {metadata: {}, params: {}, workload: {}};
+  const engine = {
+    createRunFile: async (name) => ({
+      path: () => '/host/run/' + name,
+      append: async () => { if (name === failingFile) throw writeError; },
+      close: async () => { closed[name] = true; },
+    }),
+    startProcess: async () => ({
+      stdout: failingStream === 'stdout' ? failing : open,
+      stderr: failingStream === 'stderr' ? failing : open,
+      wait: async () => {
+        try { return await exited; } finally { waitSettled = true; }
+      },
+      kill: async () => {
+        killed = true;
+        closeOpenStream();
+        rejectWait(new Error('process killed'));
+      },
+    }),
+    log: () => {}, startProgressTracker: () => {}, endProgress: () => {},
+  };
+  let failure;
+  try { await runSlRecord(engine, ctx, ['sl-record']); } catch (err) { failure = err; }
+  if (!killed) throw new Error('Capture process was left running');
+  if (!waitSettled || !closed['capture_log.txt'] || !closed['capture_log_err.txt'])
+    throw new Error('Capture returned before the process and both log drains settled');
+  if (ctx.metadata.recordHandle !== null) throw new Error('Capture handle was not cleared');
+  if (failure?.code !== 'tool_integrations.neoprof.WRITE_STREAM' || failure.cause !== writeError)
+    throw new Error('Original write error was not preserved');
+};
+`, failingStream)
+			sts, err := LoadFromSource(source, toolPath)
+			require.NoError(t, err)
+			ti, err := sts.NewIntegration(integrationContext(&tool.AgentEngine{}, nil))
+			require.NoError(t, err)
+			instance := ti.(*GojaToolInstance)
+			vm := instance.asyncHelper.Vm
+			openReader, openWriter := io.Pipe()
+			defer openReader.Close()
+			defer openWriter.Close()
+			for name, reader := range map[string]io.Reader{
+				"failing": bytes.NewBufferString("capture output"),
+				"open":    openReader,
+			} {
+				stream, err := instance.asyncHelper.RegisterAsyncIterator(vm, reader)
+				require.NoError(t, err)
+				require.NoError(t, vm.Set(name, stream))
+			}
+			require.NoError(t, vm.Set("closeOpenStream", func() { _ = openWriter.Close() }))
+			cleanup, err := ti.StartRuntime()
+			require.NoError(t, err)
+			defer func() {
+				_ = openWriter.Close()
+				cleanup()
+			}()
+			require.NoError(t, ti.Run())
+		})
+	}
+}
+
+type cancelableProcessStream struct {
+	targetagentproto.TargetAgent_StreamStdoutClient
+	ctx    context.Context
+	chunks [][]byte
+}
+
+func (s *cancelableProcessStream) Recv() (*targetagentproto.StreamChunk, error) {
+	if len(s.chunks) > 0 {
+		chunk := s.chunks[0]
+		s.chunks = s.chunks[1:]
+		return &targetagentproto.StreamChunk{Data: chunk}, nil
+	}
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func TestNeoprofSlRecordSettlesWhenKillFails(t *testing.T) {
+	toolPath := filepath.Join("..", "..", "..", "apap-cli", "tool-integrations", "neoprof.js")
+	data, err := os.ReadFile(toolPath)
+	require.NoError(t, err)
+
+	for _, failingStream := range []string{"stdout", "stderr"} {
+		t.Run(failingStream, func(t *testing.T) {
+			source := string(data) + fmt.Sprintf(`
+startGatorLogMonitor = async () => {};
+stopGatorLogMonitor = async () => {};
+tool.run = async () => {
+  const failingFile = %q === 'stdout' ? 'capture_log.txt' : 'capture_log_err.txt';
+  const closed = {}, warnings = [];
+  const writeError = new Error('disk full');
+  const ctx = {metadata: {}, params: {}, workload: {}};
+  const engine = {
+    createRunFile: async (name) => ({
+      path: () => '/host/run/' + name,
+      append: async () => { if (name === failingFile) throw writeError; },
+      close: async () => { closed[name] = true; },
+    }),
+    startProcess: async () => captureProcess,
+    log: (level, message) => { if (level === 'warn') warnings.push(message); },
+    startProgressTracker: () => {}, endProgress: () => {},
+  };
+  let failure;
+  try { await runSlRecord(engine, ctx, ['sl-record']); } catch (err) { failure = err; }
+  if (!closed['capture_log.txt'] || !closed['capture_log_err.txt'])
+    throw new Error('Log files were left open');
+  if (ctx.metadata.recordHandle !== null) throw new Error('Capture handle was not cleared');
+  if (failure?.code !== 'tool_integrations.neoprof.WRITE_STREAM' || failure.cause !== writeError)
+    throw new Error('Original write error was not preserved');
+  if (!warnings.some(message => message.includes('kill request failed')))
+    throw new Error('Kill failure was not logged');
+};
+`, failingStream)
+			sts, err := LoadFromSource(source, toolPath)
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			client := api_mocks.NewTargetAgentClient(t)
+			newStream := func(ctx context.Context, name string) *cancelableProcessStream {
+				stream := &cancelableProcessStream{ctx: ctx}
+				if name == failingStream {
+					stream.chunks = [][]byte{[]byte("capture output"), []byte("more output")}
+				}
+				return stream
+			}
+			client.EXPECT().StreamStdout(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, _ *targetagentproto.ProcessStreamRequest, _ ...grpc.CallOption) (targetagentproto.TargetAgent_StreamStdoutClient, error) {
+				return newStream(ctx, "stdout"), nil
+			}).Once()
+			client.EXPECT().StreamStderr(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, _ *targetagentproto.ProcessStreamRequest, _ ...grpc.CallOption) (targetagentproto.TargetAgent_StreamStderrClient, error) {
+				return newStream(ctx, "stderr"), nil
+			}).Once()
+			waitStarted := make(chan struct{})
+			client.EXPECT().WaitProcess(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, _ *targetagentproto.WaitProcessRequest, _ ...grpc.CallOption) (*targetagentproto.WaitProcessResponse, error) {
+				close(waitStarted)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}).Once()
+			client.On("KillProcess", mock.Anything, mock.Anything).Run(func(mock.Arguments) {
+				<-waitStarted
+			}).Return(nil, errors.New("kill request failed")).Once()
+			handle, err := tool.NewAgentProcessHandle(ctx, 123, client,
+				process.StreamRedirect{Mode: process.Stream}, process.StreamRedirect{Mode: process.Stream}, false, nil)
+			require.NoError(t, err)
+			ti, err := sts.NewIntegration(integrationContext(&tool.AgentEngine{}, nil))
+			require.NoError(t, err)
+			instance := ti.(*GojaToolInstance)
+			cleanup, err := ti.StartRuntime()
+			require.NoError(t, err)
+			defer func() { cancel(); cleanup() }()
+			bound, err := BindProcessHandle(&instance.asyncHelper, handle, ProcessHandleBindingOptions{
+				StdoutRedirectMode: process.Stream, StderrRedirectMode: process.Stream,
+			})
+			require.NoError(t, err)
+			require.NoError(t, instance.asyncHelper.RunOnLoopBlock(func(vm *goja.Runtime) error {
+				return vm.Set("captureProcess", bound)
+			}))
+			watchdog := time.AfterFunc(2*time.Second, cancel)
+			defer watchdog.Stop()
+			runErr := ti.Run()
+			require.True(t, watchdog.Stop(), "cleanup needed fallback cancellation to finish")
+			require.NoError(t, runErr)
+			require.NoError(t, ctx.Err(), "failed kill must not cancel the whole run")
 		})
 	}
 }

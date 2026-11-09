@@ -16,12 +16,13 @@ import os
 import socket
 import sys
 import threading
-from urllib.parse import urlsplit
+
+from requests.utils import urlparse
 
 
 def connect(host, port):
     """Open an HTTP CONNECT tunnel to the target through the sandbox proxy."""
-    proxy = urlsplit(os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy", ""))
+    proxy = urlparse(os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy", ""))
     if proxy.scheme != "http" or not proxy.hostname or not proxy.port:
         raise RuntimeError("Codex HTTP_PROXY is required for sandboxed SSH")
     connection = socket.create_connection((proxy.hostname, proxy.port), timeout=15)

@@ -36,6 +36,8 @@ SPDX-License-Identifier: Apache-2.0
   reported data.
 
 ## Scoring Guidance
+- Facts may appear anywhere in the response; omission from its summary table
+  is not evidence of fabrication.
 - Pass:
   - Extracts several concrete, material system facts and accurately
     characterizes the platform.

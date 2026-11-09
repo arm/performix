@@ -29,8 +29,12 @@ SPDX-License-Identifier: Apache-2.0
 - Use selected-recording JFR events to quantify collection count and pause
   cost. Use after-GC samples if assessing retained-heap growth.
 - If the measured cost is material, prioritize reducing batch allocation or
-  reusing blocks, then remeasure. Do not prescribe a larger heap or GC flags
-  without evidence that those address the cost.
+  live temporary data, for example by reusing blocks or reducing the in-flight
+  window where semantics permit, then remeasure. A larger-heap experiment is
+  also acceptable when occupancy and GC measurements support limited headroom
+  and the response connects the pressure to repeated batch allocation.
+  Bounded after-GC use does not rule out capacity pressure. Do not prescribe
+  heap or GC settings without evidence that they address the cost.
 
 ## Expected Profiling Characteristics
 - Sustained application allocation and JVM runtime activity should be visible
@@ -42,8 +46,9 @@ SPDX-License-Identifier: Apache-2.0
 ## Scoring Guidance
 - Pass:
   - Connects material sampled allocation work to the batch loop, reports
-    measured JFR GC cost, and recommends a supported way to reduce temporary
-    allocation.
+    measured JFR GC cost, and recommends an evidence-backed allocation, retention
+    or heap-headroom experiment as described above. Buffer reuse need not be the
+    sole or first recommendation when an alternative is supported.
   - Ranks the finding according to measured cost rather than GC count alone.
 - Fail:
   - Calls the bounded live set a leak or confuses temporary allocation with

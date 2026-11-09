@@ -31,8 +31,8 @@ SPDX-License-Identifier: Apache-2.0
 ## What The LLM Should Suggest
 - Identify the dominant hot function or clearly dominant hot path from dynamic
   evidence.
-- Describe the hot path as scalar, integer-dominant, and control-flow-heavy,
-  with elevated branch activity.
+- Explain how the measured integer-led mix and branch activity relate to the
+  hot path's per-byte conditional classification and state updates.
 - If suggesting follow-up analysis, keep it evidence-backed and lightweight,
   such as checking source or disassembly to understand the branch structure or
   considering whether data-dependent classification logic could be simplified.
@@ -52,8 +52,10 @@ SPDX-License-Identifier: Apache-2.0
 - Pass:
   - Identifies the dominant hot function or clearly dominant hot path from the
     dynamic evidence.
-  - Correctly describes the run as scalar and control-flow-heavy, with
-    elevated branch activity rather than SIMD-heavy execution.
+  - Connects the integer-led mix and branch activity to the conditional processing
+    in the hot path rather than describing SIMD-heavy execution. Equivalent
+    source-based explanations count without the labels "scalar", "control-flow-heavy"
+    or "elevated"; an unexplained list of percentages alone is insufficient.
   - Does not require branch instructions to be the majority instruction class.
   - Keeps any follow-up recommendation cautious and evidence-backed.
 - Fail:

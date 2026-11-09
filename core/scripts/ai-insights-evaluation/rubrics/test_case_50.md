@@ -33,7 +33,8 @@ SPDX-License-Identifier: Apache-2.0
 
 ## What The LLM Should Suggest
 
-- Give no more than two concrete changes, chosen from:
+- Recommend focused, order-preserving changes that reduce or hide score-read
+  latency, such as:
   - arrange scores for contiguous consumption in route order, without changing
     the fingerprint order; or
   - load scores for future route identifiers early, using a small look-ahead
@@ -44,11 +45,8 @@ SPDX-License-Identifier: Apache-2.0
 - Pass:
   - Makes one concrete assessment that delays from the large, scattered
     score-table reads are the underlying problem.
-  - Recommends one or both changes above and explains how they reduce or hide
-    score-read latency.
-  - Gives no more than two distinct remedies.
-  - Treats an ordered score list, a pre-resolved score stream and an equivalent
-    order-preserving layout as variants of one remedy.
+  - Recommends a concrete, order-preserving remedy and explains how it reduces
+    or hides score-read latency. Do not fail solely on the number of relevant remedies.
   - Uses the available profile evidence to support the conclusion. No specific
     measurement or profiling recipe is required.
 - Fail:
@@ -57,6 +55,6 @@ SPDX-License-Identifier: Apache-2.0
   - Lists several possible causes or asks for another profile before choosing
     what to change.
   - Suggests sorting or grouping route identifiers in a way that changes their
-    order or the fingerprint.
+    order or the fingerprint. A generic "if semantics allow" caveat does not
+    excuse a change incompatible with the required order.
   - Gives only a generic instruction to improve locality.
-  - Recommends more than two unrelated remedies.

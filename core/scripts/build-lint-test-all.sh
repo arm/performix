@@ -16,7 +16,7 @@ echo "Building..."
 "$script_dir/build-all.sh" "$@"
 
 echo "Linting..."
-"$script_dir/lint-all.sh" "$@"
+task --dir "$script_dir/../.." core:lint -- "$@"
 
 echo "Testing..."
 "$script_dir/test-all.sh" "$@"

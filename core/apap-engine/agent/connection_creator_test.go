@@ -230,6 +230,27 @@ func TestLaunchAgent_Succeeds(t *testing.T) {
 	actions.AssertExpectations(t)
 }
 
+func TestLaunchAgentWindowsPrivilegeRequest(t *testing.T) {
+	for _, loc := range []string{locality.Host, locality.Target} {
+		t.Run(loc, func(t *testing.T) {
+			actions := &conductormocks.MockTargetActions{}
+			tp := conductor.TargetPlatform{
+				PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Win},
+				Path:                  &conductor.WindowsPathUtils{}, Actions: actions,
+			}
+			cmd := `cd "C:\tools\agent" && powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File verify-and-launch.ps1`
+			if loc == locality.Host {
+				cmd += " -RequestHighestPrivileges 0"
+			}
+			actions.On("RunCommand", cmd).Return(conductor.RunCommandOutput{Stdout: "4242"}, nil).Once()
+			port, err := launchAgent(tp, `C:\tools\agent`, loc)
+			require.NoError(t, err)
+			require.Equal(t, 4242, port)
+			actions.AssertExpectations(t)
+		})
+	}
+}
+
 func TestLaunchAgent_FailsRunCommandError(t *testing.T) {
 	actions := &conductormocks.MockTargetActions{}
 	tp := conductor.TargetPlatform{Path: &conductor.LinuxPathUtils{}, Actions: actions}

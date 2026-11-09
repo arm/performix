@@ -57,40 +57,92 @@ url = "https://github.com/niXman/mingw-builds-binaries/releases/download/15.2.0-
 url_api = "https://api.github.com/repos/niXman/mingw-builds-binaries/releases/assets/358709844"
 
 [[tools.go]]
-version = "1.27.2"
+version = "1.27.3"
 backend = "core:go"
 
 [tools.go."platforms.linux-arm64"]
-checksum = "sha256:94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8"
-url = "https://dl.google.com/go/go1.27.2.linux-arm64.tar.gz"
+checksum = "sha256:a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49"
+url = "https://dl.google.com/go/go1.27.3.linux-arm64.tar.gz"
 
 [tools.go."platforms.linux-arm64-musl"]
-checksum = "sha256:94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8"
-url = "https://dl.google.com/go/go1.27.2.linux-arm64.tar.gz"
+checksum = "sha256:a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49"
+url = "https://dl.google.com/go/go1.27.3.linux-arm64.tar.gz"
 
 [tools.go."platforms.linux-x64"]
-checksum = "sha256:ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"
-url = "https://dl.google.com/go/go1.27.2.linux-amd64.tar.gz"
+checksum = "sha256:65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40"
+url = "https://dl.google.com/go/go1.27.3.linux-amd64.tar.gz"
 
 [tools.go."platforms.linux-x64-musl"]
-checksum = "sha256:ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"
-url = "https://dl.google.com/go/go1.27.2.linux-amd64.tar.gz"
+checksum = "sha256:65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40"
+url = "https://dl.google.com/go/go1.27.3.linux-amd64.tar.gz"
 
 [tools.go."platforms.macos-arm64"]
-checksum = "sha256:76812b213b1b2302c978d28fa52fa92d541704b9e7d9d5db8002c50e4018c4c5"
-url = "https://dl.google.com/go/go1.27.2.darwin-arm64.tar.gz"
+checksum = "sha256:dd3908cf20959d798c1e06ebe5b72213f0505ce01373b40ce3110975a6cd99c2"
+url = "https://dl.google.com/go/go1.27.3.darwin-arm64.tar.gz"
 
 [tools.go."platforms.macos-x64"]
-checksum = "sha256:587b59182488b23aa6e5fc25110405a3e0e5b38ed2f5b2f46ed13c32aee356fe"
-url = "https://dl.google.com/go/go1.27.2.darwin-amd64.tar.gz"
+checksum = "sha256:b6f8e931e4ab497fcde6da8ae4499a58f9d258e55c8a80824a516eae5950a750"
+url = "https://dl.google.com/go/go1.27.3.darwin-amd64.tar.gz"
 
 [tools.go."platforms.windows-arm64"]
-checksum = "sha256:5c4b294f23b558619ae8a4aa94d023e3bca03f52c8398bb41b9026002b0013de"
-url = "https://dl.google.com/go/go1.27.2.windows-arm64.zip"
+checksum = "sha256:c507872ff21f8a7cd3c1c217b059c6f7271a4a9d8e692810ef9dd3e1f601197c"
+url = "https://dl.google.com/go/go1.27.3.windows-arm64.zip"
 
 [tools.go."platforms.windows-x64"]
-checksum = "sha256:1314008898bd40df77af4b014f777f08873dbdfbcd3d92308728ee03304fe04f"
-url = "https://dl.google.com/go/go1.27.2.windows-amd64.zip"
+checksum = "sha256:f26081f438319757f8a1b46d7d0b2c5ec7583d4038e485e0aa725cfde7885fff"
+url = "https://dl.google.com/go/go1.27.3.windows-amd64.zip"
+
+[[tools.golangci-lint]]
+version = "2.14.0"
+backend = "aqua:golangci/golangci-lint"
+
+[tools.golangci-lint."platforms.linux-arm64"]
+checksum = "sha256:ee7ec5f3453d15ddf106fae5a4d6c71737712348a979d1fe9cd52ec7ea299bae"
+url = "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-linux-arm64.tar.gz"
+url_api = "https://api.github.com/repos/golangci/golangci-lint/releases/assets/585813674"
+provenance = "github-attestations"
+
+[tools.golangci-lint."platforms.linux-arm64-musl"]
+checksum = "sha256:ee7ec5f3453d15ddf106fae5a4d6c71737712348a979d1fe9cd52ec7ea299bae"
+url = "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-linux-arm64.tar.gz"
+url_api = "https://api.github.com/repos/golangci/golangci-lint/releases/assets/585813674"
+provenance = "github-attestations"
+
+[tools.golangci-lint."platforms.linux-x64"]
+checksum = "sha256:ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab"
+url = "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-linux-amd64.tar.gz"
+url_api = "https://api.github.com/repos/golangci/golangci-lint/releases/assets/585813815"
+provenance = "github-attestations"
+
+[tools.golangci-lint."platforms.linux-x64-musl"]
+checksum = "sha256:ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab"
+url = "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-linux-amd64.tar.gz"
+url_api = "https://api.github.com/repos/golangci/golangci-lint/releases/assets/585813815"
+provenance = "github-attestations"
+
+[tools.golangci-lint."platforms.macos-arm64"]
+checksum = "sha256:5ef5f36a7147e91dc58ef9ef4d11bb7bad5ead0c76eb6c01327a73c641d1dcc3"
+url = "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-darwin-arm64.tar.gz"
+url_api = "https://api.github.com/repos/golangci/golangci-lint/releases/assets/585813591"
+provenance = "github-attestations"
+
+[tools.golangci-lint."platforms.macos-x64"]
+checksum = "sha256:a5667c1c3536be1740133213e1e822bfb8f0d98ea12903174d6d5f635e4ed68d"
+url = "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-darwin-amd64.tar.gz"
+url_api = "https://api.github.com/repos/golangci/golangci-lint/releases/assets/585813755"
+provenance = "github-attestations"
+
+[tools.golangci-lint."platforms.windows-arm64"]
+checksum = "sha256:6399496aef883e5d2f77ea93e6e54fdd05bc2695f64071d8de0b0579cad92274"
+url = "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-windows-arm64.zip"
+url_api = "https://api.github.com/repos/golangci/golangci-lint/releases/assets/585813645"
+provenance = "github-attestations"
+
+[tools.golangci-lint."platforms.windows-x64"]
+checksum = "sha256:b15f903d1649283a2ab6e8d2f0c317eaf1f9f6b3763950e7e8b7e72a43dd724f"
+url = "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/golangci-lint-2.14.0-windows-amd64.zip"
+url_api = "https://api.github.com/repos/golangci/golangci-lint/releases/assets/585813793"
+provenance = "github-attestations"
 
 [[tools.goreleaser]]
 version = "2.18.1"
@@ -301,40 +353,45 @@ url = "https://github.com/grpc/grpc-go/releases/download/cmd/protoc-gen-go-grpc/
 url_api = "https://api.github.com/repos/grpc/grpc-go/releases/assets/171237300"
 
 [[tools.python]]
-version = "3.10.20"
+version = "3.14.10"
 backend = "core:python"
 
 [tools.python."platforms.linux-arm64"]
-checksum = "sha256:2d9a5d103129bd8155f0332f3f876df90364038e59945369fa73fed15e6a2474"
-url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.10.20+20260623-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
+checksum = "sha256:90f48337bc3dd4ae6eda81e001e4c981236d403b6b5a07778bbdf94ee423dc00"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10+20261026-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
 provenance = "github-attestations"
 
 [tools.python."platforms.linux-arm64-musl"]
-checksum = "sha256:c69776d67791f33f14e00224bc19f013d9a01a857ae26e9b381fb09adf3a03b8"
-url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.10.20+20260623-aarch64-unknown-linux-musl-install_only_stripped.tar.gz"
+checksum = "sha256:d96d9e66e1e4f6465114ed239681bf6e45bca63724453675fd9bdf30a6475873"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10+20261026-aarch64-unknown-linux-musl-install_only_stripped.tar.gz"
 provenance = "github-attestations"
 
 [tools.python."platforms.linux-x64"]
-checksum = "sha256:ac308036658cee12537c90bf85985f348160663dfab8550f25fc19bf10695573"
-url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.10.20+20260623-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+checksum = "sha256:4d3c16c59ed0802a3d1d34d8bce504b15ceeaff39d62dadecc6a9fa803412aed"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10+20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
 provenance = "github-attestations"
 
 [tools.python."platforms.linux-x64-musl"]
-checksum = "sha256:ada10acaebec935cf04ee1cd580dc52b47f71064ccca75669b5a3241af3eadc2"
-url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.10.20+20260623-x86_64-unknown-linux-musl-install_only_stripped.tar.gz"
+checksum = "sha256:f6dc25dc87ec05c1600ff49ad169adcec449b9ca563d274ba143f5e13b41fe42"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10+20261026-x86_64-unknown-linux-musl-install_only_stripped.tar.gz"
 provenance = "github-attestations"
 
 [tools.python."platforms.macos-arm64"]
-checksum = "sha256:1b966fa4f23c0b9a68eafa1c5720c86a622d5fbfedd49a38fe17e18987149caf"
-url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.10.20+20260623-aarch64-apple-darwin-install_only_stripped.tar.gz"
+checksum = "sha256:95eb8c87d16af37c54e9765e31d8c56c0d8ffa9968ea0f704f73a9b83f84e9f9"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10+20261026-aarch64-apple-darwin-install_only_stripped.tar.gz"
 provenance = "github-attestations"
 
 [tools.python."platforms.macos-x64"]
-checksum = "sha256:7532d3a1a1b53dd302bc91a409fe3c04f52b7e2b619f95c20cc3a59cbb873721"
-url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.10.20+20260623-x86_64-apple-darwin-install_only_stripped.tar.gz"
+checksum = "sha256:2fd8becd48cf0ff5f0a15df3c0db7cae7aa708dcaacf901bd30d6cdd6229370b"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10+20261026-x86_64-apple-darwin-install_only_stripped.tar.gz"
+provenance = "github-attestations"
+
+[tools.python."platforms.windows-arm64"]
+checksum = "sha256:2b6cf82a67cb99ef0db0932dd69ee24080077add6f98435cea5de850c144327d"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10+20261026-aarch64-pc-windows-msvc-install_only_stripped.tar.gz"
 provenance = "github-attestations"
 
 [tools.python."platforms.windows-x64"]
-checksum = "sha256:94bd85f03ae02ee090abd694763e5337293d59ee78aae775c1338ac4cb01661f"
-url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.10.20+20260623-x86_64-pc-windows-msvc-install_only_stripped.tar.gz"
+checksum = "sha256:c1876a9795d3a94ee49a1499a69cd91e26ca3e2829593f93fa6e4db90d05402b"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10+20261026-x86_64-pc-windows-msvc-install_only_stripped.tar.gz"
 provenance = "github-attestations"

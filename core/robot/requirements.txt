@@ -1,21 +1,18 @@
 # SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 # SPDX-License-Identifier: Apache-2.0
 
-# Robot Framework functional-test dependencies.
+# Dependencies for the Robot launcher, tests and development tools.
 #
-# Shared helper-script tooling lives in ../scripts/requirements.txt and is 
-# included below, so installing this file alone provisions the shared tooling
-# virtualenv (core/.venv) with everything the Robot tests and the
-# core/scripts Python helpers need.
+# Include the shared scripts dependencies used by Robot helpers.
 -r ../scripts/requirements.txt
 
 pip==26.1.2
-robotframework>=7.2.0
+robotframework>=7.2.0  # run-robot.py test selection and Robot test execution
 robotframework-robocop<8.2.1
 robotframework-seleniumlibrary
 mcp>=1.27,<2      # resources/libs/MCPClient.py
 paramiko          # resources/libs/CommandService.py, AgentHelper.py
 psutil            # resources/libs/MCPClient.py
-requests          # resources/libs/NetworkUtils.py
+requests          # run-robot.py downloads, resources/libs/NetworkUtils.py
 pylint            # lints resources/libs (.pylintrc)
 flake8            # lints resources/libs (.flake8)

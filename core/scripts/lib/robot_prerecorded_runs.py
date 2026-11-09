@@ -3,7 +3,7 @@
 
 """Select and validate pre-recorded runs for Robot tests.
 
-Used by run-robot.py to choose which runs to download, and by the PrerecordedRuns library
+Used by robot/run-robot.py to choose which runs to download, and by the PrerecordedRuns library
 to find a run for the test target and check its workload and profiling settings.
 """
 

@@ -10,6 +10,8 @@ vars:
   TOOLS_PYTHON: '{{.PYTHON_SYSTEM}}'
   BASH_RUNNER: '{{.PYTHON_SYSTEM}} "{{.TASKFILE_DIR}}/scripts/run-bash.py"'
   DEFAULT_APX_BUILD_TAGS: duckdb_arrow
+  # The optional internal Taskfile adds JavaScript lint to this list.
+  LINT_TASKS: [lint:go, lint:robot]
 
 includes:
   internal:
@@ -52,6 +54,19 @@ tasks:
     cmds:
       - '{{.TOOLS_PYTHON}} scripts/get-tools.py'
 
+  deps:tools:python:
+    desc: Install Python dependencies for Core tools and tests
+    cmds:
+      - '{{.PYTHON_SYSTEM}} -m venv .venv'
+      - '{{.PYTHON_VENV}} -m pip install --disable-pip-version-check -r robot/requirements.txt'
+      - '{{.PYTHON_VENV}} -c "from pathlib import Path; Path(''.venv/.deps-installed'').touch()"'
+
+  generate:arm-cpus:
+    desc: Download Arm CPU data and regenerate the Go source
+    deps: [deps:tools:python]
+    cmds:
+      - '{{.PYTHON_VENV}} scripts/update-arm-cpus.py'
+
   telemetry:validate:
     desc: Validate CPU telemetry specifications against the vendored schemas
     cmds:
@@ -85,3 +100,50 @@ tasks:
       - rm -rf apap-cli/tools-*-*
       - task: internal:clean
         if: test -f Taskfile.internal.yml
+
+  lint:
+    desc: Run Core linters (pass -- --fix to apply fixes)
+    requires:
+      vars:
+        - name: CLI_ARGS
+          enum: ['', '--fix']
+    # Task runs dependencies concurrently; the language linters are independent.
+    deps:
+      - for: {var: LINT_TASKS}
+        task: '{{.ITEM}}'
+
+  lint:go:
+    desc: Lint all Core Go modules (pass -- --fix to apply fixes)
+    requires:
+      vars:
+        - name: CLI_ARGS
+          enum: ['', '--fix']
+    # Discover all Go modules. Always rerun lint, even when go.mod is unchanged.
+    sources: ['**/go.mod']
+    method: none
+    cmds:
+      # Call the task below sequentially for each go.mod. ITEM is its path;
+      # the dir template function extracts the module's directory.
+      - for: sources
+        task: lint:go:module
+        vars:
+          MODULE_DIR: '{{dir .ITEM}}'
+
+  lint:go:module:
+    internal: true
+    # Run from the module directory so ./... covers only that module.
+    dir: '{{.MODULE_DIR}}'
+    cmds:
+      - >-
+        golangci-lint run --build-tags=duckdb_arrow ./... {{.CLI_ARGS}}
+        --output.text.print-issued-lines --output.text.print-linter-name
+        --output.text.colors --timeout 300s
+        --max-issues-per-linter 0 --max-same-issues 0
+
+  lint:robot:
+    desc: Run the Robocop linter for Robot Framework files
+    dir: robot
+    deps:
+      - task: deps:tools:python
+    cmds:
+      - '../{{.PYTHON_VENV}} -m robocop check --config robocop.toml'

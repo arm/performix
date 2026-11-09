@@ -7,37 +7,13 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
-func ParseRecipeSelectionPolicy(input string) (apapproto.RecipeSelectionPolicyType, error) {
-	switch strings.ToLower(input) {
-	case "use-installed-version":
-		return apapproto.RecipeSelectionPolicyType_USE_INSTALLED_VERSION, nil
-	case "from-content":
-		return apapproto.RecipeSelectionPolicyType_FROM_CONTENT, nil
-	case "override-by-name":
-		return apapproto.RecipeSelectionPolicyType_OVERRIDE_BY_NAME, nil
-	default:
-		metadata := map[string]string{
-			"flag":  "--recipe-selection-policy",
-			"value": input,
-		}
-		return apapproto.RecipeSelectionPolicyType(0), message.New(message.CliCmdValidationInvalidFlagValue).WithMetadata(metadata)
-	}
-}
-
-func RecipeSelectionPolicyHelp() string {
-	return "Valid values: use-installed-version, from-content, override-by-name"
-}
-
 type RenderPreparationParams struct {
-	RecipeSelectionPolicy *apapproto.RecipeSelectionPolicyType
 	OverrideRecipeName    string
 	RenderParameterValues map[string]*structpb.Value
 }
@@ -126,13 +102,10 @@ type RenderService struct{}
 func (s RenderService) PrepareRender(client apapproto.ApapClient, content *apapproto.ContentSelection, params RenderPreparationParams) (*apapproto.PrepareRenderResponse, error) {
 	request := apapproto.PrepareRenderRequest{Content: content}
 
-	if params.RecipeSelectionPolicy != nil {
+	if params.OverrideRecipeName != "" {
 		request.RecipeSelectionPolicy = &apapproto.RecipeSelectionPolicyOptions{
-			Policy: *params.RecipeSelectionPolicy,
-		}
-
-		if params.OverrideRecipeName != "" {
-			request.RecipeSelectionPolicy.OverrideName = &params.OverrideRecipeName
+			Policy:       apapproto.RecipeSelectionPolicyType_OVERRIDE_BY_NAME,
+			OverrideName: &params.OverrideRecipeName,
 		}
 	}
 

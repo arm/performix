@@ -11,8 +11,8 @@
   },
   "model_configs": [
     {
-      "id": "gpt-5.5-high",
-      "model": "gpt-5.5",
+      "id": "gpt-6.1-sol-high",
+      "model": "gpt-6.1-sol",
       "reasoning_effort": "high"
     }
   ],
@@ -24,9 +24,16 @@
       "run_artifact": "test_case_01/latest.zip",
       "rubric": "rubrics/test_case_01.md",
       "performance_thresholds": {
-        "duration_seconds": 35,
-        "input_tokens": 70800,
-        "output_tokens": 1032
+        "gpt-5.5-high": {
+          "duration_seconds": 35,
+          "input_tokens": 250000,
+          "output_tokens": 2700
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 300000,
+          "output_tokens": 1800
+        }
       }
     },
     {
@@ -36,9 +43,16 @@
       "run_artifact": "test_case_02/latest.zip",
       "rubric": "rubrics/test_case_02.md",
       "performance_thresholds": {
-        "duration_seconds": 38,
-        "input_tokens": 112800,
-        "output_tokens": 1080
+        "gpt-5.5-high": {
+          "duration_seconds": 38,
+          "input_tokens": 300000,
+          "output_tokens": 3100
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 290000,
+          "output_tokens": 2100
+        }
       }
     },
     {
@@ -48,9 +62,16 @@
       "run_artifact": "test_case_03/latest.zip",
       "rubric": "rubrics/test_case_03.md",
       "performance_thresholds": {
-        "duration_seconds": 41,
-        "input_tokens": 115200,
-        "output_tokens": 984
+        "gpt-5.5-high": {
+          "duration_seconds": 41,
+          "input_tokens": 370000,
+          "output_tokens": 3000
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 310000,
+          "output_tokens": 1900
+        }
       }
     },
     {
@@ -60,9 +81,16 @@
       "run_artifact": "test_case_04/latest.zip",
       "rubric": "rubrics/test_case_04.md",
       "performance_thresholds": {
-        "duration_seconds": 56,
-        "input_tokens": 168000,
-        "output_tokens": 1320
+        "gpt-5.5-high": {
+          "duration_seconds": 56,
+          "input_tokens": 310000,
+          "output_tokens": 2600
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 410000,
+          "output_tokens": 1900
+        }
       }
     },
     {
@@ -72,9 +100,16 @@
       "run_artifact": "test_case_05/latest.zip",
       "rubric": "rubrics/test_case_05.md",
       "performance_thresholds": {
-        "duration_seconds": 43,
-        "input_tokens": 117600,
-        "output_tokens": 1440
+        "gpt-5.5-high": {
+          "duration_seconds": 43,
+          "input_tokens": 330000,
+          "output_tokens": 2500
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 290000,
+          "output_tokens": 1900
+        }
       }
     },
     {
@@ -91,9 +126,16 @@
       "run_artifact": "test_case_07/latest.zip",
       "rubric": "rubrics/test_case_07.md",
       "performance_thresholds": {
-        "duration_seconds": 43,
-        "input_tokens": 132000,
-        "output_tokens": 1560
+        "gpt-5.5-high": {
+          "duration_seconds": 43,
+          "input_tokens": 360000,
+          "output_tokens": 3000
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 150,
+          "input_tokens": 350000,
+          "output_tokens": 2000
+        }
       }
     },
     {
@@ -103,9 +145,16 @@
       "run_artifact": "test_case_08/latest.zip",
       "rubric": "rubrics/test_case_08.md",
       "performance_thresholds": {
-        "duration_seconds": 60,
-        "input_tokens": 132000,
-        "output_tokens": 1440
+        "gpt-5.5-high": {
+          "duration_seconds": 60,
+          "input_tokens": 270000,
+          "output_tokens": 2800
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 320000,
+          "output_tokens": 2000
+        }
       }
     },
     {
@@ -115,9 +164,16 @@
       "run_artifact": "test_case_09/latest.zip",
       "rubric": "rubrics/test_case_09.md",
       "performance_thresholds": {
-        "duration_seconds": 64,
-        "input_tokens": 252000,
-        "output_tokens": 1800
+        "gpt-5.5-high": {
+          "duration_seconds": 64,
+          "input_tokens": 360000,
+          "output_tokens": 4000
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 150,
+          "input_tokens": 510000,
+          "output_tokens": 2050
+        }
       }
     },
     {
@@ -127,9 +183,16 @@
       "run_artifact": "test_case_10/latest.zip",
       "rubric": "rubrics/test_case_10.md",
       "performance_thresholds": {
-        "duration_seconds": 39,
-        "input_tokens": 110400,
-        "output_tokens": 1008
+        "gpt-5.5-high": {
+          "duration_seconds": 39,
+          "input_tokens": 350000,
+          "output_tokens": 2600
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 290000,
+          "output_tokens": 1800
+        }
       }
     },
     {
@@ -146,9 +209,16 @@
       "run_artifact": "test_case_12/latest.zip",
       "rubric": "rubrics/test_case_12.md",
       "performance_thresholds": {
-        "duration_seconds": 43,
-        "input_tokens": 116400,
-        "output_tokens": 1200
+        "gpt-5.5-high": {
+          "duration_seconds": 43,
+          "input_tokens": 280000,
+          "output_tokens": 2600
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 280000,
+          "output_tokens": 1800
+        }
       }
     },
     {
@@ -158,9 +228,16 @@
       "run_artifact": "test_case_13/latest.zip",
       "rubric": "rubrics/test_case_13.md",
       "performance_thresholds": {
-        "duration_seconds": 51,
-        "input_tokens": 132000,
-        "output_tokens": 1560
+        "gpt-5.5-high": {
+          "duration_seconds": 51,
+          "input_tokens": 270000,
+          "output_tokens": 3100
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 290000,
+          "output_tokens": 2100
+        }
       }
     },
     {
@@ -194,9 +271,16 @@
       "run_artifact": "test_case_16/latest.zip",
       "rubric": "rubrics/test_case_16.md",
       "performance_thresholds": {
-        "duration_seconds": 53,
-        "input_tokens": 228000,
-        "output_tokens": 1440
+        "gpt-5.5-high": {
+          "duration_seconds": 53,
+          "input_tokens": 430000,
+          "output_tokens": 3400
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 180,
+          "input_tokens": 420000,
+          "output_tokens": 2300
+        }
       },
       "recipe_params": ["collect_java_stacks=true"]
     },
@@ -207,9 +291,16 @@
       "run_artifact": "test_case_17/latest.zip",
       "rubric": "rubrics/test_case_17.md",
       "performance_thresholds": {
-        "duration_seconds": 68,
-        "input_tokens": 144000,
-        "output_tokens": 1440
+        "gpt-5.5-high": {
+          "duration_seconds": 68,
+          "input_tokens": 340000,
+          "output_tokens": 3000
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 330000,
+          "output_tokens": 1900
+        }
       },
       "recipe_params": ["collect_java_stacks=true"]
     },
@@ -220,9 +311,16 @@
       "run_artifact": "test_case_18/latest.zip",
       "rubric": "rubrics/test_case_18.md",
       "performance_thresholds": {
-        "duration_seconds": 51,
-        "input_tokens": 144000,
-        "output_tokens": 1560
+        "gpt-5.5-high": {
+          "duration_seconds": 51,
+          "input_tokens": 320000,
+          "output_tokens": 3100
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 360000,
+          "output_tokens": 2000
+        }
       },
       "recipe_params": ["collect_java_stacks=true"]
     },
@@ -240,7 +338,7 @@
       "acts": ["act2"],
       "run_artifact": "test_case_20/latest.zip",
       "rubric": "rubrics/test_case_20.md",
-      "evaluation_modes": ["performix_mcp_run_query"],
+      "requirements": ["jfr_data"],
       "prerecord": {"enable_jfr_capture": true},
       "recipe_params": ["collect_java_stacks=true"]
     },
@@ -303,15 +401,7 @@
         "cleanup": ["bash", "external/test_case_27/sidecar.sh", "cleanup"]
       },
       "run_artifact": "test_case_27/latest.zip",
-      "rubric": "rubrics/test_case_27.md",
-      "expected_failures": {
-        "modes": {
-          "arm_mcp": {
-            "expected_failure": true,
-            "reason": "Known Arm MCP limitation: test_case_27 is attach-mode, and the current Arm MCP path is launch-only."
-          }
-        }
-      }
+      "rubric": "rubrics/test_case_27.md"
     },
     {
       "id": "test_case_28",
@@ -320,9 +410,16 @@
       "run_artifact": "test_case_28/latest.zip",
       "rubric": "rubrics/test_case_28.md",
       "performance_thresholds": {
-        "duration_seconds": 34,
-        "input_tokens": 66000,
-        "output_tokens": 768
+        "gpt-5.5-high": {
+          "duration_seconds": 34,
+          "input_tokens": 340000,
+          "output_tokens": 3200
+        },
+        "gpt-6.1-sol-high": {
+          "duration_seconds": 120,
+          "input_tokens": 310000,
+          "output_tokens": 2200
+        }
       },
       "recipe_params": ["collect_dotnet_stacks=true"]
     },
@@ -728,13 +825,62 @@
       "acts": ["act4"],
       "run_artifact": "test_case_02/latest.zip",
       "rubric": "rubrics/pathways_01.md",
-      "mcp_prompt": "The workload `./ai_insights_tests/build-release/test_case_02` is too slow. Treat the slowness as a suspected CPU-side bottleneck. Edit workload source code to reduce its runtime by at least 50% while preserving the checksum.",
+      "mcp_prompt": "The workload `./build-release/test_case_02` is too slow on the specified target. Use Performix to investigate the root cause of this performance issue. A previous Performix run is available, use it if it's suitable for your investigation but otherwise obtain a fresh Performix run. Treat the slowness as a suspected CPU-side bottleneck. Edit workload source code to reduce its runtime by at least 50% while preserving the checksum. Use Performix to validate the impact of your source code edits on workload performance.",
       "pathways_execution": {
         "mode": "host_ssh",
-        "agent_timeout_seconds": 300,
+        "agent_timeout_seconds": 600,
         "workload_source": {
           "repository": "https://github.com/Arm-Debug/performix-workloads.git",
-          "branch": "main"
+          "branch": "main",
+          "directory": "ai_insights_tests/src/local/test_case_02"
+        }
+      }
+    },
+    {
+      "id": "pathways_02",
+      "summary": "Cpp unknown throughput regression and broad-to-narrow investigation",
+      "acts": ["act4"],
+      "rubric": "rubrics/pathways_02.md",
+      "mcp_prompt": "The throughput of my workload at `./build-release/test_case_52` is too low on the supplied Arm hardware target, but I have no idea what the root cause is. Use Performix to gather and analyze evidence to establish the root cause or causes of this performance problem. Support your diagnosis with recorded measurements from the Arm target, attributed to the relevant workload functions or call paths. Where the evidence points to a CPU bottleneck, use hardware performance-counter evidence to explain the limiting microarchitectural mechanism and distinguish it from other plausible causes. Edit the workload source code to increase completed iterations by at least 10% without changing the test runtime. Rebuild the optimized workload and validate its performance against the original baseline with fresh comparable Performix runs, throughput measurements and the correctness check. The correctness check should compare the original and modified implementations on identical inputs and the same amount of completed work in a separate functional check. Preserve the workload’s inputs, required work per iteration, component weights, warm-up and measured duration. Do not move required measured work into setup or replace it with precomputed results.",
+      "pathways_execution": {
+        "mode": "host_ssh",
+        "agent_timeout_seconds": 1800,
+        "workload_source": {
+          "repository": "https://github.com/Arm-Debug/performix-workloads.git",
+          "branch": "main",
+          "directory": "ai_insights_tests/src/local/test_case_52"
+        }
+      }
+    },
+    {
+      "id": "pathways_03",
+      "summary": "System transient CPU evidence and defensible stopping",
+      "acts": ["act4"],
+      "rubric": "rubrics/pathways_03.md",
+      "mcp_prompt": "My colleague claims that `./build-release/test_case_35` suffers from sustained CPU saturation on the supplied target. Use Performix to investigate this claim. If the claim is true, use Performix evidence to demonstrate a source code optimization. If the claim is not true, use evidence from Performix to explain why.",
+      "pathways_execution": {
+        "mode": "host_ssh",
+        "agent_timeout_seconds": 600,
+        "workload_source": {
+          "repository": "https://github.com/Arm-Debug/performix-workloads.git",
+          "branch": "main",
+          "directory": "ai_insights_tests/src/local/test_case_35"
+        }
+      }
+    },
+    {
+      "id": "pathways_05",
+      "summary": "Initial clarification for an underspecified investigation",
+      "acts": ["act4"],
+      "rubric": "rubrics/pathways_05.md",
+      "mcp_prompt": "Use Performix to help me investigate and improve my application's performance. If you need more information before starting, ask all your clarification questions together and wait for my answers.",
+      "pathways_execution": {
+        "mode": "host_ssh",
+        "agent_timeout_seconds": 600,
+        "workload_source": {
+          "repository": "https://github.com/Arm-Debug/performix-workloads.git",
+          "branch": "main",
+          "directory": "."
         }
       }
     },
@@ -744,7 +890,7 @@
       "acts": ["act2"],
       "run_artifact": "test_case_71/latest.zip",
       "rubric": "rubrics/test_case_71.md",
-      "evaluation_modes": ["performix_mcp_run_query"],
+      "requirements": ["jfr_data"],
       "prerecord": {"timeout_seconds": 60, "enable_jfr_capture": true},
       "recipe_params": ["collect_java_stacks=true"]
     },
@@ -754,7 +900,7 @@
       "acts": ["act1"],
       "run_artifact": "test_case_72/latest.zip",
       "rubric": "rubrics/test_case_72.md",
-      "evaluation_modes": ["performix_mcp_run_query"],
+      "requirements": ["jfr_data"],
       "prerecord": {"timeout_seconds": 60, "enable_jfr_capture": true},
       "recipe_params": ["collect_java_stacks=true"]
     },
@@ -764,7 +910,17 @@
       "acts": ["act2"],
       "run_artifact": "test_case_73/latest.zip",
       "rubric": "rubrics/test_case_73.md",
-      "evaluation_modes": ["performix_mcp_run_query"],
+      "requirements": ["jfr_data"],
+      "prerecord": {"timeout_seconds": 60, "enable_jfr_capture": true},
+      "recipe_params": ["collect_java_stacks=true"]
+    },
+    {
+      "id": "test_case_74",
+      "summary": "Java CRC32 with disabled JVM intrinsics",
+      "acts": ["act1"],
+      "run_artifact": "test_case_74/latest.zip",
+      "rubric": "rubrics/test_case_74.md",
+      "requirements": ["jfr_data"],
       "prerecord": {"timeout_seconds": 60, "enable_jfr_capture": true},
       "recipe_params": ["collect_java_stacks=true"]
     }

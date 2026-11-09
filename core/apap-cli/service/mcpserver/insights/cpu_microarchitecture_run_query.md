@@ -1,16 +1,18 @@
 # CPU Microarchitecture Query Guide
 
 Use `run_query` to inspect CPU Microarchitecture evidence for the supplied run.
-Start with Topdown Level 1, inspect secondary measurements for each material
-category, then attribute the evidence to application code. Use flat functions
-for self time, the call tree for inclusive paths, and source or disassembly to
-verify implementation claims.
+Start with Topdown Level 1 and inspect secondary measurements for each material
+category. Distinguish relevant instruction-fetch/frontend, data-access/backend
+and speculation effects at the functions or call paths under investigation;
+a run-wide dominant category is insufficient. Use flat functions for self time
+and the call tree for inclusive paths. Hotspots and source/disassembly alone
+do not establish cache, memory or branch-prediction bottlenecks; use source or
+disassembly to verify implementation claims.
 
 ## Tables
 
 `drilldown` contains flat functions and `drilldown_1` contains the run root and
-call tree. Join each to its adjacent `_measurements` table. If the schema
-differs, inspect `duckdb_columns()` once.
+call tree. Join each to its adjacent `_measurements` table.
 
 ## Level 1 overview
 
@@ -172,7 +174,7 @@ SELECT
     ELSE ps.name END AS parent_function,
   CASE WHEN length(s.name) > 131
     THEN left(s.name, 64) || '...' || right(s.name, 64)
-    ELSE s.name END AS function,
+    ELSE s.name END AS function_name,
   ROUND(100 * n.self_samples / NULLIF(r.total_samples, 0), 2) AS self_pct,
   ROUND(100 * n.inclusive_samples / NULLIF(r.total_samples, 0), 2) AS inclusive_pct,
   n.frontend_pct,
@@ -205,7 +207,7 @@ weight as a hot function:
 SELECT
   CASE WHEN length(s.name) > 131
     THEN left(s.name, 64) || '...' || right(s.name, 64)
-    ELSE s.name END AS function,
+    ELSE s.name END AS function_name,
   i.image_name,
   MAX(d.measurement_value) FILTER
     (WHERE m.identifier = 'samples.count.self') AS samples,
@@ -280,9 +282,8 @@ confidence where necessary.
 
 ## Disassembly
 
-Use sampled disassembly to verify implementation claims. Select functions by
-full function and image names from a narrowed function query, not an abbreviated
-name or an ID from an earlier query:
+Select disassembly by symbol IDs from this session, or full function and image
+names:
 
 ```sql
 SELECT

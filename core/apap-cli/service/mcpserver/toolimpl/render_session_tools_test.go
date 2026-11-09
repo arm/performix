@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,10 +20,65 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/Arm-Debug/apap-cli/apap-cli/service/mcpserver/insights"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/api/apapproto"
 	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
+
+func TestRenderToolsSessionGuidance(t *testing.T) {
+	for _, toolName := range []string{"generate_ai_insights", "open_render_session"} {
+		for _, rendererID := range []string{"hot-functions", "jfr_recordings"} {
+			t.Run(toolName+"/"+rendererID, func(t *testing.T) {
+				// Given a render session with or without JVM data.
+				ctx := t.Context()
+				engine := apapprotomocks.NewApapClient(t)
+				if toolName == "generate_ai_insights" {
+					expectRunDescription(engine, "run-123", insights.CodeHotspotsRecipeName)
+					engine.On("GetRunSummaryBundle", mock.Anything, mock.Anything).
+						Return(runSummaryBundle(insights.CodeHotspotsRecipeName), nil).Once()
+				}
+				expectRunQueryPrepare(engine, "run-123", &apapproto.PrepareRenderResponse{
+					Renderers: []*apapproto.RendererConfig{{Renderer: "SQLRenderer"}},
+				})
+				invoked := successfulRenderInvocation("session-1")
+				invoked.Manifest = renderTableSchemaManifest()
+				invoked.Manifest.Entry[0].RendererId = &apapproto.RendererId{Value: rendererID}
+				engine.On("InvokeRender", mock.Anything, mock.Anything).Return(invoked, nil).Once()
+				expectRenderTableSchemas(t, engine, "session-1")
+				client, server := connectTestServer(t, ctx, ToolDependencies{Engine: engine},
+					GenerateAIInsightsTool{}.Register, OpenRenderSessionTool{}.Register)
+				defer client.Close()
+				defer server.Close()
+
+				// When the client opens the run through either tool.
+				result, err := client.CallTool(ctx, &mcp.CallToolParams{
+					Name: toolName, Arguments: map[string]any{"run_id": "run-123"},
+				})
+
+				// Then only JVM sessions receive the resource link, not the full guide.
+				require.NoError(t, err)
+				require.False(t, result.IsError)
+				text := requireToolText(t, result)
+				assert.NotContains(t, text, "<jvm_flags_table>")
+				var session renderSessionResult
+				if toolName == "generate_ai_insights" {
+					var content generateAIInsightsResult
+					require.NoError(t, json.Unmarshal([]byte(text), &content))
+					session = content.RenderSession
+				} else {
+					require.NoError(t, json.Unmarshal([]byte(text), &session))
+				}
+				if rendererID == "jfr_recordings" {
+					assert.Contains(t, session["guidance"], "This run contains JVM data.")
+					assert.Contains(t, session["guidance"], "apx://instructions/jvm-guidance")
+				} else {
+					assert.NotContains(t, session, "guidance")
+				}
+			})
+		}
+	}
+}
 
 func TestOpenRenderSessionTool(t *testing.T) {
 	t.Run("advertises its input and output", func(t *testing.T) {
@@ -68,14 +124,60 @@ func TestOpenRenderSessionTool(t *testing.T) {
 		for _, name := range []string{
 			"session_id",
 			"connection_string",
-			"manifest",
 			"invocation_statuses",
-			"visualization_resolved_tables",
+			"table_schemas",
+			"table_schemas_query",
 			"compatibility_warning",
 			"error",
 		} {
 			assert.Contains(t, outputSchema.Properties, name)
 		}
+		assert.NotContains(t, outputSchema.Properties, "manifest")
+		var tableSchemasSchema struct {
+			Items struct {
+				Properties map[string]struct {
+					Type                 string `json:"type"`
+					AdditionalProperties struct {
+						Type string `json:"type"`
+					} `json:"additionalProperties"`
+				} `json:"properties"`
+			} `json:"items"`
+		}
+		require.NoError(t, json.Unmarshal(outputSchema.Properties["table_schemas"], &tableSchemasSchema))
+		columnsSchema := tableSchemasSchema.Items.Properties["columns"]
+		assert.Equal(t, "object", columnsSchema.Type)
+		assert.Equal(t, "string", columnsSchema.AdditionalProperties.Type)
+		var discoverySchema struct {
+			Type string `json:"type"`
+		}
+		require.NoError(t, json.Unmarshal(outputSchema.Properties["table_schemas_query"], &discoverySchema))
+		assert.Equal(t, "string", discoverySchema.Type)
+	})
+
+	t.Run("closes the session when non-schema metadata exceeds the limit", func(t *testing.T) {
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		prepared := &apapproto.PrepareRenderResponse{
+			Renderers: []*apapproto.RendererConfig{{Renderer: "hot-functions"}},
+		}
+		expectRunQueryPrepare(engine, "run-1", prepared)
+		invoked := successfulRenderInvocation("session-1")
+		invoked.ConnectionString = strings.Repeat("x", aiInsightsMaxResponseBytes)
+		invoked.Manifest = renderTableSchemaManifest()
+		engine.On("InvokeRender", mock.Anything, mock.Anything).Return(invoked, nil).Once()
+		expectRenderTableSchemas(t, engine, "session-1")
+		expectRunQueryClose(engine, "session-1")
+		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine}, OpenRenderSessionTool{}.Register)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "open_render_session", Arguments: map[string]any{"run_id": "run-1"},
+		})
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		assert.Contains(t, requireToolText(t, result), "maximum is 24576 bytes")
+		assert.NotContains(t, renderSessionToolResultMap(t, result), "session_id")
 	})
 
 	t.Run("opens a session with render parameters", func(t *testing.T) {
@@ -104,13 +206,14 @@ func TestOpenRenderSessionTool(t *testing.T) {
 		})).Return(prepared, nil).Once()
 		invoked := successfulRenderInvocation("session-1")
 		invoked.ConnectionString = "duckdb:session-1"
-		invoked.Manifest = &apapproto.RenderManifest{Entry: []*apapproto.RenderManifestEntry{{ComponentType: "functions"}}}
+		invoked.Manifest = renderTableSchemaManifest()
 		invoked.VisualizationResolvedTables = &apapproto.VisualizationResolvedTablesList{
 			Entries: []*apapproto.VisualizationResolvedTables{{
 				Id: &apapproto.VisualizationId{Value: "asct_analysis"},
 				Tables: map[string]*apapproto.StringArray{
 					"numaLatencyMatrix":   {Values: []string{"flat_table"}},
 					"numaBandwidthMatrix": {Values: []string{"flat_table_1"}},
+					"peakBandwidthGrid":   {Values: []string{"flat_table_1"}},
 				},
 			}},
 		}
@@ -120,6 +223,7 @@ func TestOpenRenderSessionTool(t *testing.T) {
 				proto.Equal(req.GetRendererConfig()[0], prepared.GetRenderers()[0]) &&
 				proto.Equal(req.GetVisualizationConfig()[0], prepared.GetVisualizations()[0])
 		})).Return(invoked, nil).Once()
+		expectRenderTableSchemas(t, engine, "session-1")
 		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine}, OpenRenderSessionTool{}.Register)
 		defer clientSession.Close()
 		defer serverSession.Close()
@@ -140,16 +244,36 @@ func TestOpenRenderSessionTool(t *testing.T) {
 		content := renderSessionToolResultMap(t, result)
 		assert.Equal(t, "session-1", content["session_id"])
 		assert.Equal(t, "duckdb:session-1", content["connection_string"])
-		assert.Contains(t, content, "manifest")
+		assert.NotContains(t, content, "manifest")
 		assert.Contains(t, content, "invocation_statuses")
-		assert.Contains(t, content, "visualization_resolved_tables")
-		resolved := content["visualization_resolved_tables"].(map[string]any)
-		entries := resolved["entries"].([]any)
-		tables := entries[0].(map[string]any)["tables"].(map[string]any)
-		latencyTables := tables["numaLatencyMatrix"].(map[string]any)["values"].([]any)
-		bandwidthTables := tables["numaBandwidthMatrix"].(map[string]any)["values"].([]any)
-		assert.Equal(t, []any{"flat_table"}, latencyTables)
-		assert.Equal(t, []any{"flat_table_1"}, bandwidthTables)
+		assert.NotContains(t, content, "visualization_resolved_tables")
+		tables := content["table_schemas"].([]any)
+		require.Len(t, tables, 3)
+		flatTable := tables[0].(map[string]any)
+		assert.Equal(t, "flat_table", flatTable["name"])
+		assert.Equal(t, map[string]any{
+			"samples":       "BIGINT",
+			"function_name": "VARCHAR",
+		}, flatTable["columns"])
+		assert.Equal(t, []any{map[string]any{
+			"visualization_id": "asct_analysis",
+			"data_source":      "numaLatencyMatrix",
+		}}, flatTable["visualization_data_sources"])
+		flatTable1 := tables[1].(map[string]any)
+		assert.Equal(t, "flat_table_1", flatTable1["name"])
+		assert.Equal(t, []any{
+			map[string]any{
+				"visualization_id": "asct_analysis",
+				"data_source":      "numaBandwidthMatrix",
+			},
+			map[string]any{
+				"visualization_id": "asct_analysis",
+				"data_source":      "peakBandwidthGrid",
+			},
+		}, flatTable1["visualization_data_sources"])
+		periodicSamples := tables[2].(map[string]any)
+		assert.Equal(t, "periodic_samples", periodicSamples["name"])
+		assert.Empty(t, periodicSamples["visualization_data_sources"])
 		warning := content["compatibility_warning"].(map[string]any)
 		assert.Equal(t, "recipe compatibility warning", warning["message"])
 		engine.AssertNotCalled(t, "CloseRender", mock.Anything, mock.Anything)
@@ -164,7 +288,9 @@ func TestOpenRenderSessionTool(t *testing.T) {
 		expectRunQueryPrepare(engine, "run-1", prepared)
 		invoked := successfulRenderInvocation("session-1")
 		invoked.ConnectionString = "duckdb:session-1"
+		invoked.Manifest = renderTableSchemaManifest()
 		engine.On("InvokeRender", mock.Anything, mock.Anything).Return(invoked, nil).Once()
+		expectRenderTableSchemas(t, engine, "session-1")
 		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine}, OpenRenderSessionTool{}.Register)
 		defer clientSession.Close()
 		defer serverSession.Close()
@@ -177,8 +303,37 @@ func TestOpenRenderSessionTool(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, result.IsError)
 		content := renderSessionToolResultMap(t, result)
-		assert.Nil(t, content["manifest"])
-		assert.Nil(t, content["visualization_resolved_tables"])
+		assert.NotContains(t, content, "manifest")
+		assert.NotContains(t, content, "visualization_resolved_tables")
+		assert.Len(t, content["table_schemas"], 3)
+	})
+
+	t.Run("closes the session when schema discovery fails", func(t *testing.T) {
+		ctx := context.Background()
+		engine := apapprotomocks.NewApapClient(t)
+		prepared := &apapproto.PrepareRenderResponse{
+			Renderers: []*apapproto.RendererConfig{{Renderer: "hot-functions"}},
+		}
+		expectRunQueryPrepare(engine, "run-1", prepared)
+		invoked := successfulRenderInvocation("session-1")
+		engine.On("InvokeRender", mock.Anything, mock.Anything).Return(invoked, nil).Once()
+		engine.On("Query", mock.Anything, mock.Anything).Return(nil, errors.New("query unavailable")).Once()
+		expectRunQueryClose(engine, "session-1")
+		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine}, OpenRenderSessionTool{}.Register)
+		defer clientSession.Close()
+		defer serverSession.Close()
+
+		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "open_render_session",
+			Arguments: map[string]any{"run_id": "run-1"},
+		})
+
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+		content := renderSessionToolResultMap(t, result)
+		assert.NotContains(t, content, "session_id")
+		assert.NotContains(t, content, "table_schemas")
+		assert.Contains(t, content["error"].(map[string]any)["message"], "query rendered table schemas")
 	})
 
 	t.Run("rejects a failed render and closes its session", func(t *testing.T) {

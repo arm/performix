@@ -35,16 +35,18 @@ type RecipeParameterDependency struct {
 
 // SingleSelectConfig maps to the JS representation of a single-select parameter configuration.
 type SingleSelectConfig struct {
-	Type         ParameterConfigType
-	DefaultValue string
-	Options      any
+	Type          ParameterConfigType
+	DefaultValue  string
+	Options       any
+	RequiresTools bool
 }
 
 // MultiSelectConfig maps to the JS representation of a multi-select parameter configuration.
 type MultiSelectConfig struct {
-	Type         ParameterConfigType
-	DefaultValue []string
-	Options      any
+	Type          ParameterConfigType
+	DefaultValue  []string
+	Options       any
+	RequiresTools bool
 }
 
 // CheckBoxConfig maps to the JS representation of a checkbox parameter configuration.
@@ -62,10 +64,11 @@ type InputConfig struct {
 
 // RadioConfig maps to the JS representation of a radio parameter configuration.
 type RadioConfig struct {
-	Type         ParameterConfigType
-	DefaultValue string
-	Options      any
-	Custom       map[string]string
+	Type          ParameterConfigType
+	DefaultValue  string
+	Options       any
+	RequiresTools bool
+	Custom        map[string]string
 }
 
 // ParameterOption maps to the JS representation of an option object used by radio parameters.
@@ -102,6 +105,7 @@ type ParameterOptionsFunction struct {
 	ParameterType  ParameterConfigType
 	ParameterIndex int
 	Callback       func(goja.FunctionCall) goja.Value
+	RequiresTools  bool
 }
 
 // ExtractRecipeParameters converts JS-defined ParameterDefinition parameters into engine Parameters
@@ -228,6 +232,7 @@ func extractParametersWithMessages(params []ParameterDefinition, source string, 
 					ParameterType:  rc.Type,
 					ParameterIndex: len(extracted.Radio) - 1,
 					Callback:       optionsFunction,
+					RequiresTools:  rc.RequiresTools,
 				})
 			} else {
 				if len(optionsValue) == 0 {
@@ -266,6 +271,7 @@ func extractParametersWithMessages(params []ParameterDefinition, source string, 
 					ParameterType:  ssc.Type,
 					ParameterIndex: len(extracted.SingleSelect) - 1,
 					Callback:       optionsFunction,
+					RequiresTools:  ssc.RequiresTools,
 				})
 			} else if len(optionsValue) == 0 {
 				metadata := map[string]string{
@@ -313,6 +319,7 @@ func extractParametersWithMessages(params []ParameterDefinition, source string, 
 					ParameterType:  msc.Type,
 					ParameterIndex: len(extracted.MultiSelect) - 1,
 					Callback:       optionsFunction,
+					RequiresTools:  msc.RequiresTools,
 				})
 			} else if len(optionsValue) == 0 {
 				metadata := map[string]string{

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Semantic version number is automatically maintained by creating news files and releasing via CI.
-VERSION = "1.24.0"
-COMMIT = "44bc6b40d900d1b0d63f80d834d852142c762e94"
+VERSION = "1.25.0"
+COMMIT = "c06f2c34c5c255c002ae34da46a9b07ba4f6be44"
 MAJOR = 1
-MINOR = 24
+MINOR = 25
 PATCH = 0

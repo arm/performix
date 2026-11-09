@@ -34,38 +34,51 @@ SPDX-License-Identifier: Apache-2.0
 ## What The LLM Should Suggest
 - Identify the application-level cache churn / chunk rebuild path as material
   work while accurately ranking any stronger sampled hotspot.
+- Base heap-related advice on recorded settings. Do not assume missing values.
 - Use JFR data from the workload's Java process to show that garbage collection
   happens often or pauses the program for a meaningful amount of time. Include
   heap measurements if available. Explain how repeatedly creating chunks could
   contribute to this, without calling that pattern a memory leak.
-- Suggest checking whether the cache can hold the hot set and increasing its
-  effective capacity if needed, for example with a larger heap or revised cache
-  budget. Comparing rebuild and GC cost and memory use before and after the
-  change would help validate it, but a detailed test plan is optional.
-- Optionally suggest secondary mitigations such as reducing rebuild cost,
-  shrinking the hot working set, or improving cache effectiveness.
+- Suggest checking or increasing effective cache capacity, or reducing the hot
+  working set, so reusable chunks stay cached. A larger heap or revised cache
+  budget are both options when supported by evidence and preserving results.
+  Explain how the change could reduce repeated rebuilding. Comparing results
+  before and after is helpful but optional.
+- Optionally suggest reducing rebuild cost.
+- If suggesting a larger heap, explain how it would let the cache retain more
+  chunks. Consider available memory.
 
 ## Expected Profiling Characteristics
 - Significant samples in `Main::runPass` and `Main::buildChunk`.
 - Under the constrained heap, visible time in GC/runtime worker paths is
   expected because the application is allocating and discarding many decoded
   chunks.
-- If the larger effective cache holds more of the working set, rebuild and GC
-  pressure should fall; validate this with runtime and GC measurements.
+- If more of the working set stays cached, rebuild and GC pressure should fall;
+  validate this with runtime and GC measurements.
 
 ## Scoring Guidance
+
 - Pass:
   - Finds repeated chunk rebuilding in CPU samples and shows how it compares
     with other sampled work. Uses JFR from the same workload to report frequent
     garbage collection or meaningful pause time. Connects the two without
     claiming JFR alone proves the cache is too small.
   - Connects the cache shortfall to repeated rebuilds and suggests checking or
-    increasing capacity so more of the hot set stays cached. An exploratory
-    suggestion counts when it explains the current shortfall; exact heap
-    settings and a before-and-after test are not required.
+    increasing capacity, or reducing the working set, so reusable chunks stay
+    cached. Bases heap-related advice on recorded settings. A larger heap is
+    optional; exact replacement settings and a before-and-after test plan are
+    not required.
+    Any working-set reduction must process the same logical input data and
+    preserve the checksum.
 - Fail:
   - Omits JFR, cites only the existence of a recording, or invents GC/heap
     measurements that the recording does not support.
   - Identifies the rebuild hotspot but offers only generic allocation or
-    compute advice without connecting a suggested improvement to cache capacity.
+    compute advice without connecting a suggested improvement to cache capacity
+    or working-set size.
   - Or misses the cache/rebuild issue, or suggests an unrelated primary fix.
+  - Claims an improvement has already happened without measuring it.
+  - Invents settings, uses settings from another JVM, or treats startup
+    properties as current values.
+  - Recommends an upgrade without evidence that it addresses the measured work
+    on the recorded JVM version. An upgrade is not required.

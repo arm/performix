@@ -31,22 +31,18 @@ evidence can include symbol, source and disassembly data for follow-up.
   - If static evidence is used, interpret it separately from dynamic evidence;
     differences are not problems by themselves.
 
-Briefly summarize the dominant and other material categories in the evidence
-used. Do not characterize a mix solely by its largest category when other
-categories materially affect its interpretation. If both streams are used,
+Briefly state which categories lead the mix and how other material categories
+qualify that interpretation. Do not leave this implicit in percentages or
+characterize the mix solely by its largest category. If both streams are used,
 distinguish dynamic operation mix from static binary composition.
 
-If a listed table is missing, inspect
-`render_session.visualization_resolved_tables`. If a column is missing, inspect
-the catalogue once before retrying.
+Composition and function attribution may be sufficient. Consider a bounded
+source or disassembly query when understanding the hot code could materially
+improve the explanation, especially before recommending more profiling.
 
-If composition and function attribution support the conclusion, do not query
-source or disassembly. If a specific unresolved question remains, use source
-for code semantics or disassembly for generated instructions and
-instruction-level attribution. Use both only when the conclusion depends on
-relating them. Once a result answers the question, do not query that evidence
-type again. Treat unavailable source or absent data as unavailable evidence,
-not a reason to retry.
+Use source for semantics and disassembly for generated instructions. Fetch both
+only to relate them. Stop when the question is answered. State evidence gaps
+without retrying unavailable data or inventing explanations.
 
 ## Dynamic top-level composition
 

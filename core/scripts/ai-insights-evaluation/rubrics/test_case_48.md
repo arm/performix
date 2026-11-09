@@ -52,15 +52,17 @@ SPDX-License-Identifier: Apache-2.0
 - A response cannot pass without measured evidence that distinguishes useful
   completed work from time spent waiting or discarding work. Identifying the hot
   vector loop from source or assembly is not enough.
+- High Retiring and IPC, supported by low bad speculation or other relevant
+  counters, can justify the cautious conclusion that no loop change is supported.
+  Explicit Frontend Bound and Backend Bound values are not mandatory. Do not
+  require every counter, or accept claims that cache misses alone rule out stalls.
+- Accept clearly qualified experiments with unproven benefits. Judge the
+  substance without requiring specific wording or ordering.
 - Pass:
   - Identifies high Retiring as useful completed work rather than waiting.
   - Confirms that the sampled aggregation loop already uses vector operations.
-  - Uses measurements that distinguish completed work from waiting and
-    discarded work to state that this recording does not justify a CPU-specific
-    code change.
-  - May mention benchmarking a different reduction or vector implementation
-    only as an unproven experiment, after stating that the recording does not
-    identify it as a likely fix.
+  - Uses measurements of completed work, waiting and discarded work to assess
+    whether a CPU-specific change is justified.
 - Fail:
   - Treats high Retiring as a performance fault by itself.
   - Uses only hotspot, source or assembly evidence to claim that the loop is

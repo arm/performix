@@ -26,12 +26,24 @@ import (
 )
 
 type liveADBRunner struct {
-	response string
+	address      string
+	lastSelector string
+	response     string
 }
 
 func (r *liveADBRunner) Run(args ...string) (string, string, error) {
 	if len(args) == 1 && args[0] == "devices" {
-		return "List of devices attached\ndevice-123\tdevice\n", "", nil
+		address := r.address
+		if address == "" {
+			address = "device-123"
+		}
+		return "List of devices attached\n" + address + "\tdevice\n", "", nil
+	}
+	if len(args) == 5 && args[3] == "getprop" {
+		return "device-123", "", nil
+	}
+	if len(args) > 1 && args[0] == "-s" {
+		r.lastSelector = args[1]
 	}
 	return r.response, "", nil
 }
@@ -62,13 +74,47 @@ func TestTargetSessionConnect(t *testing.T) {
 			runner,
 		)
 
-		client, err := ts.androidConnect(target.AndroidTarget{SerialNumber: "device-123"})
+		client, err := ts.androidConnect(context.Background(), target.AndroidTarget{SerialNumber: "device-123"})
 		require.NoError(t, err)
 		runner.response = "new"
 
 		stdout, _, err := client.CommandRunner().RunCommand("command")
 		require.NoError(t, err)
 		assert.Equal(t, "new", stdout)
+	})
+
+	t.Run("Android transport change closes cached agent and reconnects", func(t *testing.T) {
+		var addresses []conductor.ADBDevice
+		ctx := conductor.WithADBDeviceObserver(context.Background(), func(device conductor.ADBDevice) {
+			addresses = append(addresses, device)
+		})
+		runner := &liveADBRunner{address: "old:5555"}
+		ts := newTargetSession(&target.AndroidTarget{SerialNumber: "device-123"}, nil, "", runner)
+		ts.platformCreator = func(conductor.CommandRunner, conductor.TargetFilesystem, conductor.PlatformGate) (*conductor.TargetPlatform, error) {
+			return &conductor.TargetPlatform{PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Android, Architecture: conductor.AArch64}}, nil
+		}
+		ts.toolsDirResolver = func(string, conductor.OS, conductor.CommandRunner, string) (string, error) { return "/tools", nil }
+		oldConnection, err := ts.Connect(ctx)
+		require.NoError(t, err)
+		_, err = ts.Connect(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, []conductor.ADBDevice{
+			{SerialNumber: "device-123", Address: "old:5555"},
+			{SerialNumber: "device-123", Address: "old:5555"},
+		}, addresses)
+		agentClient := &targetagentmocks.TargetAgentClient{}
+		agentClient.On("Shutdown", mock.Anything, mock.Anything).Return(&emptypb.Empty{}, nil).Once()
+		ts.agents = map[string]*agent.AgentConn{locality.Target: {Client: agentClient}}
+		runner.address = "new:5556"
+		newConnection, err := ts.Connect(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, conductor.ADBDevice{SerialNumber: "device-123", Address: "new:5556"}, addresses[len(addresses)-1])
+		assert.NotSame(t, oldConnection, newConnection)
+		assert.Empty(t, ts.agents)
+		_, _, err = newConnection.CommandRunner().RunCommand("id")
+		require.NoError(t, err)
+		assert.Equal(t, "new:5556", runner.lastSelector)
+		agentClient.AssertExpectations(t)
 	})
 
 	t.Run("Caches target", func(t *testing.T) {
@@ -130,7 +176,7 @@ func TestTargetSessionConnect(t *testing.T) {
 		connectErr := errors.New("android connect failed")
 		androidTarget := &target.AndroidTarget{SerialNumber: "apap-missing-android-device"}
 		ts := newTestTargetSession(androidTarget, nil, "")
-		ts.androidConnect = func(androidTgt target.AndroidTarget) (*conductor.ADBClient, error) {
+		ts.androidConnect = func(_ context.Context, androidTgt target.AndroidTarget) (*conductor.ADBClient, error) {
 			require.Equal(t, *androidTarget, androidTgt)
 			return nil, connectErr
 		}
@@ -268,7 +314,7 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		ts.platform = &conductor.TargetPlatform{
 			PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64},
 		}
-		ts.agent = agentConn
+		ts.agents = map[string]*agent.AgentConn{locality.Target: agentConn}
 
 		conn, err := ts.TargetAgent(context.Background())
 
@@ -326,7 +372,7 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		ts.platform = &conductor.TargetPlatform{
 			PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64},
 		}
-		ts.agent = oldConn
+		ts.agents = map[string]*agent.AgentConn{locality.Target: oldConn}
 
 		conn, err := ts.TargetAgent(context.Background())
 
@@ -358,7 +404,7 @@ func TestTargetSessionTargetAgent(t *testing.T) {
 		ts.platform = &conductor.TargetPlatform{
 			PlatformConfiguration: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64},
 		}
-		ts.agent = oldConn
+		ts.agents = map[string]*agent.AgentConn{locality.Target: oldConn}
 
 		conn, err := ts.TargetAgent(context.Background())
 
@@ -414,7 +460,7 @@ func TestTargetSessionClose(t *testing.T) {
 		connection := &mockTargetConnection{}
 		connection.On("Close").Return(connErr)
 
-		ts := &targetSession{target: &target.LocalTarget{}, agent: agentConn, connection: connection}
+		ts := &targetSession{target: &target.LocalTarget{}, agents: map[string]*agent.AgentConn{locality.Target: agentConn}, connection: connection}
 
 		err := ts.Close()
 
@@ -428,7 +474,7 @@ func TestTargetSessionClose(t *testing.T) {
 
 func TestTargetSessionCloseAgent(t *testing.T) {
 	t.Run("no-op if there is no agent connection", func(t *testing.T) {
-		ts := &targetSession{agent: nil}
+		ts := &targetSession{}
 
 		err := ts.CloseTargetAgent()
 		assert.NoError(t, err)
@@ -439,13 +485,13 @@ func TestTargetSessionCloseAgent(t *testing.T) {
 		client.On("Shutdown", mock.Anything, mock.Anything).
 			Return(&emptypb.Empty{}, nil).Once()
 
-		ts := &targetSession{agent: &agent.AgentConn{Client: client}}
+		ts := &targetSession{agents: map[string]*agent.AgentConn{locality.Target: {Client: client}}}
 
 		err := ts.CloseTargetAgent()
 		require.NoError(t, err)
 
 		client.AssertExpectations(t)
-		assert.Nil(t, ts.agent)
+		assert.Empty(t, ts.agents)
 	})
 }
 

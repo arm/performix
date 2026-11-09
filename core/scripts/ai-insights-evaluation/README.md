@@ -6,13 +6,24 @@ SPDX-License-Identifier: Apache-2.0
 # AI Insights Evaluation
 
 This harness evaluates two suites: [Dynamic Insights](#dynamic-insights) analyzes
-pre-recorded Performix runs; [Pathways](#pathways) investigates a live workload,
-changes its source, and verifies an improvement. A separate judge LLM assesses
-the results against private [rubrics](rubrics/).
+pre-recorded Performix runs; [Pathways](#pathways) evaluates performance
+investigations, including clarification, optimization and stopping decisions.
+A separate judge LLM assesses the results against private [rubrics](rubrics/).
 
 Start with [shared setup](#shared-setup), then follow the section for your suite.
 [Results](#results) explains reports and saved evidence; [reference](#reference)
 covers configuration and input preparation.
+
+## Test layout
+
+`tests/unit/` contains the unit tests for the harness and run modifications.
+`tests/evaluation/` contains the live AI evaluations and their pytest hooks.
+`judge_regression/` contains the saved-answer judge evaluations.
+The unit-test task selects `tests/unit/`; the evaluation runner selects
+`tests/evaluation/`. Neither command needs filename exclusions or markers.
+Plain `pytest` from this directory defaults to the unit tests. See the
+[development guide](../../../DEVELOPMENT.md#core-workflow) for the unit-test task
+and the suite sections below for evaluation commands.
 
 ## Shared setup
 
@@ -60,8 +71,7 @@ performance problems and controls where the agent should avoid claiming a proble
 3. Judge the response against the case's rubric using `judge_ai_insights.md`, then save the verdict and evidence.
 
 Production Performix MCP mode validates that Codex completed the
-`generate_ai_insights` tool call. It may also use `read_ai_insights_payload_details`
-for paginated evidence. Failed auxiliary MCP calls appear as summary warnings,
+`generate_ai_insights` tool call. Failed auxiliary MCP calls appear as summary warnings,
 but do not override the judge's assessment of the final response.
 
 ### Run Insights locally
@@ -93,24 +103,16 @@ Use `--ai-modes` to select modes. If omitted, local execution selects
 | Mode | Purpose |
 | --- | --- |
 | `performix_mcp` | Codex uses the production Performix MCP server. |
-| `performix_mcp_run_query` | SQL comparison mode for Code Hotspots; opt-in locally and included in CI defaults. |
 
-`performix_mcp_run_query` supports only Code Hotspots; other recipes are skipped.
+All supported recipes, including Code Hotspots, use SQL through `run_query`.
 An optional per-test `evaluation_modes` list further restricts the selected modes.
-To compare curated and SQL Code Hotspots analysis on the same inputs:
-
-```bash
-task core:test:eval:ai-insights -- \
-  --ai-modes performix_mcp,performix_mcp_run_query \
-  --ai-act act1,act2 --ai-recipe code_hotspots
-```
 
 ### Insights CI
 
 [AI Insights Evaluation](../../../.github/workflows/ai-insights-evaluation.yaml)
 runs Acts 1–3 with parallel workers and publishes dashboard results. Select the
-upstream APX build, acts, cases, modes and attempts in the workflow inputs.
-The default modes are `performix_mcp` and `performix_mcp_run_query`.
+upstream APX build, acts, cases, modes, model configurations and attempts in the workflow inputs.
+The default mode is `performix_mcp`.
 
 ## Pathways
 
@@ -120,7 +122,7 @@ and profile the workload with passwordless sudo access.
 
 ### Pathways execution
 
-1. Prepare fresh host source, agent state and private Performix storage; clone the workload source onto the target.
+1. Export the manifest's `pathways_execution.workload_source.directory` (`.` for the whole repository) into a fresh Git baseline without upstream history or remotes, remove the staging clone, and seed `/workspace` on the target. Prepare fresh agent state and private Performix storage.
 2. Optionally import a pre-recorded run as starting evidence.
 3. Let the agent choose recipes, profile, analyze, edit, rebuild and verify the outcome, subject to the case's agent timeout (600 seconds by default).
 4. Judge the final response and session transcript using `judge_pathways.md` and the case's rubric, then retain evidence and clean up temporary host state.
@@ -161,19 +163,21 @@ Use CI for repetitions, or run once per fresh local target.
 Pathways cases may start with a pre-recorded run or gather all evidence live.
 To define a case without one, omit `run_artifact` and provide an `mcp_prompt`
 without `{run_id}`. The agent then starts with an empty Performix store and must
-collect its own baseline. When a run is supplied, the agent first assesses its
-suitability as a baseline. See [input preparation](#pre-recorded-run-inputs) for
-pre-recorded run requirements.
+collect its own baseline when the task requires profiling. When a run is
+supplied, the agent first assesses its suitability as a baseline. See
+[input preparation](#pre-recorded-run-inputs) for pre-recorded run requirements.
 
 ### Pathways CI
 
 [Pathways Evaluation](../../../.github/workflows/pathways-evaluation.yaml)
 runs attempts one at a time and provisions a fresh bare-metal target for each.
-Choose the upstream APX build, cases and number of attempts.
-
-The workflow terminates the target even when evaluation fails, and requires
-confirmed termination before publishing evidence. If the runner disappears,
-the existing scheduled sweeper is the cleanup fallback.
+Choose the upstream APX build, cases and number of attempts. `workload_ref`
+selects the workloads repository branch, tag or commit (default `main`). The
+CI checkout is exposed to the harness through a local branch at that exact
+commit. The resolved source commit is stored in temporary attempt metadata and
+discarded during cleanup; published Pathways evidence does not retain it.
+Locally, `--ai-workload-ref` overrides the manifest's source branch with a branch
+or tag.
 
 ## Results
 
@@ -206,17 +210,17 @@ provided pytest produced JUnit XML. A reporting failure fails an otherwise
 successful run without replacing an existing pytest failure status.
 
 MCP invocation runtime covers the `codex exec` process. Where a `performix_mcp` case
-has a complete set of [performance thresholds](#performance-thresholds), the
-harness checks runtime, input tokens and non-reasoning output tokens. POOR or
-INDETERMINABLE performance fails the test; cases without thresholds skip this
+has [performance thresholds](#performance-thresholds) for the model/reasoning
+configuration, the harness checks runtime, input tokens and non-reasoning output
+tokens. POOR or INDETERMINABLE performance fails the test; missing thresholds skip this
 assessment. `ai_output_tokens` excludes reasoning tokens, which are recorded
 separately as `ai_reasoning_output_tokens`.
 
-JUnit properties record case, mode, attempt, pass rate, imported run ID, archive
+JUnit properties record case, mode, model configuration, attempt, pass rate, imported run ID, archive
 hash, agent duration, tokens, MCP call counts and durations, judge scores and
 artifact paths, plus applicable thresholds and performance classifications.
 MCP calls count as failed for either an MCP `Err` result or `isError` response.
-Suite properties record the model, reasoning effort, judge model, manifest and
+Suite properties record the model configurations, judge model, manifest and
 results directory. These use pytest's `record_property` and
 `record_testsuite_property`; JUnit properties require `junit_family=legacy` or
 `junit_family=xunit1`.
@@ -314,7 +318,7 @@ Pass options after `task core:test:eval:ai-insights --`:
 | `--ai-act act1,act2` | Select groups; `act4` selects Pathways. |
 | `--ai-recipe code_hotspots` | Filter by recipe; excludes live-only Pathways cases without a fixed recipe. |
 | `-k test_case_03` | Filter by case name. |
-| `--ai-model MODEL --ai-reasoning-effort high` | Choose the agent model and reasoning effort. |
+| `--ai-model-config MODEL EFFORT` | Repeat for each model/reasoning pair. |
 | `--ai-judge-model MODEL` | Choose the separate judge model. |
 | `--ai-judge-reasoning-effort medium` | Set judge reasoning (default: `medium`). |
 | `--collect-only` | List selected attempts without running them. |
@@ -379,15 +383,29 @@ Or limit them to a specific mode:
 
 ### Performance thresholds
 
-Specify all three thresholds on a case to enable its performance assessment:
+Exceeding a wall-clock threshold produces a warning in the console and CI
+summaries without failing the test. Provider response times and model behaviour
+can vary independently of MCP server performance. Input and output token
+threshold breaches, and missing measurements for configured thresholds, still
+fail otherwise-passing tests.
+
+Wall-clock assessments remain `POOR` in JUnit and benchmark reports when the
+target is exceeded, so performance trends remain visible. These thresholds are
+checked after the conversation finishes; they do not impose execution timeouts.
+
+Specify all three thresholds per model/reasoning configuration on a case.
+Configurations without a complete threshold set still report usage but skip
+performance assessment.
 
 ```json
 {
   "id": "test_case_01",
   "performance_thresholds": {
-    "duration_seconds": 90,
-    "input_tokens": 1500,
-    "output_tokens": 1200
+    "gpt-5.5-high": {
+      "duration_seconds": 90,
+      "input_tokens": 1500,
+      "output_tokens": 1200
+    }
   }
 }
 ```
@@ -426,9 +444,68 @@ The manifest also defines recording recipe parameters (such as managed-runtime
 stack collection flags) and optional `prerecord` settings. The recording workflow
 resolves them before invoking the workload-agnostic `prerecord-run.py` helper.
 
-For JFR cases, `prerecord.enable_jfr_capture` sets `APXD_ENABLE_JFR_CAPTURE`
+For runs that specify it, `prerecord.enable_jfr_capture` sets `APXD_ENABLE_JFR_CAPTURE`
 during recording and is saved in `metadata.json`. The harness rejects pre-recorded runs
-with a mismatched setting; JFR table contents still need checking in the run.
+with a mismatched setting. Separately, `requirements: ["jfr_data"]` makes evaluation
+check the complete JFR dataset before AI attempts: recordings, GC, heap, JVM
+information, effective flags and initial properties. Configuration is part of
+JFR availability, not a separate requirement. The check requires queryable
+tables and a parsed recording with matching JVM identity/version, a positive
+effective `MaxHeapSize` with origin/type, and initial properties.
+
+JVM configuration coverage extends the rubrics for existing performance issues.
+Case 20 checks that cache advice uses recorded heap settings; a larger heap is
+one option, not a required recommendation. Case 72 checks that explicit GC leads
+to an application fix, with configuration advice only when supported. Case 17 checks
+that missing JFR data does not prevent useful application advice or lead to
+invented JVM settings. These cases keep their existing recordings and generic
+prompts. Run them in production MCP mode (`performix_mcp`) alongside JFR regression
+cases 71 and 73:
+
+```bash
+task core:test:eval:ai-insights -- --ai-modes performix_mcp \
+  --ai-act act1,act2 --ai-attempts 1 \
+  -k 'test_case_17 or test_case_20 or test_case_71 or test_case_72 or test_case_73'
+```
+
+`generate_ai_insights` and `open_render_session` return a short pointer to the
+MCP resource `apx://instructions/jvm-guidance` when the render manifest includes
+`jfr_recordings`. It contains the JVM configuration
+and heap/GC guidance, which is not included in every Code Hotspots response.
+The guide discovers raw configuration relations through their schemas.
+The `jvm_flags` renderer exposes `Recording`, `Event Start (epoch ns)`, `Flag`,
+`Value`, `Origin` and `Type`; `Value` remains a string to preserve integer
+precision. Queries select the latest captured value per recording/name. This
+does not change the JVM Internals UI.
+
+Case 74 is a dedicated JVM flag test. Its workload repeatedly calls
+`java.util.zip.CRC32` with JVM CRC32 intrinsics disabled; the required primary
+recommendation is to enable `UseCRC32Intrinsics` or remove the disabling override.
+It uses SQL mode, captured JVM configuration and a new recording; it does not
+reuse the scalar CRC32C workload from case 16.
+
+Before accepting a case 74 recording on the Linux Arm64 target:
+
+1. Build the workloads repository's `test_case_74` target. Its launcher supplies
+   `-XX:+UnlockDiagnosticVMOptions -XX:-UseCRC32Intrinsics`.
+2. Run a control using the same JDK and `test_case_74.jar` with
+   `-XX:+UnlockDiagnosticVMOptions -XX:+UseCRC32Intrinsics`. Compare
+   `processed_bytes / elapsed_ns` and require identical `checksum` values;
+   `completed_passes` can differ because the workload is timed. Check repeated
+   runs for a material improvement before using the fixture.
+3. Record the disabled case with JFR and Java stacks. In the workload's selected
+   recording, verify `jvm_flags` contains `UseCRC32Intrinsics=false` and its
+   command-line origin. The shared JFR preflight checks data availability, not
+   this case-specific value. Confirm that samples and source/call paths identify
+   material CRC32 computation. The native fallback can itself be optimized;
+   do not require it to lack all hardware CRC instructions.
+
+Evaluate the new fixture with:
+
+```bash
+task core:test:eval:ai-insights -- --ai-modes performix_mcp \
+  --ai-act act1 --ai-attempts 1 -k test_case_74
+```
 
 Some recipes support `run_modification` to alter an exported archive. ASCT supports
 `core_to_core_latency_asymmetry` and `low_peak_bandwidth`, for example:
@@ -463,3 +540,56 @@ refreshed dependencies.
 
 For unit tests of the harness itself, see the
 [core unit-test commands](../../../DEVELOPMENT.md#core-workflow).
+
+### Judge regression evaluation
+
+These tests check whether the judge gives the expected `pass` or `fail` result
+for a saved answer. They use the test case's scoring rules in `rubrics/`.
+They do not run the workload or ask an agent to investigate it again.
+
+Set `OPENAI_API_KEY` as described in [shared setup](#shared-setup), then run
+from the repository root:
+
+```sh
+task core:test:eval:ai-insights-judge
+```
+
+This makes paid API calls. To choose a different judge model or reasoning effort,
+pass the existing options after `--`:
+
+```sh
+task core:test:eval:ai-insights-judge -- \
+  --ai-judge-model gpt-5.6-luna --ai-judge-reasoning-effort medium
+```
+
+To add a regression case:
+
+1. Create a directory under `judge_regression/<test_case>/`. Give it a short name
+   that describes the behaviour being checked. For example,
+   `judge_regression/test_case_72/explicit_gc/`. The test case must have scoring
+   rules in `rubrics/<test_case>.md`.
+2. Save the reference answer as `response.md`. The judge should pass this answer.
+3. Save a deliberately incorrect answer as `negative_control.md` in the same
+   directory. The judge should fail this answer. Label any answer written by
+   hand in the documentation so readers can distinguish it from a captured one.
+4. Run the command above. pytest finds both files automatically. No Python test
+   list needs updating. If either file is missing, pytest reports an error
+   before making any judge calls. If a verdict differs from the expected result,
+   the test fails and displays the judge's explanation.
+
+Each test case can have several regression directories, each containing both
+files. There is currently one, `test_case_72/explicit_gc/`. Its `response.md` is
+a [saved CI answer](https://github.com/Arm-Debug/performix/actions/runs/39937492898/job/120368964294)
+that should pass despite omitting pause durations.
+
+The initial negative control was written by hand and incorrectly diagnoses a
+memory leak. It is not another captured regression. These two answers provide
+limited coverage; they do not prove that the judge will assess every answer
+correctly.
+
+AI Insights Evaluation runs these tests before the agent evaluation, using the
+same Python environment, credentials and judge settings. Both evaluations run
+even if one fails; either failure fails the job unless the workflow allows
+failures. It saves the judge regression results as a separate JUnit test report. Ordinary unit-test commands select `tests/unit/` and do not run these tests
+because they require API access. Run them when changing the relevant scoring
+rules, judge prompt, judge code or model settings.

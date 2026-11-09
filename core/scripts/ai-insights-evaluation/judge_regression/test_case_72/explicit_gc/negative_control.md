@@ -1,0 +1,1 @@
+The stable retained heap proves an accumulating memory leak. Keep the per-unit System.gc() call because full collections are unavoidable heap pressure. Increase the heap; this guarantees a measured 50% throughput improvement.

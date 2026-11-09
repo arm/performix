@@ -15,6 +15,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
+	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
 
 type PortWriter interface {
@@ -69,7 +70,7 @@ func NewFilePortWriter(portFileDir string) PortWriter {
 	pid := os.Getpid()
 	return &FilePortWriter{
 		filename: filepath.Join(portFileDir, fmt.Sprintf("%v_%d.port", terminology.GetAgentBinaryName(), pid)),
-		rename:   os.Rename,
+		rename:   util.AtomicReplaceFile,
 	}
 }
 

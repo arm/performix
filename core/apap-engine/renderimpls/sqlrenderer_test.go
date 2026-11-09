@@ -330,41 +330,6 @@ func TestSQLRendererCreatesViewFromDatasourceTablePlaceholder(t *testing.T) {
 	require.Equal(t, []int{7, 9}, values)
 }
 
-func TestSQLRendererMaterializesQueryOnce(t *testing.T) {
-	model := cdf.NewOnDiskModel(t.TempDir(), &cdf.Manifest{}, cdf.Metadata{})
-	session := newSQLTestSession(t, model, "run1")
-	_, err := session.Database().Conn.ExecContext(context.Background(),
-		`CREATE TABLE source (value INTEGER); INSERT INTO source VALUES (7), (9)`)
-	require.NoError(t, err)
-
-	renderer := &SQLRenderer{}
-	require.NoError(t, renderer.Configure(&render.Config{
-		Identity: render.RendererIdentity{Name: "SQLRenderer"},
-		JSON: `{
-			"sql": "SELECT SUM(value) AS total FROM source",
-			"materialize": true,
-			"output": {
-				"name": "result",
-				"component_type": {"name": "flat_table", "schema_version": "1.0"}
-			}
-		}`,
-	}))
-	require.NoError(t, renderer.Initialize(session, nil))
-
-	// Removing the source proves later queries use the stored result.
-	_, err = session.Database().Conn.ExecContext(context.Background(), `DROP TABLE source`)
-	require.NoError(t, err)
-	tableName := session.Manifest().Entries()[0].TableName()
-	for range 2 {
-		var total int
-		//nolint:gosec
-		err = session.Database().Conn.QueryRowContext(context.Background(),
-			`SELECT total FROM `+sqlDoubleQuoteString(tableName)).Scan(&total)
-		require.NoError(t, err)
-		require.Equal(t, 16, total)
-	}
-}
-
 func TestSQLRendererCreatesViewFromRunPathPlaceholder(t *testing.T) {
 	tmpDir := t.TempDir()
 	csvPath := filepath.Join(tmpDir, "inputs", "numbers.csv")
@@ -564,4 +529,84 @@ func TestSQLRendererResolvesRunPathPlaceholderAgainstOverlayComponentWhenPresent
 		values = append(values, value)
 	}
 	require.Equal(t, []int{21, 34}, values)
+}
+
+func TestSQLRendererMaterializedOutput(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		json      string
+		wantCount int
+	}{
+		{
+			name: "view output",
+			json: `{
+				"sql": "SELECT value FROM source",
+				"materialized": false,
+				"output": {
+					"name": "result",
+					"component_type": {"name": "flat_table", "schema_version": "1.0"}
+				}
+			}`,
+			wantCount: 2,
+		},
+		{
+			name: "materialized output",
+			json: `{
+				"sql": "SELECT value FROM source",
+				"materialized": true,
+				"output": {
+					"name": "result",
+					"component_type": {"name": "flat_table", "schema_version": "1.0"}
+				}
+			}`,
+			wantCount: 1,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			session := newSQLTestSession(t, cdf.NewOnDiskModel(t.TempDir(), &cdf.Manifest{}, cdf.Metadata{}), "run1")
+			ctx := context.Background()
+			_, err := session.db.Conn.ExecContext(ctx, `CREATE SCHEMA snapshot; SET schema='snapshot'; CREATE TABLE source(value INTEGER); INSERT INTO source VALUES (7)`)
+			require.NoError(t, err)
+			renderer := &SQLRenderer{}
+			require.NoError(t, renderer.Configure(&render.Config{Identity: render.RendererIdentity{Name: "SQLRenderer"}, JSON: tt.json}))
+			require.NoError(t, renderer.Initialize(session, nil))
+			_, err = session.db.Conn.ExecContext(ctx, `INSERT INTO source VALUES (9)`)
+			require.NoError(t, err)
+			var count int
+			require.NoError(t, session.db.Conn.QueryRowContext(ctx, `SELECT count(*) FROM flat_table`).Scan(&count))
+			require.Equal(t, tt.wantCount, count)
+			_, err = session.db.Conn.ExecContext(ctx, `SET schema='main'; DROP SCHEMA snapshot CASCADE`)
+			require.NoError(t, err)
+			require.NoError(t, session.db.Conn.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema='snapshot'`).Scan(&count))
+			require.Zero(t, count)
+		})
+	}
+}
+
+func TestSQLRendererRemovesManifestEntryWhenMaterializationFails(t *testing.T) {
+	session := newSQLTestSession(t, cdf.NewOnDiskModel(t.TempDir(), &cdf.Manifest{}, cdf.Metadata{}), "run1")
+	_, err := session.db.Conn.ExecContext(context.Background(), `
+		CREATE TABLE source(value VARCHAR);
+		INSERT INTO source VALUES ('7'), ('not-an-integer')`)
+	require.NoError(t, err)
+
+	renderer := &SQLRenderer{}
+	require.NoError(t, renderer.Configure(&render.Config{
+		Identity: render.RendererIdentity{Name: "SQLRenderer"},
+		JSON: `{
+			"sql": "SELECT CAST(value AS INTEGER) FROM source",
+			"materialized": true,
+			"output": {
+				"name": "result",
+				"component_type": {"name": "flat_table", "schema_version": "1.0"}
+			}
+		}`,
+	}))
+
+	err = renderer.Initialize(session, nil)
+	requireSQLRendererMessage(t, err, message.EngineRenderSqlRendererTableCreateFailed, map[string]string{
+		"outputName": "flat_table",
+		"portName":   "result",
+	}, "Conversion Error")
+	require.Empty(t, session.Manifest().Entries())
 }

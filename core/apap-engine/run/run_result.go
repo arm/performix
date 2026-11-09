@@ -23,6 +23,7 @@ const (
 	RecipeFailureRetrieve                 RunResult = "failure_retrieve_output_files"
 	RecipeFailureRetrievePhase1Complete   RunResult = "failure_retrieve_output_files_phase1_complete"
 	RecipeFailureDeploy                   RunResult = "failure_tool_deployment"
+	RecipeFailureToolsMissing             RunResult = "failure_tools_missing"
 	RecipeFailureStage                    RunResult = "failure_recipe_stage"
 	RecipeFailureTargetLock               RunResult = "failure_target_lock"
 	RecipeFailureIncomplete               RunResult = "failure_incomplete_run"

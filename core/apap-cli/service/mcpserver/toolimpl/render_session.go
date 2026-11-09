@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,10 +26,30 @@ import (
 
 const renderSessionCleanupTimeout = 5 * time.Second
 
+const renderTableSchemasDiscoverySQL = `SELECT table_name, column_name, data_type
+FROM duckdb_columns()
+WHERE schema_name = current_schema()
+ORDER BY table_name, column_index
+LIMIT 50 OFFSET 0`
+
 // renderSessionResult is the JSON response for an opened render session. It
 // matches InvokeRenderResponse and may include a compatibility warning from
 // PrepareRender.
 type renderSessionResult map[string]any
+
+// renderTableSchema describes one relation available to run_query. The
+// visualization data sources retain the logical meaning assigned by the
+// recipe while name and columns describe the physical relation to query.
+type renderTableSchema struct {
+	Name                     string                          `json:"name"`
+	Columns                  map[string]string               `json:"columns"`
+	VisualizationDataSources []renderVisualizationDataSource `json:"visualization_data_sources"`
+}
+
+type renderVisualizationDataSource struct {
+	VisualizationID string `json:"visualization_id"`
+	DataSource      string `json:"data_source"`
+}
 
 // openedRenderSession keeps both daemon responses. The invocation describes
 // the opened session, while the preparation may contain a compatibility
@@ -36,6 +57,13 @@ type renderSessionResult map[string]any
 type openedRenderSession struct {
 	Preparation *apapproto.PrepareRenderResponse
 	Invocation  *apapproto.InvokeRenderResponse
+}
+
+// openedRenderSessionResult contains the opened daemon session and the data
+// needed by an MCP client to query it.
+type openedRenderSessionResult struct {
+	Session openedRenderSession
+	Details renderSessionResult
 }
 
 // openRenderSession prepares and invokes the installed recipe for one run. If
@@ -101,20 +129,72 @@ func openRenderSessionResult(
 	engine apapproto.ApapClient,
 	runID string,
 	renderParameters map[string]*structpb.Value,
-) (openedRenderSession, renderSessionResult, error) {
+) (openedRenderSessionResult, error) {
+	var opened openedRenderSessionResult
 	session, err := openRenderSession(ctx, engine, runID, renderParameters)
+	opened.Session = session
 	if err != nil {
-		return session, nil, err
+		return opened, err
 	}
 
 	result, err := renderSessionResultFromProto(session.Preparation, session.Invocation)
-	if err == nil {
-		return session, result, nil
+	if err != nil {
+		sessionID := strings.TrimSpace(session.Invocation.GetSessionId())
+		err = joinRenderSessionCleanupError(ctx, engine, sessionID, err)
+		return opened, err
+	}
+	opened.Details = result
+
+	tableSchemas, err := queryRenderTableSchemas(ctx, engine, session.Invocation)
+	if err != nil {
+		sessionID := strings.TrimSpace(session.Invocation.GetSessionId())
+		err = joinRenderSessionCleanupError(ctx, engine, sessionID, err)
+		return opened, err
+	}
+	opened.Details["table_schemas"] = tableSchemas
+	addRenderSessionGuidance(opened.Details, session.Invocation)
+	return opened, nil
+}
+
+// addRenderSessionGuidance links guides relevant to the published renderers.
+func addRenderSessionGuidance(result renderSessionResult, invoked *apapproto.InvokeRenderResponse) {
+	renderers := map[string]bool{}
+	for _, entry := range invoked.GetManifest().GetEntry() {
+		renderers[entry.GetRendererId().GetValue()] = true
 	}
 
-	sessionID := strings.TrimSpace(session.Invocation.GetSessionId())
-	err = joinRenderSessionCleanupError(ctx, engine, sessionID, err)
-	return session, nil, err
+	var guidance []string
+	if renderers["jfr_recordings"] {
+		guidance = append(guidance, "This run contains JVM data. Read the MCP resource apx://instructions/jvm-guidance before interpreting it.")
+	}
+	if len(guidance) > 0 {
+		result["guidance"] = strings.Join(guidance, "\n")
+	}
+}
+
+// fitRenderTableSchemas lets schemas use all remaining response bytes. If they
+// do not fit, the caller can discover them in the still-open render session.
+func fitRenderTableSchemas(response any, session renderSessionResult) error {
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	if len(encoded) <= aiInsightsMaxResponseBytes {
+		return nil
+	}
+	tables := session["table_schemas"].([]renderTableSchema)
+	metadata := make([]renderTableSchema, len(tables))
+	for i, table := range tables {
+		metadata[i] = table
+		metadata[i].Columns = map[string]string{}
+	}
+	session["table_schemas"] = metadata
+	session["table_schemas_query"] = renderTableSchemasDiscoverySQL
+	if err := ensureJSONSizeAtMost(response, aiInsightsMaxResponseBytes); err == nil {
+		return nil
+	}
+	session["table_schemas"] = []renderTableSchema{}
+	return ensureJSONSizeAtMost(response, aiInsightsMaxResponseBytes)
 }
 
 // renderInvocationError checks that InvokeRender returned one successful
@@ -154,8 +234,9 @@ func renderInvocationError(
 }
 
 // renderSessionResultFromProto converts the daemon responses to the JSON
-// returned to MCP clients. It keeps the InvokeRenderResponse field names and
-// adds the preparation compatibility warning when present.
+// returned to MCP clients. Renderer-oriented metadata is omitted because the
+// separately queried table schemas contain the physical schema and logical
+// visualization mappings needed by MCP clients.
 func renderSessionResultFromProto(
 	prepared *apapproto.PrepareRenderResponse,
 	invoked *apapproto.InvokeRenderResponse,
@@ -172,10 +253,115 @@ func renderSessionResultFromProto(
 	if err := json.Unmarshal(encoded, &result); err != nil {
 		return nil, fmt.Errorf("convert invoke render response: %w", err)
 	}
+	delete(result, "manifest")
+	delete(result, "visualization_resolved_tables")
 	if warning := compatibilityWarningFromProto(prepared); warning != nil {
 		result["compatibility_warning"] = warning
 	}
 	return result, nil
+}
+
+// queryRenderTableSchemas describes the tables published in the render
+// manifest, which excludes hidden renderer inputs. Advertising their often
+// wide schemas can exceed the AI Insights response limit. Tables remain
+// queryable whether or not their schemas are advertised here.
+func queryRenderTableSchemas(
+	ctx context.Context,
+	engine apapproto.ApapClient,
+	invoked *apapproto.InvokeRenderResponse,
+) ([]renderTableSchema, error) {
+	result, err := queryRenderSession(ctx, engine, invoked.GetSessionId(), `SELECT table_name, column_name, data_type
+FROM duckdb_columns()
+WHERE schema_name = current_schema()
+ORDER BY table_name, column_index`)
+	if err != nil {
+		return nil, fmt.Errorf("query rendered table schemas: %w", err)
+	}
+	if result.ReturnedRowCount == 0 {
+		return nil, errors.New("rendered table schema query returned no columns")
+	}
+
+	byName := make(map[string]*renderTableSchema)
+	publicTables := make(map[string]bool)
+	for _, entry := range invoked.GetManifest().GetEntry() {
+		publicTables[entry.GetTableName()] = true
+	}
+	for _, row := range result.Rows {
+		if len(row) != 3 {
+			return nil, fmt.Errorf("rendered table schema query returned a row with %d columns", len(row))
+		}
+		tableName, tableOK := row[0].(string)
+		columnName, columnOK := row[1].(string)
+		dataType, typeOK := row[2].(string)
+		if !tableOK || !columnOK || !typeOK {
+			return nil, errors.New("rendered table schema query returned a non-string value")
+		}
+		if !publicTables[tableName] {
+			continue
+		}
+
+		table := byName[tableName]
+		if table == nil {
+			table = &renderTableSchema{
+				Name:                     tableName,
+				Columns:                  map[string]string{},
+				VisualizationDataSources: []renderVisualizationDataSource{},
+			}
+			byName[tableName] = table
+		}
+		table.Columns[columnName] = dataType
+	}
+	if len(byName) == 0 {
+		return nil, errors.New("rendered table schema query returned no published tables")
+	}
+
+	for _, entry := range invoked.GetVisualizationResolvedTables().GetEntries() {
+		visualizationID := entry.GetId().GetValue()
+		for dataSource, tables := range entry.GetTables() {
+			for _, tableName := range tables.GetValues() {
+				if tableName == "" {
+					continue
+				}
+				table := byName[tableName]
+				if table == nil {
+					return nil, fmt.Errorf(
+						"visualization %q data source %q resolved to table %q, which is absent from the active schema",
+						visualizationID,
+						dataSource,
+						tableName,
+					)
+				}
+				table.VisualizationDataSources = append(
+					table.VisualizationDataSources,
+					renderVisualizationDataSource{
+						VisualizationID: visualizationID,
+						DataSource:      dataSource,
+					},
+				)
+			}
+		}
+	}
+
+	tableNames := make([]string, 0, len(byName))
+	for tableName := range byName {
+		tableNames = append(tableNames, tableName)
+	}
+	sort.Strings(tableNames)
+
+	tables := make([]renderTableSchema, 0, len(tableNames))
+	for _, tableName := range tableNames {
+		table := byName[tableName]
+		sort.Slice(table.VisualizationDataSources, func(i, j int) bool {
+			left := table.VisualizationDataSources[i]
+			right := table.VisualizationDataSources[j]
+			if left.VisualizationID != right.VisualizationID {
+				return left.VisualizationID < right.VisualizationID
+			}
+			return left.DataSource < right.DataSource
+		})
+		tables = append(tables, *table)
+	}
+	return tables, nil
 }
 
 // compatibilityWarningFromProto converts the daemon warning to the structured

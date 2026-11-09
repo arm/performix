@@ -12,11 +12,7 @@ benchmark families before prioritizing material findings.
 
 ## Resolve the available tables
 
-Do not hard-code rendered table names. In
-`render_session.visualization_resolved_tables.entries`, find the entry whose
-`id.value` matches the visualization ID below. Use the first table name in the
-listed `tables` data source's `values` list to replace the corresponding
-`<..._table>` placeholder:
+Resolve the SQL placeholders using these visualization ID / data source pairs:
 
 - System information: `asct_system_info_table` / `systemInformation`.
 - Idle-latency matrix: `asct_analysis` / `numaLatencyMatrix`.
@@ -48,16 +44,18 @@ FROM <system_info_table>
 ORDER BY "key"
 ```
 
-`memory.peak_theoretical_bw` is bytes per second. Treat missing information as
-unavailable, not zero. If `report.run_as_root` is false or absent, privileged
-platform details may be incomplete. For a system-information request, prioritize
-the available CPU model and count, operating system and kernel, total memory and
-memory configuration, socket and NUMA topology, ASCT version, and collection
-privilege context. Include other firmware, mitigation or performance-feature
-fields when they materially help characterize the platform. Do not substitute
-benchmark conclusions or tuning recommendations for the requested system
-characterization. A field need only be described as unavailable when it is
-material to the requested analysis; do not enumerate every absent field.
+When filtering the `key` column, use `memory.peak_theoretical_bandwidth [bytes/s]`
+for theoretical peak bandwidth and `memory.total_size [bytes]` for total memory
+capacity. Treat missing information as unavailable, not zero. If
+`report.run_as_root` is false or absent, privileged platform details may be
+incomplete. For a system-information request, prioritize the available CPU model
+and count, operating system and kernel, total memory and memory configuration,
+socket and NUMA topology, ASCT version, and collection privilege context. Include other
+firmware, mitigation or performance-feature fields when they materially help
+characterize the platform. Do not substitute benchmark conclusions or tuning
+recommendations for the requested system characterization. A field need only be
+described as unavailable when it is material to the requested analysis; do not
+enumerate every absent field.
 
 ## Latency and bandwidth sweeps
 
@@ -67,9 +65,9 @@ sizes and representative measurements:
 ```sql
 SELECT
   column0 AS level,
-  "Lower Bound" AS lower_bound_bytes,
-  "Upper Bound" AS upper_bound_bytes,
-  "Optimum Datasize" AS optimum_size_bytes,
+  "Lower bound [bytes]" AS lower_bound_bytes,
+  "Upper bound [bytes]" AS upper_bound_bytes,
+  "Optimum data size [bytes]" AS optimum_size_bytes,
   "Latency [ns]" AS latency_ns
 FROM <latency_sweep_summary_table>
 ORDER BY
@@ -85,10 +83,10 @@ ORDER BY
 ```sql
 SELECT
   "Level" AS level,
-  "Datasize Used" AS data_size_bytes,
+  "Data size used [bytes]" AS data_size_bytes,
   "Bandwidth [GB/s]" AS bandwidth_gbps
 FROM <bandwidth_sweep_summary_table>
-ORDER BY "Datasize Used"
+ORDER BY "Data size used [bytes]"
 ```
 
 An ASCT summary row's selected or optimum data size is a representative
@@ -101,12 +99,12 @@ value metric below:
 WITH curve AS (
   SELECT
     row_key,
-    max(CASE WHEN metric = 'sizes'
+    max(CASE WHEN metric = 'size_bytes'
       THEN try_cast(value AS DOUBLE) END) AS size_bytes,
     max(CASE WHEN metric = '<value_metric>'
       THEN try_cast(value AS DOUBLE) END) AS measurement
   FROM <detailed_sweep_table>
-  WHERE metric IN ('sizes', '<value_metric>')
+  WHERE metric IN ('size_bytes', '<value_metric>')
   GROUP BY row_key
 )
 SELECT size_bytes, measurement
@@ -139,7 +137,7 @@ count, CPU, frequency, method and units are comparable.
 
 Matrix columns depend on the number of NUMA nodes. Run this template for the
 idle-latency and cross-NUMA-bandwidth mappings rather than hard-coding node
-columns:
+columns. Strip unit suffixes before comparing column names with row labels:
 
 ```sql
 WITH matrix AS (
@@ -149,10 +147,10 @@ WITH matrix AS (
 )
 SELECT
   column0 AS cpu_node,
-  memory_node,
+  split_part(memory_node, ' [', 1) AS memory_node,
   measurement,
   CASE
-    WHEN column0 = memory_node THEN 'local'
+    WHEN column0 = split_part(memory_node, ' [', 1) THEN 'local'
     ELSE 'remote'
   END AS locality
 FROM matrix
@@ -175,7 +173,7 @@ WITH matrix AS (
 )
 SELECT sum(try_cast(bandwidth_gbps AS DOUBLE)) AS total_local_bandwidth_gbps
 FROM matrix
-WHERE column0 = memory_node
+WHERE column0 = split_part(memory_node, ' [', 1)
 ```
 
 ## Peak bandwidth
@@ -183,7 +181,7 @@ WHERE column0 = memory_node
 ```sql
 SELECT * EXCLUDE (column0)
 FROM <peak_bandwidth_table>
-ORDER BY "Peak BW [GB/s]" DESC
+ORDER BY "Peak bandwidth [GB/s]" DESC
 ```
 
 Report every available traffic row. For each row, include its traffic type,
@@ -192,7 +190,7 @@ column is present. That percentage uses ASCT's theoretical reference; it is not
 the relative difference from the All Reads row. Derived differences may be
 supplemental, but must not replace the provided percentages. If the percentage
 column is absent, report absolute bandwidth and do not reconstruct it.
-`memory.peak_theoretical_bw` is recorded system information, not a value to
+`memory.peak_theoretical_bandwidth [bytes/s]` is recorded system information, not a value to
 infer from a measured row and percentage. You may report it when present and
 clearly attribute it to the run; do not reconstruct it when absent. Likewise,
 support any system-configuration detail or cross-benchmark comparison with
@@ -210,7 +208,7 @@ FROM <loaded_latency_table>
 ORDER BY "Bandwidth [GB/s]"
 ```
 
-Use ASCT's `% of Peak Theoretical BW` column when present. Do not derive it when
+Use ASCT's `% of Peak Theoretical` column when present. Do not derive it when
 the column is absent. Explicitly state that more injected NOPs mean less
 background traffic and that the highest-NOP sample is the low-load baseline.
 Compare it with latency-sweep DRAM when available, and claim a saturation region
@@ -229,9 +227,9 @@ SELECT
   "CPUA_NODE" AS cpua_node,
   "MEMBIND_NODE" AS memory_node,
   count(*) AS measured_pairs,
-  round(median("LATENCY"), 2) AS median_latency_ns,
-  round(avg("LATENCY"), 2) AS mean_latency_ns,
-  round(max("LATENCY"), 2) AS max_latency_ns
+  round(median("Latency [ns]"), 2) AS median_latency_ns,
+  round(avg("Latency [ns]"), 2) AS mean_latency_ns,
+  round(max("Latency [ns]"), 2) AS max_latency_ns
 FROM <c2c_latency_table>
 GROUP BY "CPUA_NODE", "MEMBIND_NODE"
 ORDER BY cpua_node, memory_node
@@ -245,9 +243,9 @@ SELECT
   "CPUB" AS target_cpu,
   "CPUA_NODE" AS source_node,
   "MEMBIND_NODE" AS memory_node,
-  "LATENCY" AS latency_ns
+  "Latency [ns]" AS latency_ns
 FROM <c2c_latency_table>
-ORDER BY "LATENCY" DESC
+ORDER BY "Latency [ns]" DESC
 LIMIT 20
 ```
 

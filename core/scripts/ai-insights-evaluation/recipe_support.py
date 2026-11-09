@@ -30,10 +30,6 @@ SUPPORTED_RECIPES = frozenset(
         ASCT_RECIPE,
     }
 )
-RECIPE_RESTRICTED_MODES = {
-    "performix_mcp_run_query": frozenset({CODE_HOTSPOTS_RECIPE}),
-}
-PERFORMIX_MCP_MODE = "performix_mcp"
 PRERECORD_MODES = frozenset({"launch", "attach", "system-wide"})
 
 CODE_HOTSPOTS_SOURCE_FILES_QUERY = """
@@ -232,13 +228,3 @@ def requires_source_archive(recipe: str, recipe_params: Iterable[str] | None = N
     """Return whether the recipe supports a source archive."""
 
     return source_files_query(recipe, recipe_params) is not None
-
-
-def mode_supports_recipe(mode: str, recipe: str) -> bool:
-    """Return whether an evaluation mode supports a recipe."""
-
-    if mode == PERFORMIX_MCP_MODE:
-        return True
-    if mode in RECIPE_RESTRICTED_MODES:
-        return recipe in RECIPE_RESTRICTED_MODES[mode]
-    raise ValueError(f"unknown or unsupported AI Insights mode: {mode or '<missing>'}")

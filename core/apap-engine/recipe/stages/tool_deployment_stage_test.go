@@ -24,10 +24,12 @@ import (
 	conductormocks "github.com/Arm-Debug/apap-cli/apap-engine/conductor/conductormocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
+	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 	"github.com/Arm-Debug/apap-cli/apap-engine/targetsession"
 	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
@@ -189,6 +191,36 @@ func TestToolDeploymentStage_Execute(t *testing.T) {
 	basePaths := deployer.BaseToolDeploymentPaths{
 		DeployedToolsDirectory: filepath.Join(tempDir, "deployed-tool-bundles"),
 	}
+
+	t.Run("ensure reports missing tools as readiness advice", func(t *testing.T) {
+		stage := newTestToolDeploymentStage(t, pm, targetPlatform, basePaths)
+		stage.deploymentMode = deployer.ToolDeployENSURE
+		stage.ToolsToDeploy = []tool.ToolInfo{toolBundles[0]}
+		notifier := &MockReadinessNotifier{}
+		notifier.On("OnReadinessProbed", mock.Anything).Run(func(args mock.Arguments) {
+			output := args.Get(0).(recipe.ReadyOutput)
+			require.Equal(t, recipe.ReadyStatusError, output.Status)
+			require.Len(t, output.Advice, 1)
+			require.Equal(t, toolBundles[0].Name, output.Advice[0].ToolName)
+			require.Equal(t, message.ToolIntegrationsCommonToolNotDeployed, output.Advice[0].AdviceMessage.Code())
+			require.NoError(t, message.ValidateMetadataPlaceholders(output.Advice[0].AdviceMessage))
+		}).Once()
+		_, err := stage.Execute(&recipe.StageContext{Context: context.Background(), ReadinessNotifier: notifier})
+		require.ErrorIs(t, err, message.New(message.ToolIntegrationsCommonToolNotDeployed))
+		require.Equal(t, run.RecipeFailureToolsMissing, stage.ErrorType())
+		notifier.AssertExpectations(t)
+	})
+
+	t.Run("ensure retains errors for missing local bundles", func(t *testing.T) {
+		stage := newTestToolDeploymentStage(t, pm, targetPlatform, basePaths)
+		stage.deploymentMode = deployer.ToolDeployENSURE
+		stage.ToolsToDeploy = []tool.ToolInfo{{Name: "not-packaged", Version: "1.0"}}
+		notifier := &MockReadinessNotifier{}
+		_, err := stage.Execute(&recipe.StageContext{Context: context.Background(), ReadinessNotifier: notifier})
+		require.Error(t, err)
+		require.Equal(t, run.RecipeFailureDeploy, stage.ErrorType())
+		notifier.AssertNotCalled(t, "OnReadinessProbed", mock.Anything)
+	})
 
 	t.Run("successfully deploys the mandatory tool bundles", func(t *testing.T) {
 		stage := newTestToolDeploymentStage(t, pm, targetPlatform, basePaths)

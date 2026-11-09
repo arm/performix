@@ -3,37 +3,26 @@
 
 from __future__ import annotations
 
-import json
 from typing import List, Dict
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import requests
 
 from parse_results import eprintln
 
 
 def _post_webhook(webhook_url: str, payload: Dict[str, object], timeout: int = 10) -> bool:
-    data = json.dumps(payload).encode("utf-8")
-    req = Request(
-        webhook_url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urlopen(req, timeout=timeout) as resp:
-            status = getattr(resp, "status", 200)
-            if 200 <= status < 300:
-                return True
-            eprintln(f"[WARN] Slack webhook non-2xx status: {status}")
-            return False
-    except HTTPError as e:
-        eprintln(f"[ERROR] Slack webhook HTTPError: {e.code} {e.reason}")
+        response = requests.post(webhook_url, json=payload, timeout=timeout)
+        response.raise_for_status()
+        return True
+    except requests.HTTPError as exc:
+        eprintln(
+            f"[ERROR] Slack webhook HTTPError: "
+            f"{exc.response.status_code} {exc.response.reason}"
+        )
         return False
-    except URLError as e:
-        eprintln(f"[ERROR] Slack webhook URLError: {e.reason}")
-        return False
-    except Exception as e:
-        eprintln(f"[ERROR] Slack webhook unexpected error: {e}")
+    except requests.RequestException as exc:
+        eprintln(f"[ERROR] Slack webhook request failed: {type(exc).__name__}")
         return False
 
 

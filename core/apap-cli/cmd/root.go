@@ -45,6 +45,11 @@ var cfgFile string
 
 var initConfigOnce sync.Once
 
+func init() {
+	connector := client.NewAutostartClient()
+	config.RootCmd.AddCommand(NewConfigGetCmd(connector), NewConfigSetCmd(connector))
+}
+
 func defaultConfigFilePath() string {
 	dir, err := userdirs.ConfigDir()
 	if err != nil {
@@ -170,6 +175,7 @@ func initConfig() {
 		viper.SetDefault("deployment-tools-dir", serverconfig.DefaultToolsDeploymentDirectory)
 		viper.SetDefault(serverconfig.DaemonAutostartConfigKey, serverconfig.DefaultDaemonAutostart)
 		viper.SetDefault("adb-path", serverconfig.DefaultADBPath)
+		viper.SetDefault("telemetry-enabled", true)
 
 		// read in environment variables that match
 		viper.AutomaticEnv()

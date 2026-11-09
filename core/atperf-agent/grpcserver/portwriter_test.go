@@ -25,12 +25,8 @@ import (
 // newTestFilePortWriter makes a file port writer with temp dir/file
 func newTestFilePortWriter(t *testing.T) (*FilePortWriter, string) {
 	t.Helper()
-	dir := t.TempDir()
-	filename := filepath.Join(dir, "performix-test.port")
-	return &FilePortWriter{
-		filename: filename,
-		rename:   os.Rename,
-	}, filename
+	w := NewFilePortWriter(t.TempDir()).(*FilePortWriter)
+	return w, w.filename
 }
 
 // readFileIfExists reads the file's contents if present
@@ -85,10 +81,7 @@ func TestWriteCleansUpOnError(t *testing.T) {
 	roDir := filepath.Join(dir, "ro")
 	require.NoError(t, os.Mkdir(roDir, perms.LocalDirPerm))
 
-	w := &FilePortWriter{
-		filename: filepath.Join(roDir, "performix-test.port"),
-		rename:   os.Rename,
-	}
+	w := NewFilePortWriter(roDir).(*FilePortWriter)
 
 	// Normal write should work
 	require.NoError(t, w.Write(1))

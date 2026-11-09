@@ -17,19 +17,24 @@ SPDX-License-Identifier: Apache-2.0
 - Test whether analysis distinguishes a transient maximum from sustained
   pressure.
 
+## Private Workload Design
+- The launcher idles for 20 seconds, runs stress-ng matrix multiplication on
+  every CPU for 3 seconds, then idles for another 30 seconds.
+- This is a negative control for sustained-pressure diagnosis: the spike is
+  visible at one-second sampling intervals but does not establish a sustained
+  CPU bottleneck. The stress-ng version is pinned to `V0.21.04`.
+
 ## What's Wrong In Current Implementation
 - No sustained performance problem is present in the recording.
 - Treating the isolated CPU spike as a capacity problem would overstate the
   available evidence.
 
 ## What The LLM Should Suggest
-- Identify the short CPU peak and subsequent recovery with measured time
-  ranges.
-- State that the data does not support a sustained CPU, memory, storage or
-  network bottleneck.
-- Avoid unnecessary optimisation advice.
-- Suggest another representative recording only if application work was
-  expected during the idle periods.
+- Quantify the short CPU peak.
+- Distinguish the isolated spike from sustained pressure and do not present it
+  as a demonstrated bottleneck.
+- Conditional diagnostic profiling is acceptable. Keep any optimisation
+  suggestion conditional on measured workload impact.
 
 ## Expected Profiling Characteristics
 - An extended idle baseline precedes a short system-wide CPU peak.
@@ -38,9 +43,11 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Scoring Guidance
 - Pass:
-  - Identifies and quantifies the short CPU peak and recovery.
-  - Distinguishes the isolated peak from sustained pressure.
-  - States that no sustained resource bottleneck is supported by the data.
+  - Identifies and quantifies the short CPU peak; exact recovery timings are optional.
+  - Distinguishes the isolated peak from sustained pressure and does not
+    present it as a demonstrated bottleneck.
+  - Keeps any follow-up profiling or optimisation conditional on measured
+    workload impact.
   - Avoids unnecessary optimisation advice.
 - Fail:
   - Invents a bottleneck from the transient maximum.

@@ -118,6 +118,23 @@ function findTimelineCounterBindings(context, runIndex, counterParquetPattern) {
 }
 
 /**
+ * Read mixed numeric counter schemas while preserving identities and aggregate
+ * fields. Callers supply explicit paths to control which files are read.
+ * @param {string[]} componentRelativePaths
+ * @returns {string}
+ */
+function readTimelineCountersSQL(componentRelativePaths) {
+  return `SELECT * FROM read_parquet(
+    [${componentRelativePaths.map((path) => `{{path:${path}}}`).join(', ')}],
+    hive_partitioning = true, union_by_name = true
+  ) UNION ALL BY NAME
+  SELECT CAST(NULL AS DOUBLE) AS value,
+         CAST(NULL AS DOUBLE) AS sum_value,
+         CAST(NULL AS UBIGINT) AS count
+  WHERE FALSE`;
+}
+
+/**
  * @param {number} binDuration
  * @param {string} rawSeriesKey
  * @returns {string}
@@ -175,17 +192,7 @@ function makeSeriesRenderer({
           base.thread,
           base.value
         FROM (
-          SELECT *
-          FROM read_parquet(
-            {{path:${componentRelativePath}}},
-            hive_partitioning = true
-          )
-          UNION ALL BY NAME
-          -- Legacy capabilities do not record counter_class. Supply the
-          -- numeric column so an older activity file binds as an empty source
-          -- instead of preventing the whole run from rendering.
-          SELECT CAST(NULL AS DOUBLE) AS value
-          WHERE FALSE
+          ${readTimelineCountersSQL([componentRelativePath])}
         ) AS base
         WHERE base.value IS NOT NULL
       `,
@@ -267,6 +274,7 @@ function buildTimelineSQLRendererBundle(args) {
 }
 
 module.exports = {
+  readTimelineCountersSQL,
   findTimelineCounterBindings,
   buildTimelineSQLRendererBundle,
 };

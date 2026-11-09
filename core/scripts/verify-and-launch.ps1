@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # verify-and-launch.ps1
-# Launch apx-agent via a Scheduled Task (detached from SSH job), wait for its port file, print it.
-# Registers the task under the CURRENT USER with highest privileges, non-interactive, waits for the port file, prints it.
+# Launch local agents directly with the caller token; use a scheduled task for
+# remote agents to detach from the SSH job. Wait for and print the agent port.
 
 param(
+  # Use 0/1 because Windows PowerShell -File cannot pass an explicit false Boolean.
+  [ValidateSet(0, 1)]
+  [int]      $RequestHighestPrivileges = 1,
   [double]   $TimeoutSeconds        = 60.0,                    # total wait for port file
   [double]   $SleepIntervalSeconds  = 0.02,                    # polling interval
   [double]   $SigtermGraceSeconds   = 0.1,                     # grace before force kill (on error)
@@ -155,13 +158,16 @@ function Error-And-Exit {
 
 # Clean up task + agent on *any* unhandled error
 trap {
+  $launchError = $_
   try { Kill-Agent-For-ThisPortFile } catch {}
   try { Remove-PortFileDir } catch {}
   try { Remove-TempTask } catch {}
-  Write-Error ("FATAL: " + ($_.Exception.Message))
-  if ($_.InvocationInfo) {
-    Write-Error (" at {0}:{1}" -f $_.InvocationInfo.ScriptName,
-                 $_.InvocationInfo.ScriptLineNumber)
+  # Write-Error would itself terminate under ErrorActionPreference=Stop and hide
+  # the original failure location. Preserve that error and write directly to stderr.
+  [Console]::Error.WriteLine("FATAL: " + $launchError.Exception.Message)
+  [Console]::Error.WriteLine("RequestHighestPrivileges={0}", $RequestHighestPrivileges)
+  if ($launchError.InvocationInfo) {
+    [Console]::Error.WriteLine($launchError.InvocationInfo.PositionMessage)
   }
   exit 1
 }
@@ -183,42 +189,73 @@ New-Item -ItemType Directory -Path $global:PortFileDir -Force | Out-Null
 # Append --port-file-dir to agent arguments
 $AgentArgs = @($AgentArgs) + @('--port-file-dir', $global:PortFileDir)
 
-# Compose argument string for the scheduled task action; launch agent hidden via PowerShell
-$escapedAgent = $resolvedAgent -replace "'","''"
-$escapedArgs = $AgentArgs | ForEach-Object { "'{0}'" -f ($_ -replace "'","''") }
-$agentDir = (Split-Path -Parent $resolvedAgent) -replace "'","''"
-$startProcessCmd = "& { Start-Process -FilePath '$escapedAgent' -ArgumentList @($($escapedArgs -join ', ')) -WindowStyle Hidden -WorkingDirectory '$agentDir' }"
-$action   = New-ScheduledTaskAction -Execute 'powershell.exe' `
-             -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command $startProcessCmd"
-$trigger  = New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes(-1))
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
-             -DontStopIfGoingOnBatteries -StartWhenAvailable `
-             -MultipleInstances IgnoreNew -Priority 1
+# Local host agents inherit the caller's token, including elevation, without
+# switching to an S4U logon. Avoid Task Scheduler's interactive PowerShell console.
+if ($RequestHighestPrivileges -eq 0) {
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  $startInfo.FileName = $resolvedAgent
+  $startInfo.WorkingDirectory = Split-Path -Parent $resolvedAgent
+  # Shell execution detaches standard handles from the launcher's captured pipes.
+  # Set Hidden at process creation, rather than asking PowerShell to hide itself.
+  $startInfo.UseShellExecute = $true
+  $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+  # ProcessStartInfo.ArgumentList is unavailable in Windows PowerShell 5.1.
+  $startInfo.Arguments = ($AgentArgs | ForEach-Object {
+    '"' + (($_ -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
+  }) -join ' '
+  $agentProcess = New-Object System.Diagnostics.Process
+  $agentProcess.StartInfo = $startInfo
+  try {
+    if (-not $agentProcess.Start()) { throw 'Agent process did not start' }
+    $global:AGENTPID = $agentProcess.Id
+  } finally {
+    $agentProcess.Dispose()
+  }
+} else {
+  # Compose argument string for the scheduled task action; launch agent hidden via PowerShell
+  $escapedAgent = $resolvedAgent -replace "'","''"
+  $escapedArgs = $AgentArgs | ForEach-Object { "'{0}'" -f ($_ -replace "'","''") }
+  $agentDir = (Split-Path -Parent $resolvedAgent) -replace "'","''"
+  $startProcessCmd = "& { Start-Process -FilePath '$escapedAgent' -ArgumentList @($($escapedArgs -join ', ')) -WindowStyle Hidden -WorkingDirectory '$agentDir' }"
+  $action   = New-ScheduledTaskAction -Execute 'powershell.exe' `
+               -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command $startProcessCmd"
+  $trigger  = New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes(-1))
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+               -DontStopIfGoingOnBatteries -StartWhenAvailable `
+               -MultipleInstances IgnoreNew -Priority 1
 
-$userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType S4U -RunLevel Highest
+  # Register under the CURRENT USER
+  $global:TaskPath = "\"
+  $global:TaskName = "$AgentName-once-" + [guid]::NewGuid().ToString('N')
 
-# Register under the CURRENT USER
-$global:TaskPath = "\"
-$global:TaskName = "$AgentName-once-" + [guid]::NewGuid().ToString('N')
+  # Remote agents must survive the SSH job that launches this script.
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 
-# Register the scheduled task
-Register-ScheduledTask -TaskPath $global:TaskPath -TaskName $global:TaskName `
-  -Action $action -Trigger $trigger -Settings $settings -Principal $principal | Out-Null
+  $registration = @{
+    TaskPath = $global:TaskPath
+    TaskName = $global:TaskName
+    Action   = $action
+    Trigger  = $trigger
+    Settings = $settings
+  }
+  $registration['Principal'] = New-ScheduledTaskPrincipal -UserId $identity.Name `
+    -LogonType S4U -RunLevel Highest
+  Register-ScheduledTask @registration | Out-Null
 
-# Start the task, then wait for the scheduler to actually launch it before timing the process
-$preStartUtc = [DateTimeOffset]::UtcNow
-Start-ScheduledTask -TaskPath $global:TaskPath -TaskName $global:TaskName | Out-Null
+  # Start the task, then wait for the scheduler to actually launch it before timing the process
+  $preStartUtc = [DateTimeOffset]::UtcNow
+  Start-ScheduledTask -TaskPath $global:TaskPath -TaskName $global:TaskName | Out-Null
 
-# Wait for the scheduled task to actually begin executing (handles CPU-stressed delays)
-if (-not (Wait-For-TaskLaunch -TaskPath $global:TaskPath -TaskName $global:TaskName `
-                              -StartedAfterUtc $preStartUtc `
-                              -TimeoutSeconds $TaskLaunchTimeoutSeconds `
-                              -SleepSeconds $SleepIntervalSeconds)) {
-  Error-And-Exit ("scheduled task did not start within {0}s (CPU may be stressed)" -f $TaskLaunchTimeoutSeconds)
+  # Wait for the scheduled task to actually begin executing (handles CPU-stressed delays)
+  if (-not (Wait-For-TaskLaunch -TaskPath $global:TaskPath -TaskName $global:TaskName `
+                                -StartedAfterUtc $preStartUtc `
+                                -TimeoutSeconds $TaskLaunchTimeoutSeconds `
+                                -SleepSeconds $SleepIntervalSeconds)) {
+    Error-And-Exit ("scheduled task did not start within {0}s (CPU may be stressed)" -f $TaskLaunchTimeoutSeconds)
+  }
 }
 
-# Now that the task has launched, wait for a port file to appear in the unique directory
+# Wait for the agent to publish its port in the unique directory
 $result = Wait-For-PortFileInDir -Directory $global:PortFileDir `
                                  -AgentName $AgentName `
                                  -TimeoutSeconds $TimeoutSeconds `

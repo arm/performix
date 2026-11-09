@@ -7,6 +7,7 @@ package util
 
 import (
 	"errors"
+	"os"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -14,26 +15,15 @@ import (
 
 const atomicReplaceAttempts = 6
 
-func atomicReplaceFile(src, dst string) error {
-	srcPtr, err := windows.UTF16PtrFromString(src)
-	if err != nil {
-		return err
-	}
-	dstPtr, err := windows.UTF16PtrFromString(dst)
-	if err != nil {
-		return err
-	}
-
+// AtomicReplaceFile replaces dst with src, retrying transient Windows errors.
+func AtomicReplaceFile(src, dst string) error {
 	var replaceErr error
 	// Windows can briefly reject replacement if another process, antivirus, or
 	// indexer has the destination open. Retry only those transient sharing/lock
 	// errors; other failures are returned immediately.
 	for attempt := 0; attempt < atomicReplaceAttempts; attempt++ {
-		replaceErr = windows.MoveFileEx(
-			srcPtr,
-			dstPtr,
-			windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH,
-		)
+		// os.Rename handles Windows paths that need an extended-length prefix.
+		replaceErr = os.Rename(src, dst)
 		if replaceErr == nil {
 			return nil
 		}

@@ -15,21 +15,23 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Public Intent (safe summary)
 - Repeatedly look up many values in a deterministic shuffled order.
-  Each value occupies a separate normal page and huge pages are explicitly
-  disabled.
 
 ## What's Wrong In Current Implementation
 - `lookup_paged_values` reuses about 1 MiB of accessed cache lines across 16K
   4 KiB pages for 32 rounds. This keeps the data cached while exceeding TLB
   coverage.
+- The setup source is intentionally unavailable. The one-value-per-page layout,
+  page size and disabled huge pages are private fixture facts, not knowledge
+  required of the model. Assess its recommendations against available evidence.
 
 ## What The LLM Should Suggest
 - Connect TLB access count, walk count, walk percentage and average walk latency
   to `lookup_paged_values`.
-- Recommend reducing the translation footprint. More compact storage or huge
-  pages are acceptable options. If huge pages are the primary action, qualify
-  platform support and memory or allocation trade-offs. A brief conditional
-  caveat is sufficient when they are one of several alternatives.
+- Recommend a concrete translation-footprint reduction, or check the current
+  mapping/page size to choose a conditional layout, lookup-order or large-page
+  experiment. Experiments should acknowledge unknown layout and measure TLB
+  walks and runtime, plus memory use for large pages. Such a large-page experiment
+  needs no separate platform-support or allocation caveats, even as the primary action.
 - Distinguish translation overhead from an LLC or DRAM data-cache problem.
 - Reporting the TLB Walk Score is optional. If included, treat it as a ranking
   estimate, not measured elapsed time or an exact speedup opportunity.
@@ -46,12 +48,14 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Scoring Guidance
 - Pass:
-  - Identifies a material TLB-walk problem, attributes it to
-    `lookup_paged_values`, distinguishes it from data-cache latency and
-    proposes a supported reduction in translation footprint.
+  - Identifies material TLB walks, attributes them to `lookup_paged_values`,
+    distinguishes them from data-cache latency and gives a next step as described
+    above. Do not reject conditional reordering based on private layout facts.
 - Fail:
   - Describes the primary problem as DRAM or general cache-miss latency.
   - Presents huge pages as a guaranteed or unconditional primary fix.
+  - Claims reordering necessarily reduces distinct pages or guarantees a gain
+    without evidence of the layout and access pattern.
   - Gives generic memory advice without using the TLB measurements and source
     attribution.
   - Presents the TLB Walk Score as measured elapsed time, exact lost cycles or

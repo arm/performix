@@ -9,6 +9,21 @@ const TOOL_SYSUTIL_TIMELINE = {
 };
 const TOOL_NEOPROF = { name: 'neoprof', version: '1.1.0' };
 
+const GPU_ACTIVITY_METRICS = [
+  'GPUFront-end.GPUCycles.GPUActive',
+  'GPUFront-end.GPUUtilization',
+];
+
+const GPU_SUMMARY_QUEUE_METRICS = [
+  'GPUFront-end.GPUUtilization.Non-fragmentQueueUtilization',
+  'GPUFront-end.GPUUtilization.ComputeQueueUtilization',
+  'GPUFront-end.GPUUtilization.VertexQueueUtilization',
+  'GPUFront-end.GPUUtilization.FragmentQueueUtilization',
+  'GPUFront-end.GPUUtilization.BinningPhaseQueueUtilization',
+  'GPUFront-end.GPUUtilization.MainPhaseQueueUtilization',
+  'GPUFront-end.GPUUtilization.NeuralQueueUtilization',
+];
+
 const NEOPROF_SYSUTIL_WORKFLOW = 'sys_util';
 const NANOSECONDS_PER_SECOND = 1_000_000_000;
 const NEOPROF_TIMELINE_BIN_DURATION_NS = 100_000_000;
@@ -1113,7 +1128,7 @@ const MAJOR_FAULT_BUCKET_STARTS = [
  * @returns {string}
  */
 const sumMatchingColumnsSql = (pattern) =>
-  `coalesce(list_sum(list_transform(list_value(unpack(COLUMNS('${pattern}'))), x -> coalesce(try_cast(x AS DOUBLE), 0))), 0)`;
+  `coalesce(list_sum(list_transform(list_value(unpack(COLUMNS('${pattern}'))), lambda x: coalesce(try_cast(x AS DOUBLE), 0))), 0)`;
 const DISK_READ_IOPS_SQL = sumMatchingColumnsSql('^read_iops_.*$');
 const DISK_WRITE_IOPS_SQL = sumMatchingColumnsSql('^write_iops_.*$');
 const DISK_READ_BPS_SQL = sumMatchingColumnsSql('^read_bps_.*$');
@@ -1137,7 +1152,7 @@ const recipe = {
   api_version: '1.0.0',
   status: 'preview',
   description:
-    'Analyze CPU, memory, disk, and network activity over time to identify system resource bottlenecks.',
+    'Analyze CPU, GPU, memory, disk, and network activity over time to identify system resource bottlenecks.',
   deployments: [
     {
       appliesTo: [{ architecture: 'aarch64', os: 'Android' }],
@@ -1193,6 +1208,23 @@ const recipe = {
       },
     },
   ],
+  parameterValidation: (context) => {
+    const value = context.getParameter('interval');
+    const interval = Number(value);
+    if (!Number.isFinite(interval) || interval < 0.01 || interval > 60) {
+      return {
+        errors: [
+          {
+            parameterId: 'interval',
+            value,
+            messageCode: 'tool_integrations.sysutil_timeline.INVALID_INTERVAL',
+            metadata: { value: String(value), min: '0.01', max: '60' },
+          },
+        ],
+      };
+    }
+    return { errors: [] };
+  },
   readyStages: [
     {
       name: 'Checking recipe is ready',
@@ -1244,9 +1276,10 @@ function generateSysutilTimelineConfig(workload, params) {
  * counters, analyzing on the host for Android and on the target for Linux.
  * @param {import("./docs/jsdocs").Workload} workload
  * @param {import("./docs/jsdocs").TargetInfoDescription} targetInfo
+ * @param {string} interval Sampling interval in seconds.
  * @return {import("./docs/jsdocs").ToolConfigurationsArg}
  */
-function generateNeoprofSysutilConfig(workload, targetInfo) {
+function generateNeoprofSysutilConfig(workload, targetInfo, interval) {
   const timelineDeviceNumbers = (targetInfo?.CPUs ?? [])
     .filter(
       ({ CoreNumber }) => Number.isSafeInteger(CoreNumber) && CoreNumber >= 0,
@@ -1262,6 +1295,8 @@ function generateNeoprofSysutilConfig(workload, targetInfo) {
           mode: 'samples',
           sampling_frequency: 'normal',
           workflow: NEOPROF_SYSUTIL_WORKFLOW,
+          requested_gpu_metrics: JSON.stringify(GPU_ACTIVITY_METRICS),
+          poll_interval: String(Math.round(Number(interval) * 1000)),
           reformat_on_host: isAndroidTarget(targetInfo),
           timeline_device_numbers: JSON.stringify(timelineDeviceNumbers),
           rich_data_capture: false,
@@ -1302,7 +1337,11 @@ function readySystemUtilization(context) {
   const workload = context.getWorkload();
   const targetInfo = context.targetInfo();
   if (usesNeoprofSystemUtilization(context, targetInfo)) {
-    const tools = generateNeoprofSysutilConfig(workload, targetInfo);
+    const tools = generateNeoprofSysutilConfig(
+      workload,
+      targetInfo,
+      context.getParameter('interval'),
+    );
     const toolResponses = context.probeTools(tools);
     const allAdvice = collectToolAdvice(tools, toolResponses);
 
@@ -1335,7 +1374,13 @@ function runSystemUtilization(context) {
   const workload = context.getWorkload();
   const targetInfo = context.targetInfo();
   if (usesNeoprofSystemUtilization(context, targetInfo)) {
-    context.runTools(generateNeoprofSysutilConfig(workload, targetInfo));
+    context.runTools(
+      generateNeoprofSysutilConfig(
+        workload,
+        targetInfo,
+        context.getParameter('interval'),
+      ),
+    );
     return;
   }
 
@@ -2341,6 +2386,22 @@ function getNeoprofTimelineSchema(context) {
 }
 
 /**
+ * Use zero for missing activity only for collected delta counters.
+ * Unavailable and absolute counters keep NULL for missing data.
+ * @param {string[]} columns
+ * @param {Set<string>} zeroFilledColumns
+ * @returns {string[]}
+ */
+function makeNeoprofNormalizedColumnExpressions(columns, zeroFilledColumns) {
+  return columns.map((columnName) => {
+    const column = `wide_timeline."${columnName}"`;
+    return zeroFilledColumns.has(columnName)
+      ? `COALESCE(${column}, 0) AS "${columnName}"`
+      : column;
+  });
+}
+
+/**
  * Builds a SQL renderer which converts the counter-series timeline emitted by
  * sl-analyze for NeoProf's `sys_util` workflow into the wide timeline schema
  * already consumed by this recipe's visualizations.
@@ -2356,6 +2417,7 @@ function getNeoprofTimelineSchema(context) {
  * @returns {any}
  */
 function buildNeoprofTimelineRenderer(context) {
+  const { readTimelineCountersSQL } = require('./lib/timeline_sql_renderer');
   const counterComponents = context.listRunComponents(
     0,
     NEOPROF_TIMELINE_COUNTER_COMPONENT,
@@ -2365,58 +2427,32 @@ function buildNeoprofTimelineRenderer(context) {
       'The NeoProf system-utilization run does not contain timeline counters.',
     );
   }
-  const counterPathPlaceholders = counterComponents
-    .map((component) => `{{path:${component.relativePath}}}`)
-    .join(', ');
-  const metadataQuery = `SELECT counter_group.key_type, counter.id AS series_id, counter.title, counter.name
-       FROM (
-         SELECT unnest(counter_groups) AS counter_group
-         FROM read_json({{path:${NEOPROF_TIMELINE_METADATA_COMPONENT}}},
-           columns = {counter_groups: 'STRUCT(key_type BIGINT, counters STRUCT(id BIGINT, title VARCHAR, name VARCHAR)[])[]'})
-       ), UNNEST(counter_group.counters) AS entries(counter)`;
+  const counterPaths = counterComponents.map(
+    (component) => component.relativePath,
+  );
   const { columns: timelineColumns, zeroFilledColumns } =
     getNeoprofTimelineSchema(context);
-  const fixedTimelineColumnCasesSql = makeNeoprofFixedTimelineColumnCasesSql();
   const pivotColumnValues = timelineColumns
     .map((columnName) => `'${columnName}'`)
     .join(', ');
-  // Build SQL that restores missing samples to zero for collected delta counters,
-  // because NeoProf leaves out zero activity. Other metrics keep NULL for missing data.
-  const normalizedColumnExpressionsSql = timelineColumns
-    .map((columnName) => {
-      const column = `wide_timeline."${columnName}"`;
-      return zeroFilledColumns.has(columnName)
-        ? `COALESCE(${column}, 0) AS "${columnName}"`
-        : column;
-    })
-    .join(',\n');
+  const normalizedColumnExpressionsSql = makeNeoprofNormalizedColumnExpressions(
+    timelineColumns,
+    zeroFilledColumns,
+  ).join(',\n');
 
   return {
     type: 'SQL',
     id: 'timeline_csv',
     config: {
       // Normalize once so each chart query reads the prepared timeline table.
-      materialize: true,
+      materialized: true,
       sql: sql`
         WITH
         -- Combine every counter file into one relation. Counter files may
         -- contain either a direct value or aggregate fields, so union_by_name
         -- aligns those variants by column name.
         raw_binned_counters AS (
-          SELECT *
-          FROM read_parquet(
-            [${counterPathPlaceholders}],
-            hive_partitioning = true,
-            union_by_name = true
-          )
-          UNION ALL BY NAME
-          -- Declare fields that can be absent from every input file so the
-          -- normalization query below can bind for either counter variant.
-          SELECT
-            CAST(NULL AS DOUBLE) AS value,
-            CAST(NULL AS DOUBLE) AS sum_value,
-            CAST(NULL AS UBIGINT) AS count
-          WHERE FALSE
+          ${readTimelineCountersSQL(counterPaths)}
         ),
         -- Select the 100-millisecond timeline level and normalize direct-value
         -- rows and sum/count aggregate rows to one sample_value.
@@ -2450,46 +2486,7 @@ function buildNeoprofTimelineRenderer(context) {
         -- Translate NeoProf counter identities into the column names and units
         -- expected by the existing sysutil visualizations.
         mapped_counters AS (
-          SELECT
-            counters.x_start,
-            CASE
-              -- Fixed one-to-one mappings share the timeline schema catalogue
-              -- used to build the explicit pivot columns.
-              ${fixedTimelineColumnCasesSql}
-              -- CPU and interrupt counters also include per-device forms.
-              WHEN metadata.title = 'Proc Stat CPU Per-core' AND metadata.name = 'Utilization' THEN concat('cpu', counters.device_no, '_percent')
-              WHEN metadata.title = 'Interrupts' AND metadata.name = 'Total' THEN concat('irq_cpu', counters.device_no, '_per_s')
-              -- Disk and network devices do not have stable names in the
-              -- exported rows. Keep each series distinct using its series ID;
-              -- downstream queries aggregate columns by these prefixes.
-              WHEN lower(metadata.title) = 'disk iops' AND lower(metadata.name) LIKE '%read%' THEN concat('read_iops_series_', metadata.series_id)
-              WHEN lower(metadata.title) = 'disk iops' AND lower(metadata.name) LIKE '%write%' THEN concat('write_iops_series_', metadata.series_id)
-              WHEN lower(metadata.title) LIKE 'disk%bandwidth%' AND lower(metadata.name) LIKE '%read%' THEN concat('read_bps_series_', metadata.series_id)
-              WHEN lower(metadata.title) LIKE 'disk%bandwidth%' AND lower(metadata.name) LIKE '%write%' THEN concat('write_bps_series_', metadata.series_id)
-              WHEN metadata.title = 'Disk I/O' AND lower(metadata.name) LIKE '%read%' THEN concat('read_bps_series_', metadata.series_id)
-              WHEN metadata.title = 'Disk I/O' AND lower(metadata.name) LIKE '%write%' THEN concat('write_bps_series_', metadata.series_id)
-              WHEN metadata.title = 'Network' AND lower(metadata.name) LIKE '%receive%' THEN concat('rx_bps_series_', metadata.series_id)
-              WHEN metadata.title = 'Network' AND lower(metadata.name) LIKE '%transmit%' THEN concat('tx_bps_series_', metadata.series_id)
-              ELSE NULL
-            END AS column_name,
-            CASE
-              -- NeoProf encodes CPU/I/O percentages and load averages as
-              -- fixed-point values scaled by 100; sysutil uses their base units.
-              WHEN metadata.title IN (
-                'Load Average',
-                'Proc Stat CPU Total',
-                'Proc Stat CPU Per-core',
-                'Proc Stat I/O Wait Total',
-                'Proc Stat I/O Wait Per-core'
-              ) THEN counters.sample_value / 100.0
-              -- NeoProf emits memory sizes in bytes; the sysutil contract is KiB.
-              WHEN metadata.title IN ('Memory', 'Swap') THEN counters.sample_value / 1024.0
-              ELSE counters.sample_value
-            END AS value
-          FROM expanded_counters AS counters
-          INNER JOIN (${metadataQuery}) AS metadata
-            ON counters.key_type = metadata.key_type
-              AND counters.series_id = metadata.series_id
+          ${mapCounterColumnsSQL('expanded_counters', 'counters.x_start')}
         ),
         -- Convert the normalized long-form points into the wide, one-row-per-
         -- sample shape consumed by all existing recipe queries. SUM collapses
@@ -2526,6 +2523,269 @@ function buildNeoprofTimelineRenderer(context) {
       },
     },
   };
+}
+
+function getCounterMetadataSQL() {
+  return `SELECT counter_group.key_type, counter.id AS series_id, counter.title, counter.name
+       FROM (
+         SELECT unnest(counter_groups) AS counter_group
+         FROM read_json({{path:${NEOPROF_TIMELINE_METADATA_COMPONENT}}},
+           columns = {counter_groups: 'STRUCT(key_type BIGINT, counters STRUCT(id BIGINT, title VARCHAR, name VARCHAR)[])[]'})
+       ), UNNEST(counter_group.counters) AS entries(counter)`;
+}
+
+/** @param {string} source @param {string} identityColumns */
+function mapCounterColumnsSQL(source, identityColumns) {
+  const fixedTimelineColumnCasesSql = makeNeoprofFixedTimelineColumnCasesSql();
+  const metadataQuery = getCounterMetadataSQL();
+  return `          SELECT
+            ${identityColumns},
+            CASE
+              -- Fixed one-to-one mappings share the timeline schema catalogue
+              -- used to build the explicit pivot columns.
+              ${fixedTimelineColumnCasesSql}
+              -- CPU and interrupt counters also include per-device forms.
+              WHEN metadata.title = 'Proc Stat CPU Per-core' AND metadata.name = 'Utilization' THEN concat('cpu', counters.device_no, '_percent')
+              WHEN metadata.title = 'Interrupts' AND metadata.name = 'Total' THEN concat('irq_cpu', counters.device_no, '_per_s')
+              -- Disk and network devices do not have stable names in the
+              -- exported rows. Keep each series distinct using its series ID;
+              -- downstream queries aggregate columns by these prefixes.
+              WHEN lower(metadata.title) = 'disk iops' AND lower(metadata.name) LIKE '%read%' THEN concat('read_iops_series_', metadata.series_id)
+              WHEN lower(metadata.title) = 'disk iops' AND lower(metadata.name) LIKE '%write%' THEN concat('write_iops_series_', metadata.series_id)
+              WHEN lower(metadata.title) LIKE 'disk%bandwidth%' AND lower(metadata.name) LIKE '%read%' THEN concat('read_bps_series_', metadata.series_id)
+              WHEN lower(metadata.title) LIKE 'disk%bandwidth%' AND lower(metadata.name) LIKE '%write%' THEN concat('write_bps_series_', metadata.series_id)
+              WHEN metadata.title = 'Disk I/O' AND lower(metadata.name) LIKE '%read%' THEN concat('read_bps_series_', metadata.series_id)
+              WHEN metadata.title = 'Disk I/O' AND lower(metadata.name) LIKE '%write%' THEN concat('write_bps_series_', metadata.series_id)
+              WHEN metadata.title = 'Network' AND lower(metadata.name) LIKE '%receive%' THEN concat('rx_bps_series_', metadata.series_id)
+              WHEN metadata.title = 'Network' AND lower(metadata.name) LIKE '%transmit%' THEN concat('tx_bps_series_', metadata.series_id)
+              ELSE NULL
+            END AS column_name,
+            CASE
+              -- NeoProf encodes CPU/I/O percentages and load averages as
+              -- fixed-point values scaled by 100; sysutil uses their base units.
+              WHEN metadata.title IN (
+                'Load Average',
+                'Proc Stat CPU Total',
+                'Proc Stat CPU Per-core',
+                'Proc Stat I/O Wait Total',
+                'Proc Stat I/O Wait Per-core'
+              ) THEN counters.sample_value / 100.0
+              -- NeoProf emits memory sizes in bytes; the sysutil contract is KiB.
+              WHEN metadata.title IN ('Memory', 'Swap') THEN counters.sample_value / 1024.0
+              ELSE counters.sample_value
+            END AS value
+          FROM ${source} AS counters
+          INNER JOIN (${metadataQuery}) AS metadata
+            ON counters.key_type = metadata.key_type
+              AND counters.series_id = metadata.series_id`;
+}
+
+/**
+ * @param {number} binDuration
+ * @param {string[]} counterPaths
+ * @param {number} captureDuration
+ * @returns {any}
+ */
+function buildNeoprofTimelineLodRenderer(
+  binDuration,
+  counterPaths,
+  captureDuration,
+) {
+  const { readTimelineCountersSQL } = require('./lib/timeline_sql_renderer');
+  const captureEnd = Math.ceil(captureDuration / binDuration) * binDuration;
+  return {
+    type: 'SQL',
+    id: `sysutil_lod_${binDuration}`,
+    config: {
+      // Add an empty interval so idle captures still have a time grid.
+      sql: `WITH binned_counters AS (
+        SELECT start_timestamp, end_timestamp, bin_duration, key_type, series_id, device_no,
+          -- A delta row sums the whole compressed interval. Absolute counters
+          -- use sum/count instead, independent of interval length.
+          COALESCE(value * ${NANOSECONDS_PER_SECOND}.0 / (end_timestamp - start_timestamp),
+            sum_value / NULLIF(count, 0)) AS sample_value
+        FROM (${readTimelineCountersSQL(counterPaths)})
+      ) ${mapCounterColumnsSQL('binned_counters', 'counters.start_timestamp, counters.end_timestamp, counters.bin_duration')}
+      UNION ALL SELECT 0::BIGINT, ${captureEnd}::BIGINT, ${binDuration}::BIGINT, NULL::VARCHAR, NULL::DOUBLE`,
+      output: {
+        name: 'counters',
+        description: `Compressed Sys Util counters for ${binDuration} ns bins.`,
+        cardinality: 'one',
+        component_type: {
+          name: `sysutil-timeline-source-${binDuration}`,
+          schema_version: '1.0',
+        },
+      },
+    },
+  };
+}
+
+/**
+ * @param {string[]} columns
+ * @param {Set<string>} zeroFilledColumns
+ * @returns {string}
+ */
+function buildNeoprofTimelineRangeQuery(columns, zeroFilledColumns) {
+  const { buildTimelineRangeCTEs } = require('./lib/timeline_config');
+  const pivotColumns = columns.map(quoteSqlStringLiteral).join(', ');
+  const normalizedColumns = makeNeoprofNormalizedColumnExpressions(
+    columns,
+    zeroFilledColumns,
+  ).join(', ');
+  const rangeCTEs = buildTimelineRangeCTEs({
+    binOrigin: 0,
+    columns: 'source.column_name, source.value',
+    projection: 'relevant_rows.column_name, relevant_rows.value',
+  });
+  return `WITH ${rangeCTEs},
+      wide_timeline AS (
+        PIVOT expanded ON column_name IN (${pivotColumns}) USING SUM(value) GROUP BY x_start
+      )
+      SELECT bin_grid.x_start AS uptime_s, ${normalizedColumns},
+        CASE WHEN mem_total_kb > 0 THEN mem_used_kb * 100.0 / mem_total_kb ELSE NULL END AS mem_used_percent
+      FROM bin_grid LEFT JOIN wide_timeline USING (x_start)`;
+}
+
+/**
+ * @param {Record<string, any>} groups
+ * @param {{binDuration: number, sourceKey: string}[]} lods
+ * @param {string} rangeQuery
+ * @returns {Record<string, any>}
+ */
+function buildNeoprofTimelineGroups(groups, lods, rangeQuery) {
+  // Some chart settings are shared with Summary. Copy them before changing
+  // the Timeline queries.
+  const timelineGroups = JSON.parse(JSON.stringify(groups));
+  for (const group of Object.values(timelineGroups)) {
+    group.lods = lods;
+    const customQuery = group.config.customQuery;
+    // Use a subquery because some chart queries already contain a WITH clause.
+    customQuery.query = customQuery.query.replaceAll(
+      customQuery.tableNamePlaceholder,
+      `(${rangeQuery})`,
+    );
+    customQuery.rangeStartPlaceholder = '{rangeStart}';
+    customQuery.rangeEndPlaceholder = '{rangeEnd}';
+  }
+  return timelineGroups;
+}
+
+/** @param {import("./docs/jsdocs").RenderExecutionContext} context */
+function findNeoprofSystemTimelineBindings(context) {
+  const metadata = JSON.parse(
+    context.readRunComponent(0, NEOPROF_TIMELINE_METADATA_COMPONENT),
+  );
+  const counterKeys = new Set(
+    metadata.counter_groups.flatMap((group) =>
+      group.counters
+        .filter(
+          ({ title, name }) =>
+            NEOPROF_FIXED_TIMELINE_COLUMN_MAPPINGS.some(
+              (mapping) => mapping.title === title && mapping.name === name,
+            ) ||
+            NEOPROF_PER_DEVICE_TIMELINE_COLUMN_MAPPINGS.some(
+              (mapping) => mapping.title === title && mapping.name === name,
+            ) ||
+            NEOPROF_PER_SERIES_TIMELINE_COLUMN_MAPPINGS.some(
+              (mapping) =>
+                mapping.matchesTitle(title) &&
+                mapping.counters.some((counter) =>
+                  name.toLowerCase().includes(counter.nameIncludes),
+                ),
+            ),
+        )
+        .map((counter) => `key_${group.key_type}_series_${counter.id}`),
+    ),
+  );
+  const {
+    findTimelineCounterBindings,
+  } = require('./lib/timeline_sql_renderer');
+  return findTimelineCounterBindings(
+    context,
+    0,
+    NEOPROF_TIMELINE_COUNTER_COMPONENT,
+  ).filter((binding) => counterKeys.has(binding.rawSeriesKey));
+}
+
+/**
+ * Configure the supplied Timeline to use NeoProf's bin levels.
+ * Modifies the Timeline configuration and returns the required SQL renderers.
+ * Summary keeps its separate 100 ms table.
+ * @param {import("./docs/jsdocs").RenderExecutionContext} context
+ * @param {any} timeline
+ * @returns {any[]}
+ */
+function attachNeoprofTimelineLods(context, timeline) {
+  const {
+    buildTimelineLods,
+    buildValidatedTimelineCatalogue,
+    getNeoprofTimelineDomain,
+  } = require('./lib/timeline_config');
+  const {
+    NEOPROF_TIMELINE_BIN_DURATIONS_NS,
+  } = require('../tool-integrations/neoprof_timeline');
+  const bindings = findNeoprofSystemTimelineBindings(context);
+  const sources = bindings.map((binding) => ({
+    ...binding,
+    rendererId: `sysutil_lod_${binding.binDuration}`,
+    output: 'counters',
+  }));
+  buildValidatedTimelineCatalogue({
+    timelineSources: sources,
+    expectedBinDurations: NEOPROF_TIMELINE_BIN_DURATIONS_NS,
+    incompleteCatalogueMessageCode:
+      'recipes.system_utilization.TIMELINE_DATA_INCOMPLETE',
+  });
+  const capturePath =
+    'tool/neoprof/0/output/parquet/metadata/capture_metadata.json';
+  timeline.config.timeDomain = getNeoprofTimelineDomain(
+    JSON.parse(context.readRunComponent(0, capturePath)),
+  );
+  timeline.config.binOrigin = 0;
+  timeline.config.xAxisDisplayScale = 1e-9;
+  const { columns, zeroFilledColumns } = getNeoprofTimelineSchema(context);
+  const durations = [...NEOPROF_TIMELINE_BIN_DURATIONS_NS].sort(
+    (a, b) => a - b,
+  );
+  const renderers = durations.map((binDuration) => {
+    const counterPaths = bindings
+      .filter((binding) => binding.binDuration === binDuration)
+      .map((binding) => binding.componentRelativePath);
+    return buildNeoprofTimelineLodRenderer(
+      binDuration,
+      counterPaths,
+      timeline.config.timeDomain.end,
+    );
+  });
+  const existingTables = timeline.config.data_source.tables;
+  const systemGroups = Object.fromEntries(
+    Object.entries(timeline.config.groups).filter(([id]) =>
+      existingTables[id].some(
+        (source) => source.renderer_id === 'timeline_csv',
+      ),
+    ),
+  );
+  const tables = Object.fromEntries(
+    Object.entries(existingTables).filter(([id]) => !(id in systemGroups)),
+  );
+  // System chart groups share a source for each bin size.
+  const lods = buildTimelineLods(
+    tables,
+    'sysutil',
+    durations.map((binDuration) => ({
+      binDuration,
+      rendererId: `sysutil_lod_${binDuration}`,
+      output: 'counters',
+    })),
+  );
+  timeline.config.data_source.tables = tables;
+  timeline.rendererId = renderers[0].id;
+  const wideQuery = buildNeoprofTimelineRangeQuery(columns, zeroFilledColumns);
+  timeline.config.groups = {
+    ...timeline.config.groups,
+    ...buildNeoprofTimelineGroups(systemGroups, lods, wideQuery),
+  };
+  return renderers;
 }
 
 /**
@@ -2571,6 +2831,100 @@ function getRunCollector(context) {
   return selectedCollector ?? TOOL_SYSUTIL_TIMELINE.name;
 }
 
+/** @param {ReturnType<typeof import('./lib/gpu-metrics/timeline').buildGpuRenderParts>} gpu */
+function buildSystemUtilizationSummaryConfig(gpu) {
+  const gpuName = gpu.gpuName;
+  const gpuUtilization = gpu.metricGroups.find(
+    (group) => group.id === 'GPUFront-end.GPUUtilization',
+  );
+  if (!gpuName || !gpuUtilization) return systemUtilizationSummaryConfig;
+
+  const { selectGPUMetrics } = require('./lib/gpu-metrics/select-metrics');
+  const collectedMetricIds = new Set(
+    gpu.metricGroups.flatMap((group) =>
+      group.metrics.map((metric) => metric.id),
+    ),
+  );
+  const gpuQueueMetrics = GPU_SUMMARY_QUEUE_METRICS.flatMap((selector) => {
+    const { selection } = selectGPUMetrics(gpuName, [selector]);
+    return selection.selectedMetrics.filter((metric) =>
+      collectedMetricIds.has(metric.id),
+    );
+  });
+  if (gpuQueueMetrics.length === 0) return systemUtilizationSummaryConfig;
+
+  const { buildGpuTimelineParts } = require('./lib/gpu-metrics/timeline');
+  const gpuTimeline = buildGpuTimelineParts(
+    [{ ...gpuUtilization, metrics: gpuQueueMetrics }],
+    gpuName,
+    { [gpuUtilization.id]: 'GPU Utilization' },
+  );
+  const gpuUtilizationId = `gpu_group_${gpuQueueMetrics[0].id}`;
+  const gpuQueueQueries = gpuQueueMetrics.map((metric, index) => {
+    const column = `"${metric.machineName.replaceAll('"', '""')}"`;
+    return `SELECT ${quoteSqlStringLiteral(gpuName)} AS gpu_name,
+      device_no,
+      ${quoteSqlStringLiteral(metric.humanName ?? metric.layoutName)} AS metric,
+      avg(${column}) AS average_utilization_percent,
+      ${index} AS metric_order
+    FROM __GPU_METRICS__
+    GROUP BY device_no
+    HAVING count(${column}) > 0`;
+  });
+
+  const summaryTimeline = systemUtilizationSummaryConfig.timeline;
+
+  const orderedGroups = [
+    ['per_core_cpu', summaryTimeline.groups.per_core_cpu],
+    [gpuUtilizationId, gpuTimeline.groups[gpuUtilizationId]],
+    ['memory_kb', summaryTimeline.groups.memory_kb],
+    ['disk_bw', summaryTimeline.groups.disk_bw],
+    ['net_bw', summaryTimeline.groups.net_bw],
+  ];
+
+  return {
+    ...systemUtilizationSummaryConfig,
+    data_source: {
+      tables: {
+        ...systemUtilizationSummaryConfig.data_source.tables,
+        ...gpuTimeline.tables,
+        gpu_metrics: gpuTimeline.tables[gpuUtilizationId],
+      },
+    },
+    queries: {
+      ...systemUtilizationSummaryConfig.queries,
+      gpu: {
+        utilization: {
+          title: 'GPU Utilization',
+          description: [
+            'Average queue utilization relative to GPU-active cycles, calculated over 100 ms samples with GPU activity.',
+          ],
+          unit: '%',
+          summaryQuery: {
+            query: `SELECT gpu_name, device_no, metric, average_utilization_percent
+              FROM (${gpuQueueQueries.join(' UNION ALL ')})
+              ORDER BY device_no, metric_order`,
+            tableNamePlaceholder: '__GPU_METRICS__',
+            tableKey: 'gpu_metrics',
+          },
+        },
+      },
+    },
+    timeline: {
+      ...summaryTimeline,
+      data_source: {
+        tables: {
+          ...summaryTimeline.data_source.tables,
+          ...gpuTimeline.tables,
+        },
+      },
+      groups: Object.fromEntries(
+        orderedGroups.map(([id, group], index) => [id, { ...group, index }]),
+      ),
+    },
+  };
+}
+
 /**
  * @param {import("./docs/jsdocs").RenderExecutionContext} context
  */
@@ -2589,471 +2943,532 @@ function renderSystemUtilization(context) {
         },
   ];
 
-  const visualizations = [
-    {
-      type: 'system_utilization_summary',
-      id: 'system_utilization_summary',
-      rendererId: 'timeline_csv',
-      title: 'Summary',
-      description: '',
-      config: systemUtilizationSummaryConfig,
-    },
-    {
-      type: 'timeline',
-      id: 'timeline',
-      rendererId: 'timeline_csv',
-      title: 'Timeline',
-      description: '',
-      config: {
-        xAxisUnit: 's',
-        data_source: {
-          tables: {
-            total_cpu_mem: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            per_core_cpu: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            cpu_saturation: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            iowait: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            memory_kb: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            swap_kb: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            numa_locality: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            numa_events: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            load_runqueue: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            procs_threads_ctx_irq_faults: [
-              { renderer_id: 'timeline_csv', output: 'csv' },
-            ],
-            per_core_irq: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            disk_iops: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            disk_bw: [{ renderer_id: 'timeline_csv', output: 'csv' }],
-            net_bw: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+  /** @type {[string, object][]} */
+  const cpuGroups = [
+    [
+      'total_cpu_mem',
+      {
+        title: 'Total CPU and Memory Usage',
+        type: 'line',
+        description:
+          'CPU Use (%):\n' +
+          'Overall CPU busy time across all cores. 100% means all CPU cores are fully busy.\n\n' +
+          'Mem Use (%):\n' +
+          'Memory in use as a percentage of total memory.',
+        config: {
+          xAxisTitle: 'Time (s)',
+          yAxisTitle: 'Utilization (%)',
+          yAxisDisplayRange: {
+            min: 0,
+            max: 100,
           },
-        },
-        groups: {
-          total_cpu_mem: {
-            title: 'Total CPU and Memory Usage',
-            type: 'line',
-            index: 0,
-            description:
-              'CPU Use (%):\n' +
-              'Overall CPU busy time across all cores. 100% means all CPU cores are fully busy.\n\n' +
-              'Mem Use (%):\n' +
-              'Memory in use as a percentage of total memory.',
-            config: {
-              xAxisTitle: 'Time (s)',
-              yAxisTitle: 'Utilization (%)',
-              yAxisDisplayRange: {
-                min: 0,
-                max: 100,
-              },
-              customQuery: {
-                tableNamePlaceholder: '{table}',
-                query:
-                  'SELECT ' +
-                  'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
-                  'try_cast("cpu_total_percent" AS DOUBLE) AS "cpu_total_percent", ' +
-                  'try_cast("mem_used_percent" AS DOUBLE) AS "mem_used_percent" ' +
-                  'FROM {table} ORDER BY "uptime_s"',
-              },
-              series: [
-                {
-                  type: 'single',
-                  name: 'CPU Use (%)',
-                  xColumn: 'uptime_s',
-                  yColumn: 'cpu_total_percent',
-                },
-                {
-                  type: 'single',
-                  name: 'Mem Use (%)',
-                  xColumn: 'uptime_s',
-                  yColumn: 'mem_used_percent',
-                },
-              ],
+          customQuery: {
+            tableNamePlaceholder: '{table}',
+            query:
+              'SELECT ' +
+              'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
+              'try_cast("cpu_total_percent" AS DOUBLE) AS "cpu_total_percent", ' +
+              'try_cast("mem_used_percent" AS DOUBLE) AS "mem_used_percent" ' +
+              'FROM {table} ORDER BY "uptime_s"',
+          },
+          series: [
+            {
+              type: 'single',
+              name: 'CPU Use (%)',
+              xColumn: 'uptime_s',
+              yColumn: 'cpu_total_percent',
             },
-          },
-          per_core_cpu: SUMMARY_TIMELINE_GROUPS.per_core_cpu,
-          cpu_saturation: {
-            title: 'CPU Saturation',
-            type: 'line',
-            index: 2,
-            description:
-              'Saturated cores (count):\n' +
-              `Number of CPU cores with utilization at or above ${CPU_SATURATION_THRESHOLD_PERCENT}%.`,
-            config: {
-              xAxisTitle: 'Time (s)',
-              yAxisTitle: 'Saturated cores',
-              yAxisDisplayRange: {
-                min: 0,
-              },
-              customQuery: {
-                tableNamePlaceholder: '{table}',
-                query: CPU_SATURATION_TIMELINE_QUERY,
-              },
-              series: [
-                {
-                  type: 'single',
-                  name: 'Saturated cores (count)',
-                  xColumn: 'uptime_s',
-                  yColumn: 'saturated_cores',
-                },
-              ],
+            {
+              type: 'single',
+              name: 'Mem Use (%)',
+              xColumn: 'uptime_s',
+              yColumn: 'mem_used_percent',
             },
-          },
-          iowait: {
-            title: 'IO Wait',
-            type: 'line',
-            index: 3,
-            description:
-              'IO Wait (%):\n' +
-              'CPU time spent waiting for I/O operations to complete.',
-            config: {
-              xAxisTitle: 'Time (s)',
-              yAxisTitle: 'CPU Time (%)',
-              yAxisDisplayRange: {
-                min: 0,
-                max: 100,
-              },
-              customQuery: {
-                tableNamePlaceholder: '{table}',
-                query:
-                  'SELECT ' +
-                  'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
-                  'try_cast("iowait_percent" AS DOUBLE) AS "iowait_percent" ' +
-                  'FROM {table} ORDER BY "uptime_s"',
-              },
-              series: [
-                {
-                  type: 'single',
-                  name: 'IO Wait (%)',
-                  xColumn: 'uptime_s',
-                  yColumn: 'iowait_percent',
-                },
-              ],
-            },
-          },
-          memory_kb: SUMMARY_TIMELINE_GROUPS.memory_kb,
-          swap_kb: {
-            title: 'Swap Usage',
-            type: 'line',
-            index: 5,
-            description:
-              'Swap Total:\n' +
-              'Total configured swap space.\n\n' +
-              'Swap Used:\n' +
-              'Swap space in use.',
-            config: {
-              xAxisTitle: 'Time (s)',
-              yAxisTitle: 'kB',
-              yAxisUnit: 'kibibyte',
-              yAxisDisplayRange: {
-                min: 0,
-              },
-              customQuery: {
-                tableNamePlaceholder: '{table}',
-                query:
-                  'SELECT ' +
-                  'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
-                  'try_cast("swap_total_kb" AS DOUBLE) AS "swap_total_kb", ' +
-                  'try_cast("swap_used_kb" AS DOUBLE) AS "swap_used_kb" ' +
-                  'FROM {table} ORDER BY "uptime_s"',
-              },
-              series: [
-                {
-                  type: 'single',
-                  name: 'Swap Total',
-                  xColumn: 'uptime_s',
-                  yColumn: 'swap_total_kb',
-                },
-                {
-                  type: 'single',
-                  name: 'Swap Used',
-                  xColumn: 'uptime_s',
-                  yColumn: 'swap_used_kb',
-                },
-              ],
-            },
-          },
-          numa_locality: {
-            title: 'NUMA Remote Memory',
-            type: 'line',
-            index: 6,
-            description:
-              'Remote Node (%):\n' +
-              'Percentage of sampled memory pages allocated from a different NUMA node than the running process.',
-            config: {
-              xAxisTitle: 'Time (s)',
-              yAxisTitle: 'Remote (%)',
-              yAxisDisplayRange: {
-                min: 0,
-                max: 100,
-              },
-              customQuery: {
-                tableNamePlaceholder: '{table}',
-                query:
-                  'SELECT ' +
-                  'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
-                  'try_cast("numa_remote_percent" AS DOUBLE) AS "numa_remote_percent" ' +
-                  'FROM {table} ORDER BY "uptime_s"',
-              },
-              series: [
-                {
-                  type: 'single',
-                  name: 'Remote Node (%)',
-                  xColumn: 'uptime_s',
-                  yColumn: 'numa_remote_percent',
-                },
-              ],
-            },
-          },
-          numa_events: {
-            title: 'NUMA Page Rates',
-            type: 'line',
-            index: 7,
-            description:
-              'Preferred Node Missed Pages/s:\n' +
-              'Rate of memory pages allocated from a NUMA node other than the preferred NUMA node, summed across all NUMA nodes.\n\n' +
-              'Remote Node Pages/s:\n' +
-              'Rate of memory pages allocated from a different NUMA node than the running process.',
-            config: {
-              xAxisTitle: 'Time (s)',
-              yAxisTitle: 'Pages/s',
-              yAxisDisplayRange: {
-                min: 0,
-              },
-              customQuery: {
-                tableNamePlaceholder: '{table}',
-                query:
-                  'SELECT ' +
-                  'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
-                  'try_cast("numa_miss_per_s" AS DOUBLE) AS "numa_miss_per_s", ' +
-                  'try_cast("numa_other_node_per_s" AS DOUBLE) AS "numa_other_node_per_s" ' +
-                  'FROM {table} ORDER BY "uptime_s"',
-              },
-              series: [
-                {
-                  type: 'single',
-                  name: 'Preferred Node Missed Pages/s',
-                  xColumn: 'uptime_s',
-                  yColumn: 'numa_miss_per_s',
-                },
-                {
-                  type: 'single',
-                  name: 'Remote Node Pages/s',
-                  xColumn: 'uptime_s',
-                  yColumn: 'numa_other_node_per_s',
-                },
-              ],
-            },
-          },
-          load_runqueue: {
-            title: 'System Load and Runqueue',
-            type: 'line',
-            index: 8,
-            description:
-              'Load 1m / 5m / 15m:\n' +
-              'System load averages over the last 1, 5, and 15 minutes.\n' +
-              'A value of 1.0 means one task (process or thread) was runnable or waiting for the CPU on average. On a machine with N CPU cores, a load near N suggests the system is fully utilized; values significantly above N indicate resource contention.\n\n' +
-              'Tasks Running (count):\n' +
-              'Tasks (processes or threads) ready to run on the CPU.\n\n' +
-              'Tasks Blocked (count):\n' +
-              'Tasks (processes or threads) waiting on I/O or another uninterruptible event.',
-            config: {
-              xAxisTitle: 'Time (s)',
-              yAxisTitle: 'Value',
-              yAxisDisplayRange: {
-                min: 0,
-              },
-              customQuery: {
-                tableNamePlaceholder: '{table}',
-                query:
-                  'SELECT ' +
-                  'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
-                  'try_cast("load1" AS DOUBLE) AS "load1", ' +
-                  'try_cast("load5" AS DOUBLE) AS "load5", ' +
-                  'try_cast("load15" AS DOUBLE) AS "load15", ' +
-                  'try_cast("procs_running" AS DOUBLE) AS "procs_running", ' +
-                  'try_cast("procs_blocked" AS DOUBLE) AS "procs_blocked" ' +
-                  'FROM {table} ORDER BY "uptime_s"',
-              },
-              series: [
-                {
-                  type: 'single',
-                  name: 'Load 1m',
-                  xColumn: 'uptime_s',
-                  yColumn: 'load1',
-                },
-                {
-                  type: 'single',
-                  name: 'Load 5m',
-                  xColumn: 'uptime_s',
-                  yColumn: 'load5',
-                },
-                {
-                  type: 'single',
-                  name: 'Load 15m',
-                  xColumn: 'uptime_s',
-                  yColumn: 'load15',
-                },
-                {
-                  type: 'single',
-                  name: 'Tasks Running (count)',
-                  xColumn: 'uptime_s',
-                  yColumn: 'procs_running',
-                },
-                {
-                  type: 'single',
-                  name: 'Tasks Blocked (count)',
-                  xColumn: 'uptime_s',
-                  yColumn: 'procs_blocked',
-                },
-              ],
-            },
-          },
-          procs_threads_ctx_irq_faults: {
-            title: 'Tasks, Interrupts and Faults',
-            type: 'line',
-            index: 9,
-            description:
-              'Processes (count):\n' +
-              'Total number of processes on the system.\n\n' +
-              'Threads (count):\n' +
-              'Total number of threads on the system.\n\n' +
-              'Context Switches/s:\n' +
-              'Rate at which the scheduler switches between threads.\n\n' +
-              'IRQs/s:\n' +
-              'Rate of hardware interrupts.\n\n' +
-              'Page Faults/s:\n' +
-              'Rate of all page faults, which occur when a process accesses a memory page that is not currently mapped as needed. This includes faults that can be satisfied from memory without disk I/O (minor faults) and faults that require fetching data from disk or swap (major faults).\n\n' +
-              'Major Faults/s:\n' +
-              'Rate of the subset of page faults that required disk or swap I/O before execution could continue. These are typically more expensive than other page faults.',
-            config: {
-              xAxisTitle: 'Time (s)',
-              yAxisTitle: 'Rate / Count',
-              yAxisDisplayRange: {
-                min: 0,
-              },
-              customQuery: {
-                tableNamePlaceholder: '{table}',
-                query:
-                  'SELECT ' +
-                  'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
-                  'try_cast("procs_total" AS DOUBLE) AS "procs_total", ' +
-                  'try_cast("threads_total" AS DOUBLE) AS "threads_total", ' +
-                  'try_cast("ctxt_per_s" AS DOUBLE) AS "ctxt_per_s", ' +
-                  'try_cast("intr_per_s" AS DOUBLE) AS "intr_per_s", ' +
-                  'try_cast("page_faults_per_s" AS DOUBLE) AS "page_faults_per_s", ' +
-                  'try_cast("pgmajfaults_per_s" AS DOUBLE) AS "pgmajfaults_per_s" ' +
-                  'FROM {table} ORDER BY "uptime_s"',
-              },
-              series: [
-                {
-                  type: 'single',
-                  name: 'Processes (count)',
-                  xColumn: 'uptime_s',
-                  yColumn: 'procs_total',
-                },
-                {
-                  type: 'single',
-                  name: 'Threads (count)',
-                  xColumn: 'uptime_s',
-                  yColumn: 'threads_total',
-                },
-                {
-                  type: 'single',
-                  name: 'Context Switches/s',
-                  xColumn: 'uptime_s',
-                  yColumn: 'ctxt_per_s',
-                },
-                {
-                  type: 'single',
-                  name: 'IRQs/s',
-                  xColumn: 'uptime_s',
-                  yColumn: 'intr_per_s',
-                },
-                {
-                  type: 'single',
-                  name: 'Page Faults/s',
-                  xColumn: 'uptime_s',
-                  yColumn: 'page_faults_per_s',
-                },
-                {
-                  type: 'single',
-                  name: 'Major Faults/s',
-                  xColumn: 'uptime_s',
-                  yColumn: 'pgmajfaults_per_s',
-                },
-              ],
-            },
-          },
-          per_core_irq: {
-            title: 'Per-Core IRQ Rate',
-            type: 'heatmap',
-            index: 10,
-            description:
-              'Core N IRQs/s:\n' +
-              'Hardware interrupt rate for each individual core, summed across all IRQ sources.',
-            config: {
-              xAxisTitle: 'Time (s)',
-              yAxisTitle: 'Per-Core IRQ Rate',
-              yAxisUnit: 'IRQs/s',
-              customQuery: {
-                tableNamePlaceholder: '{table}',
-                query:
-                  'SELECT ' +
-                  'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
-                  "try_cast(COLUMNS('^irq_cpu\\d+_per_s$') AS DOUBLE) " +
-                  'FROM {table} ORDER BY "uptime_s"',
-              },
-              series: [
-                {
-                  type: 'pattern',
-                  xColumn: 'uptime_s',
-                  yColumn: { pattern: '^irq_cpu(\\d+)_per_s$' },
-                  name: { template: 'Core {y1}' },
-                },
-              ],
-            },
-          },
-          disk_iops: {
-            title: 'Disk IOPS',
-            type: 'heatmap',
-            index: 11,
-            description:
-              'Read IOPS:\n' +
-              'Read operations per second for each storage device, shown separately.\n\n' +
-              'Write IOPS:\n' +
-              'Write operations per second for each storage device, shown separately.',
-            config: {
-              xAxisTitle: 'Time (s)',
-              yAxisTitle: 'IOPS',
-              customQuery: {
-                tableNamePlaceholder: '{table}',
-                query:
-                  'SELECT ' +
-                  'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
-                  "try_cast(COLUMNS('^read_iops_.*$') AS DOUBLE), " +
-                  "try_cast(COLUMNS('^write_iops_.*$') AS DOUBLE) " +
-                  'FROM {table} ORDER BY "uptime_s"',
-              },
-              series: [
-                {
-                  type: 'pattern',
-                  xColumn: 'uptime_s',
-                  yColumn: { pattern: '^read_iops_(.+)$' },
-                  name: { template: 'Read IOPS {y1}' },
-                },
-                {
-                  type: 'pattern',
-                  xColumn: 'uptime_s',
-                  yColumn: { pattern: '^write_iops_(.+)$' },
-                  name: { template: 'Write IOPS {y1}' },
-                },
-              ],
-            },
-          },
-          disk_bw: SUMMARY_TIMELINE_GROUPS.disk_bw,
-          net_bw: SUMMARY_TIMELINE_GROUPS.net_bw,
+          ],
         },
       },
-    },
+    ],
+    ['per_core_cpu', SUMMARY_TIMELINE_GROUPS.per_core_cpu],
+    [
+      'cpu_saturation',
+      {
+        title: 'CPU Saturation',
+        type: 'line',
+        description:
+          'Saturated cores (count):\n' +
+          `Number of CPU cores with utilization at or above ${CPU_SATURATION_THRESHOLD_PERCENT}%.`,
+        config: {
+          xAxisTitle: 'Time (s)',
+          yAxisTitle: 'Saturated cores',
+          yAxisDisplayRange: {
+            min: 0,
+          },
+          customQuery: {
+            tableNamePlaceholder: '{table}',
+            query: CPU_SATURATION_TIMELINE_QUERY,
+          },
+          series: [
+            {
+              type: 'single',
+              name: 'Saturated cores (count)',
+              xColumn: 'uptime_s',
+              yColumn: 'saturated_cores',
+            },
+          ],
+        },
+      },
+    ],
   ];
 
-  return { renderers, visualizations };
+  /** @type {[string, object][]} */
+  const remainingGroups = [
+    [
+      'iowait',
+      {
+        title: 'IO Wait',
+        type: 'line',
+        description:
+          'IO Wait (%):\n' +
+          'CPU time spent waiting for I/O operations to complete.',
+        config: {
+          xAxisTitle: 'Time (s)',
+          yAxisTitle: 'CPU Time (%)',
+          yAxisDisplayRange: {
+            min: 0,
+            max: 100,
+          },
+          customQuery: {
+            tableNamePlaceholder: '{table}',
+            query:
+              'SELECT ' +
+              'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
+              'try_cast("iowait_percent" AS DOUBLE) AS "iowait_percent" ' +
+              'FROM {table} ORDER BY "uptime_s"',
+          },
+          series: [
+            {
+              type: 'single',
+              name: 'IO Wait (%)',
+              xColumn: 'uptime_s',
+              yColumn: 'iowait_percent',
+            },
+          ],
+        },
+      },
+    ],
+    ['memory_kb', SUMMARY_TIMELINE_GROUPS.memory_kb],
+    [
+      'swap_kb',
+      {
+        title: 'Swap Usage',
+        type: 'line',
+        description:
+          'Swap Total:\n' +
+          'Total configured swap space.\n\n' +
+          'Swap Used:\n' +
+          'Swap space in use.',
+        config: {
+          xAxisTitle: 'Time (s)',
+          yAxisTitle: 'kB',
+          yAxisUnit: 'kibibyte',
+          yAxisDisplayRange: {
+            min: 0,
+          },
+          customQuery: {
+            tableNamePlaceholder: '{table}',
+            query:
+              'SELECT ' +
+              'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
+              'try_cast("swap_total_kb" AS DOUBLE) AS "swap_total_kb", ' +
+              'try_cast("swap_used_kb" AS DOUBLE) AS "swap_used_kb" ' +
+              'FROM {table} ORDER BY "uptime_s"',
+          },
+          series: [
+            {
+              type: 'single',
+              name: 'Swap Total',
+              xColumn: 'uptime_s',
+              yColumn: 'swap_total_kb',
+            },
+            {
+              type: 'single',
+              name: 'Swap Used',
+              xColumn: 'uptime_s',
+              yColumn: 'swap_used_kb',
+            },
+          ],
+        },
+      },
+    ],
+    [
+      'numa_locality',
+      {
+        title: 'NUMA Remote Memory',
+        type: 'line',
+        description:
+          'Remote Node (%):\n' +
+          'Percentage of sampled memory pages allocated from a different NUMA node than the running process.',
+        config: {
+          xAxisTitle: 'Time (s)',
+          yAxisTitle: 'Remote (%)',
+          yAxisDisplayRange: {
+            min: 0,
+            max: 100,
+          },
+          customQuery: {
+            tableNamePlaceholder: '{table}',
+            query:
+              'SELECT ' +
+              'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
+              'try_cast("numa_remote_percent" AS DOUBLE) AS "numa_remote_percent" ' +
+              'FROM {table} ORDER BY "uptime_s"',
+          },
+          series: [
+            {
+              type: 'single',
+              name: 'Remote Node (%)',
+              xColumn: 'uptime_s',
+              yColumn: 'numa_remote_percent',
+            },
+          ],
+        },
+      },
+    ],
+    [
+      'numa_events',
+      {
+        title: 'NUMA Page Rates',
+        type: 'line',
+        description:
+          'Preferred Node Missed Pages/s:\n' +
+          'Rate of memory pages allocated from a NUMA node other than the preferred NUMA node, summed across all NUMA nodes.\n\n' +
+          'Remote Node Pages/s:\n' +
+          'Rate of memory pages allocated from a different NUMA node than the running process.',
+        config: {
+          xAxisTitle: 'Time (s)',
+          yAxisTitle: 'Pages/s',
+          yAxisDisplayRange: {
+            min: 0,
+          },
+          customQuery: {
+            tableNamePlaceholder: '{table}',
+            query:
+              'SELECT ' +
+              'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
+              'try_cast("numa_miss_per_s" AS DOUBLE) AS "numa_miss_per_s", ' +
+              'try_cast("numa_other_node_per_s" AS DOUBLE) AS "numa_other_node_per_s" ' +
+              'FROM {table} ORDER BY "uptime_s"',
+          },
+          series: [
+            {
+              type: 'single',
+              name: 'Preferred Node Missed Pages/s',
+              xColumn: 'uptime_s',
+              yColumn: 'numa_miss_per_s',
+            },
+            {
+              type: 'single',
+              name: 'Remote Node Pages/s',
+              xColumn: 'uptime_s',
+              yColumn: 'numa_other_node_per_s',
+            },
+          ],
+        },
+      },
+    ],
+    [
+      'load_runqueue',
+      {
+        title: 'System Load and Runqueue',
+        type: 'line',
+        description:
+          'Load 1m / 5m / 15m:\n' +
+          'System load averages over the last 1, 5, and 15 minutes.\n' +
+          'A value of 1.0 means one task (process or thread) was runnable or waiting for the CPU on average. On a machine with N CPU cores, a load near N suggests the system is fully utilized; values significantly above N indicate resource contention.\n\n' +
+          'Tasks Running (count):\n' +
+          'Tasks (processes or threads) ready to run on the CPU.\n\n' +
+          'Tasks Blocked (count):\n' +
+          'Tasks (processes or threads) waiting on I/O or another uninterruptible event.',
+        config: {
+          xAxisTitle: 'Time (s)',
+          yAxisTitle: 'Value',
+          yAxisDisplayRange: {
+            min: 0,
+          },
+          customQuery: {
+            tableNamePlaceholder: '{table}',
+            query:
+              'SELECT ' +
+              'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
+              'try_cast("load1" AS DOUBLE) AS "load1", ' +
+              'try_cast("load5" AS DOUBLE) AS "load5", ' +
+              'try_cast("load15" AS DOUBLE) AS "load15", ' +
+              'try_cast("procs_running" AS DOUBLE) AS "procs_running", ' +
+              'try_cast("procs_blocked" AS DOUBLE) AS "procs_blocked" ' +
+              'FROM {table} ORDER BY "uptime_s"',
+          },
+          series: [
+            {
+              type: 'single',
+              name: 'Load 1m',
+              xColumn: 'uptime_s',
+              yColumn: 'load1',
+            },
+            {
+              type: 'single',
+              name: 'Load 5m',
+              xColumn: 'uptime_s',
+              yColumn: 'load5',
+            },
+            {
+              type: 'single',
+              name: 'Load 15m',
+              xColumn: 'uptime_s',
+              yColumn: 'load15',
+            },
+            {
+              type: 'single',
+              name: 'Tasks Running (count)',
+              xColumn: 'uptime_s',
+              yColumn: 'procs_running',
+            },
+            {
+              type: 'single',
+              name: 'Tasks Blocked (count)',
+              xColumn: 'uptime_s',
+              yColumn: 'procs_blocked',
+            },
+          ],
+        },
+      },
+    ],
+    [
+      'procs_threads_ctx_irq_faults',
+      {
+        title: 'Tasks, Interrupts and Faults',
+        type: 'line',
+        description:
+          'Processes (count):\n' +
+          'Total number of processes on the system.\n\n' +
+          'Threads (count):\n' +
+          'Total number of threads on the system.\n\n' +
+          'Context Switches/s:\n' +
+          'Rate at which the scheduler switches between threads.\n\n' +
+          'IRQs/s:\n' +
+          'Rate of hardware interrupts.\n\n' +
+          'Page Faults/s:\n' +
+          'Rate of all page faults, which occur when a process accesses a memory page that is not currently mapped as needed. This includes faults that can be satisfied from memory without disk I/O (minor faults) and faults that require fetching data from disk or swap (major faults).\n\n' +
+          'Major Faults/s:\n' +
+          'Rate of the subset of page faults that required disk or swap I/O before execution could continue. These are typically more expensive than other page faults.',
+        config: {
+          xAxisTitle: 'Time (s)',
+          yAxisTitle: 'Rate / Count',
+          yAxisDisplayRange: {
+            min: 0,
+          },
+          customQuery: {
+            tableNamePlaceholder: '{table}',
+            query:
+              'SELECT ' +
+              'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
+              'try_cast("procs_total" AS DOUBLE) AS "procs_total", ' +
+              'try_cast("threads_total" AS DOUBLE) AS "threads_total", ' +
+              'try_cast("ctxt_per_s" AS DOUBLE) AS "ctxt_per_s", ' +
+              'try_cast("intr_per_s" AS DOUBLE) AS "intr_per_s", ' +
+              'try_cast("page_faults_per_s" AS DOUBLE) AS "page_faults_per_s", ' +
+              'try_cast("pgmajfaults_per_s" AS DOUBLE) AS "pgmajfaults_per_s" ' +
+              'FROM {table} ORDER BY "uptime_s"',
+          },
+          series: [
+            {
+              type: 'single',
+              name: 'Processes (count)',
+              xColumn: 'uptime_s',
+              yColumn: 'procs_total',
+            },
+            {
+              type: 'single',
+              name: 'Threads (count)',
+              xColumn: 'uptime_s',
+              yColumn: 'threads_total',
+            },
+            {
+              type: 'single',
+              name: 'Context Switches/s',
+              xColumn: 'uptime_s',
+              yColumn: 'ctxt_per_s',
+            },
+            {
+              type: 'single',
+              name: 'IRQs/s',
+              xColumn: 'uptime_s',
+              yColumn: 'intr_per_s',
+            },
+            {
+              type: 'single',
+              name: 'Page Faults/s',
+              xColumn: 'uptime_s',
+              yColumn: 'page_faults_per_s',
+            },
+            {
+              type: 'single',
+              name: 'Major Faults/s',
+              xColumn: 'uptime_s',
+              yColumn: 'pgmajfaults_per_s',
+            },
+          ],
+        },
+      },
+    ],
+    [
+      'per_core_irq',
+      {
+        title: 'Per-Core IRQ Rate',
+        type: 'heatmap',
+        description:
+          'Core N IRQs/s:\n' +
+          'Hardware interrupt rate for each individual core, summed across all IRQ sources.',
+        config: {
+          xAxisTitle: 'Time (s)',
+          yAxisTitle: 'Per-Core IRQ Rate',
+          yAxisUnit: 'IRQs/s',
+          customQuery: {
+            tableNamePlaceholder: '{table}',
+            query:
+              'SELECT ' +
+              'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
+              "try_cast(COLUMNS('^irq_cpu\\d+_per_s$') AS DOUBLE) " +
+              'FROM {table} ORDER BY "uptime_s"',
+          },
+          series: [
+            {
+              type: 'pattern',
+              xColumn: 'uptime_s',
+              yColumn: { pattern: '^irq_cpu(\\d+)_per_s$' },
+              name: { template: 'Core {y1}' },
+            },
+          ],
+        },
+      },
+    ],
+    [
+      'disk_iops',
+      {
+        title: 'Disk IOPS',
+        type: 'heatmap',
+        description:
+          'Read IOPS:\n' +
+          'Read operations per second for each storage device, shown separately.\n\n' +
+          'Write IOPS:\n' +
+          'Write operations per second for each storage device, shown separately.',
+        config: {
+          xAxisTitle: 'Time (s)',
+          yAxisTitle: 'IOPS',
+          customQuery: {
+            tableNamePlaceholder: '{table}',
+            query:
+              'SELECT ' +
+              'try_cast("uptime_s" AS DOUBLE) AS "uptime_s", ' +
+              "try_cast(COLUMNS('^read_iops_.*$') AS DOUBLE), " +
+              "try_cast(COLUMNS('^write_iops_.*$') AS DOUBLE) " +
+              'FROM {table} ORDER BY "uptime_s"',
+          },
+          series: [
+            {
+              type: 'pattern',
+              xColumn: 'uptime_s',
+              yColumn: { pattern: '^read_iops_(.+)$' },
+              name: { template: 'Read IOPS {y1}' },
+            },
+            {
+              type: 'pattern',
+              xColumn: 'uptime_s',
+              yColumn: { pattern: '^write_iops_(.+)$' },
+              name: { template: 'Write IOPS {y1}' },
+            },
+          ],
+        },
+      },
+    ],
+    ['disk_bw', SUMMARY_TIMELINE_GROUPS.disk_bw],
+    ['net_bw', SUMMARY_TIMELINE_GROUPS.net_bw],
+  ];
+
+  /** @type {ReturnType<typeof import('./lib/gpu-metrics/timeline').buildGpuRenderParts>} */
+  let gpu = {
+    renderers: [],
+    tables: {},
+    groups: {},
+    gpuName: null,
+    metricGroups: [],
+  };
+  if (runCollector === TOOL_NEOPROF.name) {
+    const { buildGpuRenderParts } = require('./lib/gpu-metrics/timeline');
+    gpu = buildGpuRenderParts(context, GPU_ACTIVITY_METRICS, {
+      optional: true,
+      timeUnit: 'ns',
+      groupTitles: {
+        'GPUFront-end.GPUCycles': 'GPU Activity',
+        'GPUFront-end.GPUUtilization': 'GPU Utilization',
+      },
+    });
+  }
+
+  renderers.push(...gpu.renderers);
+
+  const summary = {
+    type: 'system_utilization_summary',
+    id: 'system_utilization_summary',
+    rendererId: 'timeline_csv',
+    title: 'Summary',
+    description: '',
+    config: buildSystemUtilizationSummaryConfig(gpu),
+  };
+
+  const orderedGroups = [
+    ...cpuGroups,
+    ...Object.entries(gpu.groups),
+    ...remainingGroups,
+  ];
+
+  const timeline = {
+    type: 'timeline',
+    id: 'timeline',
+    rendererId: 'timeline_csv',
+    title: 'Timeline',
+    description: '',
+    config: {
+      xAxisUnit: 's',
+      data_source: {
+        tables: {
+          total_cpu_mem: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          per_core_cpu: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          cpu_saturation: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          iowait: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          memory_kb: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          swap_kb: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          numa_locality: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          numa_events: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          load_runqueue: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          procs_threads_ctx_irq_faults: [
+            { renderer_id: 'timeline_csv', output: 'csv' },
+          ],
+          per_core_irq: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          disk_iops: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          disk_bw: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          net_bw: [{ renderer_id: 'timeline_csv', output: 'csv' }],
+          ...gpu.tables,
+        },
+      },
+      groups: Object.fromEntries(
+        orderedGroups.map(([id, group], index) => [id, { ...group, index }]),
+      ),
+    },
+  };
+
+  if (runCollector === TOOL_NEOPROF.name) {
+    renderers.push(...attachNeoprofTimelineLods(context, timeline));
+  }
+
+  return { renderers, visualizations: [summary, timeline] };
 }

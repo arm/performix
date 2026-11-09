@@ -4,72 +4,59 @@
 package mcpserver
 
 import (
-	"context"
+	"regexp"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 )
 
-func TestExplicitInstructionResourceRegistration(t *testing.T) {
-	const guide = "# Profile-guided Performance Investigation\n\nCompare baseline and validation runs."
-	uri := terminology.GetProductBinaryName() + "://instructions/profile-guided-performance-investigation"
-	server := mcp.NewServer(&mcp.Implementation{Name: "test-server"}, nil)
-	server.AddResource(&mcp.Resource{
-		URI:      uri,
-		Name:     "profile-guided-performance-investigation",
-		Title:    "Profile-guided Performance Investigation",
-		MIMEType: instructionsResourceMIMEType,
-	}, staticTextResourceHandler(uri, guide))
-	clientTransport, serverTransport := mcp.NewInMemoryTransports()
-	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
-	require.NoError(t, err)
-	defer serverSession.Close()
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client"}, nil)
-	clientSession, err := client.Connect(t.Context(), clientTransport, nil)
-	require.NoError(t, err)
-	defer clientSession.Close()
+func TestInstructionResources(t *testing.T) {
+	// Given a server with registered instruction resources.
+	ctx := t.Context()
+	client, server := connectTestServer(t, ctx, nil, MCPServerOptions{})
+	defer client.Close()
+	defer server.Close()
 
-	resources, err := clientSession.ListResources(t.Context(), nil)
+	init := client.InitializeResult()
+	assert.NotNil(t, init.Capabilities.Resources)
+	instructionRunes := []rune(init.Instructions)
+	instructionPrefix := string(instructionRunes[:min(512, len(instructionRunes))])
+	assert.Contains(t, instructionPrefix, "apx://instructions/performance-investigation")
+
+	expected := map[string]string{
+		"apx://instructions/performance-investigation": performanceInvestigationGuide,
+		"apx://instructions/jvm-guidance":              jvmGuide,
+	}
+	// When a client lists and reads the resources.
+	resources, err := client.ListResources(ctx, nil)
+	// Then every resource serves its guide and all guide links resolve.
 	require.NoError(t, err)
-	require.Len(t, resources.Resources, 1)
-	assert.Equal(t, uri, resources.Resources[0].URI)
-	assert.NotNil(t, clientSession.InitializeResult().Capabilities.Resources)
-	read, err := clientSession.ReadResource(t.Context(), &mcp.ReadResourceParams{URI: uri})
-	require.NoError(t, err)
-	require.Len(t, read.Contents, 1)
-	assert.Equal(t, uri, read.Contents[0].URI)
-	assert.Equal(t, instructionsResourceMIMEType, read.Contents[0].MIMEType)
-	assert.Equal(t, guide, read.Contents[0].Text)
-}
-
-func TestStaticTextResourceHandler(t *testing.T) {
-	const uri = "apx://instructions/run-defaults"
-	const text = "# Run Defaults\n\nUse defaults."
-
-	result, err := staticTextResourceHandler(uri, text)(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("staticTextResourceHandler returned error: %v", err)
+	require.Len(t, resources.Resources, len(expected))
+	documents := []string{init.Instructions}
+	for _, resource := range resources.Resources {
+		t.Run(resource.Name, func(t *testing.T) {
+			text, ok := expected[resource.URI]
+			require.True(t, ok, "unexpected resource URI: %s", resource.URI)
+			assert.NotEmpty(t, resource.Title)
+			assert.NotEmpty(t, resource.Description)
+			assert.Equal(t, "text/markdown", resource.MIMEType)
+			read, err := client.ReadResource(ctx, &mcp.ReadResourceParams{URI: resource.URI})
+			require.NoError(t, err)
+			require.Len(t, read.Contents, 1)
+			assert.Equal(t, resource.URI, read.Contents[0].URI)
+			assert.Equal(t, "text/markdown", read.Contents[0].MIMEType)
+			assert.Equal(t, text, read.Contents[0].Text)
+			assert.NotEmpty(t, read.Contents[0].Text)
+			assert.NotContains(t, read.Contents[0].Text, "SPDX-")
+			documents = append(documents, read.Contents[0].Text)
+		})
 	}
-	if result == nil {
-		t.Fatal("staticTextResourceHandler returned nil result")
-		return
-	}
-	if len(result.Contents) != 1 {
-		t.Fatalf("expected one resource content, got %d", len(result.Contents))
-	}
-
-	content := result.Contents[0]
-	if content.URI != uri {
-		t.Fatalf("expected URI %q, got %q", uri, content.URI)
-	}
-	if content.MIMEType != instructionsResourceMIMEType {
-		t.Fatalf("expected MIME type %q, got %q", instructionsResourceMIMEType, content.MIMEType)
-	}
-	if content.Text != text {
-		t.Fatalf("expected text %q, got %q", text, content.Text)
+	linkPattern := regexp.MustCompile(`\]\((apx://instructions/[^)#]+)\)`)
+	for _, document := range documents {
+		for _, link := range linkPattern.FindAllStringSubmatch(document, -1) {
+			assert.Contains(t, expected, link[1], "broken guide link")
+		}
 	}
 }

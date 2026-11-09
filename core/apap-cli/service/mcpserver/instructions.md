@@ -1,5 +1,7 @@
 # Performix MCP Usage
 
+Before investigating a performance issue or validating an optimization, discover the available MCP resources and read the [Performance Investigation Pathway](apx://instructions/performance-investigation). Use the server identifier returned by discovery; do not infer it from a tool namespace. The pathway contains the required investigation workflow.
+
 ## Terminology & Core Concepts
 
 Arm Performix is a performance analysis toolkit for profiling an application and turning captured performance data into actionable insights. Through MCP, you can manage targets, run recipes against workloads, inspect existing runs, and generate Dynamic Insights for supported runs without requiring the user to switch to the CLI or GUI. Prefer accessing Performix via the MCP server wherever the relevant functionality is exposed via MCP.
@@ -77,6 +79,6 @@ Dynamic Insights are available only for successful runs produced by a supported 
 
 This limitation applies to Dynamic Insights, not to `run_recipe`; continue to use other recipes when they better match the user's profiling goal.
 
-Use `list_runs` to find a suitable existing successful run when the user has not supplied a run ID. Call `generate_ai_insights` with that run ID. If the user specifies a PID, TID, time range or another render filter, use `recipe_info` to check whether the recipe exposes a matching render parameter and obtain its exact name and type. Pass matching values in `render_parameters`. `generate_ai_insights` accepts render parameters for every supported AI Insights recipe except `code_hotspots`; recipes with no listed parameters use their default render. If any returned payload is incomplete, use its bundle ID, payload name and `next_offset` with `read_ai_insights_payload_details`, repeating as needed until the relevant evidence is complete.
+Use `list_runs` to find a suitable existing successful run when the user has not supplied a run ID. Call `generate_ai_insights` with that run ID. If the user specifies a PID, TID, time range or another render filter, use `recipe_info` to check whether the recipe exposes a matching render parameter and obtain its exact name and type. Pass matching values in `render_parameters`. `generate_ai_insights` accepts render parameters for every supported AI Insights recipe; recipes with no listed parameters use their default render.
 
 The `run_query` tool provides advanced SELECT access to rendered run data. Use it when recipe-specific guidance requests direct querying, or when the user explicitly asks to query a run.

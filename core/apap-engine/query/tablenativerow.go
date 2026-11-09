@@ -120,7 +120,7 @@ func rowToMap(rows *sql.Rows, columnTypes []*sql.ColumnType) (map[string]interfa
 			scanArgs[i] = new(sql.NullInt64)
 		case "DOUBLE", "FLOAT64":
 			scanArgs[i] = new(sql.NullFloat64)
-		case "DOUBLE[]", "BIGINT[]", "VARCHAR[]":
+		case "DOUBLE[]", "BIGINT[]", "VARCHAR[]", "SQLNULL":
 			var placeholder interface{}
 			scanArgs[i] = &placeholder
 		default:

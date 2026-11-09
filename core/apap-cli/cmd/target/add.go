@@ -34,7 +34,6 @@ type AddTargetArgs struct {
 }
 
 var provisionKey = false
-var userPassword string
 
 const enableAndroidTargetsConfigKey = serverconfig.EnableAndroidTargetsConfigKey
 
@@ -103,7 +102,7 @@ func newAddCommand(cc client.ClientConnector, targetService target.TargetManager
 	addCmd.Flags().BoolVar(&parsed.findPrivateKey, "find-keys", false, "Find the first SSH keys compatible with the target and any jump nodes when adding the target (note this requires connecting to the target and any jump nodes).")
 	addCmd.Flags().StringVar(&parsed.hostKeyPolicy, "host-key-policy", "ask", "Control host key checking: 'ask', 'strict', 'accept-new', or 'ignore'")
 	addCmd.Flags().BoolVar(&provisionKey, "provision-key", false, "Automatically create and install an SSH key on the target using the SSH password entered when prompted (TTY by default; if stdin is piped, read from stdin). "+
-		"A new RSA 2048 key pair will be created, added to authorized_keys on the target, and added to the local known_hosts file. The target must be online for this operation to succeed. This flag cannot be used with jump nodes.")
+		"A new RSA 2048 key pair will be created and its public key added to authorized_keys on the target. The target must be online for this operation to succeed. This flag cannot be used with jump nodes.")
 	_ = addCmd.MarkFlagRequired("user")
 
 	return addCmd
@@ -331,11 +330,6 @@ func addSSHTargetConfig(cc client.ClientConnector, args AddTargetArgs, targetSer
 			tgt.Jumps[i].PrivateKeyFilename = privateKeyPaths[i]
 		}
 	} else if provisionKey {
-		pw, err := targetlogin.PromptSecret("Enter password: ")
-		if err != nil {
-			return message.New(message.CliServiceTargetloginPromptFailed).WithCause(err)
-		}
-		userPassword = string(pw)
 		privateKey, err := provisionAndDeployKeys(sshService, tgt.LastJump())
 		if err != nil {
 			return err
@@ -382,10 +376,8 @@ func provisionAndDeployKeys(sshService ssh.SSHKeyProvisioner, hostConfig engine_
 	// Step 3: Provision public key using password
 	err = sshService.ProvisionPublicKeyWithPassword(
 		configDir,
-		hostConfig.Host,
-		int(hostConfig.Port),
-		hostConfig.Username,
-		userPassword,
+		hostConfig,
+		targetlogin.PromptSecret,
 		string(pubKeyBytes),
 	)
 	if err != nil {

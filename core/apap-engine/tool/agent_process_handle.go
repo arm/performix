@@ -26,6 +26,8 @@ import (
 // It supports lifecycle operations (kill, interrupt, wait) and I/O streams.
 type AgentProcessHandle struct {
 	ctx              context.Context
+	waitCtx          context.Context
+	cancelIO         context.CancelFunc
 	pid              int32
 	client           targetagentproto.TargetAgentClient
 	stderrPipeReader *io.PipeReader
@@ -93,7 +95,8 @@ func NewAgentProcessHandle(
 	asPrivileged bool,
 	privilegeSession privilege.PrivilegeSession) (*AgentProcessHandle, error) {
 
-	streamCtx, cancelStreams := context.WithCancel(ctx)
+	waitCtx, cancelIO := context.WithCancel(ctx)
+	streamCtx, cancelStreams := context.WithCancel(waitCtx)
 	var stdoutStream targetagentproto.TargetAgent_StreamStdoutClient
 	var stderrStream targetagentproto.TargetAgent_StreamStderrClient
 	openStream := func(name string) error {
@@ -115,12 +118,14 @@ func NewAgentProcessHandle(
 	if process.IsStreamModeEnabled(stdout.Mode) {
 		if err := openStream("StreamStdout"); err != nil {
 			cancelStreams()
+			cancelIO()
 			return nil, err
 		}
 	}
 	if process.IsStreamModeEnabled(stderr.Mode) {
 		if err := openStream("StreamStderr"); err != nil {
 			cancelStreams()
+			cancelIO()
 			return nil, err
 		}
 	}
@@ -151,6 +156,8 @@ func NewAgentProcessHandle(
 
 	return &AgentProcessHandle{
 		ctx:              ctx,
+		waitCtx:          waitCtx,
+		cancelIO:         cancelIO,
 		pid:              pid,
 		client:           client,
 		stderrPipeReader: stderrPipeReader,
@@ -168,10 +175,21 @@ func (p *AgentProcessHandle) PID() int {
 const processCleanupTimeout = 5 * time.Second
 
 // Kill sends a process kill request even after the operation has been canceled.
+// If the request fails, local waits and streams are canceled so cleanup can finish.
 func (p *AgentProcessHandle) Kill() error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), processCleanupTimeout)
 	defer cancel()
-	return killAgentProcess(ctx, p.pid, p.client, p.asPrivileged, p.privilegeSession)
+	err := killAgentProcess(ctx, p.pid, p.client, p.asPrivileged, p.privilegeSession)
+	if err != nil {
+		p.cancelIO()
+		// Closing the readers also releases pipe writers blocked after a drain failed.
+		for _, reader := range []*io.PipeReader{p.stdoutPipeReader, p.stderrPipeReader} {
+			if reader != nil {
+				_ = reader.CloseWithError(err)
+			}
+		}
+	}
+	return err
 }
 
 func killAgentProcess(ctx context.Context, pid int32, client targetagentproto.TargetAgentClient, asPrivileged bool, session privilege.PrivilegeSession) error {
@@ -222,14 +240,14 @@ func (p *AgentProcessHandle) Wait() (int, error) {
 
 	if p.asPrivileged {
 		// Privilege path
-		err = p.privilegeSession.Invoke(p.ctx, "WaitProcess", func(privCtx context.Context) error {
+		err = p.privilegeSession.Invoke(p.waitCtx, "WaitProcess", func(privCtx context.Context) error {
 			var err error
 			resp, err = p.client.WaitProcess(privCtx, &targetagentproto.WaitProcessRequest{Pid: p.pid})
 			return err
 		})
 	} else {
 		// Non-privilege path
-		resp, err = p.client.WaitProcess(p.ctx, &targetagentproto.WaitProcessRequest{Pid: p.pid})
+		resp, err = p.client.WaitProcess(p.waitCtx, &targetagentproto.WaitProcessRequest{Pid: p.pid})
 	}
 
 	if resp != nil {

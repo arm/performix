@@ -42,4 +42,4 @@ SPDX-License-Identifier: Apache-2.0
     modifying independent adjacent fields.
   - Gives only generic synchronization or cache advice without connecting it to
     the shared total.
-  - Converts samples into unsupported latency or performance-impact claims.
+  - Presents unsupported latency or speedup estimates as measured facts.

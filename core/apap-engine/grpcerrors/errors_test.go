@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/ARM-software/golang-utils/utils/commonerrors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -17,92 +16,6 @@ import (
 	"github.com/Arm-Debug/apap-cli/api/errorsproto"
 )
 
-func TestGetCodeForCommonError(t *testing.T) {
-
-	t.Run("mapping from common errors to gRPC error codes are as expected", func(t *testing.T) {
-		testConditions := []struct {
-			commonError      error
-			expectedGRPCCode codes.Code
-		}{
-			{commonerrors.ErrNotImplemented, codes.Unimplemented},
-			{commonerrors.ErrNoExtension, codes.InvalidArgument},
-			{commonerrors.ErrNoLogger, codes.Internal},
-			{commonerrors.ErrNoLogSource, codes.Internal},
-			{commonerrors.ErrUndefined, codes.Internal},
-			{commonerrors.ErrInvalidDestination, codes.InvalidArgument},
-			{commonerrors.ErrTimeout, codes.DeadlineExceeded},
-			{commonerrors.ErrLocked, codes.Aborted},
-			{commonerrors.ErrStaleLock, codes.Aborted},
-			{commonerrors.ErrExists, codes.AlreadyExists},
-			{commonerrors.ErrNotFound, codes.NotFound},
-			{commonerrors.ErrUnsupported, codes.Unimplemented},
-			{commonerrors.ErrUnavailable, codes.Unavailable},
-			{commonerrors.ErrWrongUser, codes.Unauthenticated},
-			{commonerrors.ErrUnauthorised, codes.Unauthenticated},
-			{commonerrors.ErrUnknown, codes.Unknown},
-			{commonerrors.ErrInvalid, codes.InvalidArgument},
-			{commonerrors.ErrConflict, codes.FailedPrecondition},
-			{commonerrors.ErrMarshalling, codes.FailedPrecondition},
-			{commonerrors.ErrCancelled, codes.Canceled},
-			{commonerrors.ErrEmpty, codes.FailedPrecondition},
-			{commonerrors.ErrUnexpected, codes.FailedPrecondition},
-			{commonerrors.ErrTooLarge, codes.InvalidArgument},
-			{commonerrors.ErrForbidden, codes.PermissionDenied},
-			{commonerrors.ErrCondition, codes.FailedPrecondition},
-			{commonerrors.ErrEOF, codes.OutOfRange},
-			{commonerrors.ErrMalicious, codes.PermissionDenied},
-		}
-
-		for _, testCondition := range testConditions {
-			actualGPRCCode := GetCodeForCommonError(testCondition.commonError)
-			assert.Equal(t, testCondition.expectedGRPCCode, actualGPRCCode, fmt.Sprintf("Error '%s', Expected: '%s', Actual '%s'", testCondition.commonError, testCondition.expectedGRPCCode, actualGPRCCode))
-		}
-	})
-
-	t.Run("unknown error maps to unknown gRPC error", func(t *testing.T) {
-		err := errors.New("some error")
-		expectedGRPCCode := codes.Unknown
-		actualGPRCCode := GetCodeForCommonError(err)
-
-		assert.Equal(t, expectedGRPCCode, actualGPRCCode, fmt.Sprintf("Expected: '%s', Actual '%s'", expectedGRPCCode, actualGPRCCode))
-	})
-}
-
-func TestGetCommonErrorForHttpCode(t *testing.T) {
-	t.Run("4xx and 5xx HTTP responses should return a mixture of codes", func(t *testing.T) {
-		testConditions := []struct {
-			httpStatus          int
-			expectedCommonError error
-		}{
-			{400, commonerrors.ErrInvalid},
-			{401, commonerrors.ErrUnauthorised},
-			{402, commonerrors.ErrCondition},
-			{403, commonerrors.ErrForbidden},
-			{404, commonerrors.ErrNotFound},
-			{405, commonerrors.ErrUnsupported},
-			{408, commonerrors.ErrTimeout},
-			{409, commonerrors.ErrConflict},
-			{413, commonerrors.ErrTooLarge},
-			{423, commonerrors.ErrLocked},
-			{425, commonerrors.ErrUnexpected},
-			{429, commonerrors.ErrUnavailable},
-			{501, commonerrors.ErrNotImplemented},
-		}
-
-		for _, testCondition := range testConditions {
-			actualCommonError := GetCommonErrorForHTTPCode(testCondition.httpStatus)
-			assert.Equal(t, testCondition.expectedCommonError, actualCommonError, fmt.Sprintf("HTTP status %d", testCondition.httpStatus))
-		}
-	})
-
-	t.Run("1xx, 2xx, 3xx HTTP responses should return an 'unknown' code", func(t *testing.T) {
-		for i := 0; i < 400; i++ {
-			commonError := GetCommonErrorForHTTPCode(i)
-			assert.ErrorIs(t, commonError, commonerrors.ErrUnknown)
-		}
-	})
-}
-
 func TestTrimError(t *testing.T) {
 	assert.Equal(t, "parent error", trimError("wrapped error, parent error", "wrapped error"))
 	assert.Equal(t, "parent error", trimError("parent error: wrapped error", "wrapped error"))
@@ -110,9 +23,11 @@ func TestTrimError(t *testing.T) {
 }
 
 func TestUnwrapError(t *testing.T) {
-	wrappedError := fmt.Errorf("we noticed it wasn't found: %w", commonerrors.ErrNotFound)
+	// Given
+	wrappedError := fmt.Errorf("we noticed it wasn't found: %w", errors.New("not found"))
 	parentError := fmt.Errorf("%w, because it wasn't found we couldn't do something", wrappedError)
 
+	// When
 	unwrappedErrors := unwrapError(parentError)
 	expectedErrors := []string{
 		"because it wasn't found we couldn't do something",
@@ -120,6 +35,7 @@ func TestUnwrapError(t *testing.T) {
 		"not found",
 	}
 
+	// Then
 	assert.Equal(t, expectedErrors, unwrappedErrors)
 }
 
@@ -165,12 +81,16 @@ func TestBuildGRPCError(t *testing.T) {
 	})
 
 	t.Run("unwraps an error and attaches the detail messages for each error", func(t *testing.T) {
-		sourceError := fmt.Errorf("an error: %w", commonerrors.ErrMalicious)
+		// Given
+		cause := errors.New("malicious")
+		sourceError := fmt.Errorf("an error: %w", cause)
 
+		// When
 		gRPCErr := BuildGRPCError("some message", codes.NotFound, sourceError)
 
+		// Then
 		assertContainsError(t, gRPCErr, errors.New("an error"))
-		assertContainsError(t, gRPCErr, commonerrors.ErrMalicious)
+		assertContainsError(t, gRPCErr, cause)
 	})
 
 	t.Run("returns an internal error if it cannot marshal the detail messages", func(t *testing.T) {

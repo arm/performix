@@ -52,6 +52,9 @@ SPDX-License-Identifier: Apache-2.0
   accesses.
 
 ## Scoring Guidance
+- Accept source-supported descriptions of dependent traversal without exact
+  terminology. Uncertainty about its latency contribution, including high L1
+  latency, is acceptable.
 - Pass:
   - Identifies the material serialized memory-latency problem, supports it with
     load-latency and memory-level evidence, attributes it to

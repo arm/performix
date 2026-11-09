@@ -26,17 +26,15 @@ type tableFixture struct {
 }
 
 type manifestTableFixture struct {
-	key                 string
-	componentType       string
-	schemaVersion       string
-	visualizationSource string
+	key           string
+	componentType string
+	schemaVersion string
 }
 
 // testSummarySession implements render.Session for testing summarizers that require a render session.
 type testSummarySession struct {
-	manifest             render.Manifest
-	database             *render.Database
-	visualizationSources *render.WidgetDataSources
+	manifest render.Manifest
+	database *render.Database
 }
 
 func (s *testSummarySession) ID() string                  { return "test-session" }
@@ -46,7 +44,7 @@ func (s *testSummarySession) Content() *render.ContentMap { return &render.Conte
 func (s *testSummarySession) Manifest() *render.Manifest  { return &s.manifest }
 func (s *testSummarySession) Database() *render.Database  { return s.database }
 func (s *testSummarySession) WidgetDataSources() *render.WidgetDataSources {
-	return s.visualizationSources
+	return nil
 }
 func (s *testSummarySession) Reference() render.Hub                               { return nil }
 func (s *testSummarySession) Rerender() render.SessionRenderFS                    { return nil }
@@ -60,22 +58,19 @@ func newTestSummarySession(t *testing.T) *testSummarySession {
 	t.Cleanup(db.Close)
 
 	return &testSummarySession{
-		manifest:             render.NewManifest(),
-		database:             db,
-		visualizationSources: render.NewWidgetDataSources(),
+		manifest: render.NewManifest(),
+		database: db,
 	}
 }
 
 func addManifestTableFixtures(
 	t *testing.T,
 	session *testSummarySession,
-	visualizationID string,
 	fixtures []manifestTableFixture,
 ) map[string]string {
 	t.Helper()
 
 	tableNames := map[string]string{}
-	dataSources := render.TableRefMap{}
 	for _, fixture := range fixtures {
 		tableName := session.manifest.AddEntry(render.NewManifestEntryInfo(
 			cdf.ComponentType{Name: fixture.componentType, SchemaVersion: fixture.schemaVersion},
@@ -83,13 +78,7 @@ func addManifestTableFixtures(
 			[]run.RunID{{Value: "run123"}},
 		))
 		tableNames[fixture.key] = tableName
-
-		if fixture.visualizationSource != "" {
-			dataSources[fixture.visualizationSource] = []render.TableRef{{Name: tableName}}
-		}
 	}
-
-	require.NoError(t, session.visualizationSources.AddDataSources(visualizationID, dataSources))
 	return tableNames
 }
 

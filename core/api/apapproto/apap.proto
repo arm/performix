@@ -24,6 +24,17 @@ service Apap {
   // Get the telemetry specification for a supported CPU model
   rpc GetTelemetrySpecification(GetTelemetrySpecificationRequest) returns (GetTelemetrySpecificationResponse);
 
+  // Read or update the persistent product telemetry preference.
+  rpc GetProductTelemetryPreference(google.protobuf.Empty) returns (ProductTelemetryPreference);
+  rpc SetProductTelemetryPreference(ProductTelemetryPreference) returns (google.protobuf.Empty);
+
+  // Return the persistent per-user identity, creating it if absent.
+  rpc GetOrCreateProductTelemetryUserId(google.protobuf.Empty) returns (ProductTelemetryUserId);
+
+  // Markers are additive: true writes or refreshes a marker; false leaves it unchanged.
+  rpc SetProductTelemetryMarkers(ProductTelemetryUserClassification) returns (google.protobuf.Empty);
+  rpc GetProductTelemetryUserClassification(google.protobuf.Empty) returns (ProductTelemetryUserClassification);
+
   // Return descriptions of all runs
   rpc ListRuns(google.protobuf.Empty) returns (RunListing);
 
@@ -300,11 +311,8 @@ enum RecipeSelectionPolicyType {
   // Use the recipe version installed with the application.
   USE_INSTALLED_VERSION = 0;
 
-  // Use the recipe file stored inside the run content.
-  FROM_CONTENT = 1;
-
   // Override by specifying a recipe name manually.
-  OVERRIDE_BY_NAME = 2;
+  OVERRIDE_BY_NAME = 1;
 }
 
 // Arguments for the recipe selection policy.
@@ -620,7 +628,7 @@ message LocalConnectionConfig {
 
 // Android target configuration for ADB connections
 message AndroidConnectionConfig {
-  // Device serial used with adb -s
+  // Physical device serial; resolved to a current adb -s selector when connecting
   string serial_number = 1;
   // Optional address passed to adb connect before ADB operations
   optional string device_ip_address = 2;
@@ -702,6 +710,7 @@ enum ToolDeploy {
   AUTO = 1;
   AUTO_FORCE = 2;
   CHECK = 3;
+  ENSURE = 4;
 }
 
 // RecipeCommand is used to embed the relevant recipe command
@@ -740,6 +749,8 @@ message RecipeStartCommand {
   optional bool no_cleanup_working_area = 11;
   optional string target_name = 12;
   optional bool detach_background_transfers = 13;
+  string run_name = 14; // Empty uses the generated run name.
+  string group_name = 15; // Empty leaves the run ungrouped.
 }
 
 // Recipe has begun message
@@ -1544,4 +1555,19 @@ message AndroidLaunchWorkload {
 
 message SetAdbPathRequest {
   string path = 1;
+}
+
+message ProductTelemetryPreference {
+  bool enabled = 1;
+  // False until telemetry-enabled has been explicitly saved in the config file.
+  bool configured = 2;
+}
+
+message ProductTelemetryUserClassification {
+  bool is_arm_internal = 1;
+  bool is_core_dev = 2;
+}
+
+message ProductTelemetryUserId {
+  string value = 1;
 }

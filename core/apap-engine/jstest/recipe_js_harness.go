@@ -17,6 +17,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf/semver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/jstest/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
@@ -298,8 +299,14 @@ func (rh *RecipeJSHarness) callRecipeFunction(
 // It returns a harness which allows calling any global functions in the recipe
 // file, as well as curated methods for accessing the recipe's properties and
 // calling its lifecycle methods.
-func LoadRecipe(t *testing.T, recipeName string) *RecipeJSHarness {
+// Feature flags default to disabled when omitted.
+func LoadRecipe(t *testing.T, recipeName string, flags ...featureflags.Flags) *RecipeJSHarness {
 	t.Helper()
+
+	resolvedFlags := featureflags.Flags{}
+	if len(flags) > 0 {
+		resolvedFlags = flags[0]
+	}
 
 	resolvedPath := resolveSourceFilePath(t, filepath.Join("recipes", recipeName+".js"))
 	data, err := os.ReadFile(resolvedPath)
@@ -316,7 +323,7 @@ func LoadRecipe(t *testing.T, recipeName string) *RecipeJSHarness {
 	harness := &RecipeJSHarness{GenericJSHarness: genericHarness}
 
 	err = genericHarness.asyncHelper.RunOnLoopBlock(func(vm *goja.Runtime) error {
-		binding, err := recipeparser.ParseRecipeJS(vm, resolvedPath, string(data))
+		binding, err := recipeparser.ParseRecipeJS(vm, resolvedPath, string(data), resolvedFlags)
 		if err != nil {
 			return err
 		}

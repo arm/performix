@@ -46,5 +46,17 @@
     "licenses": ["Apache License 2.0"],
     "sources": "",
     "copyrights": "Copyright (c) 2026 Arm Ltd. All rights reserved."
+  },
+  "lwi": {
+    "homepage": "",
+    "licenses": [],
+    "sources": "",
+    "copyrights": "Copyright (c) 2022-2026 Arm Ltd. All rights reserved."
+  },
+  "gpulayers": {
+    "homepage": "",
+    "licenses": ["MIT License"],
+    "sources": "",
+    "copyrights": "Copyright (c) 2024-2025 Arm Ltd. All rights reserved."
   }
 }

@@ -133,7 +133,7 @@ func WriteFileAtomic(filename string, data []byte, perm fs.FileMode) error {
 	if err := tmpFile.Close(); err != nil {
 		return err
 	}
-	if err := atomicReplaceFile(tmpName, filename); err != nil {
+	if err := AtomicReplaceFile(tmpName, filename); err != nil {
 		return err
 	}
 

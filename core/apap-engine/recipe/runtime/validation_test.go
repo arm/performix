@@ -46,6 +46,8 @@ func (f *fakeOptionsScriptedStage) Execute(ctx recipe.ExecutionContext, stageCon
 
 func (f *fakeOptionsScriptedStage) Name() string { return "FakeOptionsScriptedStage" }
 
+func (f *fakeOptionsScriptedStage) RequiresTools() bool { return false }
+
 func TestValidateBuildStages(t *testing.T) {
 
 	t.Run("with no parameter validation recipe function, a single stage is generated", func(t *testing.T) {
@@ -76,7 +78,7 @@ func TestValidateBuildStages(t *testing.T) {
 		optionsStage := &fakeOptionsScriptedStage{}
 		stageConfig := &StageConfiguration{
 			Recipe: &recipe.Recipe{
-				ParameterOptionsStages:   []recipe.ScriptedStage{optionsStage},
+				ParameterOptionsStages:   []recipe.ParameterOptionsStage{optionsStage},
 				ParameterValidationStage: &fakeScriptedStage{},
 			},
 			Ctx: &recipe.RecipeCtx{Target: &target.LocalTarget{}},
@@ -100,7 +102,7 @@ func TestValidateBuildStages(t *testing.T) {
 		optionsStage := &fakeOptionsScriptedStage{}
 		stageConfig := &StageConfiguration{
 			Recipe: &recipe.Recipe{
-				ParameterOptionsStages:   []recipe.ScriptedStage{optionsStage},
+				ParameterOptionsStages:   []recipe.ParameterOptionsStage{optionsStage},
 				ParameterValidationStage: &fakeScriptedStage{},
 			},
 			Ctx: &recipe.RecipeCtx{Target: &target.LocalTarget{}},
@@ -119,7 +121,7 @@ func TestValidateBuildStages(t *testing.T) {
 		optionsStage := &fakeOptionsScriptedStage{}
 		stageConfig := &StageConfiguration{
 			Recipe: &recipe.Recipe{
-				ParameterOptionsStages:   []recipe.ScriptedStage{optionsStage},
+				ParameterOptionsStages:   []recipe.ParameterOptionsStage{optionsStage},
 				ParameterValidationStage: &fakeScriptedStage{},
 			},
 			Ctx: &recipe.RecipeCtx{},
@@ -138,7 +140,7 @@ func TestValidateBuildStages(t *testing.T) {
 		optionsStage := &fakeOptionsScriptedStage{}
 		stageConfig := &StageConfiguration{
 			Recipe: &recipe.Recipe{
-				ParameterOptionsStages:   []recipe.ScriptedStage{optionsStage},
+				ParameterOptionsStages:   []recipe.ParameterOptionsStage{optionsStage},
 				ParameterValidationStage: &fakeScriptedStage{},
 			},
 			Ctx: &recipe.RecipeCtx{Target: &target.LocalTarget{}},

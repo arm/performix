@@ -197,7 +197,13 @@ type GojaScriptedRecipeStage struct {
 	Exec            func(goja.FunctionCall) goja.Value
 	VM              *goja.Runtime
 	DeferredActions notifiers.DeferredActions
+	requiresTools   bool
 	apiFactory      func(*goja.Runtime, recipe.ExecutionContext, context.Context, *cmdsync.CommandState, *cmdsync.CommandStateChannel, *notifiers.DeferredActions) RecipeAPI
+}
+
+// RequiresTools reports whether recipe tools must be deployed for this options stage.
+func (s *GojaScriptedRecipeStage) RequiresTools() bool {
+	return s.requiresTools
 }
 
 func (s *GojaScriptedRecipeStage) Execute(ctx recipe.ExecutionContext, stageContext *recipe.StageContext) (func(), error) {

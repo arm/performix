@@ -69,6 +69,11 @@ func (s *sessionImpl) Rerender() render.SessionRenderFS {
 }
 
 func (s *sessionImpl) Close() {
+	for _, renderer := range s.renderers {
+		if closer, ok := renderer.(render.RendererCloser); ok {
+			closer.Close()
+		}
+	}
 	if s.referenceHub != nil {
 		s.referenceHub.Close()
 	}

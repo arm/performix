@@ -14,6 +14,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/notifiers"
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/progress"
@@ -57,6 +58,9 @@ func (t *ToolDeploymentStage) Name() string {
 }
 
 func (t *ToolDeploymentStage) ErrorType() run.RunResult {
+	if t.deploymentMode == deployer.ToolDeployENSURE && t.Result == deployer.Deploy {
+		return run.RecipeFailureToolsMissing
+	}
 	return run.RecipeFailureDeploy
 }
 
@@ -140,9 +144,15 @@ func (t *ToolDeploymentStage) Execute(ctx *recipe.StageContext) (func(), error) 
 			progressUpdates = []conductor.ReportProgressRequest{handleLogProgress}
 		}
 
-		result, err := deployer.ReconcileTool(targetPlatform, toolInfo, t.deploymentMode,
+		result, err := deployer.ReconcileTool(targetPlatform, toolInfo, t.locality, t.deploymentMode,
 			t.commandRunnerSupplier(), t.targetFilesystemSupplier(), deployPaths, progressUpdates)
 		if err != nil {
+			if t.deploymentMode == deployer.ToolDeployENSURE && result == deployer.Deploy {
+				t.Result = result
+				readyOutput := recipe.ConvertMessageToReadyOutput(message.IsMessage(err))
+				readyOutput.Advice[0].ToolName = toolInfo.Name
+				ctx.ReadinessNotifier.OnReadinessProbed(readyOutput)
+			}
 			return nil, err
 		}
 

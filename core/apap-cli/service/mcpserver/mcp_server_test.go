@@ -264,22 +264,6 @@ func TestMCPServerProtocol(t *testing.T) {
 		assert.Equal(t, instructions, initResult.Instructions)
 	})
 
-	t.Run("does not duplicate server usage as a resource", func(t *testing.T) {
-		ctx := context.Background()
-		clientSession, serverSession := connectTestServer(t, ctx, nil, MCPServerOptions{})
-		defer clientSession.Close()
-		defer serverSession.Close()
-
-		resources, err := clientSession.ListResources(ctx, nil)
-		require.NoError(t, err)
-		assert.Empty(t, resources.Resources)
-		assert.Nil(t, clientSession.InitializeResult().Capabilities.Resources)
-
-		templates, err := clientSession.ListResourceTemplates(ctx, nil)
-		require.NoError(t, err)
-		assert.Empty(t, templates.ResourceTemplates)
-	})
-
 	t.Run("unknown tool returns error", func(t *testing.T) {
 		ctx := context.Background()
 		clientSession, serverSession := connectTestServer(t, ctx, nil, MCPServerOptions{})

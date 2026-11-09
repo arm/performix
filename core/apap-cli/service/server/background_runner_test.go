@@ -357,12 +357,22 @@ func (testApapServer) GetVersion(context.Context, *emptypb.Empty) (*apapproto.Se
 	return &apapproto.ServiceVersion{Version: "test-version"}, nil
 }
 
+// Tests configuration-file forwarding to the daemon child, inherited environment
+// settings, and environment overrides taking precedence over YAML.
 func TestBackgroundRunnerFeatureConfiguration(t *testing.T) {
-	for _, withFile := range []bool{false, true} {
-		t.Run(fmt.Sprintf("configFile=%t", withFile), func(t *testing.T) {
+	for _, tc := range []struct {
+		withFile bool
+		env      string
+	}{
+		{false, ""}, {false, "0"}, {false, "1"},
+		{true, ""}, {true, "0"}, {true, "1"},
+	} {
+		withFile := tc.withFile
+		t.Run(fmt.Sprintf("configFile=%t/profilingFocusEnv=%s", withFile, tc.env), func(t *testing.T) {
 			viper.Reset()
 			t.Cleanup(viper.Reset)
 			t.Setenv("APXD_ENABLE_JFR_CAPTURE", "false")
+			t.Setenv("APXD_ENABLE_PROFILING_FOCUS", tc.env)
 			setup := func(v *viper.Viper) {
 				serverconfig.RegisterFeatureDefaults(v)
 				v.SetEnvPrefix("APXD")
@@ -373,7 +383,7 @@ func TestBackgroundRunnerFeatureConfiguration(t *testing.T) {
 			var configPath string
 			if withFile {
 				configPath = filepath.Join(t.TempDir(), "custom settings.yaml")
-				require.NoError(t, os.WriteFile(configPath, []byte("enable-jfr-capture: true\nenable-run-component-compression: false\n"), 0600))
+				require.NoError(t, os.WriteFile(configPath, []byte("enable-jfr-capture: true\nenable-run-component-compression: false\nenable-profiling-focus: true\n"), 0600))
 				viper.SetConfigFile(configPath)
 				require.NoError(t, viper.ReadInConfig())
 			}
@@ -402,6 +412,7 @@ func TestBackgroundRunnerFeatureConfiguration(t *testing.T) {
 			}
 			loaded := serverconfig.LoadFeatureFlags(child)
 			require.Equal(t, parent, loaded)
+			require.Equal(t, tc.env == "1" || (withFile && tc.env == ""), loaded.ProfilingFocus)
 			require.False(t, loaded.JfrCapture, "environment overrides YAML")
 			if withFile {
 				require.False(t, loaded.RunComponentCompression, "custom YAML reaches the child")

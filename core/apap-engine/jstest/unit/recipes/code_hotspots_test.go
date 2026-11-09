@@ -9,13 +9,88 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
+	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/jstest"
 	"github.com/Arm-Debug/apap-cli/apap-engine/jstest/mocks"
+	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipeparser"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 )
+
+func TestCodeHotspotsAdditionalEventOptions(t *testing.T) {
+	probeConfig := recipeparser.RunToolConfigurationsArg{
+		ToolConfigs: []recipeparser.ToolConfiguration{{
+			Name:     "neoprof",
+			Params:   map[string]any{"compute_cpu_pmu_events": true},
+			Workload: recipeparser.WorkloadArg{Type: "systemWide", Data: ""},
+			Env:      map[string]string{},
+		}},
+	}
+	discovered := map[string]any{
+		"unavailable.8": map[string]any{
+			"componentType": map[string]any{"name": capabilities.NativeCPUCounter, "version": "1.0"},
+			"state":         "unavailable",
+		},
+		"other_type.8": map[string]any{
+			"componentType": map[string]any{"name": capabilities.CPUCounter, "version": "1.0"},
+			"state":         "available",
+		},
+	}
+	for _, pmuID := range []string{"cluster1", "cluster0"} {
+		discovered[pmuID+".8"] = capabilities.NativeCPUCounterValue{
+			ComponentType: capabilities.ComponentType{Name: capabilities.NativeCPUCounter, Version: "1.0"},
+			State:         "available",
+			Payload: capabilities.NativeCPUCounterPayload{
+				Title:     "Instructions retired",
+				PMU:       capabilities.NativeCPUCounterScope{ID: pmuID, Name: "Cortex-A78"},
+				EventCode: "0x8",
+			},
+		}
+	}
+
+	for _, os := range []string{"linux", "android", "windows", "darwin"} {
+		t.Run(os, func(t *testing.T) {
+			h := jstest.LoadRecipe(t, "code_hotspots", featureflags.Flags{CustomPMUCapture: true})
+			ctx := &mocks.MockReadyExecutionContext{}
+			ctx.On("TargetInfo").Return(h.ToJSValue(t, map[string]any{"Os": map[string]any{"OSFamily": os}}), nil)
+			var expected []parameters.ParameterOption
+			if os == "linux" || os == "android" {
+				ctx.On("ProbeTools", probeConfig).Return([]tool.ProbeResult{{Available: true, Capabilities: discovered}}, nil).Once()
+				expected = []parameters.ParameterOption{
+					{Value: "cluster0.8", Label: "Instructions retired (Cortex-A78 / cluster0, 0x8)"},
+					{Value: "cluster1.8", Label: "Instructions retired (Cortex-A78 / cluster1, 0x8)"},
+				}
+			}
+
+			options, err := h.ComputeOptions(t, "additional_events", ctx)
+
+			require.NoError(t, err)
+			if os != "linux" && os != "android" {
+				assert.Empty(t, options)
+			} else {
+				assert.Equal(t, expected, options)
+			}
+			ctx.AssertExpectations(t)
+		})
+	}
+
+	t.Run("successful discovery with no events", func(t *testing.T) {
+		h := jstest.LoadRecipe(t, "code_hotspots", featureflags.Flags{CustomPMUCapture: true})
+		ctx := &mocks.MockReadyExecutionContext{}
+		ctx.On("TargetInfo").Return(h.ToJSValue(t, map[string]any{"Os": map[string]any{"OSFamily": "linux"}}), nil)
+		ctx.On("ProbeTools", probeConfig).Return([]tool.ProbeResult{{Available: true, Capabilities: map[string]any{}}}, nil).Once()
+
+		options, err := h.ComputeOptions(t, "additional_events", ctx)
+
+		require.NoError(t, err)
+		assert.Empty(t, options)
+		ctx.AssertExpectations(t)
+	})
+}
 
 func TestCodeHotspotsRunSelectsJfr(t *testing.T) {
 	for _, os := range []string{"Linux", "Android"} {

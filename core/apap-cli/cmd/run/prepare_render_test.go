@@ -22,7 +22,6 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/utils"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
-	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 	"github.com/Arm-Debug/apap-cli/api/apapproto"
 	apapprotomocks "github.com/Arm-Debug/apap-cli/api/mocks"
 )
@@ -249,66 +248,21 @@ func TestPrepareRenderCommand_FilteringViaCLI(t *testing.T) {
 	})
 }
 
-func TestToPreparationParams(t *testing.T) {
-	tests := []struct {
-		name                      string
-		recipeName                string
-		recipeSelectionPolicyName string
-		expectPolicy              *apapproto.RecipeSelectionPolicyType
-		expectedErr               error
-	}{
-		{
-			name:         "only recipe name set",
-			recipeName:   "example-recipe",
-			expectPolicy: util.Ptr(apapproto.RecipeSelectionPolicyType_OVERRIDE_BY_NAME),
-		},
-		{
-			name:                      "empty policy name and recipe set",
-			recipeName:                "example-recipe",
-			recipeSelectionPolicyName: "",
-			expectPolicy:              util.Ptr(apapproto.RecipeSelectionPolicyType_OVERRIDE_BY_NAME),
-		},
-		{
-			name:                      "valid policy name with recipe set",
-			recipeName:                "example-recipe",
-			recipeSelectionPolicyName: "from-content",
-			expectPolicy:              util.Ptr(apapproto.RecipeSelectionPolicyType_FROM_CONTENT),
-		},
-		{
-			name:                      "invalid policy name",
-			recipeSelectionPolicyName: "not-a-valid-policy",
-			expectedErr: message.New(message.CliCmdValidationInvalidFlagValue).WithMetadata(map[string]string{
-				"flag":  "--recipe-selection-policy",
-				"value": "not-a-valid-policy",
-			}),
-		},
-		{
-			name:                      "override-by-name set with no recipe name provided",
-			recipeSelectionPolicyName: "override-by-name",
-			expectedErr:               message.New(message.CliCmdRunPrepareRenderNoOverrideRecipe),
-		},
-		{
-			name:         "neither recipe nor policy set",
-			expectPolicy: nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			params := recipeSelectionParams{
-				RecipeName:                tt.recipeName,
-				RecipeSelectionPolicyName: tt.recipeSelectionPolicyName,
+func TestRenderCommandsRejectRecipeSelectionPolicy(t *testing.T) {
+	for _, command := range []string{"prepare-render", "render"} {
+		t.Run(command, func(t *testing.T) {
+			// Given
+			cmd := NewPrepareRenderCmd(nil, nil)
+			if command == "render" {
+				cmd = NewRenderCmd(nil, nil, nil)
 			}
-			got, err := params.ToPreparationParams()
 
-			require.Equal(t, tt.expectedErr, err)
-			require.Equal(t, tt.recipeName, got.OverrideRecipeName)
-			if tt.expectPolicy != nil {
-				require.NotNil(t, got.RecipeSelectionPolicy)
-				require.Equal(t, *tt.expectPolicy, *got.RecipeSelectionPolicy)
-			} else {
-				require.Nil(t, got.RecipeSelectionPolicy)
-			}
+			// When
+			err := cmd.ParseFlags([]string{"--recipe-selection-policy", "from-content"})
+
+			// Then
+			require.EqualError(t, err, "unknown flag: --recipe-selection-policy")
+			require.NotContains(t, cmd.UsageString(), "recipe-selection-policy")
 		})
 	}
 }
