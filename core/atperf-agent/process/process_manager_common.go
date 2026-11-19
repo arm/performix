@@ -47,6 +47,7 @@ type managedProcess struct {
 	stderr    *streamHandle
 	stdin     *redirectHandle
 	procState *ProcessState
+	kill      func() error
 }
 
 // processCommon provides shared functionality for Linux and Windows process managers.
@@ -398,9 +399,9 @@ func (pc *processCommon) decrementWaitGroup() {
 }
 
 // registerProcess stores process handles for shutdown management
-func (pc *processCommon) registerProcess(pid int, stdoutHandle, stderrHandle *streamHandle, stdinRedirect *redirectHandle, processState *ProcessState, sp *StartProcess) {
+func (pc *processCommon) registerProcess(pid int, stdoutHandle, stderrHandle *streamHandle, stdinRedirect *redirectHandle, processState *ProcessState, sp *StartProcess, kill func() error) {
 
-	ps := &managedProcess{procState: processState}
+	ps := &managedProcess{procState: processState, kill: kill}
 
 	// Maintain the stdio redirect mappings
 	if IsStreamModeEnabled(sp.Stdout.Mode) {
@@ -591,6 +592,10 @@ func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessMan
 		return nil, err
 	}
 
+	if err := CheckWorkingDirectory(sp.LaunchCommand.WorkingDirectory); err != nil {
+		return nil, err
+	}
+
 	if IsFileModeEnabled(sp.Stdout.Mode) {
 		sp.Stdout.FilePath = filepath.Clean(sp.Stdout.FilePath)
 		if err := pc.validateFilePath(sp.Stdout.FilePath); err != nil {
@@ -661,7 +666,11 @@ func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessMan
 
 	cmd.Stdout = stdoutHandle.writerTarget()
 	cmd.Stderr = stderrHandle.writerTarget()
-	cmd.Stdin = stdinRedirect.pr
+	// Leave Stdin nil for os/exec to supply the platform's null device.
+	// A typed nil *os.File instead closes the child's standard input.
+	if stdinRedirect.pr != nil {
+		cmd.Stdin = stdinRedirect.pr
+	}
 
 	if err := pc.incrementWaitGroup(); err != nil {
 		stdoutHandle.close()
@@ -708,12 +717,25 @@ func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessMan
 	// Set CPU affinity if specified (platform-specific)
 	if len(sp.LaunchCommand.Affinity) > 0 {
 		if err := builder.setCPUAffinityAfterStart(pid, sp.LaunchCommand.Affinity); err != nil {
+			// No process handle will reach the caller on a failed RPC. Terminate
+			// and reap the child here before returning, and release the
+			// unregistered resources.
+			killErr := launch.kill()
+			if errors.Is(killErr, os.ErrProcessDone) {
+				killErr = nil
+			}
+			stdoutHandle.close()
+			stderrHandle.close()
+			_ = stdinRedirect.close()
+			_ = launch.wait() // A killed child's nonzero exit is expected.
+			pc.decrementWaitGroup()
+			err = errors.Join(err, killErr, launch.cleanupErr)
 			return nil, fmt.Errorf("failed to set CPU affinity: %w", err)
 		}
 	}
 
 	processState := NewProcessState(cmd)
-	pc.registerProcess(pid, stdoutHandle, stderrHandle, stdinRedirect, processState, sp)
+	pc.registerProcess(pid, stdoutHandle, stderrHandle, stdinRedirect, processState, sp, launch.kill)
 
 	// Send shutdown signal to process if shutdown began while process was starting
 	pc.applyInFlightShutdown(pid, builder)
@@ -721,10 +743,14 @@ func (pc *processCommon) StartProcessCommon(sp *StartProcess, builder ProcessMan
 	logsHandedOff = true
 	// Wait for the process to exit and clean up resources
 	go func() {
-		_ = cmd.Wait()
+		_ = launch.wait()
 		if controllerLogs != nil {
 			<-controllerLogs.done
 		}
+		// Darwin has no group controller or Windows job to stop descendants.
+		// Structured execution uses file-backed streams, so the parent wait
+		// finishes before output EOF. Settle its group before reporting exit.
+		processState.cleanupErr = errors.Join(launch.cleanupErr, finishProcessGroup(pid, builder))
 		processState.ProcessExited()
 		stdoutHandle.closeWriters()
 		stderrHandle.closeWriters()
@@ -776,12 +802,15 @@ func (pc *processCommon) ExecCommandCommon(lc *LaunchCommand, builder ProcessMan
 	// Set CPU affinity if specified (platform-specific)
 	if len(lc.Affinity) > 0 {
 		if err := builder.setCPUAffinityAfterStart(pid, lc.Affinity); err != nil {
-			return nil, err
+			_ = launch.kill()
+			_ = launch.wait()
+			pc.decrementWaitGroup()
+			return nil, errors.Join(err, launch.cleanupErr)
 		}
 	}
 
 	processState := NewProcessState(cmd)
-	pc.managedProcesses.Store(pid, &managedProcess{procState: processState})
+	pc.managedProcesses.Store(pid, &managedProcess{procState: processState, kill: launch.kill})
 
 	// Send shutdown signal to process if shutdown began while process was starting
 	pc.applyInFlightShutdown(pid, builder)
@@ -789,7 +818,9 @@ func (pc *processCommon) ExecCommandCommon(lc *LaunchCommand, builder ProcessMan
 	waitCh := make(chan error, 1)
 
 	go func() {
-		waitCh <- cmd.Wait()
+		waitErr := launch.wait()
+		processState.cleanupErr = launch.cleanupErr
+		waitCh <- waitErr
 		processState.ProcessExited()
 		pc.decrementWaitGroup()
 		pc.managedProcesses.Delete(pid)
@@ -810,5 +841,5 @@ func (pc *processCommon) ExecCommandCommon(lc *LaunchCommand, builder ProcessMan
 		Rc:     rc,
 		Stdout: stdoutBuf.String(),
 		Stderr: stderrBuf.String(),
-	}, nil
+	}, launch.cleanupErr
 }

@@ -71,6 +71,7 @@ type ProbeResult struct {
 type ToolIntegration interface {
 	Properties() IntegrationProperties
 	Probe() (ProbeResult, error)
+	Validate() ([]ProbeAdvice, error)
 	StartRuntime() (cleanup func(), err error)
 	Run() error
 	Stop() error
@@ -106,8 +107,9 @@ type WorkloadLaunch struct {
 }
 
 type WorkloadAndroidLaunch struct {
-	PackageName  string
-	ActivityName string
+	PackageName       string
+	ActivityName      string
+	ActivityArguments string
 }
 
 type WorkloadAttach struct {

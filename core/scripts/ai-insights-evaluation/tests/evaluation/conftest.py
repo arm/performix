@@ -50,6 +50,7 @@ from typing import Any
 import pytest
 import requests
 
+from pass_rate import passing_attempt_groups
 from evaluation_summary import render_console_summary
 from judge_config import DEFAULT_JUDGE_MODEL
 from performance_quality import (
@@ -185,6 +186,8 @@ def pytest_addoption(parser) -> None:
                     help="Reasoning effort for the judge model (default: medium).")
     _add_env_option(group, OPENAI_API_KEY_OPT)
     group.addoption("--ai-attempts", type=int, default=int(os.environ.get("AI_INSIGHTS_ATTEMPTS", "0")))
+    group.addoption("--ai-min-pass-rate", type=float, default=float(os.environ.get("AI_INSIGHTS_MIN_PASS_RATE", "0")),
+                    help="Minimum pass rate per case, mode, and model. Use 0 for manifest defaults.")
     # Pathways CI collects exact test IDs (including repetition numbers) to build
     # its job matrix. Each job replays one ID against its own disposable target.
     group.addoption("--ai-collect-selection", help="Internal: write the filtered execution selection as JSON.")
@@ -208,6 +211,7 @@ def pytest_xdist_node_collection_finished(node, ids) -> None:
     if getattr(config, AI_XDIST_PREPARED_ATTR, False):
         return
 
+    _minimum_pass_rate(config)
     testcases = _selected_testcases_from_nodeids(config, ids)
     if any(case.get("pathways_execution") for case in testcases):
         pytest.exit(
@@ -276,6 +280,8 @@ def pytest_collection_modifyitems(config, items):
 
     if config.option.collectonly:
         return
+
+    _minimum_pass_rate(config)
 
     pathways_count = sum(_is_pathways_item(item) for item in items)
     if pathways_count and hasattr(config, "workerinput"):
@@ -798,6 +804,19 @@ def pytest_sessionfinish(session, exitstatus) -> None:
     if hasattr(config, "workerinput") or config.option.collectonly:
         return
 
+    # The controller has all xdist reports at this point. Keep raw failures in
+    # JUnit and terminal output; only the suite exit status uses the pass rate.
+    if (session.exitstatus == pytest.ExitCode.TESTS_FAILED
+            and (min_pass_rate := _minimum_pass_rate(config)) < 1 and not session.shouldfail):
+        reporter = config.pluginmanager.get_plugin("terminalreporter")
+        if reporter is not None:
+            reports = [report for result in ("passed", "failed", "skipped", "xfailed", "error")
+                       for report in reporter.stats.get(result, [])]
+            summaries = passing_attempt_groups(reports, min_pass_rate)
+            if summaries is not None:
+                config._ai_insights_pass_policy_summary = summaries
+                session.exitstatus = pytest.ExitCode.OK
+
     try:
         graph_report = _generate_graph_report(config)
     except Exception as exc:
@@ -851,6 +870,12 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
         return
 
     terminalreporter.section("AI Insights evaluation")
+    policy_summary = getattr(config, "_ai_insights_pass_policy_summary", None)
+    if policy_summary:
+        terminalreporter.write_line("Suite gate: PASS (minimum pass rate per case, mode, and model).")
+        terminalreporter.write_line("Individual attempt failures remain in the reports.")
+        for key, result in policy_summary.items():
+            terminalreporter.write_line(f"{' / '.join(key)}: {result.summary}")
     summary = getattr(config, "_ai_insights_suite_summary", None)
     if summary:
         terminalreporter.write_line(_format_suite_summary(summary))
@@ -960,10 +985,25 @@ def _ai_attempts_from_reports(reports: list) -> list[dict[str, str]]:
         attempts.append(
             {
                 **properties,
-                "pytest_outcome": str(getattr(report, "outcome", "unknown")),
+                "pytest_outcome": "xfailed" if getattr(report, "wasxfail", False)
+                else str(getattr(report, "outcome", "unknown")),
             }
         )
     return attempts
+
+
+def _minimum_pass_rate(config) -> float:
+    """Resolve and cache the suite pass rate on each pytest process."""
+    cached_rate = getattr(config, "_ai_insights_min_pass_rate", None)
+    if cached_rate is not None:
+        return cached_rate
+    manifest_path = Path(config.getoption("--ai-manifest")).expanduser().resolve()
+    defaults = json.loads(manifest_path.read_text(encoding="utf-8")).get("defaults", {})
+    min_pass_rate = float(config.getoption("--ai-min-pass-rate") or defaults.get("min_pass_rate", 1.0))
+    if not 0 < min_pass_rate <= 1:
+        raise pytest.UsageError("--ai-min-pass-rate must be greater than 0 and at most 1")
+    config._ai_insights_min_pass_rate = min_pass_rate
+    return min_pass_rate
 
 
 def _performance_thresholds(config) -> PerformanceThresholds:

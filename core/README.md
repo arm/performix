@@ -66,6 +66,36 @@ validator. CPU state and series-binding rules remain in `capabilities/cpu.go`.
 
 The renderer regression suite under [`apap-engine/regressiontests/`](apap-engine/regressiontests/) protects the engine's analysis output.
 
+#### Structured execution helpers
+
+`conductor.ExecutionRunner` provides `RunProcess` to launch a program with literal
+arguments and `RunScript` to run a script with an explicitly selected shell.
+Local runners and `tool.AgentEngine` implement these helpers and return captured
+stdout, stderr and exit status. Existing `CommandRunner.RunCommand(string)` callers
+remain unchanged. Windows scripts support PowerShell 5.1 and cmd.
+Cmd scripts deliberately reject nonempty `ScriptRequest.Arguments` with
+`ExecutionUnsupported`: batch-file expansion does not guarantee literal values.
+Use PowerShell when a Windows script needs literal arguments.
+The embedded [`execution_windows.ps1`](apap-engine/conductor/execution_windows.ps1)
+wrapper starts the selected Windows shell, preserves literal PowerShell arguments
+and exit status, and writes cmd source into a process-owned temporary directory.
+Windows PowerShell 5.1 (`powershell.exe`) is the supported interpreter; PowerShell 7
+(`pwsh.exe`) has different execution behaviour and is not selected by this API.
+See the [execution API](apap-engine/conductor/execution.go) for the request and
+error contracts.
+
+### Process lifetime ownership
+
+Windows launches start suspended, join an owned Job Object, and resume after
+assignment. Managed kills, forced shutdowns, and parent exit terminate remaining
+descendants. Managed kills and forced shutdowns retain exit status `1`.
+The shared launch wrapper releases the job when waiting completes or startup
+fails. Unix managed launches keep their existing group-controller behavior.
+
+This is process-tree ownership machinery for execution helpers. It does not
+implement Windows Group Controller support or root-worker privilege escalation.
+A future Windows Group Controller can build on the same Job Object ownership.
+
 ### Target-side agent
 
 [`atperf-agent/`](atperf-agent/) is released as the target-side `apx-agent` binary. The engine deploys it as a managed tool when a profiling workflow needs richer target operations than the base remote connection provides.
@@ -93,14 +123,18 @@ Release packaging for `apx` and `apx-agent` is defined by [`core/.goreleaser.yml
 
 ## Testing strategy
 
-Core testing follows the boundaries between reusable packages, released components, and target-backed product workflows:
+See [TEST.md](../TEST.md) for the complete list of Performix test suites.
 
-- Go and Python unit tests exercise packages close to their implementation, with focused suites for the CLI and engine.
-- Renderer regression tests protect stable engine analysis output using recorded run data.
-- Robot Framework tests validate CLI and engine behaviour against real Linux, Windows, and Android targets.
-- Evaluation and benchmarking suites measure accuracy, overhead, workload compatibility, and AI Insights quality outside the functional test layers.
+Go tests cover engine, CLI, and target-side agent packages alongside their implementation. Python tests cover built-in tools and supporting scripts. JavaScript recipes and tool integrations use the [Goja test harness](apap-engine/jstest/README.md).
 
 Commands belong in the [repository development guide](../DEVELOPMENT.md#core-workflow). Suite-specific requirements live in the [Robot guide](robot/README.md), the [renderer regression guide](apap-engine/regressiontests/README.md), and the [AI Insights evaluation guide](scripts/ai-insights-evaluation/README.md).
+
+Execution contract tests compare values reported by a native probe. Local tests
+and an in-process gRPC server exercise real child processes, output, cancellation
+and handle release. The in-process server excludes the Linux agent's self-reexec
+group controller; its own tests cover that path. Windows process tests also check
+batch-file rejection after executable lookup. Cross-compilation is not runtime
+platform evidence. See the [execution test workflow](../DEVELOPMENT.md#execution-helper-tests).
 
 ## Release boundary
 

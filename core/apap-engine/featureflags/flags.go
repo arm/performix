@@ -8,15 +8,13 @@ package featureflags
 // Flags contains the feature settings used by the CLI and engine.
 // JSON tags preserve their configuration keys in support-package diagnostics.
 type Flags struct {
-	// AndroidTargets controls CLI Android support; it is not used by the engine.
-	AndroidTargets bool `json:"enable-android-targets"`
-
 	FullCaptureSupport       bool `json:"enable-full-capture-support"`
 	Rerendering              bool `json:"enable-rerendering"`
 	ExperimentalRecipes      bool `json:"enable-experimental-recipes"`
 	SecondaryRunPaths        bool `json:"enable-secondary-run-paths"`
 	ProfilingFocus           bool `json:"enable-profiling-focus"`
 	RenderDBSandbox          bool `json:"enable-render-db-sandbox"`
+	CPUScheduling            bool `json:"enable-cpu-scheduling"`
 	NeoprofTimeline          bool `json:"enable-neoprof-timeline"`
 	CustomPMUCapture         bool `json:"enable-custom-pmu-capture"`
 	NeoprofSystemUtilization bool `json:"enable-neoprof-system-utilization"`

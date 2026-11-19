@@ -26,6 +26,7 @@ type neoprofSysutilGPUFixture struct {
 	activityOnly    bool
 	binDuration     int64
 	multipleDevices bool
+	rowsByMetric    map[string][]timelineCounterRowFixture
 }
 
 func TestSystemUtilizationNeoprofGPURendering(t *testing.T) {
@@ -443,6 +444,9 @@ func writeNeoprofSysutilGPUFixture(t *testing.T, runRoot string, fixture neoprof
 					fmt.Sprintf("series_id=%d/bin_duration=%d/counter.parquet", seriesID, fixture.binDuration))
 				require.NoError(t, os.MkdirAll(filepath.Dir(counterPath), 0o755))
 				rows := []timelineCounterRowFixture{{EndTimestamp: 2 * fixture.binDuration, Value: total}}
+				if custom, ok := fixture.rowsByMetric[metric.MachineName]; ok {
+					rows = custom
+				}
 				if fixture.multipleDevices {
 					secondTotal := total
 					if metric.MachineName == "MaliGPUActiveCy" {

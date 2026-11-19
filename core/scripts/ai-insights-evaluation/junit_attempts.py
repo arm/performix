@@ -48,7 +48,7 @@ def _junit_outcome(testcase: ET.Element) -> str:
         if name == "error":
             return "error"
         if name == "skipped":
-            return "skipped"
+            return "xfailed" if child.attrib.get("type") == "pytest.xfail" else "skipped"
     return "passed"
 
 

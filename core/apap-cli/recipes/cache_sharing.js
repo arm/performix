@@ -5,9 +5,10 @@
 
 // @ts-check
 
-const PY_CACHE_SHARING_VERSION = '1.1.0';
+const { render: renderCacheSharing } = require('./analyses/cache_sharing');
 
 let tool_name = 'linux_perf';
+const PY_CACHE_SHARING_VERSION = '1.1.0';
 let tool_version = '1.0.0';
 const { collectToolAdvice, toolStatusToRecipeStatus } = recipeUtils;
 
@@ -168,134 +169,4 @@ function runCacheSharing(context) {
       },
     ],
   });
-}
-
-/**
- * @param {import("./docs/jsdocs").RunExecutionContext} context
- */
-function renderCacheSharing(context) {
-  const renderSpec = {
-    renderers: [
-      {
-        type: 'StreamlineAnalyzeSymbols',
-        id: 'perf_symbols',
-        config: {
-          entity: `tool/${tool_name}/0/`,
-          symbols: 'perf_c2c_output_symbols.json',
-        },
-      },
-      {
-        type: 'CacheSharing',
-        id: 'cache_sharing',
-        config: {
-          entity: `tool/${tool_name}/0/`,
-          component: 'perf-c2c-output',
-          data_source: {
-            tables: {
-              symbols: [
-                {
-                  renderer_id: 'perf_symbols',
-                  output: 'symbols',
-                },
-              ],
-              images: [
-                {
-                  renderer_id: 'perf_symbols',
-                  output: 'images',
-                },
-              ],
-              source_files: [
-                {
-                  renderer_id: 'perf_symbols',
-                  output: 'source_files',
-                },
-              ],
-            },
-          },
-        },
-      },
-      {
-        type: 'SourceCodeAttribution',
-        id: 'source_code_attribution',
-        config: {
-          data_source: {
-            tables: {
-              source_files: [
-                { renderer_id: 'perf_symbols', output: 'source_files' },
-              ],
-            },
-          },
-          entity: `tool/${tool_name}/0/`,
-        },
-      },
-    ],
-    visualizations: [
-      {
-        type: 'generic_grid',
-        id: 'cachelines',
-        rendererId: 'cache_sharing',
-        title: 'Cachelines',
-        description:
-          'Cachelines flagged as TRUE/FALSE sharing issues with sample counts and sharing metadata.',
-        config: {
-          data_source: {
-            tables: {
-              table: [
-                {
-                  renderer_id: 'cache_sharing',
-                  output: 'cachelines_flat',
-                },
-              ],
-            },
-          },
-        },
-      },
-      {
-        type: 'flat_functions',
-        id: 'accesses',
-        rendererId: 'cache_sharing',
-        title: 'Accesses',
-        description:
-          'Function-level cache-to-cache accesses with sample, coherence, and store counts.',
-        config: {
-          data_source: {
-            tables: {
-              flatFunctions: [
-                {
-                  renderer_id: 'cache_sharing',
-                  output: 'drilldown',
-                },
-              ],
-              measurements: [
-                {
-                  renderer_id: 'cache_sharing',
-                  output: 'measurements',
-                },
-              ],
-              symbols: [
-                {
-                  renderer_id: 'perf_symbols',
-                  output: 'symbols',
-                },
-              ],
-              images: [
-                {
-                  renderer_id: 'perf_symbols',
-                  output: 'images',
-                },
-              ],
-              source_files: [
-                {
-                  renderer_id: 'perf_symbols',
-                  output: 'source_files',
-                },
-              ],
-            },
-          },
-        },
-      },
-    ],
-  };
-
-  return renderSpec;
 }

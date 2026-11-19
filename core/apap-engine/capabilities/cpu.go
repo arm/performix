@@ -48,24 +48,6 @@ type CPUCounterValue struct {
 	Payload       CPUCounterPayload `json:"payload"`
 }
 
-// SatisfiesRequiredSelection reports whether a final outcome fulfils a
-// required CPU counter request. Schema validation remains the caller's
-// responsibility.
-func (v CPUCounterValue) SatisfiesRequiredSelection() bool {
-	return v.State == CPUCounterStateCollected
-}
-
-// FailsCollectionRegardlessOfPolicy reports outcomes caused by a failed
-// capture or analysis. These failures invalidate the Run even when the
-// capability was optional.
-func (v CPUCounterValue) FailsCollectionRegardlessOfPolicy() bool {
-	if v.State != CPUCounterStateIncomplete || v.Payload.Reason == nil {
-		return false
-	}
-	return *v.Payload.Reason == CPUCounterReasonRecordFailed ||
-		*v.Payload.Reason == CPUCounterReasonReformatFailed
-}
-
 func decode(value any, dest any) error {
 	data, err := json.Marshal(value)
 	if err != nil {

@@ -30,6 +30,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from pass_rate import attempt_group_result
+
 from performance_quality import (
     QUALITY_GOOD,
     QUALITY_INDETERMINABLE,
@@ -399,7 +401,7 @@ def _format_result(
         _attempt_result(attempt)
         for attempt in attempts
     ]
-    if len(results) == 1:
+    if len(results) == 1 and "ai_min_pass_rate" not in attempts[0]:
         status, status_text = results[0]
     else:
         status, status_text = _multiple_attempt_result(attempts, results)
@@ -421,14 +423,18 @@ def _multiple_attempt_result(
     attempts: list[dict[str, str]],
     results: list[tuple[str, str]],
 ) -> tuple[str, str]:
-    if len(set(results)) == 1:
+    if len(set(results)) == 1 and "ai_min_pass_rate" not in attempts[0]:
         return results[0]
 
     labelled_results = []
     for index, (attempt, result) in enumerate(zip(attempts, results), start=1):
         _, result_text = result
         labelled_results.append(f"attempt {_attempt_label(attempt, index)} {result_text}")
-    return "fail", ", ".join(labelled_results)
+    details = ", ".join(labelled_results)
+    if "ai_min_pass_rate" in attempts[0]:
+        result = attempt_group_result(attempts, float(attempts[0]["ai_min_pass_rate"]))
+        return "pass" if result.passed else "fail", f"{result.summary}; {details}"
+    return "fail", details
 
 
 def _format_mcp_detail_lines(

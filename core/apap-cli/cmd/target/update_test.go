@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
@@ -382,12 +381,6 @@ func TestUpdateJSONStringTarget(t *testing.T) {
 
 func TestUpdateAndroidTarget(t *testing.T) {
 	t.Run("android protocol accepts device IP address with port", func(t *testing.T) {
-		wasEnabled := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, true)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, wasEnabled)
-		})
-
 		mtm := &target.MockTargetManager{}
 		cc := &mocks.MockAutostartClientConnector{}
 		tgtToUpdate := engine_target.AndroidTarget{SerialNumber: "device-123"}
@@ -409,12 +402,6 @@ func TestUpdateAndroidTarget(t *testing.T) {
 	})
 
 	t.Run("android protocol rejects device IP address with extra colon-delimited fields", func(t *testing.T) {
-		wasEnabled := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, true)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, wasEnabled)
-		})
-
 		mtm := &target.MockTargetManager{}
 		cc := &mocks.MockAutostartClientConnector{}
 		tgtToUpdate := engine_target.AndroidTarget{SerialNumber: "device-123"}
@@ -434,15 +421,6 @@ func TestUpdateAndroidTarget(t *testing.T) {
 }
 
 func TestTargetUpdateHostDescription(t *testing.T) {
-	wasEnabled := viper.GetBool(enableAndroidTargetsConfigKey)
-	t.Cleanup(func() {
-		viper.Set(enableAndroidTargetsConfigKey, wasEnabled)
-	})
-
-	viper.Set(enableAndroidTargetsConfigKey, false)
-	assert.NotContains(t, targetUpdateHostDescription(), "android://serial[@host]")
-
-	viper.Set(enableAndroidTargetsConfigKey, true)
 	assert.Contains(t, targetUpdateHostDescription(), "[user@]host[:port][:private_ssh_key_path][:auth=key|password]")
 	assert.Contains(t, targetUpdateHostDescription(), "android://serial[@host]")
 }

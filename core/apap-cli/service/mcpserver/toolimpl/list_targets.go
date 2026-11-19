@@ -17,9 +17,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 )
 
-type ListTargetsTool struct {
-	AndroidTargetsEnabled bool
-}
+type ListTargetsTool struct{}
 
 const defaultListTargetsLimit = 100
 const defaultListTargetsOffset = 0
@@ -127,16 +125,13 @@ func (tool ListTargetsTool) Register(server *mcp.Server, toolDeps ToolDependenci
 			return &mcp.CallToolResult{IsError: true}, listTargetsResult{Targets: []listedTarget{}, Error: newToolError(err)}, nil
 		}
 
-		return nil, newListTargetsResult(targetConfig.Targets, targetConfig.Default, tool.AndroidTargetsEnabled, input), nil
+		return nil, newListTargetsResult(targetConfig.Targets, targetConfig.Default, input), nil
 	})
 }
 
-func newListTargetsResult(targetsMap map[string]target.Target, defaultName string, androidTargetsEnabled bool, input listTargetsInput) listTargetsResult {
+func newListTargetsResult(targetsMap map[string]target.Target, defaultName string, input listTargetsInput) listTargetsResult {
 	targets := make([]listedTarget, 0, len(targetsMap))
 	for name, tgt := range targetsMap {
-		if _, isAndroid := tgt.(*target.AndroidTarget); isAndroid && !androidTargetsEnabled {
-			continue
-		}
 		targets = append(targets, listedTarget{
 			Name:        name,
 			Type:        targetTypeName(tgt),

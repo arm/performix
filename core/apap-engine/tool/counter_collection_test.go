@@ -4,13 +4,43 @@
 package tool
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 )
+
+func TestPrepareToolIntegrationsPreservesProbeErrors(t *testing.T) {
+	// Given an additional-event selection that exceeds the PMU's programmable counter capacity.
+	advice := ProbeAdvice{
+		Level: "error", MessageCode: "tool_integrations.neoprof.CPU_EVENTS_CAPACITY_EXCEEDED",
+		Metadata: map[string]string{"pmu": "pmu0", "selected": "2", "capacity": "1", "remove": "1", "selection": "pmu0.8, pmu0.10"},
+	}
+	reg := NewToolRegistry()
+	reg.RegisterTool(&capabilityFakeToolFactory{FakeToolFactory: &FakeToolFactory{
+		createInstance: func() *FakeToolInstance {
+			return NewFakeToolInstance(WithProbeResult(ProbeResult{Available: false, Advice: []ProbeAdvice{advice}}))
+		},
+	}})
+	ctx := IntegrationContext{Name: "fake-tool", Version: "1.0", Ctx: context.Background(),
+		CapabilityRequest: &capabilities.CapabilityRequest{Required: []string{}, Optional: []string{}},
+	}
+
+	// When the engine prepares the integration before collection.
+	prepared, errs := PrepareToolIntegrations([]IntegrationContext{ctx}, reg, nil)
+
+	// Then preparation stops with the specific error and its metadata.
+	require.Nil(t, prepared)
+	require.Len(t, errs, 1)
+	msg, ok := errs[0].(message.Message)
+	require.True(t, ok, "preparation returns a Message directly")
+	require.Equal(t, message.MessageCode(advice.MessageCode), msg.Code())
+	require.Equal(t, advice.Metadata, msg.Metadata())
+}
 
 func TestValidateNativeCPUDiscovery(t *testing.T) {
 	value := json.RawMessage(`{
@@ -19,9 +49,9 @@ func TestValidateNativeCPUDiscovery(t *testing.T) {
 		"payload":{"title":"Instructions retired","pmu":{"id":"pmu0","name":"Cortex-A78"},"eventCode":"0x8"}
 	}`)
 	result := ProbeResult{Capabilities: map[string]any{
-		"pmu0.8":    value,
-		"unrelated": map[string]any{"componentType": map[string]any{"name": "other"}},
-		"legacy":    true,
+		"nativecounter.pmu0.8": value,
+		"unrelated":            map[string]any{"componentType": map[string]any{"name": "other"}},
+		"legacy":               true,
 	}}
 	require.NoError(t, validateCPUDiscovery(result, true, false))
 
@@ -34,27 +64,27 @@ func TestValidateCounterOutcomesAppliesSelectionPolicy(t *testing.T) {
 	outputUnverified := capabilities.CPUCounterReasonOutputUnverified
 	captureFailed := capabilities.CPUCounterReasonRecordFailed
 	analysisFailed := capabilities.CPUCounterReasonReformatFailed
-	collected := capabilities.CPUCounterValue{State: capabilities.CPUCounterStateCollected}
-	incompleteOutput := capabilities.CPUCounterValue{State: capabilities.CPUCounterStateIncomplete, Payload: capabilities.CPUCounterPayload{Reason: &outputUnverified}}
-	incompleteCapture := capabilities.CPUCounterValue{State: capabilities.CPUCounterStateIncomplete, Payload: capabilities.CPUCounterPayload{Reason: &captureFailed}}
-	incompleteAnalysis := capabilities.CPUCounterValue{State: capabilities.CPUCounterStateIncomplete, Payload: capabilities.CPUCounterPayload{Reason: &analysisFailed}}
-	unavailable := capabilities.CPUCounterValue{State: capabilities.CPUCounterStateUnavailable}
+	collected := capabilities.CPUCounterCapabilityValue{State: capabilities.CPUCounterStateCollected}
+	incompleteOutput := capabilities.CPUCounterCapabilityValue{State: capabilities.CPUCounterStateIncomplete, Payload: map[string]any{"reason": outputUnverified}}
+	incompleteCapture := capabilities.CPUCounterCapabilityValue{State: capabilities.CPUCounterStateIncomplete, Payload: map[string]any{"reason": captureFailed}}
+	incompleteAnalysis := capabilities.CPUCounterCapabilityValue{State: capabilities.CPUCounterStateIncomplete, Payload: map[string]any{"reason": analysisFailed}}
+	unavailable := capabilities.CPUCounterCapabilityValue{State: capabilities.CPUCounterStateUnavailable}
 
 	for _, test := range []struct {
 		name      string
 		required  bool
-		published map[string]capabilities.CPUCounterValue
+		published map[string]capabilities.CPUCounterCapabilityValue
 		wantError string
 	}{
-		{"missing", false, map[string]capabilities.CPUCounterValue{}, "omitted final outcome"},
-		{"required_collected", true, map[string]capabilities.CPUCounterValue{"counter.cpu_cycles": collected}, ""},
-		{"required_unavailable", true, map[string]capabilities.CPUCounterValue{"counter.cpu_cycles": unavailable}, "finished with unavailable"},
-		{"required_output_unverified", true, map[string]capabilities.CPUCounterValue{"counter.cpu_cycles": incompleteOutput}, "finished with incomplete"},
-		{"required_record_failed", true, map[string]capabilities.CPUCounterValue{"counter.cpu_cycles": incompleteCapture}, "finished with record_failed"},
-		{"optional_unavailable", false, map[string]capabilities.CPUCounterValue{"counter.cpu_cycles": unavailable}, ""},
-		{"optional_output_unverified", false, map[string]capabilities.CPUCounterValue{"counter.cpu_cycles": incompleteOutput}, ""},
-		{"optional_record_failed", false, map[string]capabilities.CPUCounterValue{"counter.cpu_cycles": incompleteCapture}, "finished with record_failed"},
-		{"optional_reformat_failed", false, map[string]capabilities.CPUCounterValue{"counter.cpu_cycles": incompleteAnalysis}, "finished with reformat_failed"},
+		{"missing", false, map[string]capabilities.CPUCounterCapabilityValue{}, "omitted final outcome"},
+		{"required_collected", true, map[string]capabilities.CPUCounterCapabilityValue{"counter.cpu_cycles": collected}, ""},
+		{"required_unavailable", true, map[string]capabilities.CPUCounterCapabilityValue{"counter.cpu_cycles": unavailable}, "finished with unavailable"},
+		{"required_output_unverified", true, map[string]capabilities.CPUCounterCapabilityValue{"counter.cpu_cycles": incompleteOutput}, "finished with incomplete"},
+		{"required_record_failed", true, map[string]capabilities.CPUCounterCapabilityValue{"counter.cpu_cycles": incompleteCapture}, "finished with record_failed"},
+		{"optional_unavailable", false, map[string]capabilities.CPUCounterCapabilityValue{"counter.cpu_cycles": unavailable}, ""},
+		{"optional_output_unverified", false, map[string]capabilities.CPUCounterCapabilityValue{"counter.cpu_cycles": incompleteOutput}, ""},
+		{"optional_record_failed", false, map[string]capabilities.CPUCounterCapabilityValue{"counter.cpu_cycles": incompleteCapture}, "finished with record_failed"},
+		{"optional_reformat_failed", false, map[string]capabilities.CPUCounterCapabilityValue{"counter.cpu_cycles": incompleteAnalysis}, "finished with reformat_failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := &capabilities.CapabilityRequest{Required: []string{}, Optional: []string{}}

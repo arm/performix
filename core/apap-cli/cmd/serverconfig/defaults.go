@@ -34,7 +34,6 @@ const DefaultADBPath = "adb"
 
 const DefaultDaemonAutostart = true
 
-const EnableAndroidTargetsConfigKey = "enable-android-targets"
 const EnableProfilingFocusConfigKey = "enable-profiling-focus"
 const DaemonAutostartConfigKey = "daemon-autostart"
 

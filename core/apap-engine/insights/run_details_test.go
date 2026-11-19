@@ -53,6 +53,46 @@ func TestSummarizeRunDetails(t *testing.T) {
 	assert.Nil(t, payload.CPUTopology)
 }
 
+func TestSummarizeRunDetailsAndroidActivityArguments(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		activityArguments string
+		wantIncluded      bool
+	}{
+		{
+			name:              "includes Android activity arguments",
+			activityArguments: `--es greeting "hello world"`,
+			wantIncluded:      true,
+		},
+		{
+			name: "omits empty Android activity arguments",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given an Android run with the requested activity arguments.
+			desc := &run.RunDescription{
+				ID:                       "run123",
+				WorkloadType:             "Android Launch",
+				AndroidActivityArguments: tc.activityArguments,
+			}
+
+			// When the run details summary is built.
+			summary, err := SummarizeRunDetails(context.Background(), desc, nil)
+
+			// Then include non-empty arguments and omit an empty field.
+			require.NoError(t, err)
+			var payload runDetailsPayload
+			require.NoError(t, json.Unmarshal([]byte(summary.Payload), &payload))
+			assert.Equal(t, tc.activityArguments, payload.AndroidActivityArguments)
+			if tc.wantIncluded {
+				assert.Contains(t, summary.Payload, `"AndroidActivityArguments"`)
+			} else {
+				assert.NotContains(t, summary.Payload, `"AndroidActivityArguments"`)
+			}
+		})
+	}
+}
+
 func TestSummarizeRunDetailsIncludesSamplingParameters(t *testing.T) {
 	desc := &run.RunDescription{
 		ID: "run123",

@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# Direct dependencies for repository build scripts, tests and development tools.
+
+blackduck==1.1.3
+certifi>=2026.10.23
+detect-secrets==1.5.0
+flake8
+ghapi>=2.1.4,<3
+GitPython==3.2.1
+jsonschema==4.25.1
+matplotlib>=3.11.2
+mcp>=2.3.0,<3
+paramiko
+perfetto>=0.58.2,<0.59
+pip==26.2
+pip-tools==7.6.2
+psutil
+# PyArrow is only used by pytorch-collect tests; CI runs those on Linux.
+pyarrow; sys_platform != "win32"
+pylint
+pytest>=9.2.0
+pytest-xdist>=3.8.0
+PyYAML>=6.0,<7
+requests>=2.32.0
+reuse[charset-normalizer]==6.3.0
+rich>=14.1.0
+robotframework>=7.2.0
+robotframework-robocop<8.2.1
+robotframework-seleniumlibrary
+truststore>=0.10

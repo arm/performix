@@ -118,10 +118,13 @@ func TestProcessManagement(t *testing.T) {
 		assert.Equal(t, syscall.SIGKILL, reason.Signal())
 	})
 
-	t.Run("KillProcess errors when given a pid that does not exist", func(t *testing.T) {
-		// Kill an invalid process
-		err := pm.KillProcess(999999)
-		assert.ErrorContains(t, err, "failed to kill process 999999")
+	t.Run("KillProcess succeeds when the process group is already gone", func(t *testing.T) {
+		// Given a process group that does not exist.
+		const missingPID = 999999
+		// When termination is requested.
+		err := pm.KillProcess(missingPID)
+		// Then the requested outcome is already satisfied.
+		assert.NoError(t, err)
 	})
 
 	t.Run("InterruptProcess successfully interrupts a dummy process", func(t *testing.T) {

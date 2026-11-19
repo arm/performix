@@ -16,6 +16,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/client"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/mcpserver"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/server"
+	"github.com/Arm-Debug/apap-cli/apap-engine/clientcontext"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/api/apapproto"
@@ -57,7 +58,7 @@ func defaultMCPRunner(options mcpserver.MCPServerOptions) MCPRunner {
 	// Suppress the background runner's user-facing startup message because MCP
 	// stdout is reserved for protocol messages. Keep the engine in MCP's process
 	// group so client process-group signals stop both processes.
-	connector := client.NewAttachedAutostartClientWithOutput(io.Discard)
+	connector := client.NewAttachedAutostartClientWithOutput(io.Discard).WithClient(clientcontext.MCP)
 	shutter := server.NewShutter()
 	targets := target.NewDefaultTargetManager()
 	return &engineDaemonRunner{

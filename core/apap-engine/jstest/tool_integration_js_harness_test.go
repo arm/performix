@@ -68,6 +68,7 @@ func TestToolIntegrationJSHarness(t *testing.T) {
 						advice: [{ level: "info", messageCode: "a" }],
 					};
 				},
+				validate: () => {},
 				run: async (engine, ctx) => engine.log("run", ctx.params.value),
 				reformat: async (engine, ctx) => engine.log("reformat", ctx.params.value),
 				onStop: async (engine, ctx) => engine.log("stop", ctx.params.value),
@@ -121,6 +122,7 @@ func TestToolIntegrationJSHarness(t *testing.T) {
 				version: "1",
 				description: { short: "short", long: "long" },
 				probe: () => ({ available: true, capabilities: {}, advice: [] }),
+				validate: () => {},
 				run: async (engine) => {
 					const hostEngine = engine.withLocality("host");
 					const locality = hostEngine.getLocality();
@@ -151,6 +153,7 @@ func TestToolIntegrationJSHarness(t *testing.T) {
 				version: "1",
 				description: { short: "short", long: "long" },
 				probe: () => ({ available: true, capabilities: {}, advice: [] }),
+				validate: () => {},
 				run: async (engine) => {
 					const result = engine.createTempDir();
 					if (!(result instanceof Promise)) {
@@ -179,6 +182,7 @@ func TestToolIntegrationJSHarness(t *testing.T) {
 				version: "1",
 				description: { short: "short", long: "long" },
 				probe: () => ({ available: true, capabilities: {}, advice: [] }),
+				validate: () => {},
 				run: () => { throw new Error("boom"); },
 				reformat: () => {},
 				onStop: () => {},
@@ -201,6 +205,7 @@ func TestToolIntegrationJSHarness(t *testing.T) {
 				version: "1",
 				description: { short: "short", long: "long" },
 				probe: () => ({ available: true, capabilities: {}, advice: [] }),
+				validate: () => {},
 				run: (_engine, ctx) => {
 					if (ctx.params.value !== "a") throw new Error("unexpected params");
 					if (ctx.workload.type !== "launch") throw new Error("unexpected workload type");
@@ -255,6 +260,7 @@ func TestToolIntegrationJSHarness(t *testing.T) {
 						cause: "because",
 					}],
 				}),
+				validate: () => {},
 				run: () => {},
 				reformat: () => {},
 				onStop: () => {},
@@ -284,6 +290,7 @@ func TestToolIntegrationJSHarness(t *testing.T) {
 				version: "1",
 				description: { short: "short", long: "long" },
 				probe: () => ({ available: true, capabilities: {}, advice: [] }),
+				validate: () => {},
 				run: async (engine) => { await engine.createTempDir(); },
 				reformat: () => {},
 				onStop: () => {},
@@ -309,6 +316,7 @@ func TestToolIntegrationJSHarness(t *testing.T) {
 				version: "1",
 				description: { short: "short", long: "long" },
 				probe: () => ({ available: true, capabilities: {}, advice: [] }),
+				validate: () => {},
 				run: async (engine) => {
 					const winner = await Promise.race([
 						engine.createTempDir().then(() => "promise"),
@@ -366,6 +374,7 @@ func TestToJSProcessHandle(t *testing.T) {
 				version: "1",
 				description: { short: "short", long: "long" },
 				probe: () => ({ available: true, capabilities: {}, advice: [] }),
+				validate: () => {},
 				run: () => {},
 				reformat: () => {},
 				onStop: () => {},
@@ -422,6 +431,7 @@ func TestToJSProcessHandleNoOptions(t *testing.T) {
 				version: "1",
 				description: { short: "short", long: "long" },
 				probe: () => ({ available: true, capabilities: {}, advice: [] }),
+				validate: () => {},
 				run: () => {},
 				reformat: () => {},
 				onStop: () => {},

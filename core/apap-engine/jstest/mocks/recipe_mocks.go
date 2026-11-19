@@ -262,6 +262,7 @@ type RenderExecutionContext interface {
 	LogInfo(message string) error
 	LogWarn(message string) error
 	IsRerenderingEnabled() (bool, error)
+	IsCPUSchedulingEnabled() (bool, error)
 	IsNeoprofTimelineEnabled() (bool, error)
 }
 
@@ -343,6 +344,11 @@ func (m *MockRenderExecutionContext) IsRerenderingEnabled() (bool, error) {
 }
 
 func (m *MockRenderExecutionContext) IsNeoprofTimelineEnabled() (bool, error) {
+	args := m.Called()
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockRenderExecutionContext) IsCPUSchedulingEnabled() (bool, error) {
 	args := m.Called()
 	return args.Bool(0), args.Error(1)
 }

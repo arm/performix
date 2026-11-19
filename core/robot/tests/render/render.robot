@@ -8,6 +8,7 @@ Resource        ../../resources/keywords/target.resource
 Resource        ../../resources/keywords/render.resource
 Resource        ../../resources/keywords/process.resource
 Resource        ../../resources/keywords/environment.resource
+Resource        ../../resources/keywords/time_range_filter.resource
 
 Suite Setup     Render Suite Setup
 Suite Teardown  Render Suite Teardown
@@ -136,6 +137,16 @@ Run Render Successfully Filters a Code Hotspots Run by PID with SlAnalyze Render
   [Teardown]  Run Keywords  Stop Process On Target  ${PYTHON_PID}
   ...  AND  Stop Process On Target  ${YES_PID}
 
+Off-CPU Measurements Follow The Selected Time Range
+  [Documentation]  Render both off-CPU tables and verify a narrower time range reduces the sum of available off-CPU self measurements.
+  [Tags]  code-hotspots  off-cpu
+  [Setup]  Run Keywords  Skip Unless Target OS Is  ${OS_LINUX}
+  ...  AND  Prepare Render Capture Target
+  ...  AND  Run Code Hotspots With System-Wide And Capture Run ID  --param collect_off_cpu_time=true
+  Given The Run Exists  ${RUN_ID}
+  When The Off-CPU Run Is Rendered With A Time Filter  ${RUN_ID}
+  Then The Off-CPU Measurements Are Reduced
+
 ### CompareDrilldownFlat tests ###
 
 The Runs Can Be Invoke-Rendered With CompareDrilldownFlat
@@ -214,6 +225,15 @@ The Code Hotspots Run Renders Successfully
   Given The Run Exists  ${CODE_HOTSPOTS_RUN_ID_1}
   When Run Render  ${CODE_HOTSPOTS_RUN_ID_1}
   Then The Render Invocation Was Successful
+
+The Code Hotspots Thread Analysis Renders Successfully
+  [Documentation]  Check that a fresh Linux capture with scheduler data renders successfully.
+  [Tags]  code-hotspots  thread-analysis
+  [Setup]  Prepare Thread Analysis Run
+  Given The Run Exists  ${THREAD_ANALYSIS_RUN_ID}
+  When Run Render  ${THREAD_ANALYSIS_RUN_ID}
+  Then The Render Invocation Was Successful
+  [Teardown]  Clear Thread Analysis Test Environment
 
 The Memory Access Run Renders Successfully
   [Documentation]  Check that Memory Access run can be rendered.
@@ -484,11 +504,57 @@ Run CPU Microarchitecture With System-Wide And Capture Run ID
 
 Run Code Hotspots With System-Wide And Capture Run ID
   [Documentation]  Run code_hotspots system-wide and capture the run ID in a test variable
-  Run Code Hotspots Recipe  --system-wide --timeout 3 --param rich_data_capture=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  [Arguments]  ${extra_args}=${EMPTY}
+  Run Code Hotspots Recipe  --system-wide --timeout 3 --param rich_data_capture=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG} ${extra_args}
   The Last Command Succeeded
   ${run_id} =  Extract The Run ID
   The Run Exists  ${run_id}
   VAR  ${RUN_ID} =  ${run_id}  scope=TEST
+
+The Off-CPU Run Is Rendered With A Time Filter
+  [Arguments]  ${run_id}
+  ${unfiltered}  ${start}  ${end} =  Render Off-CPU Time  ${run_id}
+  ${partial_start}  ${partial_end} =  Calculate Middle Tenth Time Filter  ${start}  ${end}
+  ${filtered}  ${filtered_start}  ${filtered_end} =  Render Off-CPU Time
+  ...  ${run_id}  --param filter_start_time_ns=${partial_start} --param filter_end_time_ns=${partial_end}
+  Time Limits Should Match  ${start}  ${end}  ${filtered_start}  ${filtered_end}
+  VAR  ${UNFILTERED_OFF_CPU}  ${unfiltered}  scope=TEST
+  VAR  ${FILTERED_OFF_CPU}  ${filtered}  scope=TEST
+
+Render Off-CPU Time
+  [Arguments]  ${run_id}  ${flags}=${EMPTY}
+  Run Render With Flags  ${run_id}  flags=${flags}
+  TRY
+    The Render Invocation Was Successful
+    ${totals} =  Query Off-CPU Time
+    ${start}  ${end} =  Query Time Limits  ${G_RENDER_SESSION_ID}
+    RETURN  ${totals}  ${start}  ${end}
+  FINALLY
+    Run ATPerf CLI Command  render close ${G_RENDER_SESSION_ID}
+    The Last Command Succeeded
+  END
+
+Query Off-CPU Time
+  ${response} =  Parse Last JSON Stdout Line To Dictionary
+  VAR  ${entries}  ${response}[data][invocation][manifest][entry]
+  ${totals} =  Create Dictionary
+  FOR  ${renderer}  IN  flat_off_cpu  drilldown_off_cpu
+    ${tables} =  Evaluate
+    ...  [e['table_name'] for e in $entries if e.get('renderer_id', {}).get('value') == '${renderer}' and e['component_type'] == 'drilldown']
+    Length Should Be  ${tables}  1
+    ${query} =  Catenate
+    ...  "select coalesce(sum(d.measurement_value), 0) from ${tables}[0] d join ref_measurements m using (measurement_id)
+    ...  where ends_with(m.name, ' (self)')"
+    ${total} =  Query Single Value From Render Session  ${G_RENDER_SESSION_ID}  ${query}
+    Set To Dictionary  ${totals}  ${renderer}  ${total}
+  END
+  RETURN  ${totals}
+
+The Off-CPU Measurements Are Reduced
+  FOR  ${renderer}  IN  flat_off_cpu  drilldown_off_cpu
+    Should Be True  ${UNFILTERED_OFF_CPU}[${renderer}] > 0
+    Should Be True  0 <= ${FILTERED_OFF_CPU}[${renderer}] < ${UNFILTERED_OFF_CPU}[${renderer}]
+  END
 
 Invoke-Render Is Run With SlAnalyze Filtered By PID
   [Documentation]  Invoke-render slanalyze, symbols, and flat functions with PID filtering.
@@ -526,3 +592,16 @@ Get Process Command Name On Target
   ${name} =  Strip String  ${G_LAST_RESULT.stdout}
   ${lower} =  Convert To Lower Case  ${name}
   RETURN  ${lower}
+
+Prepare Thread Analysis Run
+  [Documentation]  Collect scheduler data for rendering with CPU scheduling enabled.
+  Skip Unless Target OS Is  ${OS_LINUX}
+  Set Performix Env Var  ENABLE_CPU_SCHEDULING  true
+  Prepare Render Capture Target
+  ${run_id} =  Run Code Hotspots Recipe And Extract Run ID
+  VAR  ${THREAD_ANALYSIS_RUN_ID} =  ${run_id}  scope=TEST
+
+Clear Thread Analysis Test Environment
+  [Documentation]  Clear the CPU scheduling feature flag.
+  IF  $G_TARGET_OS != $OS_LINUX  RETURN
+  Clear Performix Env Var  ENABLE_CPU_SCHEDULING

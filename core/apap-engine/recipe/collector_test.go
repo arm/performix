@@ -303,8 +303,9 @@ func TestCreateRun_HappyPath(t *testing.T) {
 		{
 			name: "Android launch",
 			wl: &tool.WorkloadAndroidLaunch{
-				PackageName:  "com.example.app",
-				ActivityName: ".MainActivity",
+				PackageName:       "com.example.app",
+				ActivityName:      ".MainActivity",
+				ActivityArguments: `--es greeting "hello world"`,
 			},
 			expected: []any{"Android Launch", "", nilMap, "", false, int64(-2), "com.example.app", ".MainActivity"},
 		},
@@ -392,6 +393,9 @@ func TestCreateRun_HappyPath(t *testing.T) {
 				assert.Equal(t, wl.expected[5], model.Metadata().Pid)
 				assert.Equal(t, wl.expected[6], model.Metadata().AndroidPackageName)
 				assert.Equal(t, wl.expected[7], model.Metadata().AndroidActivityName)
+				if android, ok := wl.wl.(*tool.WorkloadAndroidLaunch); ok {
+					assert.Equal(t, android.ActivityArguments, model.Metadata().AndroidActivityArguments)
+				}
 			})
 		}
 	}

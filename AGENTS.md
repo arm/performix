@@ -30,6 +30,7 @@ Keep information in the document whose role matches it:
 - [`README.md`](README.md) provides repository orientation and the documentation map.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) is the source of truth for setup, build, run, generation, test, message, and feature-flag workflows across both components, together with shared language-specific development guidance.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) defines pull-request, testing, labelling, and team conventions.
+- [`TEST.md`](TEST.md) is the source of truth for the list of Performix test suites. Keep coverage details and suite-specific instructions alongside each suite.
 - [`gui/README.md`](gui/README.md) and [`core/README.md`](core/README.md) explain component architecture, source structure, release boundaries, and component-specific testing strategy.
 - [`.github/docs/README.md`](.github/docs/README.md) describes CI workflows and reusable actions.
 - `AGENTS.md` files contain durable instructions for AI coding agents rather than user-facing development guidance.
@@ -54,11 +55,11 @@ Do not duplicate repository development procedures in component READMEs. Link to
 - Use the workflows documented in [`DEVELOPMENT.md`](DEVELOPMENT.md). Run `task --list` to discover tasks and prefer root aggregate tasks unless a narrower component task is appropriate.
 - Preserve component boundaries. Put shared guidance at the root and component-specific architecture or testing strategy in the relevant component README.
 - Keep documentation aligned with the nearest source of truth: Taskfiles for commands, source and configuration for behaviour, and CI workflows for automation.
-- Review Recall operation lives in `.github/docs/review-recall-shadow.md`. Edit the committed caller directly, using a published immutable shared-workflow revision, and validate it with workflow YAML linting and a completed hosted PR shadow run with inspected artifacts. Keep the Recall trial separate from the learned-memory shadow and retain its repository-variable activation gate. Grant `id-token: write` only on its reusable-workflow calling job so the shared workflow can isolate AWS IAM token issuance; the shared review job must retain explicit read permissions without OIDC. Use short-lived IAM database authentication, not stored database password secrets.
 - Treat generated protobuf clients and engine message codes as derived output. Shared protobuf changes can affect both core and GUI generated bindings; use the documented generation workflow and review the complete generated diff.
 - Use the [`technical-writing` skill](.agents/skills/technical-writing/SKILL.md) when authoring or reviewing user-facing message catalogue text and GUI message overrides.
 - Consider feature flags for risky or incomplete functional changes. Follow the root development guide before changing flag names, defaults, or loading behaviour, then apply the component-specific implementation rules.
 - Do not move detailed GUI guidance into core documentation or detailed core guidance into GUI documentation unless the change describes a shared boundary between them.
+- Before designing architectural changes, consult relevant [technical decision records](docs/tdrs/) and check the [TDR process](docs/tdrs/README.md) to determine whether a new proposal is needed.
 
 ## Contribution workflow
 

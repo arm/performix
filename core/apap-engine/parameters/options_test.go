@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/apiversion"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf/semver"
@@ -74,6 +75,56 @@ func TestConvertOptionValuesAndItems(t *testing.T) {
 			{Value: "b", Label: "B", Description: "Bee"},
 		}, items)
 	})
+
+	t.Run("preserves metadata", func(t *testing.T) {
+		// Given an option with string-valued metadata.
+		data := []any{map[string]any{
+			"value": "example",
+			"label": "Example",
+			"metadata": map[string]any{
+				"category": "Example category",
+				"code":     "3",
+			},
+		}}
+		// When converting the option.
+		values, items := ConvertOptionValuesAndItems(data)
+		// Then option values and metadata are preserved.
+		assert.Equal(t, []string{"example"}, values)
+		assert.Equal(t, []ParameterOption{{
+			Value:    "example",
+			Label:    "Example",
+			Metadata: map[string]string{"category": "Example category", "code": "3"},
+		}}, items)
+	})
+
+	t.Run("leaves absent metadata nil", func(t *testing.T) {
+		// Given an option without metadata.
+		data := []any{map[string]any{"value": "plain", "label": "Plain"}}
+		// When converting the option.
+		values, items := ConvertOptionValuesAndItems(data)
+		// Then the option has nil metadata.
+		assert.Equal(t, []string{"plain"}, values)
+		assert.Equal(t, []ParameterOption{{Value: "plain", Label: "Plain"}}, items)
+	})
+
+	t.Run("rejects invalid metadata", func(t *testing.T) {
+		for name, invalid := range map[string]any{
+			"string":           "text",
+			"array":            []any{"text"},
+			"non-string value": map[string]any{"code": 3},
+			"nested object":    map[string]any{"nested": map[string]any{}},
+		} {
+			t.Run(name, func(t *testing.T) {
+				// Given an option with invalid metadata.
+				data := []any{map[string]any{"value": "example", "label": "Example", "metadata": invalid}}
+				// When converting the option.
+				values, items := ConvertOptionValuesAndItems(data)
+				// Then invalid metadata is rejected.
+				assert.Nil(t, values)
+				assert.Nil(t, items)
+			})
+		}
+	})
 }
 
 func TestConvertRecipeSelectOptionValuesAndItems(t *testing.T) {
@@ -90,5 +141,113 @@ func TestConvertRecipeSelectOptionValuesAndItems(t *testing.T) {
 	t.Run("rejects string arrays for newer api versions", func(t *testing.T) {
 		_, _, err := ConvertRecipeSelectOptionValuesAndItems([]string{"a"}, semver.SemVer{Major: 1, Minor: 0, Patch: 1})
 		assert.EqualError(t, err, "select options for recipe api_version 1.0.1 must use option objects")
+	})
+
+	t.Run("preserves metadata", func(t *testing.T) {
+		// Given an option with string-valued metadata.
+		data := []any{map[string]any{
+			"value": "example",
+			"label": "Example",
+			"metadata": map[string]any{
+				"category": "Example category",
+				"code":     "3",
+			},
+		}}
+		// When converting the option.
+		values, items, err := ConvertRecipeSelectOptionValuesAndItems(data, semver.SemVer{Major: 1, Minor: 1})
+		// Then option values and metadata are preserved.
+		require.NoError(t, err)
+		assert.Equal(t, []string{"example"}, values)
+		assert.Equal(t, []ParameterOption{{
+			Value:    "example",
+			Label:    "Example",
+			Metadata: map[string]string{"category": "Example category", "code": "3"},
+		}}, items)
+	})
+
+	t.Run("leaves absent metadata nil", func(t *testing.T) {
+		// Given an option without metadata.
+		data := []any{map[string]any{"value": "plain", "label": "Plain"}}
+		// When converting the option.
+		values, items, err := ConvertRecipeSelectOptionValuesAndItems(data, semver.SemVer{Major: 1, Minor: 1})
+		// Then the option has nil metadata.
+		require.NoError(t, err)
+		assert.Equal(t, []string{"plain"}, values)
+		assert.Equal(t, []ParameterOption{{Value: "plain", Label: "Plain"}}, items)
+	})
+
+	t.Run("rejects invalid metadata", func(t *testing.T) {
+		for name, invalid := range map[string]any{
+			"string":           "text",
+			"array":            []any{"text"},
+			"non-string value": map[string]any{"code": 3},
+			"nested object":    map[string]any{"nested": map[string]any{}},
+		} {
+			t.Run(name, func(t *testing.T) {
+				// Given an option with invalid metadata.
+				data := []any{map[string]any{"value": "example", "label": "Example", "metadata": invalid}}
+				// When converting the option.
+				values, items, err := ConvertRecipeSelectOptionValuesAndItems(data, semver.SemVer{Major: 1, Minor: 1})
+				// Then invalid metadata is rejected.
+				require.ErrorContains(t, err, "metadata")
+				assert.Nil(t, values)
+				assert.Nil(t, items)
+			})
+		}
+	})
+}
+
+func TestConvertRecipeRadioOptionValuesAndItems(t *testing.T) {
+	t.Run("preserves metadata", func(t *testing.T) {
+		// Given an option with string-valued metadata.
+		data := []any{map[string]any{
+			"value": "example",
+			"label": "Example",
+			"metadata": map[string]any{
+				"category": "Example category",
+				"code":     "3",
+			},
+		}}
+		// When converting the option.
+		values, items, err := ConvertRecipeRadioOptionValuesAndItems(data, semver.SemVer{Major: 1, Minor: 1})
+		// Then option values and metadata are preserved.
+		require.NoError(t, err)
+		assert.Equal(t, []string{"example"}, values)
+		assert.Equal(t, []ParameterOption{{
+			Value:    "example",
+			Label:    "Example",
+			Metadata: map[string]string{"category": "Example category", "code": "3"},
+		}}, items)
+	})
+
+	t.Run("leaves absent metadata nil", func(t *testing.T) {
+		// Given an option without metadata.
+		data := []any{map[string]any{"value": "plain", "label": "Plain"}}
+		// When converting the option.
+		values, items, err := ConvertRecipeRadioOptionValuesAndItems(data, semver.SemVer{Major: 1, Minor: 1})
+		// Then the option has nil metadata.
+		require.NoError(t, err)
+		assert.Equal(t, []string{"plain"}, values)
+		assert.Equal(t, []ParameterOption{{Value: "plain", Label: "Plain"}}, items)
+	})
+
+	t.Run("rejects invalid metadata", func(t *testing.T) {
+		for name, invalid := range map[string]any{
+			"string":           "text",
+			"array":            []any{"text"},
+			"non-string value": map[string]any{"code": 3},
+			"nested object":    map[string]any{"nested": map[string]any{}},
+		} {
+			t.Run(name, func(t *testing.T) {
+				// Given an option with invalid metadata.
+				data := []any{map[string]any{"value": "example", "label": "Example", "metadata": invalid}}
+				// When converting the option.
+				values, items, err := ConvertRecipeRadioOptionValuesAndItems(data, semver.SemVer{Major: 1, Minor: 1})
+				// Then invalid metadata is rejected.
+				require.ErrorContains(t, err, "metadata")
+				assert.Nil(t, values)
+				assert.Nil(t, items)
+			})
+		}
 	})
 }

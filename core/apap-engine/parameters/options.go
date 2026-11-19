@@ -40,8 +40,12 @@ func ConvertOptionValuesAndItems(data []interface{}) ([]string, []ParameterOptio
 		if !ok {
 			return nil, nil
 		}
+		metadata, err := optionMetadata(option["metadata"])
+		if err != nil {
+			return nil, nil
+		}
 		results[i] = value
-		item := ParameterOption{Value: value}
+		item := ParameterOption{Value: value, Metadata: metadata}
 		if label, ok := option["label"].(string); ok {
 			item.Label = label
 		}
@@ -86,8 +90,12 @@ func convertRecipeOptionValuesAndItems(data any, apiVersion semver.SemVer, legac
 			if !ok {
 				return nil, nil, fmt.Errorf("%s option object at index %d must contain a string value field", paramType, i)
 			}
+			metadata, err := optionMetadata(option["metadata"])
+			if err != nil {
+				return nil, nil, fmt.Errorf("%s option at index %d: %w", paramType, i, err)
+			}
 			results[i] = value
-			item := ParameterOption{Value: value}
+			item := ParameterOption{Value: value, Metadata: metadata}
 			if label, ok := option["label"].(string); ok {
 				item.Label = label
 			}
@@ -100,6 +108,28 @@ func convertRecipeOptionValuesAndItems(data any, apiVersion semver.SemVer, legac
 	default:
 		return nil, nil, nil
 	}
+}
+
+func optionMetadata(value any) (map[string]string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	if metadata, ok := value.(map[string]string); ok {
+		return metadata, nil
+	}
+	metadata, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("metadata must be an object with string values")
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		text, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("metadata field %q must be a string", key)
+		}
+		out[key] = text
+	}
+	return out, nil
 }
 
 // ConvertRecipeSelectOptionValuesAndItems converts static or dynamic select

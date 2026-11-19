@@ -19,13 +19,24 @@ func TestInstructionResources(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
+	// When
 	init := client.InitializeResult()
+
+	// Then
 	assert.NotNil(t, init.Capabilities.Resources)
 	instructionRunes := []rune(init.Instructions)
-	instructionPrefix := string(instructionRunes[:min(512, len(instructionRunes))])
-	assert.Contains(t, instructionPrefix, "apx://instructions/performance-investigation")
+	assert.LessOrEqual(t, len(instructionRunes), 4096)
+	for _, uri := range []string{
+		"apx://instructions/recipe-selection",
+		"apx://instructions/analysing-runs",
+		"apx://instructions/performance-investigation",
+	} {
+		assert.Contains(t, init.Instructions, uri)
+	}
 
 	expected := map[string]string{
+		"apx://instructions/recipe-selection":          recipeSelectionGuide,
+		"apx://instructions/analysing-runs":            analysingRunsGuide,
 		"apx://instructions/performance-investigation": performanceInvestigationGuide,
 		"apx://instructions/jvm-guidance":              jvmGuide,
 	}
@@ -37,12 +48,17 @@ func TestInstructionResources(t *testing.T) {
 	documents := []string{init.Instructions}
 	for _, resource := range resources.Resources {
 		t.Run(resource.Name, func(t *testing.T) {
+			// Given
 			text, ok := expected[resource.URI]
 			require.True(t, ok, "unexpected resource URI: %s", resource.URI)
 			assert.NotEmpty(t, resource.Title)
 			assert.NotEmpty(t, resource.Description)
 			assert.Equal(t, "text/markdown", resource.MIMEType)
+
+			// When
 			read, err := client.ReadResource(ctx, &mcp.ReadResourceParams{URI: resource.URI})
+
+			// Then
 			require.NoError(t, err)
 			require.Len(t, read.Contents, 1)
 			assert.Equal(t, resource.URI, read.Contents[0].URI)

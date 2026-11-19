@@ -35,7 +35,8 @@ builds:
       - -tags=grpcnotrace
     ldflags:
       - >-
-        -s -w{{ if ne (envOrDefault "NO_INJECT" "") "1" }} -X github.com/Arm-Debug/apap-cli/atperf-version/versions.version={{ .Version }}{{ end }}
+        -s -w
+        -X github.com/Arm-Debug/apap-cli/atperf-version/versions.version={{ envOrDefault "PERFORMIX_ENGINE_VERSION" .Version }}
     hooks:
       post:
         - cmd: >-

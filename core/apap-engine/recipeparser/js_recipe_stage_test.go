@@ -132,6 +132,16 @@ func (m *mockExecutionContext) ProbeToolsFromIntegrations(ctx context.Context, c
 	return probeResults, errs
 }
 
+func (m *mockExecutionContext) ValidateToolsFromIntegrations(_ context.Context, _ *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext) ([]tool.ProbeResult, []error) {
+	results := make([]tool.ProbeResult, len(intCtxs))
+	errs := make([]error, len(intCtxs))
+	for i, ic := range intCtxs {
+		results[i] = *ic.Discovery
+		errs[i] = tool.AddCapabilitySelectionAdvice(&results[i], ic.CapabilityRequest)
+	}
+	return results, errs
+}
+
 func (m *mockExecutionContext) GetFeatureFlags() featureflags.Flags {
 	return m.featureFlags
 }

@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# Windows-only transitive dependencies omitted by pip-compile on macOS.
+# Keep this file separate: Dependabot cannot compile pywin32 on Linux.
+colorama==0.4.6
+pywin32==312

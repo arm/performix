@@ -158,7 +158,7 @@ class MCPClient:
                         if tool_name is None:
                             raise AssertionError("MCP tool name is required")
                         result = await session.call_tool(tool_name, arguments={})
-                        if result.isError:
+                        if result.is_error:
                             raise AssertionError(
                                 f"MCP tool {tool_name} returned an error"
                             )
@@ -175,7 +175,7 @@ class MCPClient:
                 self._verify_broken_pipe_shutdown_log(environment["APXD_LOG_FILE"])
             if interrupt_cleanup:
                 return result
-            return result.structuredContent
+            return result.structured_content
         finally:
             if engine_process is not None and engine_process.is_running():
                 engine_process.terminate()

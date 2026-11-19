@@ -107,6 +107,8 @@ const tool = {
     };
   },
 
+  validate: () => {},
+
   run: async (engine, ctx) => {
     engine.log(
       'info',

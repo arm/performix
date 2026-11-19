@@ -123,12 +123,13 @@ func (renderer *SlAnalyzeRenderer) Initialize(session render.Session, resolvedDa
 
 	pending := false
 	for entryIndex, entry := range session.Content().Entries {
+		collectOffCPUTime := entry.Model.Metadata().Parameters["collect_off_cpu_time"] == true
 		// Resolve capture.apc directory for the run.
 		captureDir, err := renderer.resolveCaptureRoot(entry.Model)
 		if errors.Is(err, cdf.ErrComponentPending) {
 			pending = true
 			// Add pending entries to the render manifest
-			if emitErr := renderer.emitOutputs(rerender, entry.ID, true); emitErr != nil {
+			if emitErr := renderer.emitOutputs(rerender, entry.ID, true, collectOffCPUTime); emitErr != nil {
 				return emitErr
 			}
 			// continue to allow outputs for other runs to be emitted; we will still return errcomponentpending in the end
@@ -173,7 +174,7 @@ func (renderer *SlAnalyzeRenderer) Initialize(session render.Session, resolvedDa
 		}
 
 		// Move outputs from temp render directory into the session render overlay.
-		if err := renderer.emitOutputs(rerender, entry.ID, false); err != nil {
+		if err := renderer.emitOutputs(rerender, entry.ID, false, collectOffCPUTime); err != nil {
 			return err
 		}
 	}
@@ -258,13 +259,14 @@ func (renderer *SlAnalyzeRenderer) buildSlAnalyzeArgs(slAnalyzePath, tempDir, ca
 }
 
 // emitOutputs moves sl-analyze outputs into the render overlay.
-func (renderer *SlAnalyzeRenderer) emitOutputs(rerender render.SessionRenderFS, runID run.RunID, pending bool) error {
+func (renderer *SlAnalyzeRenderer) emitOutputs(rerender render.SessionRenderFS, runID run.RunID, pending, collectOffCPUTime bool) error {
 	entity := renderer.getEntity()
 	outputs := []struct {
 		sourceRel      string
 		destRel        string
 		meta           render.OutputMetadata
 		allowNoMatches bool
+		isOffCPUOutput bool
 	}{
 		{
 			sourceRel: "symbols.json",
@@ -333,10 +335,59 @@ func (renderer *SlAnalyzeRenderer) emitOutputs(rerender render.SessionRenderFS, 
 			meta:           render.OutputMetadata{ComponentType: "disassembly_capture_samples", Version: "1.1"},
 			allowNoMatches: true,
 		},
+		{
+			sourceRel:      "call_tree_off-cpu.json",
+			destRel:        path.Join(entity, "output", "call_tree_off-cpu.json"),
+			meta:           render.OutputMetadata{ComponentType: "sl-collect-call-tree", Version: "1.0"},
+			isOffCPUOutput: true,
+		},
+		{
+			sourceRel:      "callpath_self_off-cpu.json",
+			destRel:        path.Join(entity, "output", "callpath_self_off-cpu.json"),
+			meta:           render.OutputMetadata{ComponentType: "sl-collect-metrics", Version: "1.0"},
+			isOffCPUOutput: true,
+		},
+		{
+			sourceRel:      "callpath_total_off-cpu.json",
+			destRel:        path.Join(entity, "output", "callpath_total_off-cpu.json"),
+			meta:           render.OutputMetadata{ComponentType: "sl-collect-metrics", Version: "1.0"},
+			isOffCPUOutput: true,
+		},
+		{
+			sourceRel:      "callpaths-capture-off_cpu.csv",
+			destRel:        path.Join(entity, "output", "callpaths-capture-off_cpu.csv"),
+			meta:           render.OutputMetadata{ComponentType: "sl-collect", Version: "1.0"},
+			isOffCPUOutput: true,
+		},
+		{
+			sourceRel:      "functions-capture-off_cpu.csv",
+			destRel:        path.Join(entity, "output", "functions-capture-off_cpu.csv"),
+			meta:           render.OutputMetadata{ComponentType: "sl-collect-flat-functions-csv", Version: "1.1"},
+			isOffCPUOutput: true,
+		},
+		{
+			sourceRel:      "disassembly-capture-off_cpu-*.csv",
+			destRel:        path.Join(entity, "output", "disassembly-capture-off_cpu-*.csv"),
+			meta:           render.OutputMetadata{ComponentType: "disassembly_capture_samples", Version: "1.1"},
+			allowNoMatches: true,
+			isOffCPUOutput: true,
+		},
+		{
+			sourceRel:      "sources-capture-off_cpu-*.csv",
+			destRel:        path.Join(entity, "output", "sources-capture-off_cpu-*.csv"),
+			meta:           render.OutputMetadata{ComponentType: "sl-collect-source-line-attribution", Version: "1.0"},
+			allowNoMatches: true,
+			isOffCPUOutput: true,
+		},
 	}
 
 	// Emit each output, allowing optional globbed files to be absent.
 	for _, output := range outputs {
+		// Required off-CPU files must not fall back to the unfiltered run when
+		// analysis fails to produce them. Older/off-CPU-disabled runs omit them.
+		if output.isOffCPUOutput && !collectOffCPUTime {
+			continue
+		}
 		if pending {
 			err := rerender.EmitPendingOutputForRun(runID, output.destRel, output.meta)
 			if err != nil {

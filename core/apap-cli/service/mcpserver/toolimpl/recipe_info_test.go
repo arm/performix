@@ -76,7 +76,7 @@ func TestRecipeInfoTool(t *testing.T) {
 					Base:         &apapproto.RecipeParameterBase{ID: "benchmark_set", Label: "Benchmark set", Description: "Select benchmark set."},
 					DefaultValue: "quick",
 					Options: []*apapproto.ParameterOption{
-						{Value: "quick", Label: "Quick", Description: optionDescription("Short smoke test")},
+						{Value: "quick", Label: "Quick", Description: optionDescription("Short smoke test"), Metadata: map[string]string{"category": "Smoke tests"}},
 						{Value: "all", Label: "All"},
 					},
 				}}},
@@ -125,6 +125,8 @@ func TestRecipeInfoTool(t *testing.T) {
 		assert.Equal(t, "quick", decoded.Parameters[0].Config.DefaultValue)
 		require.Len(t, decoded.Parameters[0].Config.OptionItems, 2)
 		assert.Equal(t, "Short smoke test", decoded.Parameters[0].Config.OptionItems[0].Description)
+		assert.Equal(t, map[string]string{"category": "Smoke tests"}, decoded.Parameters[0].Config.OptionItems[0].Metadata)
+		assert.Nil(t, decoded.Parameters[0].Config.OptionItems[1].Metadata)
 		assert.Equal(t, "checkbox", decoded.Parameters[1].Config.Type)
 		assert.Equal(t, true, decoded.Parameters[1].Config.DefaultValue)
 		require.Len(t, decoded.RenderParameters, 1)

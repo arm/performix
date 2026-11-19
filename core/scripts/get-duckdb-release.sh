@@ -11,28 +11,23 @@ cmd_arch=$2
 
 os=$cmd_os
 arch=$cmd_arch
-if [ "$os" == "linux" ] && [ "$cmd_arch" == "arm64" ]; then
-  arch=aarch64
-elif [ "$os" == "darwin" ]; then
+if [ "$os" == "darwin" ]; then
   os=osx
   arch=universal
 fi
 
-duckdb_version=v1.4.4
-filename=libduckdb-$os-$arch.zip
+duckdb_version=v2.0.0
+filename=duckdb-shared-libs-$os-$arch.tar.gz
 url=https://github.com/duckdb/duckdb/releases/download/$duckdb_version/$filename
 output_dir=$cmd_os/$cmd_arch
 
 mkdir -p deps/duckdb
 cd deps/duckdb
-if [ -x "$filename" ]; then
-  rm $filename
-fi
-wget $url
+wget -O "$filename" "$url"
 
 if [ -x "$output_dir" ]; then
   rm -r "$output_dir"
 fi
 
 mkdir -p "$output_dir"
-unzip "$filename" -d "$output_dir"
+tar -xzf "$filename" -C "$output_dir"

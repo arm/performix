@@ -19,6 +19,16 @@ Recipe-level render coverage lives in [`../recipejstest/code_hotspots_cpu_counte
 
 A CPU group is a set of CPUs grouped by the collector. Generated Parquet fixtures represent one group on which the profiled process never ran and another with recorded measurements. The tests verify that the inactive group's counter series remains queryable and returns no observations, while the active group's measurements remain available. These tests run as part of the engine Go unit tests.
 
+## Generated test Runs
+
+Fixtures registered in `generated_runs_test.go` are generated once per package
+execution and shared across the regression tests. Tests needing independent
+Runs copy the shared source. Files are temporary unless
+`APX_KEEP_GENERATED_TEST_DATA=1` is set. With retention enabled, tests generate
+Runs under `test-data/runs/generated/`, clearing previous data before generation.
+
+Available fixtures: [JFR execution samples](fixtures/jfr/README.md).
+
 ## JFR heap timeline origins
 
 [`../recipejstest/java_heap_timeline_test.go`](../recipejstest/java_heap_timeline_test.go)
@@ -46,7 +56,9 @@ When adding a new regression test:
 1. Add or reuse a fixture run under `test-data/runs`.
 2. Add a JSON test configuration under `test-data/tests`.
    The configuration can specify:
-   - `importedRuns`: optional logical run aliases that are resolved from a pre-recorded Artifactory run before the test session starts. `prerecordedRun.artifactDir` should point at the stable case directory that contains the exported `latest.zip`. The harness first uses `PERFORMIX_REGRESSIONTEST_PRERECORDED_RUN_CACHE_DIR` when it already contains that artifact, otherwise it downloads from `prerecordedRun.artifactoryRunBase` or `PERFORMIX_REGRESSIONTEST_ARTIFACTORY_RUN_BASE` with `ARTIFACTORY_API_TOKEN`.
+   - `importedRuns`: optional logical run aliases resolved before the test session starts. Each entry selects exactly one source: `prerecordedRun` or `generatedRun`. `prerecordedRun.artifactDir` should point at the stable case directory that contains the exported `latest.zip`. The harness first uses `PERFORMIX_REGRESSIONTEST_PRERECORDED_RUN_CACHE_DIR` when it already contains that artifact, otherwise it downloads from `prerecordedRun.artifactoryRunBase` or `PERFORMIX_REGRESSIONTEST_ARTIFACTORY_RUN_BASE` with `ARTIFACTORY_API_TOKEN`.
+     For generated data, `generatedRun` selects a fixture by its registered name in `generated_runs_test.go`. Each alias gets an independent copy of the shared source Run. Generated Runs require no credentials and can be combined with local or prerecorded Runs.
+     For example, `{"alias":"samples","generatedRun":"jfr_execution_samples"}` selects the JFR execution-sample fixture. Refer to `samples` in renderer `content`.
    - `renderers`: renderer names, optional renderer IDs, renderer configuration, and the run IDs to render.
    - `visualizations`: optional visualization IDs and configuration.
    - `queries`: optional SQL overrides for generated output tables. If no override is provided for a visible manifest entry, the harness queries all columns from that table in a deterministic order.
@@ -56,7 +68,12 @@ When adding a new regression test:
    These files are the contract for the regression test, so only commit changes that are expected from the feature or bug fix being tested.
 5. Run the normal engine test task without `REGEN=1` to make sure the checked-in truth data matches the renderer output.
 
-Tests that declare `importedRuns` are skipped when neither a local prerecorded-run cache nor `ARTIFACTORY_API_TOKEN` is available. That keeps ordinary local unit-test runs usable while still letting CI exercise the imported-run coverage.
+Tests that require a `prerecordedRun` are skipped when neither a local prerecorded-run cache nor `ARTIFACTORY_API_TOKEN` is available. Generated-only tests still run. That keeps ordinary local unit-test runs usable while still letting CI exercise the imported-run coverage.
+
+`TestGeneratedRunAliasesShouldResolveToIndependentRuns` checks generator selection and alias
+resolution through the JSON resource loader, including independent instances of
+the same fixture. Companion tests check invalid source declarations and access
+to local runs alongside generated fixtures.
 
 ## Refreshing Instruction Mix fidelity fixtures
 

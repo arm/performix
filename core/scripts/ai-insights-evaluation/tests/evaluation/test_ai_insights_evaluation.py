@@ -1290,8 +1290,68 @@ def pathways_result_data(output: Any) -> dict[str, Any]:
     return output
 
 
+def deduplicate_pathways_result(result: Any) -> None:
+    """Remove only plain text copies of an identical structured MCP result."""
+    if not isinstance(result, dict) or not isinstance(result.get("structuredContent"), dict):
+        return
+    if not isinstance(result.get("content"), list):
+        return
+    structured = json.dumps(result["structuredContent"], sort_keys=True, ensure_ascii=False)
+    retained = []
+    for item in result["content"]:
+        if isinstance(item, dict) and set(item) == {"type", "text"} and item["type"] == "text":
+            try:
+                # JSON equality must distinguish booleans, numbers and strings.
+                if json.dumps(json.loads(item["text"]), sort_keys=True, ensure_ascii=False) == structured:
+                    continue
+            except (ValueError, TypeError):
+                pass
+        retained.append(item)
+    result["content"] = retained
+
+
+def discard_pathways_event(event: dict[str, Any]) -> bool:
+    """Reduce known session overhead in place; retain unfamiliar evidence.
+
+    Return True to discard the event or False to keep it.
+    """
+    # Drop setup and usage metadata; actions and results are recorded separately.
+    if event.get("type") in {"session_meta", "world_state", "turn_context", "token_usage_record"}:
+        return True
+    payload = event.get("payload", {})
+    if not isinstance(payload, dict):
+        # Keep unfamiliar payloads to avoid losing evidence.
+        return False
+    # Token counts and task-start markers do not describe the investigation.
+    if event.get("type") == "event_msg" and payload.get("type") in {"token_count", "task_started"}:
+        return True
+    # Internal chat metadata is not evidence about the agent's work.
+    payload.pop("internal_chat_message_metadata_passthrough", None)
+    if payload.get("type") == "reasoning":
+        # Encrypted reasoning is unreadable to the judge.
+        payload.pop("encrypted_content", None)
+        # Keep reasoning text or unknown fields; drop records with neither.
+        if set(payload) <= {"type", "id", "summary", "content"} and not payload.get("summary") and not payload.get("content"):
+            return True
+    item = payload.get("item")
+    if payload.get("type") == "item_completed" and isinstance(item, dict):
+        # Completed reasoning records use the same retention rule.
+        if (item.get("type") == "Reasoning" and set(item) <= {"type", "id", "summary_text", "raw_content"}
+                and not item.get("summary_text") and not item.get("raw_content")):
+            return True
+        if item.get("type") == "McpToolCall":
+            # Keep structured results; remove only identical plain-text copies.
+            deduplicate_pathways_result(item.get("result"))
+    if payload.get("type") == "mcp_tool_call_end" and isinstance(payload.get("result"), dict):
+        # Apply the same duplicate removal to the older MCP result format.
+        result = payload["result"]
+        deduplicate_pathways_result(result.get("Ok", result))
+    # Other event types may contain investigation evidence.
+    return False
+
+
 def pathways_judge_records(raw: str) -> list[dict[str, Any]]:
-    """Pair tool calls and annotate results using recorded run IDs and column names."""
+    """Retain investigation evidence, linking requests by original session line."""
     evidence = []
     requests_by_id = {}
     runs_by_session = {}
@@ -1305,14 +1365,14 @@ def pathways_judge_records(raw: str) -> list[dict[str, Any]]:
         if not isinstance(event, dict):
             evidence.append({"session_line": number, "event": event})
             continue
-        payload = event.get("payload", {})
-        if event.get("type") == "event_msg" and payload.get("type") == "token_count":
+        if discard_pathways_event(event):
             continue
-        payload.pop("internal_chat_message_metadata_passthrough", None)
-        if payload.get("type") == "reasoning":
-            payload.pop("encrypted_content", None)  # Opaque ciphertext cannot be judged.
         record = {"session_line": number, "event": event}
-        payload = normalize_mcp_event(payload, PERFORMIX_SERVER)
+        try:
+            payload = normalize_mcp_event(event.get("payload", {}), PERFORMIX_SERVER)
+        except ValueError:
+            evidence.append(record)  # Preserve malformed evidence without inventing attribution.
+            continue
         call_id = payload.get("call_id")
         is_request = payload.get("type") in {"function_call", "custom_tool_call", "mcp_tool_call_begin"}
         if call_id and is_request:
@@ -1321,7 +1381,7 @@ def pathways_judge_records(raw: str) -> list[dict[str, Any]]:
         if output is not None:
             request = requests_by_id.get(call_id)
             if request:
-                record["request"] = request
+                record["request_session_line"] = request["session_line"]
             request_payload = normalize_mcp_event(request["event"]["payload"], PERFORMIX_SERVER) if request else payload
             invocation = request_payload.get("invocation") or {}
             tool = invocation.get("tool") if invocation.get("server") == PERFORMIX_SERVER else None
@@ -1330,7 +1390,7 @@ def pathways_judge_records(raw: str) -> list[dict[str, Any]]:
                 arguments = {}  # Invalid tool arguments provide no run attribution.
             run_id = arguments.get("run_id") or runs_by_session.get(arguments.get("session_id"))
             data = pathways_result_data(output) if tool in {
-                "run_recipe", "open_render_session", "generate_ai_insights", "run_query"} else {}
+                "run_recipe", "open_render_session", "generate_ai_insights"} else {}
             if tool == "run_recipe" and data.get("run_status") == "completed":
                 run_id = data.get("run_id")
             if tool in {"open_render_session", "generate_ai_insights"} and run_id:
@@ -1338,19 +1398,19 @@ def pathways_judge_records(raw: str) -> list[dict[str, Any]]:
                 if session_id:
                     runs_by_session[session_id] = run_id
             record["run_id"] = run_id
-            if tool == "run_query" and "columns" in data and "rows" in data:
-                columns = [column["name"] for column in data["columns"]]
-                # Duplicate SQL column names cannot be represented as named fields.
-                if len(set(columns)) == len(columns) and all(len(row) == len(columns) for row in data["rows"]):
-                    record["query_rows"] = [dict(zip(columns, row)) for row in data["rows"]]
         evidence.append(record)
     return evidence
 
 
-def pathways_judge_transcript(raw: str) -> str:
-    """Preserve the timeline and original line numbers alongside evidence annotations."""
-    return "\n".join(json.dumps(record, ensure_ascii=False, separators=(",", ":"))
-                     for record in pathways_judge_records(raw))
+def pathways_judge_limit(setting: str, default: int) -> int:
+    """Validate a configured Pathways request limit before making API calls."""
+    try:
+        limit = int(os.environ.get(setting, default))
+        if limit > 0:
+            return limit
+    except ValueError:
+        pass
+    raise AiInsightsConfigError(f"{setting} must be a positive integer")
 
 
 def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str, Any],
@@ -1372,8 +1432,14 @@ def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str,
         "response_under_test": response_text,
     }
     if pathways_evidence is not None:
-        prompt["pathways_evidence"] = {**pathways_evidence,
-            "session_jsonl": pathways_judge_transcript(pathways_evidence.get("session_jsonl", ""))}
+        raw = pathways_evidence.get("session_jsonl", "")
+        records = pathways_judge_records(raw)
+        prompt["pathways_evidence"] = {
+            **{key: value for key, value in pathways_evidence.items() if key != "session_jsonl"},
+            "session_records": records,
+        }
+        LOGGER.info("Pathways judge evidence for %s: %d transcript bytes, %d lines, %d retained records",
+                    test_id, len(raw.encode("utf-8")), len(raw.splitlines()), len(records))
     else:
         prompt["output_schema"] = {
             "label": "pass|fail",
@@ -1382,10 +1448,12 @@ def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str,
             "material_gaps": "string",
             "verdict_rationale": "string",
         }
+    prompt_text = (json.dumps(prompt, ensure_ascii=False, separators=(",", ":"))
+                   if pathways_evidence is not None else json.dumps(prompt))
     body = {
         "model": cfg["judge_model"],
         "reasoning": {"effort": cfg["judge_reasoning_effort"]},
-        "input": [{"role": "user", "content": [{"type": "input_text", "text": json.dumps(prompt)}]}],
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": prompt_text}]}],
     }
     if pathways_evidence is not None:
         properties = {
@@ -1395,10 +1463,12 @@ def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str,
             "measurement_evidence": {"type": "array", "items": {
                 "type": "object", "additionalProperties": False,
                 "properties": {
-                    "session_line": {"type": "integer"}, "quote": {"type": "string"},
+                    "session_line": {"type": "integer", "description": "Original result record's session_line."},
+                    "quote": {"type": "string"},
                     "run_id": {"type": ["string", "null"]},
                     "query_cell": {"type": ["object", "null"], "additionalProperties": False,
-                                   "properties": {"row": {"type": "integer"}, "column": {"type": "string"},
+                                   "properties": {"row": {"type": "integer", "description": "One-based row position in the result table."},
+                                                  "column": {"type": "string"},
                                                   "value": {"type": ["number", "string", "boolean", "null"]}},
                                    "required": ["row", "column", "value"]},
                 },
@@ -1411,20 +1481,17 @@ def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str,
     request_data = json.dumps(body).encode("utf-8")
     if pathways_evidence is not None:
         setting = "AI_INSIGHTS_PATHWAYS_JUDGE_MAX_REQUEST_BYTES"
-        try:
-            limit = int(os.environ.get(setting, DEFAULT_PATHWAYS_JUDGE_MAX_REQUEST_BYTES))
-            if limit <= 0:
-                raise ValueError
-        except ValueError:
-            raise AiInsightsConfigError(f"{setting} must be a positive integer byte count") from None
+        limit = pathways_judge_limit(setting, DEFAULT_PATHWAYS_JUDGE_MAX_REQUEST_BYTES)
         if len(request_data) > limit:
             raise RuntimeError(
                 f"Pathways judge request is {len(request_data):,} bytes; limit is {limit:,} bytes "
                 f"({setting}). No request was sent and no evidence was truncated."
             )
+        LOGGER.info("Pathways judge request for %s: %d bytes", test_id, len(request_data))
     url = f"{os.environ.get('OPENAI_API_BASE', DEFAULT_API_BASE).rstrip('/')}/responses"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     last_exc: Exception | None = None
+    started = time.monotonic()
     for attempt in range(1, 4):
         try:
             LOGGER.info("Judge attempt %d for %s", attempt, test_id)
@@ -1450,6 +1517,9 @@ def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str,
             }
             if pathways_evidence is not None:
                 verdict["measurement_evidence"] = parsed["measurement_evidence"]
+                LOGGER.info("Pathways judge completed for %s in %.1fs including retries; input tokens: %s",
+                            test_id, time.monotonic() - started,
+                            (payload.get("usage") or {}).get("input_tokens", "unreported"))
             return verdict
         except requests.HTTPError as exc:
             # Keep the rejection reason without archiving request headers or bodies.
@@ -1468,6 +1538,7 @@ def judge_response(test_id: str, rubric: str, response_text: str, cfg: dict[str,
                 raise last_exc from None
         except (requests.RequestException, json.JSONDecodeError, ValueError) as exc:
             last_exc = exc
+        LOGGER.warning("Judge attempt %d failed for %s: %s", attempt, test_id, last_exc)
         if attempt < 3:
             time.sleep(attempt)
     raise RuntimeError(f"judge unavailable after 3 attempts: {last_exc}")
@@ -1559,6 +1630,7 @@ def record_evaluation_properties(
     record_property("ai_mode", aggregate["mode"])
     record_property("ai_attempt", aggregate["attempt"])
     record_property("ai_attempts_total", aggregate["attempts_total"])
+    record_property("ai_min_pass_rate", aggregate.get("min_pass_rate", 1.0))
     record_property("ai_attempts", aggregate["attempts"])
     record_property("ai_passes", aggregate["passes"])
     record_property("ai_pass_rate", aggregate["pass_rate"])
@@ -2002,6 +2074,7 @@ def test_ai_insights(
         "mode": mode,
         "attempt": attempt,
         "attempts_total": attempts_total,
+        "min_pass_rate": pytestconfig._ai_insights_min_pass_rate,
         "attempts": len(scores),
         "passes": passes,
         "pass_rate": passes / len(scores) if scores else 0,

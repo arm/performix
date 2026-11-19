@@ -92,8 +92,9 @@ const CommandNotFoundExitCode int32 = 127
 // ProcessState is platform agnostic wrapper around a process, providing
 // a channel to signify process termination
 type ProcessState struct {
-	cmd    *exec.Cmd
-	exited chan struct{} // This channel is closed when the process exits
+	cmd        *exec.Cmd
+	cleanupErr error         // Published before exited is closed.
+	exited     chan struct{} // This channel is closed when the process exits
 }
 
 // WaitForExitCode waits for the process to exit and returns its exit code
@@ -103,7 +104,7 @@ func (ps *ProcessState) WaitForExitCode(ctx context.Context) (int, error) {
 	case <-ctx.Done():
 		return -1, ctx.Err()
 	case <-ps.exited:
-		return int(ps.cmd.ProcessState.ExitCode()), nil
+		return int(ps.cmd.ProcessState.ExitCode()), ps.cleanupErr
 	}
 }
 

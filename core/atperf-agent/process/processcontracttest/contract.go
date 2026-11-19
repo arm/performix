@@ -70,7 +70,12 @@ func EnvironmentSelector(keys ...string) (string, error) {
 // MarkerArgument returns harmless text which would create markerPath if a
 // direct-process argument were accidentally interpreted by a common shell.
 func MarkerArgument(markerPath string) string {
-	if runtime.GOOS == "windows" {
+	return MarkerArgumentForOS(markerPath, runtime.GOOS)
+}
+
+// MarkerArgumentForOS selects the target's syntax, not the test host's.
+func MarkerArgumentForOS(markerPath, goos string) string {
+	if goos == "windows" {
 		return fmt.Sprintf("& type nul > \"%s\"", markerPath)
 	}
 	return fmt.Sprintf("; touch %q", markerPath)
@@ -85,29 +90,39 @@ type TestingT interface {
 // PrepareProbe builds the standalone process probe once for the current test
 // run. The caller must invoke the returned cleanup function after all tests.
 func PrepareProbe() (func() error, error) {
+	outputPath, cleanup, err := BuildProbe(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return nil, err
+	}
+	probePath = outputPath
+	return func() error { probePath = ""; return cleanup() }, nil
+}
+
+// BuildProbe builds a probe for a target without requiring Go on that target.
+// Each call owns its output and can be used independently by transport tests.
+func BuildProbe(goos, goarch string) (string, func() error, error) {
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
-		return nil, fmt.Errorf("resolve process probe source directory")
+		return "", nil, fmt.Errorf("resolve process probe source directory")
 	}
 	packageDirectory := filepath.Dir(sourceFile)
 	outputName := "process-probe"
-	if runtime.GOOS == "windows" {
+	if goos == "windows" {
 		outputName += ".exe"
 	}
 	outputDirectory, err := os.MkdirTemp("", "performix-process-probe-")
 	if err != nil {
-		return nil, fmt.Errorf("create process probe directory: %w", err)
+		return "", nil, fmt.Errorf("create process probe directory: %w", err)
 	}
 	outputPath := filepath.Join(outputDirectory, outputName)
 	command := exec.Command("go", "build", "-o", outputPath, "./testdata/processprobe") //nolint:gosec // Fixed test helper package and temporary output.
 	command.Dir = packageDirectory
+	command.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
 	if output, err := command.CombinedOutput(); err != nil {
 		_ = os.RemoveAll(outputDirectory)
-		return nil, fmt.Errorf("build process probe: %w\n%s", err, output)
+		return "", nil, fmt.Errorf("build process probe: %w\n%s", err, output)
 	}
-	probePath = outputPath
-	return func() error {
-		probePath = ""
+	return outputPath, func() error {
 		return os.RemoveAll(outputDirectory)
 	}, nil
 }

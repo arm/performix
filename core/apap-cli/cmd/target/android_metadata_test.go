@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -155,9 +154,6 @@ func TestAndroidAddressPersistence(t *testing.T) {
 }
 
 func TestAndroidChecksPersistEngineAddressAfterLaterFailures(t *testing.T) {
-	previous := viper.GetBool(enableAndroidTargetsConfigKey)
-	viper.Set(enableAndroidTargetsConfigKey, true)
-	t.Cleanup(func() { viper.Set(enableAndroidTargetsConfigKey, previous) })
 	for _, operation := range []string{"test", "prepare-check"} {
 		t.Run(operation, func(t *testing.T) {
 			manager := engine_target.NewTargetManager(filepath.Join(t.TempDir(), "targets.json"), &noLocalhostVerifier{})

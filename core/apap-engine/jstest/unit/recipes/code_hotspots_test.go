@@ -21,7 +21,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 )
 
-func TestCodeHotspotsAdditionalEventOptions(t *testing.T) {
+func TestCodeHotspotsCPUEventOptions(t *testing.T) {
 	probeConfig := recipeparser.RunToolConfigurationsArg{
 		ToolConfigs: []recipeparser.ToolConfiguration{{
 			Name:     "neoprof",
@@ -31,7 +31,7 @@ func TestCodeHotspotsAdditionalEventOptions(t *testing.T) {
 		}},
 	}
 	discovered := map[string]any{
-		"unavailable.8": map[string]any{
+		"nativecounter.unavailable.8": map[string]any{
 			"componentType": map[string]any{"name": capabilities.NativeCPUCounter, "version": "1.0"},
 			"state":         "unavailable",
 		},
@@ -41,7 +41,7 @@ func TestCodeHotspotsAdditionalEventOptions(t *testing.T) {
 		},
 	}
 	for _, pmuID := range []string{"cluster1", "cluster0"} {
-		discovered[pmuID+".8"] = capabilities.NativeCPUCounterValue{
+		discovered[capabilities.NativeCPUCounterIDPrefix+pmuID+".8"] = capabilities.NativeCPUCounterValue{
 			ComponentType: capabilities.ComponentType{Name: capabilities.NativeCPUCounter, Version: "1.0"},
 			State:         "available",
 			Payload: capabilities.NativeCPUCounterPayload{
@@ -61,12 +61,12 @@ func TestCodeHotspotsAdditionalEventOptions(t *testing.T) {
 			if os == "linux" || os == "android" {
 				ctx.On("ProbeTools", probeConfig).Return([]tool.ProbeResult{{Available: true, Capabilities: discovered}}, nil).Once()
 				expected = []parameters.ParameterOption{
-					{Value: "cluster0.8", Label: "Instructions retired (Cortex-A78 / cluster0, 0x8)"},
-					{Value: "cluster1.8", Label: "Instructions retired (Cortex-A78 / cluster1, 0x8)"},
+					{Value: "cluster0.8", Label: "Instructions retired", Metadata: map[string]string{"pmuId": "cluster0", "pmuName": "Cortex-A78", "eventTitle": "Instructions retired", "eventCode": "0x8", "category": ""}},
+					{Value: "cluster1.8", Label: "Instructions retired", Metadata: map[string]string{"pmuId": "cluster1", "pmuName": "Cortex-A78", "eventTitle": "Instructions retired", "eventCode": "0x8", "category": ""}},
 				}
 			}
 
-			options, err := h.ComputeOptions(t, "additional_events", ctx)
+			options, err := h.ComputeOptions(t, "cpu_event", ctx)
 
 			require.NoError(t, err)
 			if os != "linux" && os != "android" {
@@ -84,7 +84,7 @@ func TestCodeHotspotsAdditionalEventOptions(t *testing.T) {
 		ctx.On("TargetInfo").Return(h.ToJSValue(t, map[string]any{"Os": map[string]any{"OSFamily": "linux"}}), nil)
 		ctx.On("ProbeTools", probeConfig).Return([]tool.ProbeResult{{Available: true, Capabilities: map[string]any{}}}, nil).Once()
 
-		options, err := h.ComputeOptions(t, "additional_events", ctx)
+		options, err := h.ComputeOptions(t, "cpu_event", ctx)
 
 		require.NoError(t, err)
 		assert.Empty(t, options)
@@ -92,18 +92,46 @@ func TestCodeHotspotsAdditionalEventOptions(t *testing.T) {
 	})
 }
 
+func TestCodeHotspotsRunForwardsCPUEvents(t *testing.T) {
+	// Given a Linux capture requesting CPU cycles and an additional event.
+	h := jstest.LoadRecipe(t, "code_hotspots", featureflags.Flags{CustomPMUCapture: true})
+	ctx := &mocks.MockRunExecutionContext{}
+	ctx.On("TargetInfo").Return(h.ToJSValue(t, map[string]any{"Os": map[string]any{"OSFamily": "linux"}}), nil)
+	ctx.On("GetWorkload").Return(recipeparser.WorkloadArg{Type: "systemWide"}, nil)
+	ctx.On("GetParameter", "sampling_freq").Return("normal", nil)
+	for _, parameter := range []string{"rich_data_capture", "reformat_on_host", "collect_java_stacks", "collect_dotnet_stacks"} {
+		ctx.On("GetParameter", parameter).Return(false, nil)
+	}
+	ctx.On("GetParameter", "cpu_event").Return([]string{"armv8_cortex_a78.8"}, nil).Once()
+	ctx.On("GetParameter", "collect_off_cpu_time").Return(false, nil).Once()
+	var config recipeparser.RunToolConfigurationsArg
+	ctx.On("RunTools", mock.Anything).Run(func(args mock.Arguments) {
+		config = args.Get(0).(recipeparser.RunToolConfigurationsArg)
+	}).Return(nil).Once()
+
+	// When running the recipe.
+	err := h.RecipeRun(t, ctx)
+
+	// Then both counters are requested through the capability contract.
+	require.NoError(t, err)
+	require.Len(t, config.ToolConfigs, 1)
+	assert.Equal(t, []string{"counter.cpu_cycles", "nativecounter.armv8_cortex_a78.8"}, config.ToolConfigs[0].CapabilityRequest.Required)
+	ctx.AssertExpectations(t)
+}
+
 func TestCodeHotspotsRunSelectsJfr(t *testing.T) {
 	for _, os := range []string{"Linux", "Android"} {
 		for _, java := range []bool{false, true} {
 			for _, flag := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/Java=%t/Jfr=%t", os, java, flag), func(t *testing.T) {
+					// Given: Java collection controls on a supported target.
 					h := jstest.LoadRecipe(t, "code_hotspots")
 					ctx := &mocks.MockRunExecutionContext{}
-					ctx.On("IsNeoprofTimelineEnabled").Return(false, nil)
 					ctx.On("IsJfrCaptureEnabled").Return(flag, nil).Maybe()
 					ctx.On("GetWorkload").Return(recipeparser.WorkloadArg{Type: "systemWide"}, nil)
 					ctx.On("GetParameter", "sampling_freq").Return("normal", nil)
 					ctx.On("TargetInfo").Return(h.ToJSValue(t, map[string]any{"Os": map[string]any{"OSFamily": os}}), nil)
+					ctx.On("GetParameter", "collect_off_cpu_time").Return(false, nil)
 					ctx.On("GetParameter", "rich_data_capture").Return(true, nil)
 					if os == "Linux" {
 						ctx.On("GetParameter", "reformat_on_host").Return(false, nil)
@@ -120,7 +148,10 @@ func TestCodeHotspotsRunSelectsJfr(t *testing.T) {
 						}
 						return p["collect_jfr"] == (java && flag) && p["collect_java_stacks"] == java && p["collect_dotnet_stacks"] == true && p["rich_data_capture"] == true
 					})).Return(nil).Once()
-					assert.NoError(t, h.RecipeRun(t, ctx))
+					// When: collection starts.
+					err := h.RecipeRun(t, ctx)
+					// Then: Java collection still follows its own controls.
+					assert.NoError(t, err)
 					ctx.AssertExpectations(t)
 				})
 			}
@@ -130,15 +161,16 @@ func TestCodeHotspotsRunSelectsJfr(t *testing.T) {
 }
 
 func TestCodeHotspotsReadyAllowsJavaAnalysisBeforeWorkloadSelection(t *testing.T) {
+	// Given: Java collection is enabled for the selected workload.
 	harness := jstest.LoadRecipe(t, "code_hotspots")
 	context := &mocks.MockReadyExecutionContext{}
-	context.On("IsNeoprofTimelineEnabled").Return(false, nil)
 	context.On("IsJfrCaptureEnabled").Return(true, nil)
 	context.On("GetWorkload").Return(recipeparser.WorkloadArg{}, nil)
 	context.On("GetParameter", "sampling_freq").Return("normal", nil)
 	context.On("GetParameter", "reformat_on_host").Return(false, nil)
 	context.On("GetParameter", "collect_java_stacks").Return(true, nil)
 	context.On("GetParameter", "collect_dotnet_stacks").Return(false, nil)
+	context.On("GetParameter", "collect_off_cpu_time").Return(false, nil)
 	context.On("GetParameter", "rich_data_capture").Return(false, nil)
 	context.On("TargetInfo").Return(harness.ToJSValue(t, map[string]any{
 		"Os":             map[string]any{"OSFamily": "Linux"},
@@ -156,8 +188,10 @@ func TestCodeHotspotsReadyAllowsJavaAnalysisBeforeWorkloadSelection(t *testing.T
 	context.On("GetTelemetrySpecification", "Neoverse-N1").
 		Return(harness.ToJSValue(t, "available"), nil)
 
+	// When: readiness probes the collection configuration.
 	output, err := harness.RecipeReady(t, context)
 
+	// Then: Java readiness behavior is unchanged.
 	assert.NoError(t, err)
 	assert.Equal(t, recipe.ReadyStatusReady, output.Status)
 	assert.Empty(t, output.Advice)
@@ -165,15 +199,16 @@ func TestCodeHotspotsReadyAllowsJavaAnalysisBeforeWorkloadSelection(t *testing.T
 }
 
 func TestCodeHotspotsReadyAllowsJavaAnalysisForAttachWorkload(t *testing.T) {
+	// Given: Java collection is enabled for the selected workload.
 	harness := jstest.LoadRecipe(t, "code_hotspots")
 	context := &mocks.MockReadyExecutionContext{}
-	context.On("IsNeoprofTimelineEnabled").Return(false, nil)
 	context.On("IsJfrCaptureEnabled").Return(true, nil)
 	context.On("GetWorkload").Return(recipeparser.WorkloadArg{Type: "attach", Data: 42}, nil)
 	context.On("GetParameter", "sampling_freq").Return("normal", nil)
 	context.On("GetParameter", "reformat_on_host").Return(false, nil)
 	context.On("GetParameter", "collect_java_stacks").Return(true, nil)
 	context.On("GetParameter", "collect_dotnet_stacks").Return(false, nil)
+	context.On("GetParameter", "collect_off_cpu_time").Return(false, nil)
 	context.On("GetParameter", "rich_data_capture").Return(false, nil)
 	context.On("TargetInfo").Return(harness.ToJSValue(t, map[string]any{
 		"Os":             map[string]any{"OSFamily": "Linux"},
@@ -189,10 +224,48 @@ func TestCodeHotspotsReadyAllowsJavaAnalysisForAttachWorkload(t *testing.T) {
 	context.On("GetTelemetrySpecification", "Neoverse-N1").
 		Return(harness.ToJSValue(t, "available"), nil)
 
+	// When: readiness probes the collection configuration.
 	output, err := harness.RecipeReady(t, context)
 
+	// Then: Java readiness behavior is unchanged.
 	assert.NoError(t, err)
 	assert.Equal(t, recipe.ReadyStatusReady, output.Status)
 	assert.Empty(t, output.Advice)
 	context.AssertExpectations(t)
+}
+
+func TestCodeHotspotsForwardsOffCPUParameter(t *testing.T) {
+	for _, os := range []string{"Linux", "Android"} {
+		for _, enabled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/enabled=%t", os, enabled), func(t *testing.T) {
+				// Given
+				h := jstest.LoadRecipe(t, "code_hotspots")
+				var checkboxIDs []string
+				for _, parameter := range h.RecipeProperties().Parameters.Checkbox {
+					checkboxIDs = append(checkboxIDs, parameter.ID)
+				}
+				ctx := &mocks.MockRunExecutionContext{}
+				ctx.On("TargetInfo").Return(h.ToJSValue(t, map[string]any{"Os": map[string]any{"OSFamily": os}}), nil)
+				ctx.On("GetWorkload").Return(recipeparser.WorkloadArg{Type: "systemWide"}, nil)
+				ctx.On("GetParameter", "collect_off_cpu_time").Return(enabled, nil)
+				ctx.On("GetParameter", "sampling_freq").Return("normal", nil)
+				ctx.On("GetParameter", mock.Anything).Return(false, nil)
+				var config recipeparser.RunToolConfigurationsArg
+				ctx.On("RunTools", mock.Anything).Run(func(args mock.Arguments) {
+					config = args.Get(0).(recipeparser.RunToolConfigurationsArg)
+				}).Return(nil).Once()
+
+				// When
+				err := h.RecipeRun(t, ctx)
+
+				// Then
+				require.NoError(t, err)
+				require.Contains(t, checkboxIDs, "collect_off_cpu_time")
+				require.Len(t, config.ToolConfigs, 1)
+				assert.Equal(t, "neoprof", config.ToolConfigs[0].Name)
+				assert.Equal(t, enabled, config.ToolConfigs[0].Params["collect_off_cpu_time"])
+				ctx.AssertExpectations(t)
+			})
+		}
+	}
 }

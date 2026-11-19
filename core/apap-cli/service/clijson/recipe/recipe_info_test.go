@@ -4,14 +4,31 @@
 package recipe
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
+
+func TestOptionMetadataJSON(t *testing.T) {
+	// Given options with and without metadata
+	options := []*apapproto.ParameterOption{
+		{Value: "example", Label: "Example", Metadata: map[string]string{"category": "Example category", "code": "3"}},
+		{Value: "plain", Label: "Plain"},
+	}
+	// When rendering options
+	items := ConvertOptionItems(options)
+	encoded, err := json.Marshal(items)
+	// Then metadata is included only when present and fields retain their values.
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"value":"example","label":"Example","metadata":{"category":"Example category","code":"3"}},{"value":"plain","label":"Plain"}]`, string(encoded))
+	assert.Equal(t, []string{"example", "plain"}, optionValues(items))
+}
 
 func TestConvertRecipeStruct(t *testing.T) {
 	tests := []struct {

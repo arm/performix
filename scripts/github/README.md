@@ -5,11 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 
 # GitHub Actions Perfetto trace
 
-`actions_perfetto_trace.py` turns one or more GitHub Actions run URLs into a native protobuf trace that can be opened with [Perfetto](https://ui.perfetto.dev/). Set `GITHUB_TOKEN` (or `GH_TOKEN`) to a token with Actions, contents, and pull-request read access, then install the Python dependencies in a virtual environment. An existing `gh` login can supply the token with `export GITHUB_TOKEN="$(gh auth token)"`.
+`task ci:trace` turns one or more GitHub Actions run URLs into a native protobuf trace that can be opened with [Perfetto](https://ui.perfetto.dev/). Run it from the repository root. Set `GITHUB_TOKEN` (or `GH_TOKEN`) to a token with Actions, contents, and pull-request read access. An existing `gh` login can supply the token with `export GITHUB_TOKEN="$(gh auth token)"`.
 
 ```sh
-python -m pip install -r scripts/github/requirements.txt
-python scripts/github/actions_perfetto_trace.py \
+task ci:trace -- \
   https://github.com/Arm-Debug/performix/actions/runs/37640407122 \
   --output actions-trace.pftrace
 ```
@@ -26,7 +25,7 @@ Each run URL anchors a trigger. By default, the tool includes workflow runs with
 Pass several sources to compare them in one trace:
 
 ```sh
-python scripts/github/actions_perfetto_trace.py \
+task ci:trace -- \
   https://github.com/Arm-Debug/performix/actions/runs/37640407122 \
   https://github.com/Arm-Debug/performix/actions/runs/37779115331 \
   --output comparison.pftrace
@@ -39,7 +38,7 @@ The tool fetches independent job lists and workflow files concurrently, with at 
 A saved GitHub `pull_request` or `merge_group` webhook payload can be supplied in place of the run URL:
 
 ```sh
-python scripts/github/actions_perfetto_trace.py event.json \
+task ci:trace -- event.json \
   --output actions-trace.pftrace
 ```
 
@@ -48,7 +47,7 @@ The payload needs `repository.full_name` (or `--repo`) and a head SHA. The tool 
 For the unit-test workflow alone:
 
 ```sh
-python scripts/github/actions_perfetto_trace.py \
+task ci:trace -- \
   https://github.com/Arm-Debug/performix/actions/runs/37640407122 \
   --single-run --output unit-test-trace.pftrace
 ```

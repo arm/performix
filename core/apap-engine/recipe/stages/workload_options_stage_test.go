@@ -82,7 +82,7 @@ func TestWorkloadOptionsStageUpdateWorkingDir(t *testing.T) {
 	}
 	t.Run("doesn't resolve non-command workloads", func(t *testing.T) {
 		wls := []tool.Workload{
-			&tool.WorkloadAndroidLaunch{PackageName: "com.example.app", ActivityName: ".MainActivity"},
+			&tool.WorkloadAndroidLaunch{PackageName: "com.example.app", ActivityName: ".MainActivity", ActivityArguments: `--es greeting "hello world"`},
 			&tool.WorkloadAttach{PID: 1234},
 			&tool.WorkloadSystemWide{},
 		}

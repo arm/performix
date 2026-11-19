@@ -79,7 +79,6 @@ func newMCPStartCmd(newRunner func(mcpserver.MCPServerOptions) MCPRunner) *cobra
 			defer stop()
 
 			options := mcpserver.MCPServerOptions{
-				AndroidTargetsEnabled:     viper.GetBool(serverconfig.EnableAndroidTargetsConfigKey),
 				ProfilingFocusEnabled:     viper.GetBool(serverconfig.EnableProfilingFocusConfigKey),
 				SourceSharingAcknowledged: acknowledgeSourceSharing,
 			}

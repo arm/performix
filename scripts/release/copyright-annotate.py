@@ -93,7 +93,7 @@ HASH_STYLE_EXTENSIONS = {
 HASH_STYLE_FILENAMES = {
     "bootstrap",
     "makefile",
-    "requirements-dev.txt",
+    "requirements.txt",
 }
 
 DEFAULT_STYLE_FILENAMES = {

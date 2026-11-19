@@ -114,6 +114,8 @@ let tool = {
     };
   },
 
+  validate: () => {},
+
   run: async (engine, ctx) => {
     initialiseInterruptionState(ctx);
     throwIfUserInterrupted(engine, ctx, 'setup');

@@ -43,7 +43,7 @@ All metrics are sampled on an interval and written as a single CSV row.
 - Total process count from counting `/proc/<pid>` files
 - Total thread count from summing `Threads:` in `/proc/<pid>/status`
 - NUMA memory page rates, per-node page-rate balance, and locality percentages from default `numastat` output when available
-- Disk IOPS and bandwidth from `/proc/diskstats` + `/sys/block/<dev>/queue/hw_sector_size`
+- Disk IOPS and bandwidth from `/proc/diskstats`, using fixed 512-byte sectors
 - Network bandwidth per interface from `/proc/net/dev` (includes `lo`)
 
 ## CSV schema

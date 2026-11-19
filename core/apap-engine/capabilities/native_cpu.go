@@ -13,6 +13,7 @@ import (
 
 const NativeCPUCounter = "tool_capabilities/native_cpu_counter"
 const NativeCPUCounterVersion = "1.0"
+const NativeCPUCounterIDPrefix = "nativecounter."
 
 type NativeCPUCounterScope struct {
 	ID   string `json:"id"`
@@ -21,6 +22,7 @@ type NativeCPUCounterScope struct {
 
 type NativeCPUCounterPayload struct {
 	Title       string                `json:"title"`
+	Category    *string               `json:"category,omitempty"`
 	Description *string               `json:"description,omitempty"`
 	Units       *string               `json:"units,omitempty"`
 	PMU         NativeCPUCounterScope `json:"pmu"`
@@ -36,6 +38,11 @@ type NativeCPUCounterValue struct {
 }
 
 var canonicalNativeCPUCounterCode = regexp.MustCompile(`^0x(?:0|[1-9a-f][0-9a-f]*)$`)
+
+// IsNativeCPUCounterID reports whether id uses the native CPU counter namespace.
+func IsNativeCPUCounterID(id string) bool {
+	return strings.HasPrefix(id, NativeCPUCounterIDPrefix)
+}
 
 // Validate checks the counter's metadata, ID, and state/payload combination.
 // outcome is false for discovery results and true for collection results.
@@ -55,7 +62,7 @@ func (v NativeCPUCounterValue) Validate(id string, outcome bool) error {
 	for _, field := range []struct {
 		name  string
 		value *string
-	}{{"description", p.Description}, {"units", p.Units}} {
+	}{{"description", p.Description}, {"units", p.Units}, {"category", p.Category}} {
 		if field.value != nil && strings.TrimSpace(*field.value) == "" {
 			return fmt.Errorf("native CPU counter %q requires non-empty %s when present", id, field.name)
 		}
@@ -63,7 +70,7 @@ func (v NativeCPUCounterValue) Validate(id string, outcome bool) error {
 	if !canonicalNativeCPUCounterCode.MatchString(p.EventCode) {
 		return fmt.Errorf("native CPU counter %q requires a canonical hexadecimal eventCode", id)
 	}
-	expectedID := p.PMU.ID + "." + p.EventCode[2:]
+	expectedID := NativeCPUCounterIDPrefix + p.PMU.ID + "." + p.EventCode[2:]
 	if !validID.MatchString(id) || p.PMU.ID != strings.ToLower(p.PMU.ID) || id != expectedID {
 		return fmt.Errorf("invalid native CPU counter capability ID %q: expected %q from PMU and eventCode", id, expectedID)
 	}
@@ -110,7 +117,7 @@ func ParseNativeCPUCounterValue(id string, value any, outcome bool) (NativeCPUCo
 	if _, err := object(raw["componentType"], []string{"name", "version"}); err != nil {
 		return v, err
 	}
-	payload, err := object(raw["payload"], []string{"title", "pmu", "eventCode"}, "description", "units", "binding", "reason")
+	payload, err := object(raw["payload"], []string{"title", "pmu", "eventCode"}, "description", "units", "category", "binding", "reason")
 	if err != nil {
 		return v, err
 	}

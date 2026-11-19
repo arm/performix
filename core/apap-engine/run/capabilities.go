@@ -7,12 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 
 	log "github.com/sirupsen/logrus"
 
 	cpucap "github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
-	"github.com/Arm-Debug/apap-cli/apap-engine/util"
 )
 
 // RunCapabilities represents the capabilities for all tool invocations
@@ -35,7 +35,26 @@ type ToolCapability struct {
 	ComponentType cdf.ComponentType `json:"-"`
 }
 
+// loadedToolCapability keeps a decoded capability and its original JSON.
+// Validators use the original JSON to check for missing or unexpected fields.
+type loadedToolCapability struct {
+	ToolCapability
+	raw json.RawMessage
+}
+
 var capabilityPattern = regexp.MustCompile(`^(?P<invocationPath>tool/[^/]+(?:/[^/]+)?)/capabilities/(?P<capabilityId>[^/]+)\.json$`)
+
+// capabilityValidators lists capability component types that need schema validation.
+// Add new types here with their validator.
+var capabilityValidators = []struct {
+	types    []string
+	validate func(map[string]loadedToolCapability) error
+}{
+	{
+		types:    []string{cpucap.CPUCounter, cpucap.NativeCPUCounter},
+		validate: validateCPUCounterOutcomes,
+	},
+}
 
 // LoadRunCapabilities loads all capabilities for each of the specified runs into an
 // in-memory Go data structure.
@@ -53,7 +72,7 @@ var capabilityPattern = regexp.MustCompile(`^(?P<invocationPath>tool/[^/]+(?:/[^
 func LoadRunCapabilities(entries []cdf.ModelView) ([]RunCapabilities, error) {
 	capabilities := make([]RunCapabilities, len(entries))
 	for i, entry := range entries {
-		capabilitiesForRun := map[string]ToolCapabilities{}
+		loadedForRun := map[string]map[string]loadedToolCapability{}
 		components, err := entry.FindComponents("tool/**/capabilities/*")
 		if err != nil {
 			return nil, err
@@ -76,60 +95,27 @@ func LoadRunCapabilities(entries []cdf.ModelView) ([]RunCapabilities, error) {
 				return nil, err
 			}
 
-			var capability *ToolCapability
-			if len(contents) == 0 {
-				capability = &ToolCapability{}
-			} else {
-				capability, err = util.DecodeJSON[ToolCapability](contents)
-				if err != nil {
-					return nil, err
-				}
+			capability, err := decodeToolCapability(comp.Type, contents)
+			if err != nil {
+				return nil, err
 			}
-			if capability == nil {
-				return nil, fmt.Errorf("nil capability")
+			if _, ok := loadedForRun[invocationPath]; !ok {
+				loadedForRun[invocationPath] = map[string]loadedToolCapability{}
 			}
-			capability.ComponentType = comp.Type
-			if comp.Type.Name == cpucap.CPUCounter {
-				var envelope map[string]any
-				if err := json.Unmarshal(contents, &envelope); err != nil {
-					return nil, err
-				}
-				if _, exists := envelope["componentType"]; exists {
-					return nil, fmt.Errorf("CPU component type belongs in the manifest")
-				}
-				envelope["componentType"] = map[string]any{"name": comp.Type.Name, "version": comp.Type.SchemaVersion}
-				if _, err := cpucap.ParseCPUCounterValue(capabilityId, envelope, true); err != nil {
-					return nil, err
-				}
-			}
-			if _, ok := capabilitiesForRun[invocationPath]; !ok {
-				capabilitiesForInvocation := ToolCapabilities{capabilityId: *capability}
-				capabilitiesForRun[invocationPath] = capabilitiesForInvocation
-			} else if _, ok = capabilitiesForRun[invocationPath][capabilityId]; !ok {
-				capabilitiesForRun[invocationPath][capabilityId] = *capability
-			} else {
+			if _, exists := loadedForRun[invocationPath][capabilityId]; exists {
 				return nil, fmt.Errorf("duplicate capability: run %v, tool invocation %v, id %v", i, invocationPath, capabilityId)
 			}
+			loadedForRun[invocationPath][capabilityId] = capability
 		}
 
-		for _, invocation := range capabilitiesForRun {
+		capabilitiesForRun := map[string]ToolCapabilities{}
+		for invocationPath, invocation := range loadedForRun {
+			if err := validateToolCapabilities(invocation); err != nil {
+				return nil, err
+			}
+			capabilitiesForRun[invocationPath] = ToolCapabilities{}
 			for id, capability := range invocation {
-				if capability.ComponentType.Name != cpucap.CPUCounter {
-					continue
-				}
-				value, err := cpucap.ParseCPUCounterValue(id, map[string]any{"componentType": cpucap.ComponentType{Name: capability.ComponentType.Name, Version: capability.ComponentType.SchemaVersion}, "state": capability.State, "payload": capability.Payload}, true)
-				if err != nil {
-					return nil, err
-				}
-				for _, binding := range value.Payload.Bindings {
-					series, exists := invocation[binding.SeriesCapabilityID]
-					if !exists {
-						return nil, fmt.Errorf("CPU binding %q is missing from its tool invocation", binding.SeriesCapabilityID)
-					}
-					if err := cpucap.ValidateCPUCounterSeries(cpucap.ComponentType{Name: series.ComponentType.Name, Version: series.ComponentType.SchemaVersion}, series.State, series.Payload); err != nil {
-						return nil, err
-					}
-				}
+				capabilitiesForRun[invocationPath][id] = capability.ToolCapability
 			}
 		}
 		capabilities[i] = RunCapabilities{
@@ -139,6 +125,35 @@ func LoadRunCapabilities(entries []cdf.ModelView) ([]RunCapabilities, error) {
 	}
 
 	return capabilities, nil
+}
+
+// decodeToolCapability decodes common fields.
+func decodeToolCapability(componentType cdf.ComponentType, contents []byte) (loadedToolCapability, error) {
+	var capability ToolCapability
+	if len(contents) != 0 {
+		if err := json.Unmarshal(contents, &capability); err != nil {
+			return loadedToolCapability{}, err
+		}
+	}
+	capability.ComponentType = componentType
+	return loadedToolCapability{ToolCapability: capability, raw: contents}, nil
+}
+
+// validateToolCapabilities runs each matching validator once per invocation.
+// Unknown capability types receive only common checks.
+func validateToolCapabilities(invocation map[string]loadedToolCapability) error {
+	for _, validator := range capabilityValidators {
+		for _, capability := range invocation {
+			if !slices.Contains(validator.types, capability.ComponentType.Name) {
+				continue
+			}
+			if err := validator.validate(invocation); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return nil
 }
 
 func getCapabilityDetails(relativePath string) (string, string, bool) {

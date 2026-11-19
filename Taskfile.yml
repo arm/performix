@@ -13,6 +13,25 @@ includes:
     flatten: true
 
 tasks:
+  deps:python:
+    desc: Install shared Python dependencies in the active venv
+    run: once
+    env:
+      PIP_REQUIRE_VIRTUALENV: '1'
+    cmds:
+      - 'python -m pip install --disable-pip-version-check --no-deps -r "{{.TASKFILE_DIR}}/requirements.txt"{{if eq OS "windows"}} -r "{{.TASKFILE_DIR}}/requirements-windows.txt"{{end}}'
+      - python -m pip check
+
+  deps:python:lock:
+    desc: Regenerate pinned Python dependencies from requirements.in
+    dir: '{{.TASKFILE_DIR}}'
+    deps: [deps:python]
+    env:
+      PIP_REQUIRE_VIRTUALENV: '1'
+      CUSTOM_COMPILE_COMMAND: task deps:python:lock
+    cmds:
+      - python -m piptools compile --allow-unsafe --no-strip-extras --output-file=requirements.txt requirements.in {{.CLI_ARGS}}
+
   default:
     desc: List available repository tasks
     cmds:

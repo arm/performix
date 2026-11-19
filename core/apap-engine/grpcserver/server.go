@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	grpc_logrus "github.com/grpc-ecosystem/go-grpc-middleware/logging/logrus"
 	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
@@ -19,12 +20,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/clientcontext"
 	"github.com/Arm-Debug/apap-cli/apap-engine/featureflags"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcerrors"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpclogging"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/pidfiles"
+	"github.com/Arm-Debug/apap-cli/apap-engine/producttelemetry"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tlsconfig"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
@@ -138,12 +141,14 @@ func (s *GrpcServer) runServer() error {
 	grpcServer := grpc.NewServer(
 		grpc.Creds(serverCredentials),
 		grpc.ChainStreamInterceptor(
+			clientcontext.StreamServerInterceptor(),
 			grpclogging.StreamRPCStartInterceptor(log.NewEntry(log.StandardLogger())),
 			grpc_logrus.StreamServerInterceptor(log.NewEntry(log.StandardLogger()), logOpts...),
 			grpc_recovery.StreamServerInterceptor(grpc_recovery.WithRecoveryHandler(grpclogging.LogPanicCallStackFunc)),
 			message.ErrorHandlingServerStreamInterceptor(),
 		),
 		grpc.ChainUnaryInterceptor(
+			clientcontext.UnaryServerInterceptor(),
 			grpclogging.UnaryRPCStartInterceptor(log.NewEntry(log.StandardLogger())),
 			grpc_logrus.UnaryServerInterceptor(log.NewEntry(log.StandardLogger()), logOpts...),
 			grpc_recovery.UnaryServerInterceptor(grpc_recovery.WithRecoveryHandler(grpclogging.LogPanicCallStackFunc)),
@@ -163,7 +168,7 @@ func (s *GrpcServer) runServer() error {
 		LogLevel:             s.Config.LogLevel,
 		LogFile:              s.Config.LogPath,
 		SourceToolsDir:       s.Config.SrcToolsDirectory,
-		ConfigDirectory:      s.Config.ConfigDirectory,
+		ConfigDirectory:      configDir,
 		ADBPath:              s.Config.ADBPath,
 		ConfigFile:           s.Config.ConfigFile,
 		TelemetryEnabled:     s.Config.TelemetryEnabled,
@@ -176,6 +181,22 @@ func (s *GrpcServer) runServer() error {
 	apapServer, err := NewApapServer(ctx, packsServerConfig, deploymentPaths, cancel)
 	if err != nil {
 		return err
+	}
+	// Register cleanup before GracefulStop so active RPCs finish before draining.
+	if directory, err := producttelemetry.MarkerDirectory(); err != nil {
+		log.WithError(err).Warn("Could not initialize product event delivery")
+	} else {
+		apapServer.productTelemetry = producttelemetry.NewService(directory, func() bool {
+			enabled, _ := packsServerConfig.GetTelemetryPreference()
+			return enabled
+		}, producttelemetry.NewEnvelopeSender())
+		defer func() {
+			flushCtx, cancelFlush := context.WithTimeout(context.Background(), time.Second)
+			defer cancelFlush()
+			if err := apapServer.productTelemetry.Close(flushCtx); err != nil {
+				log.WithError(err).Debug("Product event shutdown flush incomplete")
+			}
+		}()
 	}
 	arrowToken, err := generateArrowToken()
 	if err != nil {

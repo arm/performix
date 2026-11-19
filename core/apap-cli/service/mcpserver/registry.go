@@ -35,13 +35,11 @@ func DefaultToolRegistry(options MCPServerOptions) ToolRegistry {
 		toolimpl.UpdateRunsTool{},
 		toolimpl.ImportRunTool{},
 		toolimpl.ExportRunTool{},
-		toolimpl.ListTargetsTool{AndroidTargetsEnabled: options.AndroidTargetsEnabled},
+		toolimpl.ListTargetsTool{},
 		toolimpl.SearchTargetProcessesTool{},
-		toolimpl.AddTargetTool{AndroidTargetsEnabled: options.AndroidTargetsEnabled},
-		toolimpl.RunRecipeTool{AndroidTargetsEnabled: options.AndroidTargetsEnabled},
-	}
-	if options.AndroidTargetsEnabled {
-		tools = append(tools, toolimpl.SearchAndroidPackagesTool{})
+		toolimpl.AddTargetTool{},
+		toolimpl.RunRecipeTool{},
+		toolimpl.SearchAndroidPackagesTool{},
 	}
 	return NewToolRegistry(tools...)
 }

@@ -2,6 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import shutil
+from types import SimpleNamespace
+
+import pytest
+
+from collector import _build_header, collect_sample, init_collector_state
 
 from compute import rate_from_delta
 from sources import read_diskstats, read_sector_size
@@ -69,3 +75,42 @@ def test_sector_size_defaults_to_512_when_sysfs_file_missing(tmp_path) -> None:
     (sys_root / "block" / "vda" / "queue").mkdir(parents=True)
 
     assert read_sector_size("vda", sys_root=str(sys_root)) == 512
+
+
+@pytest.mark.parametrize("sector_size", [4096, 512, None], ids=["4kn", "512", "missing"])
+def test_collector_disk_rates_use_512_byte_sectors(tmp_path, fixtures_dir, sector_size):
+    sys_root = tmp_path / "sys"
+    shutil.copytree(os.path.join(fixtures_dir, "sys"), sys_root)
+    sector_file = sys_root / "block" / "sda" / "queue" / "hw_sector_size"
+    if sector_size is None:
+        sector_file.unlink()
+    else:
+        sector_file.write_text(str(sector_size), encoding="utf-8")
+
+    def failed_numastat(_args):
+        return SimpleNamespace(returncode=1, stdout="")
+
+    state = init_collector_state(
+        os.path.join(fixtures_dir, "proc1"), str(sys_root), now=0,
+        numa_command_runner=failed_numastat,
+    )
+    header = _build_header(
+        state.cpu_ids, state.disk_devs, state.net_ifaces, state.numa_node_ids,
+    )
+    row = collect_sample(
+        state,
+        proc_root=os.path.join(fixtures_dir, "proc2"),
+        sys_root=str(sys_root),
+        tick_time=2,
+        elapsed=2,
+        uptime=2,
+        thread_scan_interval=10,
+        numa_command_runner=failed_numastat,
+    )
+    sample = dict(zip(header, row))
+
+    # Both sector counters increase by 60 over two seconds: 60 * 512 / 2.
+    assert sample["read_bps_sda"] == "15360.00"
+    assert sample["write_bps_sda"] == "15360.00"
+    assert sample["read_iops_sda"] == "10.00"
+    assert sample["write_iops_sda"] == "10.00"

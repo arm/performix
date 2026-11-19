@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
+	gojarequire "github.com/dop251/goja_nodejs/require"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
@@ -77,16 +78,18 @@ func TestSystemUtilizationSupportsAndroidWithNeoprof(t *testing.T) {
 }
 
 func TestSystemUtilizationNeoprofConfiguration(t *testing.T) {
+	// Given
 	recipePath := recipeTestPath(t, "system_utilization.js")
 	recipeSource, err := os.ReadFile(recipePath)
 	require.NoError(t, err)
 
 	vm := goja.New()
+	gojarequire.NewRegistry().Enable(vm)
 	require.NoError(t, vm.Set("recipeUtils", map[string]any{
 		"collectToolAdvice":        func() []any { return nil },
 		"toolStatusToRecipeStatus": func() string { return "ready" },
 	}))
-	_, err = vm.RunString(string(recipeSource))
+	_, err = vm.RunScript(recipePath, string(recipeSource))
 	require.NoError(t, err)
 
 	generateConfig, ok := goja.AssertFunction(vm.Get("generateNeoprofSysutilConfig"))
@@ -103,6 +106,7 @@ func TestSystemUtilizationNeoprofConfiguration(t *testing.T) {
 			map[string]any{"CoreNumber": 0},
 		},
 	}
+	// When
 	result, err := generateConfig(
 		goja.Undefined(),
 		vm.ToValue(workload),
@@ -111,6 +115,7 @@ func TestSystemUtilizationNeoprofConfiguration(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	// Then
 	config, ok := result.Export().(map[string]any)
 	require.True(t, ok)
 	toolConfigs, ok := config["toolConfigs"].([]any)

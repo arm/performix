@@ -66,6 +66,27 @@ func runInfoText(t *testing.T, desc clijson.CLIRunDescription) string {
 	return buf.String()
 }
 
+func TestRunInfoTextShowsAndroidActivityArguments(t *testing.T) {
+	// Given an Android run description with activity arguments.
+	activityArguments := `--es greeting "hello world"`
+	desc := clijson.CLIRunDescription{
+		ID:                       "android-run",
+		WorkloadType:             "Android Launch",
+		AndroidActivityArguments: activityArguments,
+		Target: clijson.CLITarget{
+			JSONTarget: engine_target.JSONTarget{
+				Value: &engine_target.JSONLocalTarget{},
+			},
+		},
+	}
+
+	// When run information is formatted as text.
+	output := runInfoText(t, desc)
+
+	// Then include the arguments in the Android Launch section.
+	assert.Contains(t, output, "Activity Arguments: "+activityArguments)
+}
+
 func TestInfoCommand(t *testing.T) {
 	t.Run("error is raised when no arguments specified", func(t *testing.T) {
 		client := apapprotomocks.NewApapClient(t)

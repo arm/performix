@@ -44,7 +44,7 @@ exports.createFixture = function (cpuCounters) {
   const saved = [];
   const warnings = [];
   const engine = {
-    isNeoprofTimelineEnabled: () => true,
+    isNeoprofTimelineEnabled: () => false,
     createTempDir: async () => '/tmp/cpu',
     execCommand: async (args) => {
       commands.push(args);
@@ -91,7 +91,7 @@ exports.createFixture = function (cpuCounters) {
   };
   function request(policy, text) {
     return {
-      params: { mode: 'samples' },
+      params: { mode: 'samples', export_timeline: true },
       metadata: {},
       discovery: { capabilities: { neoprof_cpu_counter_catalogue: text } },
       capabilityRequest: {

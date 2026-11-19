@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const nativeCPUCounterID = "example_a78.8"
+const nativeCPUCounterID = "nativecounter.example_a78.8"
 const availableNativeCPUCounter = `{
 	"componentType":{"name":"tool_capabilities/native_cpu_counter","version":"1.0"},
 	"state":"available",
@@ -48,10 +48,12 @@ func TestNativeCPUCounterDescriptor(t *testing.T) {
 	require.Error(t, err)
 
 	// Omit units and descriptions when they are unknown.
+	v.Payload.Category = nativeCPUCounterString("Example category")
 	v.Payload.Description = nil
 	v.Payload.Units = nil
 	encoded, err := json.Marshal(v)
 	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"category":"Example category"`)
 	require.NotContains(t, string(encoded), `"description"`)
 	require.NotContains(t, string(encoded), `"units"`)
 	require.NotContains(t, string(encoded), `"binding"`)
@@ -133,7 +135,7 @@ func TestNativeCPUCounterCodeValidation(t *testing.T) {
 		t.Run(code, func(t *testing.T) {
 			v := nativeCPUCounterFixture()
 			v.Payload.EventCode = code
-			parsed, err := ParseNativeCPUCounterValue("example_a78."+code[2:], v, false)
+			parsed, err := ParseNativeCPUCounterValue(NativeCPUCounterIDPrefix+"example_a78."+code[2:], v, false)
 			require.NoError(t, err)
 			require.Equal(t, code, parsed.Payload.EventCode)
 		})
@@ -150,12 +152,12 @@ func TestNativeCPUCounterCodeValidation(t *testing.T) {
 
 func TestNativeCPUCounterIDValidation(t *testing.T) {
 	v := nativeCPUCounterFixture()
-	for _, id := range []string{"", "example_a78", "example_a78.0x8", "example_a78.11", "other.8", "counter.cpu_cycles", "example_a78/8", "example_a78 8", "example_a78.8\n"} {
+	for _, id := range []string{"", "example_a78.8", "nativecounter.example_a78", "nativecounter.example_a78.0x8", "nativecounter.example_a78.11", "nativecounter.other.8", "counter.cpu_cycles", "nativecounter.example_a78/8", "nativecounter.example_a78 8", "nativecounter.example_a78.8\n"} {
 		_, err := ParseNativeCPUCounterValue(id, v, false)
 		require.ErrorContains(t, err, "capability ID")
 	}
 	v.Payload.PMU.ID = "example.a78"
-	_, err := ParseNativeCPUCounterValue("example.a78.8", v, false)
+	_, err := ParseNativeCPUCounterValue("nativecounter.example.a78.8", v, false)
 	require.NoError(t, err)
 }
 
@@ -208,9 +210,9 @@ func TestNativeCPUCounterDiscovery(t *testing.T) {
 	otherEvent := nativeCPUCounterFixture()
 	otherEvent.Payload.EventCode = "0x11"
 	require.NoError(t, ValidateNativeCPUCounterDiscovery(map[string]NativeCPUCounterValue{
-		nativeCPUCounterID: base,
-		"second_a78.8":     otherPMU,
-		"example_a78.11":   otherEvent,
+		nativeCPUCounterID:             base,
+		"nativecounter.second_a78.8":   otherPMU,
+		"nativecounter.example_a78.11": otherEvent,
 	}))
 	require.NoError(t, ValidateNativeCPUCounterDiscovery(map[string]NativeCPUCounterValue{}))
 
@@ -228,7 +230,7 @@ func TestNativeCPUCounterDiscovery(t *testing.T) {
 			v := nativeCPUCounterFixture()
 			v.Payload.EventCode = "0x11"
 			tc.mutate(&v)
-			err := ValidateNativeCPUCounterDiscovery(map[string]NativeCPUCounterValue{nativeCPUCounterID: base, "example_a78.11": v})
+			err := ValidateNativeCPUCounterDiscovery(map[string]NativeCPUCounterValue{nativeCPUCounterID: base, "nativecounter.example_a78.11": v})
 			require.ErrorContains(t, err, tc.errorText)
 		})
 	}

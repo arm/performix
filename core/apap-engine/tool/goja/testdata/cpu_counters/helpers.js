@@ -148,7 +148,7 @@ const scenarios = {
     };
     let timer;
     try {
-      const discovered = await Promise.race([
+      const { capabilities: discovered } = await Promise.race([
         cpuCounters.discover(engine, { metadata: {} }, '/collector'),
         new Promise((_, reject) => {
           timer = setTimeout(
@@ -190,7 +190,7 @@ const scenarios = {
     };
     for (const asPrivileged of [false, true]) {
       const calls = [];
-      const discovered = await cpuCounters.discover(
+      const { capabilities: discovered } = await cpuCounters.discover(
         {
           startProcess: async (args, opts) => {
             assertEqual(opts.asPrivileged, asPrivileged, 'Preserve privilege');
@@ -629,7 +629,7 @@ const scenarios = {
         'units="cycles" description="Pre-decode error &amp; ERROR: valid text"',
       ),
     };
-    const discovered = await cpuCounters.discover(
+    const { capabilities: discovered } = await cpuCounters.discover(
       {
         startProcess: async (args) =>
           commandHandle(catalogue[args[2].split('.')[0]]),
@@ -657,7 +657,7 @@ const scenarios = {
     const stderr = '  ' + diagnostics.join('\r\n') + '\r\n\r\n';
     const logs = [];
     const commands = [];
-    const discovered = await cpuCounters.discover(
+    const { capabilities: discovered } = await cpuCounters.discover(
       {
         log: (level, text) => logs.push({ level, text }),
         startProcess: async (args) => {

@@ -176,7 +176,6 @@ Tools Are Deployed For Recipe With Jitdump-JVM Tool Successfully
   Prepare The Test Target
   The Target Is Prepared
   Deploy Tools For Recipe  ${recipe}  --param collect_java_stacks=true
-  The Last Command Succeeded
   Jitdump-JVM Is Deployed
 
 Tools Are Deployed For Recipe Without Jitdump-JVM Tool Successfully
@@ -185,5 +184,4 @@ Tools Are Deployed For Recipe Without Jitdump-JVM Tool Successfully
   Prepare The Test Target
   The Target Is Prepared
   Deploy Tools For Recipe  ${recipe}
-  The Last Command Succeeded
   Jitdump-JVM Is Not Deployed

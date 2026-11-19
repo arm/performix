@@ -55,6 +55,7 @@ let tool = {
 	onCancel: (engine, ctx) => {},
 	onStop: (engine, ctx) => {},
 	probe: (engine, ctx) => {return {available: true, capabilities: {}, advice: [{level: "info", messageCode: "some.CODE"}]}},
+	validate: () => {},
 };
 `
 
@@ -69,6 +70,7 @@ let tool = {
 	onStop: () => {},
 	onCancel: () => {},
 	probe: () => ({available: true, capabilities: {}, advice: []}),
+	validate: () => {},
 };
 `
 
@@ -83,6 +85,7 @@ let tool = {
 	onCancel: (engine, ctx) => {},
 	onStop: (engine, ctx) => {},
 	probe: (engine, ctx) => {return {available: true, capabilities: {}, advice: [{level: "info", messageCode: "some.CODE"}]}},
+	validate: () => {},
 };
 `
 
@@ -103,6 +106,7 @@ let tool = {
 		finishProbe({available: false, capabilities: {}, advice: []});
 	},
 	probe: () => new Promise(resolve => { finishProbe = resolve; }),
+	validate: () => {},
 };
 `
 
@@ -1488,8 +1492,9 @@ func TestGetWorkload(t *testing.T) {
 	})
 	t.Run("getWorkload passes with valid Android launch workload", func(t *testing.T) {
 		recipeCtx := &recipe.RecipeCtx{ResolvedWorkload: &tool.WorkloadAndroidLaunch{
-			PackageName:  "com.example.app",
-			ActivityName: ".MainActivity",
+			PackageName:       "com.example.app",
+			ActivityName:      ".MainActivity",
+			ActivityArguments: `--es greeting "hello world"`,
 		}}
 		execCtx := &recipe.RunExecutionContext{Collector: &recipe.Collector{}, RecipeCtx: recipeCtx}
 
@@ -1505,8 +1510,9 @@ func TestGetWorkload(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "androidLaunch", workload.Type)
 		assert.Equal(t, AndroidLaunchWorkloadData{
-			PackageName:  "com.example.app",
-			ActivityName: ".MainActivity",
+			PackageName:       "com.example.app",
+			ActivityName:      ".MainActivity",
+			ActivityArguments: `--es greeting "hello world"`,
 		}, workload.Data)
 	})
 	t.Run("getWorkload fails with an argument", func(t *testing.T) {
@@ -2409,6 +2415,22 @@ func TestExtractWorkload(t *testing.T) {
 		},
 		{
 			name: "converts Android launch correctly",
+			input: WorkloadArg{
+				Type: "androidLaunch",
+				Data: map[string]any{
+					"packageName":       "com.example.app",
+					"activityName":      ".MainActivity",
+					"activityArguments": `--es greeting "hello world"`,
+				},
+			},
+			expectedOutput: &tool.WorkloadAndroidLaunch{
+				PackageName:       "com.example.app",
+				ActivityName:      ".MainActivity",
+				ActivityArguments: `--es greeting "hello world"`,
+			},
+		},
+		{
+			name: "converts Android launch without activity arguments",
 			input: WorkloadArg{
 				Type: "androidLaunch",
 				Data: map[string]any{

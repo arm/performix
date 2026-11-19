@@ -160,6 +160,11 @@ func (m *MockRecipeAPI) isRerenderingEnabled(call goja.FunctionCall) goja.Value 
 	return arg.Get(0).(goja.Value)
 }
 
+func (m *MockRecipeAPI) isCPUSchedulingEnabled(call goja.FunctionCall) goja.Value {
+	arg := m.Called(call)
+	return arg.Get(0).(goja.Value)
+}
+
 func (m *MockRecipeAPI) isNeoprofTimelineEnabled(call goja.FunctionCall) goja.Value {
 	arg := m.Called(call)
 	return arg.Get(0).(goja.Value)

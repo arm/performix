@@ -215,11 +215,12 @@ func (g *AgentEngine) ExecCommand(opts *process.LaunchCommand) (*process.Command
 	}
 
 	req := &targetagentproto.ExecCommandRequest{
-		Command:          opts.Command,
-		AsPrivileged:     opts.AsPrivileged,
-		Affinity:         opts.Affinity,
-		Environment:      opts.Environment,
-		WorkingDirectory: opts.WorkingDirectory,
+		Command:            opts.Command,
+		AsPrivileged:       opts.AsPrivileged,
+		Affinity:           opts.Affinity,
+		Environment:        opts.Environment,
+		WorkingDirectory:   opts.WorkingDirectory,
+		TemporaryDirectory: temporaryDirectoryToProto(opts.TemporaryDirectory),
 	}
 
 	var resp *targetagentproto.CommandResult
@@ -248,7 +249,7 @@ func (g *AgentEngine) ExecCommand(opts *process.LaunchCommand) (*process.Command
 		Rc:     resp.Rc,
 		Stdout: resp.Stdout,
 		Stderr: resp.Stderr,
-	}, nil
+	}, cleanupFailureFromProto(resp.CleanupFailureReason)
 }
 
 func (g *AgentEngine) StartProcess(opts *process.StartProcess) (ProcessHandle, error) {

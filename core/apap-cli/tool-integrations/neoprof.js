@@ -31,6 +31,7 @@ const {
   translateGPUCounters,
 } = require('./gpu-counters');
 const cpuCounters = require('./neoprof_cpu_counters');
+const gpuTimeline = require('./neoprof_gpu_timeline');
 const {
   resolveGPUHardwareCounterAliases,
 } = require('../recipes/lib/gpu-metrics');
@@ -128,10 +129,24 @@ function isRichDataCaptureEnabled(engine, ctx) {
 
 /**
  * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ */
+function isOffCPUEnabled(ctx) {
+  return (
+    ctx.params.mode === 'samples' && ctx.params.collect_off_cpu_time === true
+  );
+}
+
+/**
+ * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
  * @returns {boolean}
  */
 function isSysUtilWorkflow(ctx) {
   return ctx.params.workflow === 'sys_util';
+}
+
+/** @param {import("../recipes/docs/jsdocs").ToolContext} ctx @returns {boolean} */
+function shouldDownloadImages(ctx) {
+  return !isSysUtilWorkflow(ctx) && ctx.params.download_images !== false;
 }
 
 /** @param {import("../recipes/docs/jsdocs").ToolContext} ctx @returns {boolean} */
@@ -145,8 +160,8 @@ function hasRequestedGPUMetrics(ctx) {
 
 /**
  * Returns whether sl-analyze timeline exports are required for this invocation.
- * The sys_util workflow consumes the timeline as its primary output, so it
- * enables export independently of the provisional neoprof timeline flag.
+ * Recipes can require timeline export independently of the experimental flag.
+ * System Utilization and GPU metric requests also require timeline export.
  * @param {import("../recipes/docs/jsdocs").Engine} engine
  * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
  * @returns {boolean}
@@ -154,14 +169,20 @@ function hasRequestedGPUMetrics(ctx) {
 function isTimelineExportEnabled(engine, ctx) {
   return (
     engine.isNeoprofTimelineEnabled() ||
+    ctx.params.export_timeline === true ||
     isSysUtilWorkflow(ctx) ||
-    hasRequestedGPUMetrics(ctx)
+    hasRequestedGPUMetrics(ctx) ||
+    engine.isCPUSchedulingEnabled()
   );
 }
 
 function validateCPUCounterOptions(engine, ctx) {
   cpuCounters.validateOptions(ctx);
-  if (cpuCounters.selected(ctx) && !isTimelineExportEnabled(engine, ctx)) {
+  if (
+    (cpuCounters.cyclesSelected(ctx) ||
+      cpuCounters.requestedNativeEvents(ctx).length) &&
+    !isTimelineExportEnabled(engine, ctx)
+  ) {
     throw {
       code: 'tool_integrations.neoprof.CPU_COUNTER_OPTIONS_INVALID',
       metadata: { capability: cpuCounters.ID },
@@ -289,6 +310,12 @@ let tool = {
   },
   parameters: [
     {
+      id: 'export_timeline',
+      label: 'Export timeline',
+      description: 'Export timeline data required by the recipe.',
+      config: { type: 'checkbox', defaultValue: false },
+    },
+    {
       id: 'mode',
       label: 'Profiling mode',
       description:
@@ -313,11 +340,24 @@ let tool = {
       },
     },
     {
+      id: 'collect_gpu_timeline',
+      label: 'Collect GPU timeline',
+      description:
+        'Collect Vulkan GPU timeline and graph data for Android application launches.',
+      config: { type: 'checkbox', defaultValue: false },
+    },
+    {
       id: 'requested_gpu_metrics',
       label: 'GPU metrics',
       description:
         'Required in GPU mode: a non-empty JSON array of semantic GPU metrics to collect.',
       config: { type: 'input' },
+    },
+    {
+      id: 'collect_call_chains',
+      label: 'Collect call chains',
+      description: 'Unwind CPU call stacks when collecting samples.',
+      config: { type: 'checkbox', defaultValue: true },
     },
     {
       id: 'sampling_frequency',
@@ -401,6 +441,16 @@ let tool = {
       },
     },
     {
+      id: 'collect_off_cpu_time',
+      label: 'Collect off-CPU time',
+      description:
+        'Collect time spent blocked or waiting off CPU in samples mode.',
+      config: {
+        type: 'checkbox',
+        defaultValue: false,
+      },
+    },
+    {
       id: 'compute_cpu_pmu_events',
       label: 'Compute CPU PMU events',
       description: 'List available CPU PMU events when probing.',
@@ -426,6 +476,13 @@ let tool = {
         type: 'checkbox',
         defaultValue: false,
       },
+    },
+    {
+      id: 'download_images',
+      label: 'Download executable images',
+      description:
+        'Download target executables and libraries for source and disassembly output during host analysis.',
+      config: { type: 'checkbox', defaultValue: true },
     },
     {
       id: 'rich_data_capture',
@@ -463,7 +520,6 @@ let tool = {
       return probeCPUPMUEvents(engine, ctx);
     }
 
-    validateCPUCounterOptions(engine, ctx);
     const neoprofAsPrivileged = await isPrivilegeRequired(engine, ctx);
     engine.log('info', `Neoprof privilege requirement: ${neoprofAsPrivileged}`);
     ctx.metadata.neoprofAsPrivileged = neoprofAsPrivileged;
@@ -477,12 +533,6 @@ let tool = {
       capabilities: cpuCounters.initialProbeCapabilities(ctx),
       advice: [],
     };
-
-    const jfrValidation = validateNeoprofJfrMode(ctx);
-    if (jfrValidation) {
-      result.advice.push(jfrValidation);
-      return result;
-    }
 
     /** @type {string[] | null} */
     let requestedMetrics = null;
@@ -510,6 +560,18 @@ let tool = {
       );
       if (androidPackageAccessProbe.level !== 'ready') {
         result.advice.push(androidPackageAccessProbe);
+        return result;
+      }
+    }
+
+    if (gpuTimeline.isEnabled(ctx)) {
+      const layerProbe = await probeDeployment(
+        engine,
+        gpuTimeline.libraryPath(engine),
+        gpuTimeline.TOOL_GPU_LAYERS.name,
+      );
+      if (layerProbe.level !== 'ready') {
+        result.advice.push(layerProbe);
         return result;
       }
     }
@@ -648,24 +710,32 @@ let tool = {
           paths.slRecordDeployPath + 'gator-log.txt',
           'counter discovery log',
         );
-        Object.assign(
-          result.capabilities,
-          await cpuCounters.discover(
-            engine,
-            ctx,
-            paths.slRecordDeployPath + slRecordToolName,
-          ),
+        const counters = await cpuCounters.discover(
+          engine,
+          ctx,
+          paths.slRecordDeployPath + slRecordToolName,
         );
+        Object.assign(result.capabilities, counters.capabilities);
+        result.advice.push(...counters.advice);
+        if (counters.advice.length) result.available = false;
       }
-      result.advice.push(
-        ...probeResponse.advice.map((a) => {
-          return {
-            level: a.severity,
-            messageCode: 'tool_integrations.neoprof.SL_RECORD_PROBE_ADVICE',
-            metadata: { message: a.message },
-          };
-        }),
-      );
+      for (const item of probeResponse.advice) {
+        /** @type {import("../recipes/docs/jsdocs").ProbeAdvice} */
+        const advice = {
+          level: item.severity,
+          messageCode: 'tool_integrations.neoprof.SL_RECORD_PROBE_ADVICE',
+          metadata: { message: item.message },
+        };
+
+        if (item.severity === 'error') {
+          const error = matchNeoprofError(ctx, `ERROR: ${item.message}`);
+          if (error !== null) {
+            advice.messageCode = error.code;
+            advice.metadata = error.metadata;
+          }
+        }
+        result.advice.push(advice);
+      }
     }
 
     // Probe jitdump-jvm
@@ -686,16 +756,16 @@ let tool = {
     return result;
   },
 
-  run: async (engine, ctx) => {
+  validate: async (engine, ctx) => {
+    if (ctx.params.compute_cpu_pmu_events) {
+      return [];
+    }
     validateCPUCounterOptions(engine, ctx);
     const jfrValidation = validateNeoprofJfrMode(ctx);
-    if (jfrValidation) {
-      throw {
-        code: jfrValidation.messageCode,
-        metadata: jfrValidation.metadata,
-      };
-    }
+    return jfrValidation ? [jfrValidation] : [];
+  },
 
+  run: async (engine, ctx) => {
     const paths = getNeoprofPaths(engine);
     const jitdumpJvmDeployPath = paths.jitdumpJvmDeployPath;
     const dotnetAgentDeployPath = paths.dotnetAgentDeployPath;
@@ -728,7 +798,27 @@ let tool = {
       'capture log',
     );
 
-    const counterArgs = await cpuCounters.prepare(engine, ctx);
+    let counterCatalogue;
+    if (cpuCounters.requestedNativeEvents(ctx).length) {
+      const { catalogue, advice } = await cpuCounters.discover(
+        engine,
+        ctx,
+        paths.slRecordDeployPath + slRecordToolName,
+      );
+      if (advice.length) {
+        throw {
+          code: advice[0].messageCode,
+          metadata: advice[0].metadata,
+        };
+      }
+      counterCatalogue = catalogue;
+    }
+
+    const counterArgs = await cpuCounters.prepare(
+      engine,
+      ctx,
+      counterCatalogue,
+    );
     let outputDirectory = await engine.createTempDir();
     ctx.metadata.outputDirectory = outputDirectory;
     let captureDirectory = outputDirectory + '/capture.apc';
@@ -774,6 +864,7 @@ let tool = {
       ...counterArgs,
     ];
 
+    await gpuTimeline.prepare(engine, ctx);
     let recordArgs = buildRecordArgs(ctx, gpuCounters);
     processArgs.push(...recordArgs);
     engine.log(
@@ -1033,7 +1124,7 @@ let tool = {
 
     let runSlRecordErr = false;
     try {
-      ctx.metadata.cpuCounterAttempted = cpuCounters.selected(ctx);
+      ctx.metadata.cpuCounterAttempted = cpuCounters.cyclesSelected(ctx);
       await runSlRecord(engine, ctx, processArgs);
     } catch (err) {
       runSlRecordErr = true;
@@ -1054,7 +1145,7 @@ let tool = {
   reformat: async (engine, ctx) => {
     validateCPUCounterOptions(engine, ctx);
     if (ctx.params.reformat_on_host) {
-      const useTwoStageAnalyze = !isSysUtilWorkflow(ctx);
+      const useTwoStageAnalyze = shouldDownloadImages(ctx);
       return reformatOnHost(
         engine.withLocality('host'),
         ctx,
@@ -1401,6 +1492,9 @@ async function reformatOnHost(engine, ctx, useTwoStageAnalyze) {
     ctx.metadata.captureDirectory + '/**/*',
     hostCaptureDirectory + '/**/*',
   );
+
+  // Save the inputs from the existing host copy, without another target transfer.
+  emitHostCaptureInputs(engine, ctx, hostCaptureDirectory);
 
   const slAnalyzePath =
     paths.slAnalyzeDeployPath + getSlAnalyzeFilename(engine);
@@ -2219,13 +2313,18 @@ function workloadToSLArgs(workload) {
       return ['-S', 'yes'];
     case 'systemWide':
       return ['-S', 'yes'];
-    case 'androidLaunch':
-      return [
+    case 'androidLaunch': {
+      const args = [
         '--android-pkg',
         workload.packageName,
         '--android-activity',
         workload.activityName,
       ];
+      if (workload.activityArguments) {
+        args.push('--activity-args', workload.activityArguments);
+      }
+      return args;
+    }
     default:
       // This throw is fine as it will be scooped up into a SCRIPTED_STAGE_ERROR later (and there's no advice here anyway)
       throw new Error(
@@ -2316,6 +2415,10 @@ function buildTimeoutSignalArgs(engine, ctx) {
 function buildRecordArgs(ctx, gpuCounters = []) {
   let args = [];
 
+  if (isOffCPUEnabled(ctx)) {
+    args.push('--off-cpu-time', 'yes');
+  }
+
   const mode = ctx.params['mode'];
   const samplingFrequency = ctx.params['sampling_frequency'];
   const metricsGroup = ctx.params['metrics_group'];
@@ -2377,8 +2480,17 @@ function buildRecordArgs(ctx, gpuCounters = []) {
     };
   }
 
-  if (gpuCounters.length > 0) {
-    args.push('-C', gpuCounters.map((counter) => counter.counter).join(','));
+  if (ctx.params.collect_call_chains === false) {
+    args.push('--call-stack-unwinding', 'no');
+  }
+
+  const counters = gpuCounters.map((counter) => counter.counter);
+  if (gpuTimeline.isEnabled(ctx)) {
+    counters.push('MaliTimeline_Perfetto');
+    args.push('--gpu-timeline', 'yes');
+  }
+  if (counters.length > 0) {
+    args.push('-C', counters.join(','));
   }
 
   if (workflow) {
@@ -2393,14 +2505,13 @@ function buildRecordArgs(ctx, gpuCounters = []) {
 }
 
 /**
- * Checks the stderr output of the neoprof tools for known error patterns and throws the relevant catalog error if matched.
- * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * Matches a collector diagnostic to its catalog error.
  * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
- * @param {string} stdErr - the neoprof stderr
- * @param {number} exitCode - the exit code of the process
- * @param {string} tool
+ * @param {string} diagnostic
+ * @param {number} [exitCode] - Apply exit-status rules when matching process stderr.
+ * @returns {{code: string, metadata: Object.<string, string>} | null}
  */
-async function checkAndThrowNeoprofError(engine, ctx, exitCode, stdErr, tool) {
+function matchNeoprofError(ctx, diagnostic, exitCode) {
   // ERR_MAP maps stderr patterns to catalog errors.
   // throwOnZeroExit: true => throw even when exitCode == 0 (defaults to false)
   const ERR_MAP = new Map([
@@ -2569,18 +2680,32 @@ async function checkAndThrowNeoprofError(engine, ctx, exitCode, stdErr, tool) {
     ],
   ]);
 
-  ERR_MAP.forEach((msgInfo, regex) => {
+  for (const [regex, msgInfo] of ERR_MAP) {
     if (exitCode === 0 && msgInfo.throwOnZeroExit !== true) {
-      return;
+      continue;
     }
-    let match = stdErr.match(regex);
+    const match = diagnostic.match(regex);
     if (!match) {
-      return;
+      continue;
     }
-    // Known error message was found in stdErr output, throw error with corresponding code
-    let metadata = msgInfo.metadataProvider(match);
-    throw { code: msgInfo.msgCode, metadata: metadata };
-  });
+    return { code: msgInfo.msgCode, metadata: msgInfo.metadataProvider(match) };
+  }
+  return null;
+}
+
+/**
+ * Checks process stderr and throws the relevant catalog error.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ * @param {number} exitCode
+ * @param {string} stdErr
+ * @param {string} tool
+ */
+async function checkAndThrowNeoprofError(engine, ctx, exitCode, stdErr, tool) {
+  const error = matchNeoprofError(ctx, stdErr, exitCode);
+  if (error) {
+    throw error;
+  }
 
   if (exitCode !== 0) {
     // If no known error was found, return a generic error if still didn't complete successfully
@@ -2948,6 +3073,44 @@ function emitAnalysisFiles(engine, ctx, analysisDir, captureDir) {
   if (isTimelineExportEnabled(engine, ctx)) {
     emitNeoprofTimelineFiles(engine, captureDir);
   }
+  if (isOffCPUEnabled(ctx)) {
+    emitOffCpuFiles(engine, analysisDir);
+  }
+}
+
+/**
+ * Keeps minimal inputs for normal Android Code Hotspots runs.
+ * Rich captures already save these files from the target.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {import("../recipes/docs/jsdocs").ToolContext} ctx
+ * @param {string} outputDir
+ */
+function emitHostCaptureInputs(engine, ctx, outputDir) {
+  if (
+    isAndroidLaunch(ctx) &&
+    ctx.params.mode === 'samples' &&
+    !isSysUtilWorkflow(ctx) &&
+    !isRichDataCaptureEnabled(engine, ctx)
+  ) {
+    emitCaptureInputs(engine, outputDir);
+  }
+}
+
+/**
+ * Registers the capture inputs needed to analyze missing libraries later.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {string} outputDir
+ * @param {{immediateRetrieval?: boolean}} options
+ */
+function emitCaptureInputs(engine, outputDir, options = {}) {
+  for (const filename of ['0000000000', 'captured.xml']) {
+    engine.emitOutput(
+      outputDir + '/' + filename,
+      'capture.apc/' + filename,
+      { name: 'capture_apc', version: '1.0' },
+      { ...options, backgroundTransfer: true },
+    );
+  }
 }
 
 /**
@@ -2971,30 +3134,7 @@ function immediateEmitSlRecordFiles(engine, ctx, outputDir) {
   if (isRichDataCaptureEnabled(engine, ctx)) {
     // Emit capture.apc outputs that are available as soon as sl-record runs. Remaining capture.apc files
     // will be output once sl-analyze finishes
-    engine.emitOutput(
-      outputDir + '/0000000000',
-      'capture.apc/0000000000',
-      {
-        name: 'capture_apc',
-        version: '1.0',
-      },
-      {
-        immediateRetrieval: true,
-        backgroundTransfer: true,
-      },
-    );
-    engine.emitOutput(
-      outputDir + '/captured.xml',
-      'capture.apc/captured.xml',
-      {
-        name: 'capture_apc',
-        version: '1.0',
-      },
-      {
-        immediateRetrieval: true,
-        backgroundTransfer: true,
-      },
-    );
+    emitCaptureInputs(engine, outputDir, { immediateRetrieval: true });
     engine.emitOutput(
       outputDir + '/counters.xml',
       'capture.apc/counters.xml',
@@ -3286,6 +3426,57 @@ function emitNeoprofTimelineFiles(engine, captureDir) {
       name: 'timeline-counter-series-binned-deltas',
       version: '1.0',
     },
+  );
+}
+
+/**
+ * Registers off-cpu artifacts.
+ * @param {import("../recipes/docs/jsdocs").Engine} engine
+ * @param {string} analysisDir
+ * @returns {void}
+ */
+function emitOffCpuFiles(engine, analysisDir) {
+  engine.emitOutput(
+    analysisDir + '/call_tree_off-cpu.json',
+    'output/call_tree_off-cpu.json',
+    { name: 'sl-collect-call-tree', version: '1.0' },
+    { compressed: true },
+  );
+  engine.emitOutput(
+    analysisDir + '/callpath_self_off-cpu.json',
+    'output/callpath_self_off-cpu.json',
+    { name: 'sl-collect-metrics', version: '1.0' },
+    { compressed: true },
+  );
+  engine.emitOutput(
+    analysisDir + '/callpath_total_off-cpu.json',
+    'output/callpath_total_off-cpu.json',
+    { name: 'sl-collect-metrics', version: '1.0' },
+    { compressed: true },
+  );
+  engine.emitOutput(
+    analysisDir + '/callpaths-capture-off_cpu.csv',
+    'output/callpaths-capture-off_cpu.csv',
+    { name: 'sl-collect', version: '1.0' },
+    { compressed: true },
+  );
+  engine.emitOutput(
+    analysisDir + '/functions-capture-off_cpu.csv',
+    'output/functions-capture-off_cpu.csv',
+    { name: 'sl-collect-flat-functions-csv', version: '1.1' },
+    { compressed: true },
+  );
+  engine.emitOutput(
+    analysisDir + '/disassembly-capture-off_cpu-*.csv',
+    'output/disassembly-capture-off_cpu-*.csv',
+    { name: 'disassembly_capture_samples', version: '1.1' },
+    { compressed: true },
+  );
+  engine.emitOutput(
+    analysisDir + '/sources-capture-off_cpu-*.csv',
+    'output/sources-capture-off_cpu-*.csv',
+    { name: 'sl-collect-source-line-attribution', version: '1.0' },
+    { compressed: true },
   );
 }
 

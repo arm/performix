@@ -1511,31 +1511,32 @@ func newZipHeader(info fs.FileInfo, name string, method uint16) *zip.FileHeader 
 
 // RunDescription represents a run description.
 type RunDescription struct {
-	ID                  string
-	EngineVersion       string
-	Name                string
-	StartTime           string
-	EndTime             string
-	RecipeName          string
-	Parameters          map[string]any
-	WorkloadType        string
-	Cmdline             string
-	WorkingDir          string
-	Env                 map[string]string
-	UseShell            bool
-	AndroidPackageName  string
-	AndroidActivityName string
-	Group               string
-	Tags                []string
-	Pid                 int64
-	Target              target.Target
-	TargetName          string
-	Timeout             uint32
-	RunResult           string
-	RunError            string
-	SizeBytes           *uint64
-	ToolsUsed           []cdf.ToolUsed
-	SupportsStop        bool
+	ID                       string
+	EngineVersion            string
+	Name                     string
+	StartTime                string
+	EndTime                  string
+	RecipeName               string
+	Parameters               map[string]any
+	WorkloadType             string
+	Cmdline                  string
+	WorkingDir               string
+	Env                      map[string]string
+	UseShell                 bool
+	AndroidPackageName       string
+	AndroidActivityName      string
+	AndroidActivityArguments string
+	Group                    string
+	Tags                     []string
+	Pid                      int64
+	Target                   target.Target
+	TargetName               string
+	Timeout                  uint32
+	RunResult                string
+	RunError                 string
+	SizeBytes                *uint64
+	ToolsUsed                []cdf.ToolUsed
+	SupportsStop             bool
 }
 
 func runSupportsStop(metadata cdf.Metadata) bool {
@@ -1584,31 +1585,32 @@ func (c *RunCollection) RunDescription(ctx context.Context, run RunID) (*RunDesc
 	}
 
 	return &RunDescription{
-		ID:                  run.Value,
-		EngineVersion:       metadata.EngineVersion,
-		Name:                metadata.Name,
-		StartTime:           metadata.StartTime.ToFormattedString(),
-		EndTime:             metadata.EndTime.ToFormattedString(),
-		RecipeName:          recipemigration.GetMigratedName(run.Value, metadata.RecipeName, metadata.EngineVersion),
-		Parameters:          metadata.Parameters,
-		WorkloadType:        metadata.WorkloadType,
-		Cmdline:             metadata.Cmdline,
-		WorkingDir:          metadata.WorkingDir,
-		Env:                 metadata.Env,
-		UseShell:            metadata.UseShell,
-		AndroidPackageName:  metadata.AndroidPackageName,
-		AndroidActivityName: metadata.AndroidActivityName,
-		Group:               categorization.Group,
-		Tags:                categorization.Tags,
-		Pid:                 metadata.Pid,
-		Target:              tgt,
-		TargetName:          metadata.TargetName,
-		Timeout:             metadata.Timeout,
-		RunResult:           metadata.RunResult,
-		RunError:            metadata.RunError,
-		SizeBytes:           metadata.SizeBytes,
-		ToolsUsed:           manifest.ToolsUsed,
-		SupportsStop:        runSupportsStop(metadata),
+		ID:                       run.Value,
+		EngineVersion:            metadata.EngineVersion,
+		Name:                     metadata.Name,
+		StartTime:                metadata.StartTime.ToFormattedString(),
+		EndTime:                  metadata.EndTime.ToFormattedString(),
+		RecipeName:               recipemigration.GetMigratedName(run.Value, metadata.RecipeName, metadata.EngineVersion),
+		Parameters:               metadata.Parameters,
+		WorkloadType:             metadata.WorkloadType,
+		Cmdline:                  metadata.Cmdline,
+		WorkingDir:               metadata.WorkingDir,
+		Env:                      metadata.Env,
+		UseShell:                 metadata.UseShell,
+		AndroidPackageName:       metadata.AndroidPackageName,
+		AndroidActivityName:      metadata.AndroidActivityName,
+		AndroidActivityArguments: metadata.AndroidActivityArguments,
+		Group:                    categorization.Group,
+		Tags:                     categorization.Tags,
+		Pid:                      metadata.Pid,
+		Target:                   tgt,
+		TargetName:               metadata.TargetName,
+		Timeout:                  metadata.Timeout,
+		RunResult:                metadata.RunResult,
+		RunError:                 metadata.RunError,
+		SizeBytes:                metadata.SizeBytes,
+		ToolsUsed:                manifest.ToolsUsed,
+		SupportsStop:             runSupportsStop(metadata),
 	}, nil
 }
 
@@ -1682,8 +1684,9 @@ func (c *RunCollection) RunDescriptionsForExport(ctx context.Context) ([]map[str
 		}
 		if desc.WorkloadType == "Android Launch" {
 			payload["android_launch_workload"] = map[string]string{
-				"package_name":  desc.AndroidPackageName,
-				"activity_name": desc.AndroidActivityName,
+				"package_name":       desc.AndroidPackageName,
+				"activity_name":      desc.AndroidActivityName,
+				"activity_arguments": desc.AndroidActivityArguments,
 			}
 		}
 

@@ -359,24 +359,6 @@ def package_target_agent(tools_dir: Path) -> None:
         text=True,
     ).strip()
 
-    artifacts_dir = SCRIPT_DIR.parent / f"{agent_binary}-artifacts"
-    if not artifacts_dir.is_dir():
-        subprocess.run(
-            [
-                sys.executable,
-                SCRIPT_DIR / "build_target_agent.py",
-                "--config",
-                SCRIPT_DIR.parent / ".goreleaser-agent.yml",
-                "--no-inject",
-                "--no-sign",
-                "--snapshot",
-            ],
-            check=True,
-        )
-        dist_dir = SCRIPT_DIR.parent.parent / "dist"
-        dist_dir.rename(artifacts_dir)
-
-    tools_dir.mkdir(parents=True, exist_ok=True)
     target_agent_version = os.environ.get("TARGET_AGENT_VERSION", "")
     snapshot_build = is_snapshot_build()
     if not target_agent_version:
@@ -386,28 +368,50 @@ def package_target_agent(tools_dir: Path) -> None:
     elif snapshot_build:
         target_agent_version = f"{target_agent_version}-dev"
 
-    for os_name, arch, artifact_target in TARGET_AGENT_VARIANTS:
+    artifacts_dir = SCRIPT_DIR.parent / f"{agent_binary}-artifacts"
+    if not artifacts_dir.is_dir():
+        # Use the bundle version for the binary, including direct script builds.
+        build_env = os.environ.copy()
+        build_env["PERFORMIX_ENGINE_VERSION"] = target_agent_version
         subprocess.run(
             [
                 sys.executable,
-                SCRIPT_DIR / "bundle_tool.py",
-                "--tool-name",
-                agent_binary,
-                "--version",
-                target_agent_version,
-                "--os",
-                os_name,
-                "--arch",
-                arch,
-                "--source",
-                artifacts_dir / f"{agent_binary}-{artifact_target}.tar.gz",
-                "--tools-dir",
-                tools_dir,
+                SCRIPT_DIR / "build_target_agent.py",
+                "--config",
+                SCRIPT_DIR.parent / ".goreleaser-agent.yml",
+                "--no-sign",
+                "--snapshot",
             ],
             check=True,
+            env=build_env,
         )
+        dist_dir = SCRIPT_DIR.parent.parent / "dist"
+        dist_dir.rename(artifacts_dir)
 
-    shutil.rmtree(artifacts_dir)
+    try:
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        for os_name, arch, artifact_target in TARGET_AGENT_VARIANTS:
+            subprocess.run(
+                [
+                    sys.executable,
+                    SCRIPT_DIR / "bundle_tool.py",
+                    "--tool-name",
+                    agent_binary,
+                    "--version",
+                    target_agent_version,
+                    "--os",
+                    os_name,
+                    "--arch",
+                    arch,
+                    "--source",
+                    artifacts_dir / f"{agent_binary}-{artifact_target}.tar.gz",
+                    "--tools-dir",
+                    tools_dir,
+                ],
+                check=True,
+            )
+    finally:
+        shutil.rmtree(artifacts_dir)
 
 
 # ------------------------------------------------------------------------------

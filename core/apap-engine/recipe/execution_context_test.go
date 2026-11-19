@@ -51,6 +51,7 @@ let tool = {
 	description: {short: "test", long: "test"},
 	run: () => {}, reformat: () => {}, onStop: () => {}, onCancel: () => {},
 	probe: () => ({available: true, capabilities: {}, advice: []}),
+	validate: () => {},
 };`
 
 	registry := tool.NewToolRegistry()
@@ -80,17 +81,17 @@ let tool = {
 			Required: []string{}, Optional: []string{},
 		},
 	}}
-	_, errs := execCtx.prepareAndRecordRunStopSupport(context.Background(), rejected, registry)
+	_, errs := execCtx.prepareAndRecordRunStopSupport(context.Background(), rejected, registry, nil)
 	require.Error(t, errors.Join(errs...))
 	model, err := runCollection.LoadRun(runID)
 	require.NoError(t, err)
 	require.Nil(t, model.Metadata().SupportsStop)
 
 	accepted := []tool.IntegrationContext{{
-		Name: "stoppable", Version: "1.0",
+		Name: "stoppable", Version: "1.0", Ctx: context.Background(),
 		DefaultEngineLocality: tool.EngineLocality{Engine: &toolmocks.MockEngineContext{}},
 	}}
-	prepared, errs := execCtx.prepareAndRecordRunStopSupport(context.Background(), accepted, registry)
+	prepared, errs := execCtx.prepareAndRecordRunStopSupport(context.Background(), accepted, registry, nil)
 	require.NoError(t, errors.Join(errs...))
 	require.NoError(t, errors.Join(tool.RunAndReformatPreparedToolIntegrations(
 		make(chan struct{}), make(chan struct{}), prepared, nil,

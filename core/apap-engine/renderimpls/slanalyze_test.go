@@ -309,7 +309,7 @@ func TestSlAnalyzeRendererEmitOutputsSkipsOptionalGlobs(t *testing.T) {
 		"disassembly-capture-periodic_sampling*": render.ErrRenderNoMatches,
 	})
 
-	err := renderer.emitOutputs(fs, runID, false)
+	err := renderer.emitOutputs(fs, runID, false, false)
 	assert.NoError(t, err)
 	fs.AssertExpectations(t)
 }
@@ -323,7 +323,7 @@ func TestSlAnalyzeRendererEmitOutputsErrorsOnRequiredFile(t *testing.T) {
 		"call_tree_samples.json": run.ErrRenderTempFileNotFound,
 	}, "call_tree_samples.json")
 
-	err := renderer.emitOutputs(fs, runID, false)
+	err := renderer.emitOutputs(fs, runID, false, false)
 	assert.ErrorIs(t, err, run.ErrRenderTempFileNotFound)
 	fs.AssertExpectations(t)
 }
@@ -340,9 +340,12 @@ func TestSlAnalyzeRendererInitializeReturnsPendingForPendingCaptureManifest(t *t
 			ComponentType: cdf.ComponentType{Name: "capture_apc", SchemaVersion: "1.0"},
 			Pending:       true,
 		},
-	}}, cdf.Metadata{})
+	}}, cdf.Metadata{Parameters: map[string]any{"collect_off_cpu_time": true}})
 	fs := &mockRenderFS{}
 	expectSlAnalyzePendingOutputs(t, fs, runID, "tool/neoprof/0/")
+	for _, output := range slAnalyzeOffCPUOutputs("tool/neoprof/0/") {
+		fs.On("EmitPendingOutputForRun", runID, output.destRel, output.meta).Return(nil).Once()
+	}
 
 	manifest := render.NewManifest()
 	session := &slAnalyzeTestSession{
@@ -359,6 +362,64 @@ func TestSlAnalyzeRendererInitializeReturnsPendingForPendingCaptureManifest(t *t
 	err = renderer.Initialize(session, nil)
 	require.ErrorIs(t, err, cdf.ErrComponentPending)
 	fs.AssertExpectations(t)
+}
+
+func slAnalyzeOffCPUOutputs(entity string) []slAnalyzeOutputSpec {
+	outputs := []slAnalyzeOutputSpec{
+		{sourceRel: "call_tree_off-cpu.json", meta: render.OutputMetadata{ComponentType: "sl-collect-call-tree", Version: "1.0"}},
+		{sourceRel: "callpath_self_off-cpu.json", meta: render.OutputMetadata{ComponentType: "sl-collect-metrics", Version: "1.0"}},
+		{sourceRel: "callpath_total_off-cpu.json", meta: render.OutputMetadata{ComponentType: "sl-collect-metrics", Version: "1.0"}},
+		{sourceRel: "callpaths-capture-off_cpu.csv", meta: render.OutputMetadata{ComponentType: "sl-collect", Version: "1.0"}},
+		{sourceRel: "functions-capture-off_cpu.csv", meta: render.OutputMetadata{ComponentType: "sl-collect-flat-functions-csv", Version: "1.1"}},
+		{sourceRel: "disassembly-capture-off_cpu-*.csv", meta: render.OutputMetadata{ComponentType: "disassembly_capture_samples", Version: "1.1"}},
+		{sourceRel: "sources-capture-off_cpu-*.csv", meta: render.OutputMetadata{ComponentType: "sl-collect-source-line-attribution", Version: "1.0"}},
+	}
+	for i := range outputs {
+		outputs[i].destRel = entity + "output/" + outputs[i].sourceRel
+	}
+	return outputs
+}
+
+func TestSlAnalyzeRendererOffCPUOutputs(t *testing.T) {
+	for _, tc := range []struct {
+		name, missing string
+		enabled       bool
+	}{
+		{name: "disabled"},
+		{name: "enabled", enabled: true},
+		{name: "optional source export absent", enabled: true, missing: "sources-capture-off_cpu-*.csv"},
+		{name: "required flat export absent", enabled: true, missing: "functions-capture-off_cpu.csv"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const entity = "tool/neoprof/0/"
+			renderer := &SlAnalyzeRenderer{specificConfig: &SlAnalyzeRendererConfigJSON{Entity: entity}}
+			runID := run.RunID{Value: "off-cpu"}
+			fs := &mockRenderFS{}
+			expectSlAnalyzeOutputs(t, fs, runID, entity, nil)
+			var expectedErr error
+			if tc.enabled {
+				for _, output := range slAnalyzeOffCPUOutputs(entity) {
+					var emitErr error
+					if output.sourceRel == tc.missing {
+						if output.meta.ComponentType == "sl-collect-source-line-attribution" {
+							emitErr = render.ErrRenderNoMatches
+						} else {
+							emitErr = run.ErrRenderTempFileNotFound
+							expectedErr = emitErr
+						}
+					}
+					fs.On("EmitOutputForRun", runID, output.sourceRel, output.destRel, output.meta).Return(emitErr).Once()
+					if expectedErr != nil {
+						break
+					}
+				}
+			}
+
+			err := renderer.emitOutputs(fs, runID, false, tc.enabled)
+			require.ErrorIs(t, err, expectedErr)
+			fs.AssertExpectations(t)
+		})
+	}
 }
 
 func TestSlAnalyzeRendererResolveCaptureRootReturnsCaptureDirectory(t *testing.T) {

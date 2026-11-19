@@ -10,7 +10,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -183,8 +182,6 @@ func TestAddCommandTargetProtocols(t *testing.T) {
 	})
 
 	t.Run("android protocol with serial number succeeds", func(t *testing.T) {
-		viper.Set(enableAndroidTargetsConfigKey, true)
-
 		mtm := target.MockTargetManager{}
 		tgt := engine_target.AndroidTarget{SerialNumber: testAndroidSerialNumber}
 		mtm.On("AddTarget", testTargetName, &tgt).Return(nil)
@@ -198,8 +195,6 @@ func TestAddCommandTargetProtocols(t *testing.T) {
 	})
 
 	t.Run("android protocol with device host succeeds", func(t *testing.T) {
-		viper.Set(enableAndroidTargetsConfigKey, true)
-
 		mtm := target.MockTargetManager{}
 		deviceIPAddress := testAndroidDeviceIPAddress
 		tgt := engine_target.AndroidTarget{SerialNumber: testAndroidSerialNumber, DeviceIPAddress: &deviceIPAddress}
@@ -211,24 +206,6 @@ func TestAddCommandTargetProtocols(t *testing.T) {
 		_, err := cmd.ExecuteC()
 		require.NoError(t, err)
 		mtm.AssertExpectations(t)
-	})
-
-	t.Run("android protocol fails when Android targets are disabled", func(t *testing.T) {
-		viper.Set(enableAndroidTargetsConfigKey, false)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, true)
-		})
-
-		cmd := newAddCommand(nil, &target.MockTargetManager{}, &ssh.MockSSHKeyProvisioner{})
-		cmd.SetArgs([]string{"android://" + testAndroidSerialNumber, "--name", testTargetName})
-
-		_, err := cmd.ExecuteC()
-
-		var msgErr message.Message
-		ok := errors.As(err, &msgErr)
-		assert.True(t, ok)
-		assert.Equal(t, message.CommonUnsupportedTargetType, msgErr.Code())
-		assert.Equal(t, "android", msgErr.Metadata()["targetType"])
 	})
 
 	t.Run("unsupported protocol fails", func(t *testing.T) {
@@ -689,8 +666,6 @@ func TestAddJSONStringTarget(t *testing.T) {
 	})
 
 	t.Run("add with valid Android JSON target succeeds", func(t *testing.T) {
-		viper.Set(enableAndroidTargetsConfigKey, true)
-
 		mtm := target.MockTargetManager{}
 		deviceIPAddress := testAndroidDeviceIPAddress
 		tgt := engine_target.AndroidTarget{SerialNumber: testAndroidSerialNumber, DeviceIPAddress: &deviceIPAddress}
@@ -703,24 +678,6 @@ func TestAddJSONStringTarget(t *testing.T) {
 		_, err := cmd.ExecuteC()
 		require.NoError(t, err)
 		mtm.AssertExpectations(t)
-	})
-
-	t.Run("add with Android JSON target fails when Android targets are disabled", func(t *testing.T) {
-		viper.Set(enableAndroidTargetsConfigKey, false)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, true)
-		})
-
-		cmd := newAddCommand(nil, &target.MockTargetManager{}, &ssh.MockSSHKeyProvisioner{})
-		cmd.SetArgs([]string{testJSONAndroidTargetString, "--name", testTargetName})
-
-		_, err := cmd.ExecuteC()
-
-		var msgErr message.Message
-		ok := errors.As(err, &msgErr)
-		assert.True(t, ok)
-		assert.Equal(t, message.CommonUnsupportedTargetType, msgErr.Code())
-		assert.Equal(t, "android", msgErr.Metadata()["targetType"])
 	})
 
 	t.Run("add with localhost JSON target fails", func(t *testing.T) {

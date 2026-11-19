@@ -53,6 +53,7 @@ func TestJavaRenderRecordingSelection(t *testing.T) {
 			{name: "invalid PID", pid: "42 OR 1=1", invalid: true},
 		} {
 			t.Run(workload+"/"+tc.name, func(t *testing.T) {
+				// Given the recording index and the selected process.
 				h := jstest.LoadJSModule(t, "recipes/lib/java_analysis_render.js")
 				ctx := &javaRenderContext{}
 				ctx.On("GetRunDescriptions").Return([]recipeparser.RunDescription{{WorkloadType: workload}}, nil)
@@ -71,7 +72,9 @@ func TestJavaRenderRecordingSelection(t *testing.T) {
 						ctx.On("LogWarn", mock.Anything).Return(nil).Once()
 					}
 				}
-				result, err := h.Call[map[string]any](t, "buildJavaAnalysisRender", ctx, "java")
+				// When the owner opts into shared process indicators.
+				result, err := h.Call[map[string]any](t, "buildJavaAnalysisRender", ctx, "java", []any{}, "0", "process")
+				// Then selection, visibility, and recorded scope agree.
 				if tc.invalid {
 					require.ErrorContains(t, err, "Invalid Java process ID")
 				} else {
@@ -87,6 +90,19 @@ func TestJavaRenderRecordingSelection(t *testing.T) {
 							visualization := value.(map[string]any)
 							config := visualization["config"].(map[string]any)
 							assert.Equal(t, !tc.hidden && !skip, config["visible"])
+							filterContext := config["filterContext"].(map[string]any)
+							assert.Empty(t, filterContext["controls"])
+							scope := filterContext["recordedScope"].([]any)
+							if tc.hidden || skip {
+								assert.Empty(t, scope)
+							} else {
+								require.Len(t, scope, 1)
+								pid := "PID 42"
+								if tc.pid == 99 {
+									pid = "PID 99"
+								}
+								assert.Equal(t, map[string]any{"category": "Recorded process", "value": pid, "controlId": "process"}, scope[0])
+							}
 							if visualization["id"] == "timeline" {
 								heap := config["groups"].(map[string]any)["heap_summary"].(map[string]any)
 								assert.Equal(t, !tc.hidden && !skip, heap["visible"])
@@ -134,6 +150,9 @@ func TestJavaRenderComposesHeapAfterCPU(t *testing.T) {
 			original := timeline.Export().(map[string]any)
 			assert.NotContains(t, original["config"].(map[string]any)["groups"], "heap_summary", "Do not mutate the input timeline")
 			assert.Empty(t, original["config"].(map[string]any)["data_source"].(map[string]any)["tables"], "Do not mutate input tables")
+			for _, view := range visualizations {
+				assert.NotContains(t, view.(map[string]any)["config"], "filterContext", "Unopted owners remain unchanged")
+			}
 			merged := visualizations[0].(map[string]any)
 			assert.Equal(t, "timeline", merged["id"])
 			heap := merged["config"].(map[string]any)["groups"].(map[string]any)["heap_summary"].(map[string]any)

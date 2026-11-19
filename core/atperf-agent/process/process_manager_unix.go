@@ -7,6 +7,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -27,6 +28,10 @@ func (*UnixProcessManager) setCPUAffinityAfterStart(int, []string) error { retur
 func (*UnixProcessManager) KillProcess(pid int) error {
 	// Negative PID means we're signaling the entire process group
 	err := syscall.Kill(-pid, syscall.SIGKILL)
+	// A missing process group already satisfies the termination request.
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("failed to kill process %v: %w", pid, err)
 	}

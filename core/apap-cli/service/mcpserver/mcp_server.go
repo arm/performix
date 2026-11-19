@@ -25,7 +25,6 @@ type MCPServer struct {
 
 // MCPServerOptions controls capabilities exposed by the MCP server.
 type MCPServerOptions struct {
-	AndroidTargetsEnabled bool
 	ProfilingFocusEnabled bool
 	// SourceSharingAcknowledged acknowledges sharing for this server process,
 	// skipping prompts and saved acknowledgement access. When false, the normal

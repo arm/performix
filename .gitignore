@@ -116,6 +116,9 @@ gui/e2e-tests/soak-tests/soak-test-results.json
 **/e2e-test-reports/
 atp-e2e-log.txt
 
+# Generated test Runs retained with APX_KEEP_GENERATED_TEST_DATA=1
+/core/apap-engine/regressiontests/test-data/runs/generated/
+
 # Ignore Robot Framework test results
 core/robot/results*
 core/robot/log.html

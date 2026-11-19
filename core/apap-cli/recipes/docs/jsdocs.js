@@ -188,7 +188,7 @@
  * @property {function(): Workload} getWorkload
  * @property {function(string): string | string[]} getParameter
  * @property {function(string, string): ToolProperties} getTool
- * @property {function(ToolConfigurationsArg): ProbeResult[]} probeTools Stage-local discovery; successful results can be reused by runTools before collection starts.
+ * @property {function(ToolConfigurationsArg): ProbeResult[]} probeTools Discover capabilities, then validate the setup. Discovery can be reused within the stage.
  * @property {function(ToolConfigurationsArg): void} runTools
  * If a ToolConfigurationsArg is provided, the tools will be run concurrently. After the tools finish,
  * their output files will be reformatted concurrently. The running and reformating is defined by the tool integration.
@@ -265,6 +265,8 @@
  * Returns whether re-rendering feature flag is enabled.
  * @property {function(): boolean} isNeoprofTimelineEnabled
  * Returns whether the neoprof timeline feature flag is enabled
+ * @property {function(): boolean} isCPUSchedulingEnabled
+ * Returns whether experimental CPU scheduling visualization is enabled.
  * @description - The render execution context provides access to APIs available to the render stages.
  */
 
@@ -356,6 +358,7 @@
  * @property {string} value - The actual value of the option which will be passed to the recipe when set.
  * @property {string} label - Human-friendly label for the option, used in UIs.
  * @property {string} [description] - Optional description for the option, used in UIs.
+ * @property {Object.<string, string>} [metadata] - Optional attributes for the option, used in UIs.
  */
 
 /**
@@ -407,13 +410,29 @@
  */
 
 /**
+ * @typedef {Object} FilterContext
+ * @property {string[]} controls - IDs from side_panel_filters whose applied values this visualization should summarize, in display order. Use an empty array to show only recordedScope.
+ * @property {RecordedFilterScope[]} [recordedScope] - restrictions inherent in the data shown by this visualization, derived from the recipe's actual data selection.
+ * @description Declares filter summaries and links to drawer controls. It does not apply filters or change queries. List only controls that affect this view; for example, omit thread when only process selection affects its data. Time-range controls currently have no summary resolver. Omit this metadata to leave the view without shared filter summaries.
+ */
+
+/**
+ * @typedef {Object} RecordedFilterScope
+ * @property {string} category - readable restriction category, such as Recorded process.
+ * @property {string} value - readable restriction value derived from the selected data, such as PID 42.
+ * @property {string} [controlId] - optional drawer destination. Omitted or unavailable destinations display as text. This link does not merge the entry with an applied filter summary.
+ * @description Describes data already restricted by its recording or by the recipe's data selection. Clearing a user filter does not remove this inherent restriction. JVM recordings are the only current example, but other data sources can use the same contract. The recipe must supply the actual restriction; the GUI cannot infer it from the launched workload or selected controls.
+ */
+
+/**
  * @typedef {Object} Widget
  * @property {string} type - a visualization (or other widget) type that is supported
  * @property {string} id - a unique ID that is used to reference the widget
  * @property {string} rendererId - references an existing renderer ID
  * @property {string} title
  * @property {string} description
- * @property {string} [config] - optional config for the widget
+ * @property {Object} [config] - optional config for the widget
+ * @property {FilterContext} [config.filterContext] - filter summaries and drawer navigation metadata, read before widget-specific config parsing
  * @property {Object.<string,string>} [parameterBindings] - maps widget parameter IDs to recipe render parameter IDs
  * @property {WidgetDisabledState} [disabled] - optional object disabling this widget and providing a user-facing reason
  * @description - Declares a widget, typically a visualization, which references a renderer ID.
@@ -672,6 +691,8 @@
  * capabilityId must start with a letter or number and contain only letters, numbers, and the following symbols: ._-
  * @property {() => boolean} isFullCaptureSupportEnabled
  * Returns true when the EnableFullCaptureSupport feature flag is enabled
+ * @property {() => boolean} isCPUSchedulingEnabled
+ * Returns true when CPU scheduling data is required.
  * @property {() => boolean} isNeoprofTimelineEnabled
  * Returns true when the EnableNeoprofTimeline feature flag is enabled
  * @property {(relativePath:string, meta:OutputMetadata) => Promise<FileHandle>} createRunFile
@@ -778,6 +799,7 @@
  * @property {"androidLaunch"} type
  * @property {string} packageName
  * @property {string} activityName
+ * @property {string} [activityArguments] Activity manager arguments passed to sl-record.
  */
 
 /**
@@ -801,7 +823,7 @@
  * Context passed to your tool
  * @typedef {Object} ToolContext
  * @property {CapabilityRequest} [capabilityRequest] Normalized requested capability IDs, saved before discovery or collection.
- * @property {ProbeResult} [discovery] Current probe results for an explicit non-empty request. Resolve availability from this catalog.
+ * @property {ProbeResult} [discovery] Matching probe results, supplied to validate() and collection. An explicit-empty request skips counter enumeration.
  * @property {Object.<string, any>} params                               Parameters from the recipe/invocation.
  * @property {Workload} workload Launch/Android launch/attach/system-wide info (if any).
  * @property {string} workingdir                                         Working directory chosen by the engine/recipe.
@@ -839,6 +861,7 @@
  * @property {Parameter[]} [parameters] // parameter definitions accepted by the tool integration
  * @property {(engine:Engine, ctx:ToolContext) => (void|Promise<void>)} run // Entry point for normal execution. May be async.
  * @property {(engine:Engine, ctx:ToolContext) => (ProbeResult | Promise<ProbeResult>)} [probe]
+ * @property {(engine:Engine, ctx:ToolContext) => (void | ProbeAdvice[] | Promise<void | ProbeAdvice[]>)} validate Check parameters, workload, and selected capabilities.
  * @property {(engine:Engine, ctx:ToolContext) => (void|Promise<void>)} reformat // Transform outpule files after run, before they're transferred to the host
  * @property {(engine:Engine, ctx:ToolContext) => (void|Promise<void>)} onCancel // Respond to cancellation.
  * @property {(engine:Engine, ctx:ToolContext) => (void|Promise<void>)} onStop // Required handler for a safe graceful stop.
@@ -939,6 +962,7 @@
  * A CPU PMU event and a reference to its collected data.
  * @typedef {Object} NativeCPUCounterPayload
  * @property {string} title Event display name.
+ * @property {string} [category] Event category
  * @property {string} [description] Event description.
  * @property {string} [units] Counter units.
  * @property {{id: string, name: string}} pmu PMU ID and display name.

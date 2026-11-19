@@ -951,7 +951,7 @@ func executeCodeHotspotsRenderStage(
 			"filter_start_time_ns": nil,
 			"filter_end_time_ns":   nil,
 		},
-		renderStageOptions{neoprofTimelineEnabled: true},
+		renderStageOptions{},
 	)
 }
 
@@ -1104,4 +1104,52 @@ func resolveTimelineGroupQuery(
 	)
 	query = strings.ReplaceAll(query, customQuery["rangeStartPlaceholder"].(string), fmt.Sprint(rangeStart))
 	return strings.ReplaceAll(query, customQuery["rangeEndPlaceholder"].(string), fmt.Sprint(rangeEnd))
+}
+
+func TestCodeHotspotsTimelineUsesAppliedIdentityFilters(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		pid      any
+		tid      any
+		metadata bool
+		want     string
+	}{
+		{"process", 4454, nil, true, "source.thread IN (1329, 1331)"},
+		{"thread", 4454, 4459, true, "source.thread IN (1331)"},
+		{"empty", 9999, nil, true, "FALSE"},
+		{"legacy", 4454, nil, false, "attribution is unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			components := []timelineComponentFixture{captureMetadataComponentFixture(), counterCapabilityFixture(t, "counter.key_type_8.series_12", map[string]any{"title": "Cycles", "description": "CPU cycles", "units": "cycles", "key_type": 8, "series_id": 12})}
+			components = append(components, counterParquetCatalogueFixtures(8, 12)...)
+			if tc.metadata {
+				for name, content := range map[string]string{
+					"processes": `{"processes":[{"process_id":4454,"unique_process_id":1365}]}`,
+					"threads":   `{"threads":[{"thread_id":4454,"unique_process_id":1365,"unique_thread_id":1329},{"thread_id":4459,"unique_process_id":1365,"unique_thread_id":1331}]}`,
+				} {
+					components = append(components, timelineComponentFixture{RelativePath: "tool/neoprof/0/output/parquet/metadata/" + name + ".json", ComponentType: cdf.ComponentType{Name: "timeline-" + name + "-metadata", SchemaVersion: "1.0"}, Content: []byte(content)})
+				}
+			}
+			model := newRunComponentPresenceModel(t, t.TempDir(), components)
+			// When
+			output, err := executeRenderStage(t, parseRecipeFile(t, "code_hotspots.js"), []*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}}, []cdf.ModelView{model}, map[string]any{"filter_pid": tc.pid, "filter_tid": tc.tid, "filter_start_time_ns": nil, "filter_end_time_ns": nil}, renderStageOptions{neoprofTimelineEnabled: true})
+			// Then
+			require.NoError(t, err)
+			group := requireTimelineGroup(t, requireTimelineGroups(t, requireTimelineWidget(t, output)), "key_8_series_12")
+			encoded, err := json.Marshal(group)
+			require.NoError(t, err)
+			require.Contains(t, string(encoded), tc.want)
+			require.Contains(t, group, "scopeQuery")
+			require.Contains(t, group, "filterContext")
+			for _, renderer := range output.Renderers {
+				if strings.HasPrefix(renderer.ID, "timeline_sql_source") {
+					encoded, err := json.Marshal(renderer)
+					require.NoError(t, err)
+					require.NotContains(t, string(encoded), "1329")
+					require.NotContains(t, string(encoded), "1331")
+				}
+			}
+		})
+	}
 }

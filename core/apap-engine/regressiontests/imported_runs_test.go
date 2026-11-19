@@ -21,6 +21,7 @@ import (
 type ImportedRunRegressionTestConfiguration struct {
 	Alias          string                                     `json:"alias"`
 	PrerecordedRun *PrerecordedRunRegressionTestConfiguration `json:"prerecordedRun"`
+	GeneratedRun   string                                     `json:"generatedRun,omitempty"`
 }
 
 type PrerecordedRunRegressionTestConfiguration struct {
@@ -55,8 +56,29 @@ func newRunCollectionForRegressionConfig(config *RendererRegressionTestConfigura
 
 	importedRunAliases := make(map[string]run.RunID, len(config.ImportedRuns))
 	for _, importedRun := range config.ImportedRuns {
-		if importedRun.PrerecordedRun == nil {
-			return nil, nil, fmt.Errorf("imported run alias %q does not specify a prerecordedRun source", importedRun.Alias)
+		if importedRun.Alias == "" {
+			return nil, nil, fmt.Errorf("imported run must specify an alias")
+		}
+		if _, exists := importedRunAliases[importedRun.Alias]; exists {
+			return nil, nil, fmt.Errorf("duplicate imported run alias %q", importedRun.Alias)
+		}
+		if (importedRun.PrerecordedRun != nil) == (importedRun.GeneratedRun != "") {
+			return nil, nil, fmt.Errorf("imported run alias %q must specify exactly one of prerecordedRun or generatedRun", importedRun.Alias)
+		}
+		if importedRun.GeneratedRun != "" {
+			source, found := generatedRunFixtures[importedRun.GeneratedRun]
+			if !found {
+				return nil, nil, fmt.Errorf("unknown generated run fixture %q", importedRun.GeneratedRun)
+			}
+			builder, err := runCollection.RunBuilder()
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := os.CopyFS(runCollection.GetRunPath(builder.RunID()), os.DirFS(source)); err != nil {
+				return nil, nil, fmt.Errorf("failed to copy generated run fixture %q: %w", importedRun.GeneratedRun, err)
+			}
+			importedRunAliases[importedRun.Alias] = builder.RunID()
+			continue
 		}
 
 		archivePath, err := resolvePrerecordedRunArchive(importedRun.PrerecordedRun)

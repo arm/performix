@@ -7,6 +7,7 @@
 Print the atperf version
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -17,7 +18,13 @@ def ensure_go():
         print("go not found. Please install go and ensure it's on your PATH", file=sys.stderr)
         sys.exit(1)
 
-def get_version():
+def get_version(dev: bool = False) -> str:
+    override = os.environ.get("PERFORMIX_ENGINE_VERSION", "").strip()
+    if override:
+        return override
+
+    ensure_go()
+
     script_dir = Path(__file__).resolve().parent
     ver_dir = (script_dir / ".." / "atperf-version").resolve()
 
@@ -41,11 +48,17 @@ def get_version():
         print("version output was empty", file=sys.stderr)
         sys.exit(1)
 
+    if dev:
+        revision = subprocess.check_output(
+            ["git", "describe", "--always", "--abbrev=12", "--match", ""],
+            cwd=ver_dir, text=True,
+        ).strip()
+        version = f"{version}-dev.{revision}"
     return version
 
 def main():
-    ensure_go()
-    version = get_version()
+    dev = "--dev" in sys.argv[1:]
+    version = get_version(dev=dev)
     print(version)
 
 if __name__ == "__main__":

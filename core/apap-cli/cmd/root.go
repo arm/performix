@@ -117,11 +117,6 @@ func NewRootCmd() *cobra.Command {
 func configAwareHelpFunc(next func(*cobra.Command, []string)) func(*cobra.Command, []string) {
 	return func(cmd *cobra.Command, args []string) {
 		initConfig()
-		utils.RefreshPersistentFlagsHelp(cmd.Root())
-		target.RefreshTargetAddHelp()
-		target.RefreshTargetUpdateHelp()
-		target.RefreshTargetListHelp()
-		recipe.RefreshAndroidLaunchHelp()
 		next(cmd, args)
 	}
 }

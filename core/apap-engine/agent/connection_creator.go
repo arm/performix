@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -34,6 +35,7 @@ import (
 var ErrAgentDisconnected = errors.New("agent connection lost")
 
 const defaultConnectionTimeout = 2 * time.Second
+const defaultShutdownTimeout = 5 * time.Second
 const launchScriptName = "verify-and-launch"
 const noAgentCtxPanic = "agent.AgentConn invariant violated: nil lifetime context"
 
@@ -71,6 +73,7 @@ type AgentConn struct {
 	tether        AgentTether
 	closeOnce     sync.Once
 	closeErr      error
+	stopping      atomic.Bool
 
 	onConnectionLost func(error)
 	ctx              context.Context
@@ -90,17 +93,10 @@ func NewAgentConn(client targetagentproto.TargetAgentClient) *AgentConn {
 // Any errors encountered during shutdown or closure are returned as a single error.
 func (a *AgentConn) Close() error {
 	a.closeOnce.Do(func() {
-		if a.tether != nil {
-			a.tether.Close()
-		}
-
-		if a.logger != nil {
-			a.logger.Close()
-		}
-
-		if a.cancel != nil {
-			a.cancel(nil)
-		}
+		// Keep the tether alive until Shutdown replies. Closing it first asks
+		// the agent to stop independently, racing this RPC. This close owns
+		// teardown, so late tether failures must not close its transport.
+		a.stopping.Store(true)
 
 		var errs []error
 		appendErr := func(label string, err error) {
@@ -109,14 +105,26 @@ func (a *AgentConn) Close() error {
 			}
 		}
 
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), defaultShutdownTimeout)
 		if a.controlClient != nil {
 			force := true
-			_, err := a.controlClient.Shutdown(context.Background(), &targetagentproto.ShutdownRequest{Force: &force})
+			_, err := a.controlClient.Shutdown(shutdownCtx, &targetagentproto.ShutdownRequest{Force: &force})
 			appendErr("grpc shutdown", err)
 		} else if a.Client != nil {
 			force := true
-			_, err := a.Client.Shutdown(context.Background(), &targetagentproto.ShutdownRequest{Force: &force})
+			_, err := a.Client.Shutdown(shutdownCtx, &targetagentproto.ShutdownRequest{Force: &force})
 			appendErr("grpc shutdown", err)
+		}
+		cancelShutdown()
+
+		if a.tether != nil {
+			a.tether.Close()
+		}
+		if a.logger != nil {
+			a.logger.Close()
+		}
+		if a.cancel != nil {
+			a.cancel(nil)
 		}
 
 		if a.dataCc != nil {
@@ -143,6 +151,9 @@ func (a *AgentConn) Abort() {
 // AbortWithCause bails out of the agent connection as quickly as possible, without waiting for a graceful shutdown.
 // The connection context is cancelled with the provided cause and transport resources are closed.
 func (a *AgentConn) AbortWithCause(err error) {
+	if !a.stopping.CompareAndSwap(false, true) {
+		return
+	}
 	go a.abortOnce.Do(func() {
 		log.Warn("agent connection abort requested")
 		a.cancelAgentLifetime(err)
@@ -272,6 +283,10 @@ func (p *agentConnectionCreator) NewConnection(
 		return nil, err
 	}
 
+	return p.connectAgent(context.Background(), id, localityName, dialer, port)
+}
+
+func (p *agentConnectionCreator) connectAgent(ctx context.Context, id, localityName string, dialer grpcconnection.TCPDialer, port int) (*AgentConn, error) {
 	// Create two agent connections: one for data, one for control (to avoid large data transfers interfering
 	// with control flow traffic)
 	dataClient, dataCc, err := p.connect(grpcconnection.NewConnector(dialer), port, localityName)

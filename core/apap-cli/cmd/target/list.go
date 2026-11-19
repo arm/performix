@@ -70,18 +70,7 @@ func newListCommand(mtm target.TargetManagerService, discoverer androidTargetDis
 		},
 	}
 	listCmd.Flags().BoolVar(&discover, "discover", false, "Discover connected Android targets using adb devices.")
-	setDiscoverFlagVisibility(listCmd)
 	return listCmd
-}
-
-func RefreshTargetListHelp() {
-	setDiscoverFlagVisibility(TargetListCmd)
-}
-
-func setDiscoverFlagVisibility(cmd *cobra.Command) {
-	if flag := cmd.Flags().Lookup("discover"); flag != nil {
-		flag.Hidden = !viper.GetBool(enableAndroidTargetsConfigKey)
-	}
 }
 
 type targetListing struct {
@@ -135,11 +124,6 @@ func (t targetListing) MarshalJSON() ([]byte, error) {
 func listingFromConfig(config *engine_target.TargetConfig) map[string]targetListing {
 	result := make(map[string]targetListing)
 	for k, tgt := range config.Targets {
-		if !viper.GetBool(enableAndroidTargetsConfigKey) {
-			if _, ok := tgt.(*engine_target.AndroidTarget); ok {
-				continue
-			}
-		}
 		result[k] = targetListing{
 			Target:    tgt,
 			IsDefault: config.Default == k,
@@ -169,10 +153,6 @@ func listTargetsCommand(out io.Writer, targetService target.TargetManagerService
 	}
 
 	if discover {
-		if !viper.GetBool(enableAndroidTargetsConfigKey) {
-			return message.New(message.CommonUnsupportedTargetType).WithMetadata(map[string]string{"targetType": "android"})
-		}
-
 		discoveredTargets, err := discoverer.DiscoverAndroidTargets()
 		if err != nil {
 			if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
@@ -205,12 +185,7 @@ func printTargetListing(listing map[string]targetListing, out io.Writer) {
 	var isDefault string
 	writer := tabwriter.NewWriter(out, 1, 1, 2, ' ', tabwriter.StripEscape)
 	if itemCount > 0 {
-		showTypeColumn := viper.GetBool(enableAndroidTargetsConfigKey)
-		if showTypeColumn {
-			fmt.Fprintln(writer, "name\tdefault\ttype\thost_key_policy\tvalue")
-		} else {
-			fmt.Fprintln(writer, "name\tdefault\thost_key_policy\tvalue")
-		}
+		fmt.Fprintln(writer, "name\tdefault\ttype\thost_key_policy\tvalue")
 		keys := util.CopyKeysSlice(listing)
 		slices.Sort(keys)
 		for _, name := range keys {
@@ -239,11 +214,7 @@ func printTargetListing(listing map[string]targetListing, out io.Writer) {
 				hostKeyPolicy = ""
 			}
 
-			if showTypeColumn {
-				fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", name, isDefault, targetType, hostKeyPolicy, targetStr)
-			} else {
-				fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", name, isDefault, hostKeyPolicy, targetStr)
-			}
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", name, isDefault, targetType, hostKeyPolicy, targetStr)
 		}
 		fmt.Fprintf(writer, "\n")
 	}

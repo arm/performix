@@ -162,6 +162,7 @@ func TestCounterIntentSurvivesPreLaunchFailure(t *testing.T) {
  const payload={title:"CPU Cycles",units:"cycles",bindings:[],reason:"not_supported"};
  let tool={name:"synthetic",version:"1.0",capabilityInterfaceVersion:"1.0",description:{short:"Synthetic",long:"Synthetic"},
  probe:()=>({available:true,capabilities:{"counter.cpu_cycles":{componentType:type,state:"unavailable",payload}},advice:[]}),
+ validate: () => {},
  run: async (engine) => {
   await engine.addToolCapability("counter.cpu_cycles", type, {state: "unavailable", payload});
   throw new Error("required counter unavailable before launch");

@@ -4,7 +4,6 @@
 package tool_goja
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -48,10 +47,10 @@ type registeredCounterCapability struct {
 	data          CapabilityData
 }
 
-func (r *capabilityIDRegistry) validateBindings(value capabilities.CPUCounterValue) error {
+func (r *capabilityIDRegistry) validateBindings(bindings []capabilities.CPUCounterBinding) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, binding := range value.Payload.Bindings {
+	for _, binding := range bindings {
 		counterCapability, ok := r.counterCapabilities[binding.SeriesCapabilityID]
 		if !ok {
 			return fmt.Errorf("CPU binding %q has not been saved by this invocation", binding.SeriesCapabilityID)
@@ -128,6 +127,11 @@ func (b *BoundEngineContext) IsFullCaptureSupportEnabled() bool {
 // IsNeoprofTimelineEnabled returns whether the neoprof timeline feature is enabled for this tool integration.
 func (b *BoundEngineContext) IsNeoprofTimelineEnabled() bool {
 	return b.ic.FeatureFlags.NeoprofTimeline
+}
+
+// IsCPUSchedulingEnabled reports whether scheduling data is required.
+func (b *BoundEngineContext) IsCPUSchedulingEnabled() bool {
+	return b.ic.FeatureFlags.CPUScheduling
 }
 
 // ExecCommand runs a short-lived command via engine.
@@ -535,7 +539,7 @@ func (b *BoundEngineContext) addToolCapability(capabilityId string, gojaComponen
 		return err
 	}
 	componentType := cdf.ComponentType{Name: om.ComponentType, SchemaVersion: om.Version}
-	var cpuOutcome capabilities.CPUCounterValue
+	var cpuOutcome capabilities.CPUCounterCapabilityValue
 	definition, defined := capabilities.LookupDefinition(capabilityId)
 	if componentType.Name == capabilities.CPUCounter && !defined {
 		b.registeredCapabilityIDs.release(capabilityId)
@@ -543,7 +547,8 @@ func (b *BoundEngineContext) addToolCapability(capabilityId string, gojaComponen
 			fmt.Errorf("CPU component type %s requires a defined capability, got %q", capabilities.CPUCounter, capabilityId),
 		)
 	}
-	if defined {
+	isCPUCounter := defined || componentType.Name == capabilities.NativeCPUCounter
+	if isCPUCounter {
 		request := b.ic.CapabilityRequest
 		if request == nil {
 			b.registeredCapabilityIDs.release(capabilityId)
@@ -561,16 +566,16 @@ func (b *BoundEngineContext) addToolCapability(capabilityId string, gojaComponen
 				fmt.Errorf("CPU outcome %q was not selected by the counter request", capabilityId),
 			)
 		}
-		if componentType != (cdf.ComponentType{Name: definition.ComponentType.Name, SchemaVersion: definition.ComponentType.Version}) {
+		if defined && componentType != (cdf.ComponentType{Name: definition.ComponentType.Name, SchemaVersion: definition.ComponentType.Version}) {
 			b.registeredCapabilityIDs.release(capabilityId)
 			return message.New(message.EngineToolCounterCollectionInvalid).WithCause(
 				fmt.Errorf("reserved capability %q requires component type %s version %s", capabilityId, definition.ComponentType.Name, definition.ComponentType.Version),
 			)
 		}
 		envelope := map[string]any{"componentType": gojaComponentType.Export(), "state": capabilityData.State, "payload": capabilityData.Payload}
-		value, err := capabilities.ParseCPUCounterValue(capabilityId, envelope, true)
+		value, err := capabilities.ParseCPUCounterCapabilityValue(capabilityId, envelope, true)
 		if err == nil {
-			err = b.registeredCapabilityIDs.validateBindings(value)
+			err = b.registeredCapabilityIDs.validateBindings(value.Bindings())
 		}
 		if err != nil {
 			b.registeredCapabilityIDs.release(capabilityId)
@@ -580,12 +585,9 @@ func (b *BoundEngineContext) addToolCapability(capabilityId string, gojaComponen
 	}
 
 	relativePath := filepath.Join("capabilities", fmt.Sprintf("%v.json", capabilityId))
-	if defined && cpuOutcome.State == capabilities.CPUCounterStateCollected {
-		staged := b.ic.StageCPUCounterOutcome(capabilityId, cpuOutcome, func(value capabilities.CPUCounterValue) error {
-			contents, err := json.Marshal(struct {
-				State   string                         `json:"state"`
-				Payload capabilities.CPUCounterPayload `json:"payload"`
-			}{State: value.State, Payload: value.Payload})
+	if isCPUCounter && cpuOutcome.State == capabilities.CPUCounterStateCollected {
+		staged := b.ic.StageCPUCounterOutcome(capabilityId, cpuOutcome, func(value capabilities.CPUCounterCapabilityValue) error {
+			contents, err := value.MarshalOutcome()
 			if err != nil {
 				return err
 			}
@@ -599,7 +601,7 @@ func (b *BoundEngineContext) addToolCapability(capabilityId string, gojaComponen
 		b.registeredCapabilityIDs.release(capabilityId)
 		return err
 	}
-	if defined {
+	if isCPUCounter {
 		b.ic.RecordCPUCounterOutcome(capabilityId, cpuOutcome)
 	}
 	if componentType.Name == "tool_capabilities/counter" {

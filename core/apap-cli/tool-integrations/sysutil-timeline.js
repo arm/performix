@@ -490,6 +490,8 @@ let tool = {
     };
   },
 
+  validate: () => {},
+
   run: async (engine, ctx) => {
     const outputDir = await engine.createTempDir();
     const scriptPath = getScriptPath(ctx);

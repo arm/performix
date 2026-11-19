@@ -10,10 +10,11 @@ This directory contains the Robot Framework functional test suite for the Arm Pe
 ## Directory structure
 
 The `robot` directory consists of the following:
-* `resources` - Various resources required by Robot, such as scripts, config files, binaries, libraries, and most importantly keyword resources
-* `results` - Directory for storing output files from test runs (not required but helps keep things tidy)
-* `tests` - Test suites that contain the Robot tests, organised using subdirectories to group related tests together
-* Everything else are miscellaneous files relating to Git, linting, continuous integration, or configuring the virtual environment.
+
+- `resources` - Various resources required by Robot, such as scripts, config files, binaries, libraries, and most importantly keyword resources
+- `results` - Directory for storing output files from test runs (not required but helps keep things tidy)
+- `tests` - Test suites that contain the Robot tests, organised using subdirectories to group related tests together
+- Everything else are miscellaneous files relating to Git, linting, continuous integration, or configuring the virtual environment.
 
 ## Specifying a target
 
@@ -23,13 +24,13 @@ Create this file before running the tests. Here is an example JSON schema, note 
 
 ```json
 {
-    "name": "i-04413d15ac20a7521",
-    "host": "192.168.1.1",
-    "port": 22,
-    "user": "robot01",
-    "key": "/Users/robot01/.ssh/id_robot_key",
-    "arch": "aarch64",
-    "os": "Linux"
+  "name": "i-04413d15ac20a7521",
+  "host": "192.168.1.1",
+  "port": 22,
+  "user": "robot01",
+  "key": "/Users/robot01/.ssh/id_robot_key",
+  "arch": "aarch64",
+  "os": "Linux"
 }
 ```
 
@@ -167,15 +168,13 @@ python3 robot/run-robot.py --help
 
 ### Running `robot` directly
 
-If you need to invoke `robot` directly (e.g. for dry runs or targeting a single suite), you will need a Python virtual environment with `robot/requirements.txt` installed. You can reuse the one created by `task core:deps`, or create your own:
+If you need to invoke `robot` directly (e.g. for dry runs or targeting a single suite), run this from the repository root with the shared virtual environment active. If you use another virtual environment, activate it first; the task installs into the active environment.
 
 ```shell
-python3 -m venv path/to/venv
-source path/to/venv/bin/activate
-python3 -m pip install -r robot/requirements.txt
+task deps:python
 ```
 
-The target is passed as a Robot variable:
+From `core/`, pass the target as a Robot variable:
 
 ```shell
 robot -T --outputdir robot/results --exclude disabled --variable TARGET:<name> robot/tests
@@ -185,15 +184,15 @@ Note that `remote-localhost`-tagged tests will be skipped automatically if the r
 
 #### Example commands
 
-| Goal | Command |
-| ---- | ------- |
-| Run all tests, excluding disabled | `robot -T --outputdir robot/results --exclude disabled --variable TARGET:<name> robot/tests` |
-| x86-64 target (exclude unsupported recipes) | `robot -T --outputdir robot/results --exclude disabledORcpu_microarchitectureORinstruction_mixORmemory_access --variable TARGET:<name> robot/tests` |
-| Only run recipe tests | `robot -T --outputdir robot/results --include recipe --exclude disabled --variable TARGET:<name> robot/tests` |
-| Only run target and run tests | `robot -T --outputdir robot/results --include targetORrun --exclude disabled --variable TARGET:<name> robot/tests` |
-| Skip `remote-localhost` tests (note: `remote-localhost` tests require special setup on the target before they are run, this can be handled `./robot/run-robot.py` with the `--run-remote-localhost` flag) | `robot -T --outputdir robot/results --exclude disabledORremote-localhost --variable TARGET:<name> robot/tests` |
-| Dry run a single suite (no execution) | `robot --dryrun --output NONE --log NONE --report NONE robot/tests/recipe/recipe.robot` |
-| Run without producing output files | `robot --output NONE --log NONE --report NONE --variable TARGET:<name> robot/tests` |
+| Goal                                                                                                                                                                                                      | Command                                                                                                                                             |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run all tests, excluding disabled                                                                                                                                                                         | `robot -T --outputdir robot/results --exclude disabled --variable TARGET:<name> robot/tests`                                                        |
+| x86-64 target (exclude unsupported recipes)                                                                                                                                                               | `robot -T --outputdir robot/results --exclude disabledORcpu_microarchitectureORinstruction_mixORmemory_access --variable TARGET:<name> robot/tests` |
+| Only run recipe tests                                                                                                                                                                                     | `robot -T --outputdir robot/results --include recipe --exclude disabled --variable TARGET:<name> robot/tests`                                       |
+| Only run target and run tests                                                                                                                                                                             | `robot -T --outputdir robot/results --include targetORrun --exclude disabled --variable TARGET:<name> robot/tests`                                  |
+| Skip `remote-localhost` tests (note: `remote-localhost` tests require special setup on the target before they are run, this can be handled `./robot/run-robot.py` with the `--run-remote-localhost` flag) | `robot -T --outputdir robot/results --exclude disabledORremote-localhost --variable TARGET:<name> robot/tests`                                      |
+| Dry run a single suite (no execution)                                                                                                                                                                     | `robot --dryrun --output NONE --log NONE --report NONE robot/tests/recipe/recipe.robot`                                                             |
+| Run without producing output files                                                                                                                                                                        | `robot --output NONE --log NONE --report NONE --variable TARGET:<name> robot/tests`                                                                 |
 
 ## Continuous integration sharding
 
@@ -201,12 +200,12 @@ The extended validation workflow runs independent parts of the Robot suite in pa
 
 The main [Robot Framework workflow](../../.github/workflows/robot-framework.yaml) uses two partition shapes to balance run times. Both shapes cover all eligible ordinary tests:
 
-| Host runner and target | Ordinary test partition | Additional coverage |
-| ---------------------- | ----------------------- | ------------------- |
-| Linux Arm64 host and provisioned Linux Arm64 target | `recipe` + `tool` + `non-recipe-non-tool` | Dedicated `remote-localhost` shard |
-| Linux x86-64 host and provisioned Linux Arm64 target | `recipe` + `non-recipe` | None |
-| Windows x86-64 host and provisioned Linux Arm64 target | `recipe` + `non-recipe` | None |
-| Linux Arm64 host and static Raspberry Pi target | Selected static subset | Manual workflow dispatches only |
+| Host runner and target                                 | Ordinary test partition                   | Additional coverage                |
+| ------------------------------------------------------ | ----------------------------------------- | ---------------------------------- |
+| Linux Arm64 host and provisioned Linux Arm64 target    | `recipe` + `tool` + `non-recipe-non-tool` | Dedicated `remote-localhost` shard |
+| Linux x86-64 host and provisioned Linux Arm64 target   | `recipe` + `non-recipe`                   | None                               |
+| Windows x86-64 host and provisioned Linux Arm64 target | `recipe` + `non-recipe`                   | None                               |
+| Linux Arm64 host and static Raspberry Pi target        | Selected static subset                    | Manual workflow dispatches only    |
 
 The ordinary suite assignments in each partition are exhaustive:
 
@@ -262,16 +261,19 @@ task core:test:robot TARGET=my_device \
 ```
 
 ## Running the Robocop linter
+
 Robocop is a linter for Robot Framework. The linter will automatically run in CI, but it can also be run manually (e.g. before pushing code for review).
 
 Make sure you are in the root directory of the git repository. The Robocop configuration file to use is `robocop.toml` which exists in the `robot` directory.
 
 To run the linter manually:
+
 ```
 python -m robocop check --config robot/robocop.toml
 ```
 
 ## Generate test coverage report
+
 To gather a list of all our robot tests and generate a report:
 
 ```

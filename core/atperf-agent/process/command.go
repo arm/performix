@@ -11,17 +11,58 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 )
 
 // launchCommand keeps the command and its platform-specific start behavior together.
 type launchCommand struct {
-	command  *exec.Cmd
-	affinity []string
+	command            *exec.Cmd
+	affinity           []string
+	lifetime           commandLifetime
+	cancelled          atomic.Bool
+	temporaryDirectory *TemporaryDirectory
+	temporaryPath      string
+	cleanupErr         error
 }
 
 func (l *launchCommand) start() error {
-	return startWithAffinity(l.command, l.affinity)
+	if err := l.prepareTemporaryDirectory(); err != nil {
+		return err
+	}
+	l.lifetime.configureCancellation(l.command)
+	if l.command.Cancel != nil {
+		cancel := l.command.Cancel
+		l.command.Cancel = func() error {
+			err := cancel()
+			if err == nil {
+				l.cancelled.Store(true)
+			}
+			return err
+		}
+	}
+	if err := l.lifetime.start(l.command, l.affinity); err != nil {
+		return errors.Join(err, l.removeTemporaryDirectory())
+	}
+	return nil
 }
+
+// CleanupError reports failed resource cleanup after the program has exited.
+// Its presence distinguishes a completed command from a failed wait or launch.
+type CleanupError struct{ Err error }
+
+func (e *CleanupError) Error() string { return "process cleanup failed: " + e.Err.Error() }
+func (e *CleanupError) Unwrap() error { return e.Err }
+
+func (l *launchCommand) wait() error {
+	err := l.command.Wait()
+	l.lifetime.close()
+	if err := l.removeTemporaryDirectory(); err != nil {
+		l.cleanupErr = &CleanupError{Err: err}
+	}
+	return err
+}
+
+func (l *launchCommand) kill() error { return l.lifetime.kill(l.command.Process) }
 
 type LaunchCommand struct {
 	// Command describes a direct process launch. The first entry is the
@@ -30,11 +71,12 @@ type LaunchCommand struct {
 	// interpreter explicitly, for example: []string{"sh", "-c", source}.
 	// Bare executable names use the inherited PATH unless Environment overrides
 	// it. Explicit executable paths are unaffected by PATH overrides.
-	Command          []string
-	AsPrivileged     bool
-	Affinity         []string
-	Environment      map[string]string
-	WorkingDirectory string
+	Command            []string
+	AsPrivileged       bool
+	Affinity           []string
+	Environment        map[string]string
+	WorkingDirectory   string
+	TemporaryDirectory *TemporaryDirectory
 }
 
 // newLaunchCommand resolves bare names using a request's PATH override without
@@ -75,7 +117,7 @@ func newLaunchCommand(request *LaunchCommand) *launchCommand {
 	if lookupErr != nil {
 		cmd.Err = lookupErr
 	}
-	return &launchCommand{command: cmd, affinity: request.Affinity}
+	return &launchCommand{command: cmd, affinity: request.Affinity, temporaryDirectory: request.TemporaryDirectory}
 }
 
 func lookPathInEnvironment(name string, environment []string) (string, error) {
@@ -193,6 +235,15 @@ func ValidateLaunchCommand(command *LaunchCommand) error {
 			return &launchCommandValidationError{field: "environment name", reason: "contains a NUL character"}
 		case strings.ContainsRune(value, '\x00'):
 			return &launchCommandValidationError{field: "environment value", reason: "contains a NUL character"}
+		}
+	}
+
+	if directory := command.TemporaryDirectory; directory != nil {
+		if directory.EnvironmentVariable == "" || strings.ContainsAny(directory.EnvironmentVariable, "=\x00") {
+			return &launchCommandValidationError{field: "temporary directory environment name", reason: "is invalid"}
+		}
+		if strings.ContainsRune(directory.ParentDirectory, '\x00') {
+			return &launchCommandValidationError{field: "temporary directory parent", reason: "contains a NUL character"}
 		}
 	}
 

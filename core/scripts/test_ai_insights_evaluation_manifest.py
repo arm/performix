@@ -74,6 +74,8 @@ class FakeXdistConfig:
     def getoption(self, option: str):
         if option == "--ai-manifest":
             return str(self.manifest_path)
+        if option == "--ai-min-pass-rate":
+            return 0
         raise AssertionError(f"unexpected option: {option}")
 
 
@@ -1107,7 +1109,8 @@ class AiInsightsWorkspaceTests(unittest.TestCase):
             with (mock.patch.object(evaluation, "resolve_config", return_value=cfg),
                   mock.patch.object(evaluation, "run_attempt", return_value=result),
                   self.assertRaises(pytest.fail.Exception) as failure):
-                evaluation.test_ai_insights(SimpleNamespace(_ai_insights_suite_properties_recorded=True),
+                evaluation.test_ai_insights(SimpleNamespace(_ai_insights_suite_properties_recorded=True,
+                        _ai_insights_min_pass_rate=0.66),
                     properties.__setitem__, mock.Mock(), self.PATHWAYS_TEST_CASE, "performix_mcp", 1, 1, ("test", "high"))
             self.assertEqual(601.5, properties["ai_agent_duration_seconds"])
             self.assertEqual(600, properties["ai_agent_timeout_seconds"])
@@ -1178,7 +1181,8 @@ class AiInsightsWorkspaceTests(unittest.TestCase):
                 with (mock.patch.object(evaluation, "resolve_config", return_value=cfg),
                       mock.patch.object(evaluation, "run_attempt", return_value=result),
                       self.assertRaises(pytest.fail.Exception) as failure):
-                    evaluation.test_ai_insights(SimpleNamespace(_ai_insights_suite_properties_recorded=True),
+                    evaluation.test_ai_insights(SimpleNamespace(_ai_insights_suite_properties_recorded=True,
+                        _ai_insights_min_pass_rate=0.66),
                         properties.__setitem__, mock.Mock(), self.PATHWAYS_TEST_CASE, "performix_mcp", 1, 1, ("test", "high"))
                 self.assertEqual("pathways_01", properties["ai_test_id"])
                 self.assertEqual("error", properties["ai_scores"])
@@ -1424,7 +1428,8 @@ class AiInsightsExpectedFailureTests(unittest.TestCase):
                           "run_meta": {"run_id": "fixture"}, "invoke": {"duration_seconds": 1.2},
                           "score": {"final": {"final_label": "pass"}}}
                 properties = {}
-                config = SimpleNamespace(_ai_insights_suite_properties_recorded=True)
+                config = SimpleNamespace(_ai_insights_suite_properties_recorded=True,
+                        _ai_insights_min_pass_rate=0.66)
                 with (mock.patch.object(evaluation, "resolve_config", return_value={"results_dir": root, "model": "test", "model_config_id": "test"}),
                       mock.patch.object(evaluation, "run_attempt", return_value=result)):
                     evaluation.test_ai_insights(config, properties.__setitem__, mock.Mock(),
@@ -1433,7 +1438,7 @@ class AiInsightsExpectedFailureTests(unittest.TestCase):
                 for name in ("ai_aggregate_path", "ai_run_meta_path", "ai_invoke_metadata_path"):
                     self.assertEqual(not pathways, name in properties, name)
                 expected = {"ai_test_id": "case", "ai_model_config": "test", "ai_attempt": 1, "ai_attempts_total": 10,
-                            "ai_passes": 1, "ai_pass_rate": 1.0, "ai_scores": "pass",
+                            "ai_min_pass_rate": 0.66, "ai_passes": 1, "ai_pass_rate": 1.0, "ai_scores": "pass",
                             "ai_display_scores": "pass", "ai_run_ids": "fixture", "ai_agent_duration_seconds": 1.2}
                 self.assertEqual(expected, {name: properties[name] for name in expected})
 
@@ -1643,7 +1648,9 @@ class PathwaysJudgeRequestTests(unittest.TestCase):
         api = mock.patch.object(evaluation.requests, "post", return_value=self.response)
         self.request = api.start()
         self.addCleanup(api.stop)
-        limit = mock.patch.dict(os.environ, {self.LIMIT_SETTING: str(evaluation.DEFAULT_PATHWAYS_JUDGE_MAX_REQUEST_BYTES)})
+        limit = mock.patch.dict(os.environ, {
+            self.LIMIT_SETTING: str(evaluation.DEFAULT_PATHWAYS_JUDGE_MAX_REQUEST_BYTES),
+        })
         limit.start()
         self.addCleanup(limit.stop)
 
@@ -1654,16 +1661,15 @@ class PathwaysJudgeRequestTests(unittest.TestCase):
                                          pathways_evidence=evidence)
 
     def test_judge_reasoning_option_reaches_request_and_report(self):
-        from _pytest.config.argparsing import Parser
         for env, options, expected in (({}, [], "medium"),
                                        ({"AI_INSIGHTS_JUDGE_REASONING_EFFORT": "high"}, [], "high"),
                                        ({"AI_INSIGHTS_JUDGE_REASONING_EFFORT": "high"},
                                         ["--ai-judge-reasoning-effort", "low"], "low")):
             with self.subTest(expected=expected), mock.patch.dict(os.environ, env, clear=True):
-                parser = Parser(_ispytest=True)
-                conftest.pytest_addoption(parser)
-                args = parser.parse(["--ai-modes", "performix_mcp", "--ai-openai-api-key", "test", *options])
-                config = SimpleNamespace(getoption=lambda name: getattr(args, name[2:].replace("-", "_")))
+                config = pytest.Config.fromdictargs({}, [
+                    "-p", conftest.__name__, "--noconftest",
+                    "--ai-modes", "performix_mcp", "--ai-openai-api-key", "test", *options,
+                ])
                 cfg = evaluation.resolve_config(config)
                 evaluation.judge_response("case", "rubric", "answer", cfg)
                 self.assertEqual({"effort": expected}, json.loads(self.request.call_args.kwargs["data"])["reasoning"])
@@ -1671,71 +1677,6 @@ class PathwaysJudgeRequestTests(unittest.TestCase):
                 properties = {}
                 evaluation.record_evaluation_suite_properties(config, properties.__setitem__, cfg)
                 self.assertEqual(expected, properties["ai_judge_reasoning_effort"])
-
-    def test_judge_transcript_preserves_actions_results_and_original_lines(self):
-        events = [
-            {"type": "event_msg", "payload": {"type": "token_count", "info": "unused"}},
-            {"type": "response_item", "payload": {"type": "reasoning", "id": "reason", "summary": ["Inspect source"], "encrypted_content": "opaque"}},
-            {"type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
-                "arguments": '{"cmd":"perf stat ./workload"}', "call_id": "command"}},
-            {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "command",
-                "output": "Process exited with code 1\nFinal output:\nresult warning"}},
-            {"type": "event_msg", "payload": {"type": "mcp_tool_call_end", "call_id": "profile",
-                "invocation": {"server": "arm-performix", "tool": "run_recipe", "arguments": {"recipe": "code_hotspots"}},
-                "result": {"Ok": {"run_id": "abc", "run_status": "completed"}}}},
-        ]
-        raw = "\n".join(json.dumps(event) for event in events)
-        result = [json.loads(line) for line in evaluation.pathways_judge_transcript(raw).splitlines()]
-        self.assertEqual([2, 3, 4, 5], [event["session_line"] for event in result])
-        self.assertEqual(["Inspect source"], result[0]["event"]["payload"]["summary"])
-        self.assertNotIn("encrypted_content", result[0]["event"]["payload"])
-        self.assertEqual(events[2:], [event["event"] for event in result[1:]])
-        self.assertIn("opaque", raw)  # The saved input is not mutated.
-
-    def test_interleaved_tool_results_include_the_matching_request(self):
-        events = [
-            {"payload": {"type": "function_call", "call_id": "baseline", "name": "get_insights", "namespace": "mcp__arm_performix",
-                         "arguments": '{"run_id":"original"}'}},
-            {"payload": {"type": "function_call", "call_id": "validation", "name": "get_insights", "namespace": "mcp__arm_performix",
-                         "arguments": '{"run_id":"optimized"}'}},
-            {"payload": {"type": "function_call_output", "call_id": "validation", "output": "mutex=0"}},
-            {"payload": {"type": "function_call_output", "call_id": "baseline", "output": "mutex=52.793335"}},
-        ]
-        raw = "\n".join(json.dumps(event) for event in events)
-        records = [json.loads(line) for line in evaluation.pathways_judge_transcript(raw).splitlines()]
-        self.assertEqual(events, [record["event"] for record in records])
-        self.assertEqual(records[1], records[2]["request"])
-        self.assertEqual(records[0], records[3]["request"])
-        self.assertEqual(["optimized", "original"], [record["run_id"] for record in records[2:]])
-
-    def test_query_results_include_run_ids_and_named_rows(self):
-        table = {"columns": [{"name": "function"}, {"name": "branch_mpki"}, {"name": "l1d_mpki"}],
-                 "rows": [["process_packets", 0, 0.08], ["main", 0.08, 1]]}
-        payloads = [
-            {"type": "mcp_tool_call_end", "invocation": {"tool": "open_render_session", "server": "arm-performix",
-                 "arguments": {"run_id": "optimized"}}, "result": {"Ok": {"session_id": "s7"}}},
-            {"type": "item_completed", "item": {"type": "McpToolCall", "tool": "run_query", "server": "arm-performix",
-                 "status": "completed", "arguments": {"session_id": "s7"}, "result": {"structuredContent": table}}},
-            {"type": "item_completed", "item": {"type": "McpToolCall", "tool": "run_query", "server": "arm-performix",
-                 "status": "completed", "arguments": {"session_id": "unknown"},
-                 "result": {"content": [{"type": "text", "text": json.dumps(table)}]}}},
-            {"type": "item_completed", "item": {"type": "McpToolCall", "tool": "run_query", "server": "another-server",
-                 "status": "completed", "arguments": {"session_id": "s7"}, "result": {"structuredContent": table}}},
-            {"type": "item_completed", "item": {"type": "McpToolCall", "tool": "run_query", "server": "arm-performix",
-                 "status": "failed", "arguments": {"session_id": "s7"}, "result": None, "error": "query failed"}},
-        ]
-        raw = "\n".join(json.dumps({"payload": payload}) for payload in payloads)
-        records = evaluation.pathways_judge_records(raw)
-        self.assertEqual("optimized", records[1]["run_id"])
-        self.assertIsNone(records[2]["run_id"])  # Never infer a run from the previous result.
-        self.assertIsNone(records[3]["run_id"])
-        self.assertNotIn("query_rows", records[3])
-        self.assertEqual("optimized", records[4]["run_id"])
-        self.assertNotIn("query_rows", records[4])
-        self.assertEqual(payloads[4], records[4]["event"]["payload"])
-        self.assertEqual({"function": "process_packets", "branch_mpki": 0, "l1d_mpki": 0.08},
-                         records[1]["query_rows"][0])
-        self.assertEqual(records[1]["query_rows"], records[2]["query_rows"])
 
     def test_incomplete_judge_response_is_an_error_not_a_verdict(self):
         self.response.json.return_value = {
@@ -1771,7 +1712,8 @@ class PathwaysJudgeRequestTests(unittest.TestCase):
         result = self.judge(evidence)
         body = json.loads(self.request.call_args.kwargs["data"])
         prompt = json.loads(body["input"][0]["content"][0]["text"])
-        transcript = [json.loads(line) for line in prompt["pathways_evidence"]["session_jsonl"].splitlines()]
+        transcript = prompt["pathways_evidence"]["session_records"]
+        self.assertNotIn("session_jsonl", prompt["pathways_evidence"])
         self.assertEqual(events, [event["event"] for event in transcript])
         self.assertEqual(raw, evidence["session_jsonl"])
         self.assertEqual("answer", prompt["response_under_test"])
@@ -1785,6 +1727,8 @@ class PathwaysJudgeRequestTests(unittest.TestCase):
         self.assertFalse(schema["schema"]["additionalProperties"])
         self.assertIn("untrusted evidence", " ".join(prompt["instructions"]))
         self.assertEqual(expected, result)
+        self.request.assert_called_once()
+        self.assertTrue(self.request.call_args.args[0].endswith("/responses"))
 
     def test_request_size_limit_counts_bytes_and_rejects_before_sending(self):
         evidence = {"session_jsonl": json.dumps({"measurement": "Ã©" * 1024})}
@@ -1805,10 +1749,28 @@ class PathwaysJudgeRequestTests(unittest.TestCase):
             self.judge()  # Ordinary judging is exempt from the Pathways limit.
             self.request.assert_called_once()
 
+    def test_request_preserves_query_cells_and_reports_usage_without_preflight(self):
+        long_text = "generated_function<" + "parameter, " * 40 + ">"
+        table = {"columns": [{"name": "function"}, {"name": "samples"}],
+                 "rows": [[long_text, 24], [long_text, 51]]}
+        event = {"payload": {"type": "mcp_tool_call_end",
+                             "invocation": {"server": "arm-performix", "tool": "run_query"},
+                             "result": {"Ok": table}}}
+        raw = json.dumps(event)
+        self.response.json.return_value["usage"] = {"input_tokens": 1234}
+        with self.assertLogs(evaluation.LOGGER, level="INFO") as logged:
+            self.judge({"session_jsonl": raw})
+        self.request.assert_called_once()
+        body = json.loads(self.request.call_args.kwargs["data"])
+        evidence = json.loads(body["input"][0]["content"][0]["text"])["pathways_evidence"]
+        result = evidence["session_records"][0]["event"]["payload"]["result"]["Ok"]
+        self.assertEqual(table, result)
+        self.assertTrue(any("input tokens: 1234" in message for message in logged.output))
+
     def test_judges_load_only_their_own_task_and_rules(self):
         for evidence, task, included, excluded in (
-            (None, "Score an AI Insights response", "gives only generic tuning advice", "Read the complete transcript"),
-            ({}, "Score one Pathways test case against its private rubric", "Read the complete transcript", "gives only generic tuning advice"),
+            (None, "Score an AI Insights response", "gives only generic tuning advice", "Read all session_records"),
+            ({}, "Score one Pathways test case against its private rubric", "Read all session_records", "gives only generic tuning advice"),
         ):
             with self.subTest(task=task):
                 self.judge(evidence)
@@ -1823,6 +1785,143 @@ class PathwaysJudgeRequestTests(unittest.TestCase):
                 self.assertIn(included, instructions)
                 self.assertNotIn(excluded, instructions)
                 self.assertEqual(evidence is None, "output_schema" in prompt)
+
+    def test_generation_retry_calls_only_the_scoring_endpoint(self):
+        self.response.status_code = 503
+        self.response.content = b'{"error":{"message":"busy"}}'
+        self.response.raise_for_status.side_effect = [evaluation.requests.HTTPError(response=self.response), None]
+        with mock.patch.object(evaluation.time, "sleep"):
+            self.judge({})
+        self.assertEqual(2, self.request.call_count)
+        self.assertTrue(all(call.args[0].endswith("/responses") for call in self.request.call_args_list))
+        self.assertEqual(self.request.call_args_list[0].kwargs["data"], self.request.call_args_list[1].kwargs["data"])
+
+    def test_ordinary_judging_has_no_count_request_or_output_cap(self):
+        self.judge()
+        self.request.assert_called_once()
+        body = json.loads(self.request.call_args.kwargs["data"])
+        self.assertNotIn("max_output_tokens", body)
+
+
+class PathwaysJudgeReductionTests(unittest.TestCase):
+    def records(self, events):
+        raw = "\n".join(json.dumps(event) for event in events)
+        return evaluation.pathways_judge_records(raw)
+
+    def test_judge_transcript_preserves_actions_results_and_original_lines(self):
+        events = [
+            {"type": "event_msg", "payload": {"type": "token_count", "info": "unused"}},
+            {"type": "response_item", "payload": {"type": "reasoning", "id": "reason", "summary": ["Inspect source"], "encrypted_content": "opaque"}},
+            {"type": "response_item", "payload": {"type": "function_call", "name": "exec_command",
+                "arguments": '{"cmd":"perf stat ./workload"}', "call_id": "command"}},
+            {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "command",
+                "output": "Process exited with code 1\nFinal output:\nresult warning"}},
+            {"type": "event_msg", "payload": {"type": "mcp_tool_call_end", "call_id": "profile",
+                "invocation": {"server": "arm-performix", "tool": "run_recipe", "arguments": {"recipe": "code_hotspots"}},
+                "result": {"Ok": {"run_id": "abc", "run_status": "completed"}}}},
+            # The judge needs source and checker edits to detect a misleading passing check.
+            {"payload": {"type": "function_call_output", "call_id": "read-original",
+                         "output": "return *records.values[index];"}},
+            {"payload": {"type": "custom_tool_call", "name": "apply_patch", "call_id": "edit",
+                         "input": "*** Update File: checker.cpp\n+return records.bytes[index * records.stride];"}},
+            {"payload": {"type": "item_completed", "item": {"type": "FileChange", "id": "edit",
+                         "changes": [{"path": "checker.cpp", "diff": "+same lookup on both sides"}], "status": "completed"}}},
+            {"payload": {"type": "function_call_output", "call_id": "check",
+                         "output": "original=42\noptimized=42\ncorrectness=pass"}},
+        ]
+        result = self.records(events)
+        self.assertEqual(list(range(2, 10)), [event["session_line"] for event in result])
+        self.assertEqual(["Inspect source"], result[0]["event"]["payload"]["summary"])
+        self.assertNotIn("encrypted_content", result[0]["event"]["payload"])
+        self.assertEqual(events[2:], [event["event"] for event in result[1:]])
+
+    def test_interleaved_tool_results_reference_the_matching_request(self):
+        events = [
+            {"payload": {"type": "function_call", "call_id": "baseline", "name": "get_insights", "namespace": "mcp__arm_performix",
+                         "arguments": '{"run_id":"original"}'}},
+            {"payload": {"type": "function_call", "call_id": "validation", "name": "get_insights", "namespace": "mcp__arm_performix",
+                         "arguments": '{"run_id":"optimized"}'}},
+            {"payload": {"type": "function_call_output", "call_id": "validation", "output": "mutex=0"}},
+            {"payload": {"type": "function_call_output", "call_id": "baseline", "output": "mutex=52.793335"}},
+        ]
+        records = self.records(events)
+        self.assertEqual(events, [record["event"] for record in records])
+        self.assertEqual(2, records[2]["request_session_line"])
+        self.assertEqual(1, records[3]["request_session_line"])
+        self.assertNotIn("request", records[2])
+        self.assertEqual(["optimized", "original"], [record["run_id"] for record in records[2:]])
+
+    def test_query_results_keep_original_tables_and_run_ids_without_named_copies(self):
+        table = {"columns": [{"name": "function"}, {"name": "branch_mpki"}, {"name": "l1d_mpki"}],
+                 "rows": [["process_packets", 0, 0.08], ["main", 0.08, 1]]}
+        payloads = [
+            {"type": "mcp_tool_call_end", "invocation": {"tool": "open_render_session", "server": "arm-performix",
+                 "arguments": {"run_id": "optimized"}}, "result": {"Ok": {"session_id": "s7"}}},
+            {"type": "item_completed", "item": {"type": "McpToolCall", "tool": "run_query", "server": "arm-performix",
+                 "status": "completed", "arguments": {"session_id": "s7"}, "result": {"structuredContent": table}}},
+            {"type": "item_completed", "item": {"type": "McpToolCall", "tool": "run_query", "server": "arm-performix",
+                 "status": "completed", "arguments": {"session_id": "unknown"},
+                 "result": {"content": [{"type": "text", "text": json.dumps(table)}]}}},
+            {"type": "item_completed", "item": {"type": "McpToolCall", "tool": "run_query", "server": "another-server",
+                 "status": "completed", "arguments": {"session_id": "s7"}, "result": {"structuredContent": table}}},
+            {"type": "item_completed", "item": {"type": "McpToolCall", "tool": "run_query", "server": "arm-performix",
+                 "status": "failed", "arguments": {"session_id": "s7"}, "result": None, "error": "query failed"}},
+        ]
+        records = self.records([{"payload": payload} for payload in payloads])
+        self.assertEqual("optimized", records[1]["run_id"])
+        self.assertIsNone(records[2]["run_id"])  # Never infer a run from the previous result.
+        self.assertIsNone(records[3]["run_id"])
+        self.assertEqual("optimized", records[4]["run_id"])
+        self.assertEqual(payloads[4], records[4]["event"]["payload"])
+        self.assertTrue(all("query_rows" not in record for record in records))
+        self.assertEqual(table, records[1]["event"]["payload"]["item"]["result"]["structuredContent"])
+        self.assertEqual(json.dumps(table), records[2]["event"]["payload"]["item"]["result"]["content"][0]["text"])
+
+    def test_metadata_is_removed_but_unknown_evidence_and_textual_reasoning_survive(self):
+        events = [
+            {"type": kind, "payload": {"data": "metadata"}}
+            for kind in ("session_meta", "world_state", "turn_context", "token_usage_record")
+        ] + [
+            {"type": "response_item", "payload": {"type": "reasoning", "summary": [], "encrypted_content": "opaque"}},
+            {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "Reasoning", "summary_text": [], "raw_content": []}}},
+            {"type": "response_item", "payload": {"type": "reasoning", "content": ["Check the source"], "encrypted_content": "opaque"}},
+            {"type": "response_item", "payload": {"type": "reasoning", "future_field": "substantive evidence"}},
+            {"type": "future_event", "payload": {"type": "future_payload", "output": "keep"}},
+            {"type": "response_item", "payload": {"type": "function_call_output", "output": {
+                "encrypted_content": "a real measured field", "internal_chat_message_metadata_passthrough": "also data"}}},
+        ]
+        records = self.records(events)
+        self.assertEqual([7, 8, 9, 10], [record["session_line"] for record in records])
+        self.assertEqual(["Check the source"], records[0]["event"]["payload"]["content"])
+        self.assertNotIn("encrypted_content", records[0]["event"]["payload"])
+        self.assertEqual(events[7:], [record["event"] for record in records[1:]])
+
+    def test_mcp_deduplication_preserves_conflicting_extra_and_malformed_content(self):
+        table = {"columns": [{"name": "value"}], "rows": [[1]]}
+        duplicate = {"type": "text", "text": json.dumps(table)}
+        extra = [{"type": "text", "text": "warning: partial measurement"},
+                 {"type": "text", "text": json.dumps({"columns": [{"name": "value"}], "rows": [[True]]})},
+                 {"type": "text", "text": "{malformed"},
+                 {**duplicate, "annotations": {"important": True}},
+                 {"type": "image", "data": "recorded image"}]
+        result = {"structuredContent": table, "content": [duplicate, *extra]}
+        events = [
+            {"payload": {"type": "item_completed", "item": {"type": "McpToolCall", "server": "arm-performix",
+                "tool": "run_query", "status": "completed", "arguments": {}, "result": result}}},
+            {"payload": {"type": "mcp_tool_call_end", "result": {"Ok": result}}},
+        ]
+        records = self.records(events)
+        reduced = [records[0]["event"]["payload"]["item"]["result"], records[1]["event"]["payload"]["result"]["Ok"]]
+        for actual in reduced:
+            self.assertEqual(table, actual["structuredContent"])
+            self.assertEqual(extra, actual["content"])
+
+    def test_malformed_and_unfamiliar_records_keep_original_line_numbers(self):
+        raw = '\n'.join(['{"payload":null}', '42', '{"unfinished":', '', '{"payload":{"item":42}}'])
+        records = evaluation.pathways_judge_records(raw)
+        self.assertEqual([1, 2, 3, 5], [record["session_line"] for record in records])
+        self.assertEqual({"invalid_jsonl": '{"unfinished":'}, records[2]["event"])
+        self.assertEqual({"payload": {"item": 42}}, records[3]["event"])
 
 
 if __name__ == "__main__":

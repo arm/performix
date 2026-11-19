@@ -191,12 +191,12 @@ func TestMCPServerProtocol(t *testing.T) {
 		assert.Contains(t, names, "list_render_sessions")
 		assert.Contains(t, names, "close_render_session")
 		assert.Contains(t, names, "run_query")
-		assert.NotContains(t, names, "search_android_packages")
+		assert.Contains(t, names, "search_android_packages")
 	})
 
-	t.Run("advertises Android capability only when enabled", func(t *testing.T) {
+	t.Run("advertises Android capability by default", func(t *testing.T) {
 		ctx := context.Background()
-		clientSession, serverSession := connectTestServer(t, ctx, nil, MCPServerOptions{AndroidTargetsEnabled: true})
+		clientSession, serverSession := connectTestServer(t, ctx, nil, MCPServerOptions{})
 		defer clientSession.Close()
 		defer serverSession.Close()
 

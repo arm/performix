@@ -186,6 +186,8 @@ let tool = {
     };
   },
 
+  validate: () => {},
+
   run: async (engine, ctx) => {
     await validatePerfEventParanoidSetting(engine);
 

@@ -28,30 +28,31 @@ type CLITableWithDescription struct {
 
 // CLIRunDescription provides a detailed description of a run
 type CLIRunDescription struct {
-	ID                  string                             `json:"id"`
-	EngineVersion       string                             `json:"engine_version"`
-	LoadErrorMessage    string                             `json:"list_error_message"`
-	Name                string                             `json:"name"`
-	StartTime           string                             `json:"start_time"`
-	EndTime             string                             `json:"end_time"`
-	RecipeName          string                             `json:"recipe_name"`
-	Parameters          map[string]any                     `json:"parameters"`
-	WorkloadType        string                             `json:"workload_type"`
-	Cmdline             string                             `json:"cmdline"`
-	AndroidPackageName  string                             `json:"android_package_name,omitempty"`
-	AndroidActivityName string                             `json:"android_activity_name,omitempty"`
-	WorkingDir          string                             `json:"working_dir"`
-	Env                 map[string]string                  `json:"env"`
-	Pid                 int64                              `json:"pid"`
-	Target              CLITarget                          `json:"target"`
-	TargetName          string                             `json:"target_name"`
-	Timeout             uint32                             `json:"timeout"`
-	RunResult           string                             `json:"run_result"`
-	RunError            string                             `json:"run_error"`
-	Group               string                             `json:"group"`
-	SizeBytes           *uint64                            `json:"size_bytes,omitempty"`
-	RendererOutput      map[string]CLITableWithDescription `json:"renderer_output,omitempty"`
-	HostSourceCodePaths run.HostSourceCodePath             `json:"host_source_code_paths"`
+	ID                       string                             `json:"id"`
+	EngineVersion            string                             `json:"engine_version"`
+	LoadErrorMessage         string                             `json:"list_error_message"`
+	Name                     string                             `json:"name"`
+	StartTime                string                             `json:"start_time"`
+	EndTime                  string                             `json:"end_time"`
+	RecipeName               string                             `json:"recipe_name"`
+	Parameters               map[string]any                     `json:"parameters"`
+	WorkloadType             string                             `json:"workload_type"`
+	Cmdline                  string                             `json:"cmdline"`
+	AndroidPackageName       string                             `json:"android_package_name,omitempty"`
+	AndroidActivityName      string                             `json:"android_activity_name,omitempty"`
+	AndroidActivityArguments string                             `json:"android_activity_arguments,omitempty"`
+	WorkingDir               string                             `json:"working_dir"`
+	Env                      map[string]string                  `json:"env"`
+	Pid                      int64                              `json:"pid"`
+	Target                   CLITarget                          `json:"target"`
+	TargetName               string                             `json:"target_name"`
+	Timeout                  uint32                             `json:"timeout"`
+	RunResult                string                             `json:"run_result"`
+	RunError                 string                             `json:"run_error"`
+	Group                    string                             `json:"group"`
+	SizeBytes                *uint64                            `json:"size_bytes,omitempty"`
+	RendererOutput           map[string]CLITableWithDescription `json:"renderer_output,omitempty"`
+	HostSourceCodePaths      run.HostSourceCodePath             `json:"host_source_code_paths"`
 }
 
 // CLIRunSummary provides a summary of a run
@@ -180,26 +181,27 @@ func CLIRunDescriptionFromProto(id string, item *apapproto.RunDescription) (CLIR
 
 	androidLaunch := item.Metadata.GetAndroidLaunchWorkload()
 	cliDesc := CLIRunDescription{
-		ID:                  id,
-		EngineVersion:       item.Metadata.GetEngineVersion(),
-		Name:                item.Metadata.GetName(),
-		StartTime:           item.Metadata.GetStartTime(),
-		EndTime:             item.Metadata.GetEndTime(),
-		RecipeName:          item.Metadata.GetRecipeName(),
-		Parameters:          mappedParams,
-		WorkloadType:        item.Metadata.GetWorkloadType(),
-		Cmdline:             item.Metadata.GetCmdline(),
-		AndroidPackageName:  androidLaunch.GetPackageName(),
-		AndroidActivityName: androidLaunch.GetActivityName(),
-		WorkingDir:          item.Metadata.GetWorkingDir(),
-		Env:                 item.Metadata.GetEnv(),
-		Pid:                 item.Metadata.GetPid(),
-		Timeout:             item.Metadata.GetTimeout(),
-		RunResult:           item.Metadata.GetRunResult(),
-		RunError:            item.Metadata.GetRunError(),
-		Group:               item.Metadata.GetGroup(),
-		SizeBytes:           sizeBytes,
-		TargetName:          item.Metadata.GetTargetName(),
+		ID:                       id,
+		EngineVersion:            item.Metadata.GetEngineVersion(),
+		Name:                     item.Metadata.GetName(),
+		StartTime:                item.Metadata.GetStartTime(),
+		EndTime:                  item.Metadata.GetEndTime(),
+		RecipeName:               item.Metadata.GetRecipeName(),
+		Parameters:               mappedParams,
+		WorkloadType:             item.Metadata.GetWorkloadType(),
+		Cmdline:                  item.Metadata.GetCmdline(),
+		AndroidPackageName:       androidLaunch.GetPackageName(),
+		AndroidActivityName:      androidLaunch.GetActivityName(),
+		AndroidActivityArguments: androidLaunch.GetActivityArguments(),
+		WorkingDir:               item.Metadata.GetWorkingDir(),
+		Env:                      item.Metadata.GetEnv(),
+		Pid:                      item.Metadata.GetPid(),
+		Timeout:                  item.Metadata.GetTimeout(),
+		RunResult:                item.Metadata.GetRunResult(),
+		RunError:                 item.Metadata.GetRunError(),
+		Group:                    item.Metadata.GetGroup(),
+		SizeBytes:                sizeBytes,
+		TargetName:               item.Metadata.GetTargetName(),
 	}
 
 	cliDesc.HostSourceCodePaths = extractSourceCodePathsFromRun(item.HostSourceCodePaths)

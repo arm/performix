@@ -82,6 +82,37 @@ class VersionTests(unittest.TestCase):
             self.assertEqual(get_tools.get_engine_version(), "1.2.3-dev")
 
 
+class LocalAgentPackagingTests(unittest.TestCase):
+    def test_version_is_passed_to_agent_build_and_bundle(self):
+        for version in ("1.24.0-dev.abcd1234", "1.24.0-dev.local", "1.24.0"):
+            environment = {"PERFORMIX_ENGINE_VERSION": version} if "-dev." in version else {}
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                scripts = root / "core" / "scripts"
+                scripts.mkdir(parents=True)
+                build_versions = []
+
+                def build_agent(command, **kwargs):
+                    if Path(command[1]).name == "build_target_agent.py":
+                        build_versions.append(kwargs["env"]["PERFORMIX_ENGINE_VERSION"])
+                        (root / "dist").mkdir()
+
+                with (
+                    patch.dict(os.environ, environment, clear=True),
+                    patch.object(get_tools, "SCRIPT_DIR", scripts),
+                    patch.object(get_tools.subprocess, "check_output", side_effect=["apx-agent", version]),
+                    patch.object(get_tools.subprocess, "run", side_effect=build_agent) as run,
+                ):
+                    get_tools.package_target_agent(root / "tools")
+
+                self.assertEqual(build_versions, [version])
+                _, *bundles = run.call_args_list
+                self.assertEqual(len(bundles), len(get_tools.TARGET_AGENT_VARIANTS))
+                for bundle in bundles:
+                    command = bundle.args[0]
+                    self.assertEqual(command[command.index("--version") + 1], version)
+
+
 class SysutilPackagingTests(unittest.TestCase):
     def test_open_source_script_packages_sysutil_without_credentials(self):
         with tempfile.TemporaryDirectory() as temporary_dir:

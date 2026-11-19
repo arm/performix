@@ -602,7 +602,7 @@ func TestRecipeInfoToProtoIncludesSplitSelectAndRenderParameters(t *testing.T) {
 
 	po := recipe.ParameterOptions{
 		SingleSelectOptions: [][]parameters.ParameterOption{{{Value: "dynamic-single", Label: "dynamic-single"}}},
-		MultiSelectOptions:  [][]parameters.ParameterOption{{{Value: "dynamic-multi", Label: "dynamic-multi"}}},
+		MultiSelectOptions:  [][]parameters.ParameterOption{{{Value: "dynamic-multi", Label: "dynamic-multi", Metadata: map[string]string{"category": "Example category"}}}},
 	}
 
 	resp, err := RecipeInfoToProto(r, po, true)
@@ -618,7 +618,7 @@ func TestRecipeInfoToProtoIncludesSplitSelectAndRenderParameters(t *testing.T) {
 
 	assert.Equal(t, "multi", resp.Parameters[1].GetMultiSelect().GetBase().GetID())
 	assert.Equal(t, []string{"one"}, resp.Parameters[1].GetMultiSelect().GetDefaultValue())
-	assert.Equal(t, []*apapproto.ParameterOption{{Value: "dynamic-multi", Label: "dynamic-multi"}}, resp.Parameters[1].GetMultiSelect().GetOptions())
+	assert.Equal(t, []*apapproto.ParameterOption{{Value: "dynamic-multi", Label: "dynamic-multi", Metadata: map[string]string{"category": "Example category"}}}, resp.Parameters[1].GetMultiSelect().GetOptions())
 
 	assert.Equal(t, "render-string", resp.RenderParameters[0].GetId())
 	assert.Equal(t, apapproto.RenderParameterType_RENDER_PARAMETER_TYPE_STRING, resp.RenderParameters[0].GetType())
@@ -937,23 +937,29 @@ func TestRecipeWorkloadFromProto(t *testing.T) {
 		assert.Equal(t, "/some/dir/somewhere", wll.WorkingDir)
 		assert.Equal(t, true, wll.UseShell)
 	})
-	t.Run("Android launch workload populates package and activity", func(t *testing.T) {
+	t.Run("Android launch workload trims package and activity", func(t *testing.T) {
+		// Given
 		rw := &apapproto.RecipeWorkload{
 			SpecificWorkload: &apapproto.RecipeWorkload_AndroidLaunchWorkload{
 				AndroidLaunchWorkload: &apapproto.AndroidLaunchWorkload{
-					PackageName:  "com.example.app",
-					ActivityName: ".MainActivity",
+					PackageName:       " \tcom.example.app ",
+					ActivityName:      ".MainActivity\n",
+					ActivityArguments: `--es greeting "hello world"`,
 				},
 			},
 		}
 
+		// When
 		wl, err := RecipeWorkloadFromProto(rw)
+
+		// Then
 		require.NoError(t, err)
 
 		android, ok := wl.(*tool.WorkloadAndroidLaunch)
 		require.True(t, ok)
 		assert.Equal(t, "com.example.app", android.PackageName)
 		assert.Equal(t, ".MainActivity", android.ActivityName)
+		assert.Equal(t, `--es greeting "hello world"`, android.ActivityArguments)
 	})
 	t.Run("returns error on unknown workload type", func(t *testing.T) {
 		rw := &apapproto.RecipeWorkload{}
@@ -968,16 +974,18 @@ func TestRecipeWorkloadFromProto(t *testing.T) {
 
 func TestDescToProtoIncludesAndroidLaunchMetadata(t *testing.T) {
 	desc, err := DescToProto(&run.RunDescription{
-		WorkloadType:        "Android Launch",
-		AndroidPackageName:  "com.example.app",
-		AndroidActivityName: ".MainActivity",
+		WorkloadType:             "Android Launch",
+		AndroidPackageName:       "com.example.app",
+		AndroidActivityName:      ".MainActivity",
+		AndroidActivityArguments: `--es greeting "hello world"`,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, desc.Metadata)
 
 	assert.Equal(t, &apapproto.AndroidLaunchWorkload{
-		PackageName:  "com.example.app",
-		ActivityName: ".MainActivity",
+		PackageName:       "com.example.app",
+		ActivityName:      ".MainActivity",
+		ActivityArguments: `--es greeting "hello world"`,
 	}, desc.Metadata.AndroidLaunchWorkload)
 }
 

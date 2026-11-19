@@ -3,7 +3,7 @@
 
 module github.com/Arm-Debug/apap-cli/apap-cli
 
-go 1.27.3
+go 1.27.4
 
 replace (
 	github.com/Arm-Debug/apap-cli/apap-engine => ../apap-engine
@@ -32,8 +32,8 @@ require (
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/crypto v0.58.0
 	golang.org/x/term v0.47.0
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800
-	google.golang.org/grpc v1.84.0
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260817212433-ac3dfec99bb1
+	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 )
 
@@ -49,13 +49,8 @@ require (
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dop251/goja v0.0.0-20250309171923-bcd7cc6bf64c // indirect
 	github.com/dop251/goja_nodejs v0.0.0-20250409162600-f7acab6894b0 // indirect
-	github.com/duckdb/duckdb-go-bindings v0.3.3 // indirect
-	github.com/duckdb/duckdb-go-bindings/lib/darwin-amd64 v0.3.3 // indirect
-	github.com/duckdb/duckdb-go-bindings/lib/darwin-arm64 v0.3.3 // indirect
-	github.com/duckdb/duckdb-go-bindings/lib/linux-amd64 v0.3.3 // indirect
-	github.com/duckdb/duckdb-go-bindings/lib/linux-arm64 v0.3.3 // indirect
-	github.com/duckdb/duckdb-go-bindings/lib/windows-amd64 v0.3.3 // indirect
-	github.com/duckdb/duckdb-go/v2 v2.5.5 // indirect
+	github.com/duckdb/duckdb-go-bindings v0.20000.0 // indirect
+	github.com/duckdb/duckdb-go/v2 v2.20000.0 // indirect
 	github.com/flynn/noise v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.4+incompatible // indirect
@@ -88,6 +83,11 @@ require (
 	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
+	go.duckdb.org/libduckdb/darwin-amd64 v0.20000.0 // indirect
+	go.duckdb.org/libduckdb/darwin-arm64 v0.20000.0 // indirect
+	go.duckdb.org/libduckdb/linux-amd64 v0.20000.0 // indirect
+	go.duckdb.org/libduckdb/linux-arm64 v0.20000.0 // indirect
+	go.duckdb.org/libduckdb/windows-amd64 v0.20000.0 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect

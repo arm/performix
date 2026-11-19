@@ -124,8 +124,16 @@ func setProcessAffinityMask(hProcess windows.Handle, dwProcessAffinityMask uintp
 	return nil
 }
 
-// KillProcess sends a termination signal to the given PID on Windows using OpenProcess/TerminateProcess.
+// KillProcess terminates a managed process tree, or a single unmanaged PID.
 func (w *WindowsProcessManager) KillProcess(pid int) error {
+	if value, ok := w.common.managedProcesses.Load(pid); ok {
+		err := value.(*managedProcess).kill()
+		// A closed job has already terminated all managed descendants.
+		if errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		return err
+	}
 	handle, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid))
 	if err != nil {
 		return fmt.Errorf("failed to open process %d: %w", pid, err)
@@ -216,6 +224,9 @@ func (w *WindowsProcessManager) buildCmd(lc *LaunchCommand) (*launchCommand, err
 	}
 
 	launch := newLaunchCommand(lc)
+	if err := validateResolvedCommand(launch.command); err != nil {
+		return nil, err
+	}
 
 	// Keep a dedicated console for CTRL+C handling, but hide it when the agent
 	// runs in the user's interactive desktop session.

@@ -25,6 +25,13 @@ type report struct {
 }
 
 func main() {
+	if os.Getenv("APX_PROCESS_PROBE_TREE") != "" {
+		if err := runProcessTree(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "process tree probe: %v\n", err)
+			os.Exit(2)
+		}
+		return
+	}
 	var environmentKeys []string
 	if err := json.Unmarshal([]byte(os.Getenv(environmentKeysVariable)), &environmentKeys); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "decode selected environment keys: %v\n", err)

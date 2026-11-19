@@ -21,19 +21,20 @@ const runDetailsCPUsComponentType = "target-info-cpus"
 
 func SummarizeRunDetails(ctx context.Context, desc *run.RunDescription, session render.Session) (RunSummary, error) {
 	payload := runDetailsPayload{
-		RunID:               desc.ID,
-		RunName:             desc.Name,
-		RecipeName:          desc.RecipeName,
-		RunResult:           desc.RunResult,
-		RunError:            desc.RunError,
-		WorkloadType:        desc.WorkloadType,
-		WorkloadCmdline:     desc.Cmdline,
-		AndroidPackageName:  desc.AndroidPackageName,
-		AndroidActivityName: desc.AndroidActivityName,
-		TargetName:          desc.TargetName,
-		StartTime:           desc.StartTime,
-		EndTime:             desc.EndTime,
-		Timeout:             desc.Timeout,
+		RunID:                    desc.ID,
+		RunName:                  desc.Name,
+		RecipeName:               desc.RecipeName,
+		RunResult:                desc.RunResult,
+		RunError:                 desc.RunError,
+		WorkloadType:             desc.WorkloadType,
+		WorkloadCmdline:          desc.Cmdline,
+		AndroidPackageName:       desc.AndroidPackageName,
+		AndroidActivityName:      desc.AndroidActivityName,
+		AndroidActivityArguments: desc.AndroidActivityArguments,
+		TargetName:               desc.TargetName,
+		StartTime:                desc.StartTime,
+		EndTime:                  desc.EndTime,
+		Timeout:                  desc.Timeout,
 	}
 
 	if len(desc.Parameters) > 0 {
@@ -162,25 +163,26 @@ func loadRunDetailsCPUTopology(ctx context.Context, session render.Session) *run
 	return &runDetailsCPUTopology{TotalCPUCount: totalCPUCount, CPUTypes: cpuTypes}
 }
 
-const runDetailsPromptFragment = "Run metadata. SamplingParameters (optional) holds the profiling recipe parameters. Os (optional) holds the target operating system Description and KernelVersion. CpuTopology (optional) summarizes the target CPUs: TotalCpuCount is the total core count, and CpuTypes groups cores sharing the same model Name and Midr (Arm MIDR_EL1 register value), each with its CoreCount and the ClusterIds those cores belong to."
+const runDetailsPromptFragment = "Run metadata. SamplingParameters (optional) holds the profiling recipe parameters. AndroidActivityArguments (optional) holds the arguments passed to an Android activity. Os (optional) holds the target operating system Description and KernelVersion. CpuTopology (optional) summarizes the target CPUs: TotalCpuCount is the total core count, and CpuTypes groups cores sharing the same model Name and Midr (Arm MIDR_EL1 register value), each with its CoreCount and the ClusterIds those cores belong to."
 
 type runDetailsPayload struct {
-	RunID               string                 `json:"RunId"`
-	RunName             string                 `json:"RunName"`
-	RecipeName          string                 `json:"RecipeName"`
-	RunResult           string                 `json:"RunResult"`
-	RunError            string                 `json:"RunError"`
-	WorkloadType        string                 `json:"WorkloadType"`
-	WorkloadCmdline     string                 `json:"WorkloadCmdline"`
-	AndroidPackageName  string                 `json:"AndroidPackageName,omitempty"`
-	AndroidActivityName string                 `json:"AndroidActivityName,omitempty"`
-	TargetName          string                 `json:"TargetName"`
-	StartTime           string                 `json:"StartTime"`
-	EndTime             string                 `json:"EndTime"`
-	Timeout             uint32                 `json:"Timeout"`
-	SamplingParameters  map[string]any         `json:"SamplingParameters,omitempty"`
-	OS                  *runDetailsOSInfo      `json:"Os,omitempty"`
-	CPUTopology         *runDetailsCPUTopology `json:"CpuTopology,omitempty"`
+	RunID                    string                 `json:"RunId"`
+	RunName                  string                 `json:"RunName"`
+	RecipeName               string                 `json:"RecipeName"`
+	RunResult                string                 `json:"RunResult"`
+	RunError                 string                 `json:"RunError"`
+	WorkloadType             string                 `json:"WorkloadType"`
+	WorkloadCmdline          string                 `json:"WorkloadCmdline"`
+	AndroidPackageName       string                 `json:"AndroidPackageName,omitempty"`
+	AndroidActivityName      string                 `json:"AndroidActivityName,omitempty"`
+	AndroidActivityArguments string                 `json:"AndroidActivityArguments,omitempty"`
+	TargetName               string                 `json:"TargetName"`
+	StartTime                string                 `json:"StartTime"`
+	EndTime                  string                 `json:"EndTime"`
+	Timeout                  uint32                 `json:"Timeout"`
+	SamplingParameters       map[string]any         `json:"SamplingParameters,omitempty"`
+	OS                       *runDetailsOSInfo      `json:"Os,omitempty"`
+	CPUTopology              *runDetailsCPUTopology `json:"CpuTopology,omitempty"`
 }
 
 type runDetailsOSInfo struct {

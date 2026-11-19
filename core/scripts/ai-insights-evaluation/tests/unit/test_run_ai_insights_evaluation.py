@@ -253,9 +253,128 @@ class AiInsightsPytestIntegrationTests(unittest.TestCase):
                         f"--ai-manifest={self.root / 'manifest.json'}",
                         "--ai-openai-api-key=fake", f"--ai-prerecorded-run-cache={self.root}",
                         f"--ai-results-dir={self.root / 'results'}"]
-        environment = patch.dict(os.environ, {"PYTEST_ADDOPTS": ""})
+        environment = patch.dict(os.environ, {"PYTEST_ADDOPTS": "", "AI_INSIGHTS_MIN_PASS_RATE": "0"})
         environment.start()
         self.addCleanup(environment.stop)
+
+    def prepare_pass_rate_suite(self):
+        manifest_path = self.root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["tests"][0]["id"] = "case"
+        manifest["tests"][0]["performance_thresholds"] = {"test-high": {
+            "duration_seconds": 30, "input_tokens": 1000, "output_tokens": 1000,
+        }}
+        manifest_path.write_text(json.dumps(manifest))
+        with (self.root / "conftest.py").open("a") as output:
+            output.write("\nhooks._generate_graph_report = lambda config: None\n"
+                         "pytest_sessionfinish = hooks.pytest_sessionfinish\n")
+        (self.root / "test_fake.py").write_text(textwrap.dedent('''
+            import os
+            import pytest
+
+            @pytest.mark.parametrize("attempt", [1, 2, 3], ids=lambda n: f"case-performix_mcp-attempt_{n:03d}")
+            def test_ai_insights(attempt, record_property, request):
+                scenario = os.environ["GATE_SCENARIO"]
+                failed = scenario != "performance" and (
+                    attempt == 2 or (scenario in ("minority", "expected_failure") and attempt == 3))
+                error = scenario == "infrastructure" and attempt == 2
+                score = "error" if error else "fail" if failed else "pass"
+                for name, value in {
+                    "ai_test_id": "case", "ai_mode": "performix_mcp",
+                    "ai_model_config": "test-high", "ai_attempt": attempt,
+                    "ai_attempts_total": 3, "ai_scores": score,
+                    "ai_min_pass_rate": request.config._ai_insights_min_pass_rate,
+                    "ai_agent_duration_seconds": 20, "ai_output_tokens": 900,
+                    "ai_input_tokens": 1001 if scenario == "performance" and attempt == 2 else 900,
+                }.items():
+                    record_property(name, value)
+                if scenario == "expected_failure" and attempt == 2:
+                    pytest.xfail("known model failure")
+                if failed:
+                    pytest.fail("infrastructure error" if error else "judge rejected answer")
+        '''))
+
+    def test_pass_rate_outcomes_with_serial_and_parallel_pytest(self):
+        self.prepare_pass_rate_suite()
+        for workers in ("0", "2"):
+            for scenario, expected in (("majority", 0), ("minority", 1), ("infrastructure", 1), ("performance", 0), ("expected_failure", 0)):
+                with self.subTest(workers=workers, scenario=scenario), patch.dict(
+                    os.environ, {"GATE_SCENARIO": scenario}
+                ):
+                    result = self.run_pytest("-n", workers, "--ai-min-pass-rate=0.66", f"--junitxml={self.report}",
+                                             "-o", "junit_family=legacy")
+                    self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
+                    self.assertEqual(3, len(ET.parse(self.report).findall(".//testcase")))
+                    self.assertTrue(ET.parse(self.report).findall(".//failure"))
+                    if scenario == "expected_failure":
+                        self.assertEqual(1, len(ET.parse(self.report).findall(".//skipped")))
+                    if scenario in ("majority", "performance", "expected_failure"):
+                        self.assertIn("Suite gate: PASS", result.stdout)
+                        self.assertIn("Passed: 2/3 attempts; minimum 0.66", result.stdout)
+                        from junit_attempts import attempts_from_junit
+                        from evaluation_summary import render_markdown_summary
+                        saved = attempts_from_junit(self.report)
+                        self.assertTrue(all(a["ai_min_pass_rate"] == "0.66" for a in saved))
+                        summary = render_markdown_summary(saved)
+                        self.assertIn("Passed: 2/3 attempts; minimum 0.66", summary)
+                        self.assertIn("attempt 3 FAIL" if scenario == "expected_failure" else "attempt 2 FAIL", summary)
+
+    def test_default_pass_rate_requires_every_attempt_to_pass(self):
+        self.prepare_pass_rate_suite()
+        with patch.dict(os.environ, {"GATE_SCENARIO": "majority"}):
+            for workers in ("0", "2"):
+                result = self.run_pytest("-n", workers)
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+
+    def test_pass_rate_configuration_precedence(self):
+        from junit_attempts import attempts_from_junit
+
+        self.prepare_pass_rate_suite()
+        manifest_path = self.root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        for manifest_rate, cli_rate, env_rate, expected in (
+            (0.66, None, "0", 0), (0.66, 0, "0", 0), (0.66, 1.0, "0", 1),
+            (1.0, 0.66, "0", 0), (1.0, None, "0.66", 0), (1.0, 1.0, "0.66", 1),
+        ):
+            manifest["defaults"]["min_pass_rate"] = manifest_rate
+            manifest_path.write_text(json.dumps(manifest))
+            for workers in ("0", "2"):
+                with self.subTest(manifest_rate=manifest_rate, cli_rate=cli_rate, env_rate=env_rate, workers=workers), patch.dict(
+                    os.environ, {"GATE_SCENARIO": "majority", "AI_INSIGHTS_MIN_PASS_RATE": env_rate}
+                ):
+                    args = [] if cli_rate is None else [f"--ai-min-pass-rate={cli_rate}"]
+                    result = self.run_pytest("-n", workers, *args, f"--junitxml={self.report}",
+                                             "-o", "junit_family=legacy")
+                    self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
+                    if expected == 0:
+                        self.assertTrue(all(a["ai_min_pass_rate"] == "0.66"
+                                            for a in attempts_from_junit(self.report)))
+
+    def test_incomplete_attempt_groups_cannot_pass(self):
+        self.prepare_pass_rate_suite()
+        with patch.dict(os.environ, {"GATE_SCENARIO": "majority"}):
+            for args in (("-x",), ("-k", "not 3")):
+                result = self.run_pytest("-n", "0", "--ai-min-pass-rate=0.66", *args)
+                self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_invalid_pass_rate_is_rejected_before_setup(self):
+        for rate in ("-0.1", "1.1", "nan"):
+            with self.subTest(rate=rate):
+                result = self.run_pytest("-n", "0", f"--ai-min-pass-rate={rate}")
+                self.assertEqual(4, result.returncode, result.stdout + result.stderr)
+                self.assertIn("--ai-min-pass-rate must", result.stderr)
+        manifest_path = self.root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["tests"] = [manifest["tests"][0]]
+        for rate in (0, 1.1):
+            manifest["defaults"]["min_pass_rate"] = rate
+            manifest_path.write_text(json.dumps(manifest))
+            for workers in ("0", "2"):
+                with self.subTest(manifest_rate=rate, workers=workers):
+                    result = self.run_pytest("-n", workers)
+                    self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                    self.assertIn("--ai-min-pass-rate must", result.stdout + result.stderr)
+        self.assertEqual([], self.read_events())
 
     def read_events(self):
         return [json.loads(line) for path in self.root.glob("events-*.jsonl")

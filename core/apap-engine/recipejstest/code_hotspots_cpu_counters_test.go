@@ -67,6 +67,63 @@ func seriesCapabilityID(id int) string {
 	return fmt.Sprintf("counter.key_type_8.series_%d", id)
 }
 
+func TestCodeHotspotsTimelineIncludesCollectedCPUEvents(t *testing.T) {
+	for _, state := range []string{"collected", "incomplete", "missing"} {
+		t.Run(state, func(t *testing.T) {
+			// Given native counter data with logical CPU cycles unavailable.
+			components := []timelineComponentFixture{captureMetadataComponentFixture(), {
+				RelativePath:  "tool/neoprof/0/capabilities/counter.cpu_cycles.json",
+				ComponentType: cdf.ComponentType{Name: capabilities.CPUCounter, SchemaVersion: "1.0"},
+				Content:       []byte(`{"state":"unavailable","payload":{"title":"CPU Cycles","units":"cycles","bindings":[],"reason":"not_supported"}}`),
+			}}
+			for _, id := range []int{14, 16} {
+				components = append(components, counterCapabilityFixture(t, seriesCapabilityID(id), map[string]any{
+					"title": "Instructions", "description": "Instructions retired.", "units": "", "key_type": 8, "series_id": id,
+				}))
+			}
+			components = append(components, counterParquetCatalogueFixtures(8, 14, 16)...)
+			if state != "missing" {
+				payload := map[string]any{
+					"title": "Native event", "pmu": map[string]string{"id": "armv8_neoverse_n1", "name": "Neoverse N1"},
+					"eventCode": "0xe",
+				}
+				if state == "collected" {
+					payload["binding"] = map[string]string{"seriesCapabilityId": seriesCapabilityID(14)}
+				} else {
+					payload["reason"] = "output_unverified"
+				}
+				content, err := json.Marshal(map[string]any{"state": state, "payload": payload})
+				require.NoError(t, err)
+				components = append(components, timelineComponentFixture{
+					RelativePath:  "tool/neoprof/0/capabilities/nativecounter.armv8_neoverse_n1.e.json",
+					ComponentType: cdf.ComponentType{Name: capabilities.NativeCPUCounter, SchemaVersion: "1.0"}, Content: content,
+				})
+			}
+			model := newRunComponentPresenceModel(t, t.TempDir(), components)
+			var parameters map[string]any
+			if state == "missing" {
+				parameters = map[string]any{"cpu_event": []string{"armv8_neoverse_n1.e"}}
+			}
+
+			// When rendering, with recipe parameters only in the missing-capability case.
+			output, err := executeCodeHotspotsRenderStage(t, []*run.RunDescription{{
+				ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}, Parameters: parameters,
+			}}, []cdf.ModelView{model})
+
+			// Then only a collected binding selects a row, even when titles match.
+			require.NoError(t, err)
+			if state != "collected" {
+				requireNoTimelineWidget(t, output)
+				return
+			}
+			groups := requireTimelineGroups(t, requireTimelineWidget(t, output))
+			require.Len(t, groups, 1)
+			group := requireTimelineGroup(t, groups, "key_8_series_14")
+			require.Equal(t, "Instructions", group["title"])
+		})
+	}
+}
+
 func TestCodeHotspotsWindowsOmitsTimeline(t *testing.T) {
 	model := newRunComponentPresenceModel(t, t.TempDir(), nil)
 	output, err := executeCodeHotspotsRenderStage(t, []*run.RunDescription{{ToolsUsed: []cdf.ToolUsed{{Tool: "wperf"}}}}, []cdf.ModelView{model})

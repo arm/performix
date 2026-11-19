@@ -43,6 +43,8 @@ type FakeToolInstance struct {
 	probeResult               ProbeResult
 	probeStarted              chan struct{}
 	probeRelease              chan struct{}
+	validateStarted           chan struct{}
+	validateRelease           chan struct{}
 	runtimeCleaned            chan struct{}
 	runError                  error
 	cancelError               error
@@ -55,7 +57,7 @@ type FakeToolInstance struct {
 type FakeToolOption func(*FakeToolInstance)
 
 func NewFakeToolInstance(opts ...FakeToolOption) *FakeToolInstance {
-	f := &FakeToolInstance{done: make(chan struct{})}
+	f := &FakeToolInstance{done: make(chan struct{}), probeResult: ProbeResult{Available: true}}
 	for _, opt := range opts {
 		opt(f)
 	}
@@ -131,6 +133,14 @@ func (f *FakeToolInstance) Probe() (ProbeResult, error) {
 		<-f.probeRelease
 	}
 	return f.probeResult, f.probeError
+}
+
+func (f *FakeToolInstance) Validate() ([]ProbeAdvice, error) {
+	if f.validateStarted != nil {
+		close(f.validateStarted)
+		<-f.validateRelease
+	}
+	return nil, nil
 }
 
 func (f *FakeToolInstance) Run() error {
@@ -212,8 +222,8 @@ func CreateFakeToolFactory(createInstance func() *FakeToolInstance) (*Registry, 
 
 func newTwoCtx() []IntegrationContext {
 	return []IntegrationContext{
-		{Name: "fake-tool", Version: "1.0", Ctx: context.Background()},
-		{Name: "fake-tool", Version: "1.0", Ctx: context.Background()},
+		{Name: "fake-tool", Version: "1.0", Ctx: context.Background(), Discovery: &ProbeResult{Available: true}},
+		{Name: "fake-tool", Version: "1.0", Ctx: context.Background(), Discovery: &ProbeResult{Available: true}},
 	}
 }
 
@@ -361,15 +371,23 @@ func TestRunTool(t *testing.T) {
 	})
 
 	t.Run("Cancel request are logged", func(t *testing.T) {
+		// Given a tool that reports when collection starts.
 		logger, hook := test.NewNullLogger()
 		ctx := logx.CtxWithLogger(context.Background(), logger)
 
-		tr, _ := CreateFakeToolFactory(func() *FakeToolInstance { return NewFakeToolInstance() })
+		var running sync.WaitGroup
+		running.Add(1)
+		tr, _ := CreateFakeToolFactory(func() *FakeToolInstance {
+			instance := NewFakeToolInstance()
+			instance.running = &running
+			return instance
+		})
 
 		stopCh := make(chan struct{})
 		cancelCh := make(chan struct{})
 		done := make(chan []error, 1)
 
+		// When the caller cancels during collection.
 		go func() {
 			done <- RunAndReformatToolIntegrations(stopCh, cancelCh, []IntegrationContext{
 				{
@@ -380,9 +398,10 @@ func TestRunTool(t *testing.T) {
 				},
 			}, tr, nil)
 		}()
+		running.Wait()
 		close(cancelCh)
 
-		// Wait for cancel to be processed
+		// Then the tool stops and the Engine logs the cancellation.
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
@@ -465,14 +484,18 @@ func TestRunTool(t *testing.T) {
 	})
 
 	t.Run("Cancel request is pending so tools do not run", func(t *testing.T) {
+		// Given tools with a pending cancellation request.
 		tr, inst := CreateFakeToolFactory(func() *FakeToolInstance {
 			return NewFakeToolInstance()
 		})
 
+		// When the caller attempts collection.
 		errs := runAsync(tr, false, true, nil)
+
+		// Then preparation returns cancellation without running the tools.
 		require.Len(t, errs, 2)
-		assert.ErrorIs(t, errs[0], errToolRunCancelled)
-		assert.ErrorIs(t, errs[1], errToolRunCancelled)
+		assert.ErrorIs(t, errs[0], context.Canceled)
+		assert.ErrorIs(t, errs[1], context.Canceled)
 
 		require.Len(t, *inst, 2)
 		assertFlags(t, (*inst)[0], expectedFlags{cancelled: false, stopped: false, ran: false, reformatted: false})
@@ -531,6 +554,47 @@ func TestRunTool(t *testing.T) {
 		assertFlags(t, (*inst)[0], expectedFlags{cancelled: false, stopped: false, ran: true, reformatted: true})
 		assertFlags(t, (*inst)[1], expectedFlags{cancelled: false, stopped: false, ran: true, reformatted: true})
 	})
+}
+
+func TestCancellationDuringPreparationPreventsCollection(t *testing.T) {
+	for _, phase := range []string{"probe", "validation"} {
+		t.Run(phase, func(t *testing.T) {
+			// Given a tool that waits for cancellation during its check.
+			started := make(chan struct{})
+			instance := NewFakeToolInstance(WithImmediateExit())
+			t.Cleanup(func() { instance.once.Do(func() { close(instance.done) }) })
+			ic := IntegrationContext{Name: "fake-tool", Version: "1.0", Ctx: context.Background()}
+			if phase == "probe" {
+				instance.probeStarted, instance.probeRelease = started, instance.done
+			} else {
+				instance.validateStarted, instance.validateRelease = started, instance.done
+				ic.Discovery = &ProbeResult{Available: true}
+			}
+			reg, _ := CreateFakeToolFactory(func() *FakeToolInstance { return instance })
+			cancelCh := make(chan struct{})
+			done := make(chan []error, 1)
+
+			// When the caller cancels during the check.
+			go func() {
+				done <- RunAndReformatToolIntegrations(nil, cancelCh, []IntegrationContext{ic}, reg, nil)
+			}()
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("tool check did not start")
+			}
+			close(cancelCh)
+
+			// Then cancellation reaches the tool and collection does not start.
+			select {
+			case errs := <-done:
+				require.ErrorIs(t, errors.Join(errs...), context.Canceled)
+			case <-time.After(time.Second):
+				t.Fatal("tool check did not stop after cancellation")
+			}
+			assertFlags(t, instance, expectedFlags{cancelled: true})
+		})
+	}
 }
 
 func TestProbeTool(t *testing.T) {
@@ -647,6 +711,7 @@ func TestEngineEntryPointsNormalizeCapabilityRequests(t *testing.T) {
 	}{
 		{"nil_required", func() *capabilities.CapabilityRequest { return request(nil, []string{}) }, false},
 		{"nil_optional", func() *capabilities.CapabilityRequest { return request([]string{}, nil) }, false},
+		{"optional_native_event", func() *capabilities.CapabilityRequest { return request([]string{}, []string{"nativecounter.pmu.8"}) }, false},
 		{"duplicate_ids", func() *capabilities.CapabilityRequest {
 			return request([]string{"counter.cpu_cycles", "counter.cpu_cycles"}, []string{})
 		}, true},
@@ -661,7 +726,7 @@ func TestEngineEntryPointsNormalizeCapabilityRequests(t *testing.T) {
 					CapabilityRequest: test.request(), Discovery: &available,
 				}
 				if entry == "prepare" {
-					prepared, errs := PrepareToolIntegrations([]IntegrationContext{ctx}, registry())
+					prepared, errs := PrepareToolIntegrations([]IntegrationContext{ctx}, registry(), nil)
 					if !test.valid {
 						require.ErrorContains(t, errors.Join(errs...), "engine.tool.COUNTER_COLLECTION_INVALID")
 						require.Nil(t, prepared)
@@ -847,7 +912,7 @@ func TestCapabilityCancellationDoesNotPublishOutcomes(t *testing.T) {
 					instance := &capabilityPhaseTool{FakeToolInstance: NewFakeToolInstance()}
 					instance.runPhase = func() error {
 						if staged {
-							contexts[0].StageCPUCounterOutcome("counter.cpu_cycles", capabilities.CPUCounterValue{State: "collected"}, func(capabilities.CPUCounterValue) error {
+							contexts[0].StageCPUCounterOutcome("counter.cpu_cycles", capabilities.CPUCounterCapabilityValue{State: "collected", Payload: map[string]any{"bindings": []any{}}}, func(capabilities.CPUCounterCapabilityValue) error {
 								publications++
 								return nil
 							})
@@ -880,11 +945,11 @@ func TestCapabilityFailurePreservesOriginalError(t *testing.T) {
 		Ctx:               context.Background(),
 		CapabilityRequest: &capabilities.CapabilityRequest{Required: []string{"counter.cpu_cycles"}},
 		counterOutcomes: &counterOutcomeSet{
-			published: map[string]capabilities.CPUCounterValue{},
+			published: map[string]capabilities.CPUCounterCapabilityValue{},
 			staged: map[string]stagedCounterOutcome{
 				"counter.cpu_cycles": {
-					value:   capabilities.CPUCounterValue{State: "collected"},
-					publish: func(capabilities.CPUCounterValue) error { return publication },
+					value:   capabilities.CPUCounterCapabilityValue{State: "collected", Payload: map[string]any{"bindings": []any{}}},
+					publish: func(capabilities.CPUCounterCapabilityValue) error { return publication },
 				},
 			},
 		},
@@ -896,8 +961,8 @@ func TestCapabilityFailurePreservesOriginalError(t *testing.T) {
 	require.Len(t, ic.counterOutcomes.staged, 1, "do not replace a staged result after publication fails")
 
 	ic.counterOutcomes.staged["counter.cpu_cycles"] = stagedCounterOutcome{
-		value:   capabilities.CPUCounterValue{State: "collected"},
-		publish: func(capabilities.CPUCounterValue) error { return nil },
+		value:   capabilities.CPUCounterCapabilityValue{State: "collected", Payload: map[string]any{"bindings": []any{}}},
+		publish: func(capabilities.CPUCounterCapabilityValue) error { return nil },
 	}
 	err = finishCapabilityFailure(&ic, nil, original, capabilities.CPUCounterReasonRecordFailed)
 	require.Same(t, original, err, "successful publication must return the original error unchanged")

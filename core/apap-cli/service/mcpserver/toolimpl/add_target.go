@@ -20,9 +20,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
-type AddTargetTool struct {
-	AndroidTargetsEnabled bool
-}
+type AddTargetTool struct{}
 
 const defaultAddTargetPort = 22
 
@@ -57,7 +55,7 @@ type addTargetJumpInput struct {
 	PrivateKeyPath string `json:"private_key_path,omitempty"`
 }
 
-func addTargetInputProperties(androidTargetsEnabled bool) map[string]*jsonschema.Schema {
+func addTargetInputProperties(validateRanges bool) map[string]*jsonschema.Schema {
 	properties := map[string]*jsonschema.Schema{
 		"name": {
 			Type: "string",
@@ -85,8 +83,6 @@ func addTargetInputProperties(androidTargetsEnabled bool) map[string]*jsonschema
 				},
 				"port": {
 					Type:        "integer",
-					Minimum:     jsonschema.Ptr(1.0),
-					Maximum:     jsonschema.Ptr(float64(math.MaxUint16)),
 					Description: "Port for the SSH connection to the target. Defaults to 22 when omitted.",
 				},
 				"private_key_path": {
@@ -114,8 +110,6 @@ func addTargetInputProperties(androidTargetsEnabled bool) map[string]*jsonschema
 							"port": {
 								Type:        "integer",
 								Default:     json.RawMessage(strconv.Itoa(defaultAddTargetPort)),
-								Minimum:     jsonschema.Ptr(1.0),
-								Maximum:     jsonschema.Ptr(float64(math.MaxUint16)),
 								Description: "Port for the SSH connection to the jump host.",
 							},
 							"private_key_path": {
@@ -128,23 +122,33 @@ func addTargetInputProperties(androidTargetsEnabled bool) map[string]*jsonschema
 			},
 		},
 	}
-	if androidTargetsEnabled {
-		properties["android"] = &jsonschema.Schema{
-			Type:        "object",
-			Required:    []string{"serial_number"},
-			Description: "Add a target reached through ADB.",
-			Properties: map[string]*jsonschema.Schema{
-				"serial_number": {
-					Type:        "string",
-					Description: "ADB serial number of the Android device.",
-				},
-				"device_ip_address": {
-					Type:        "string",
-					Description: "Optional host and port used to reach the device through ADB, for example 10.0.0.2:5555.",
-				},
+	properties["android"] = &jsonschema.Schema{
+		Type:        "object",
+		Required:    []string{"serial_number"},
+		Description: "Add a target reached through ADB.",
+		Properties: map[string]*jsonschema.Schema{
+			"serial_number": {
+				Type:        "string",
+				Description: "ADB serial number of the Android device.",
 			},
+			"device_ip_address": {
+				Type:        "string",
+				Description: "Optional host and port used to reach the device through ADB, for example 10.0.0.2:5555.",
+			},
+		},
+	}
+	// Keep range constraints on the root properties so validation reports the
+	// offending field instead of a generic oneOf failure, as for run_recipe.
+	if validateRanges {
+		for _, port := range []*jsonschema.Schema{
+			properties["ssh"].Properties["port"],
+			properties["ssh"].Properties["jumps"].Items.Properties["port"],
+		} {
+			port.Minimum = jsonschema.Ptr(1.0)
+			port.Maximum = jsonschema.Ptr(float64(math.MaxUint16))
 		}
 	}
+
 	return properties
 }
 
@@ -152,19 +156,15 @@ func addTargetInputVariant(targetType string) *jsonschema.Schema {
 	return &jsonschema.Schema{
 		Type:       "object",
 		Required:   []string{targetType},
-		Properties: addTargetInputProperties(true),
+		Properties: addTargetInputProperties(false),
 	}
 }
 
-func addTargetInputSchema(androidTargetsEnabled bool) *jsonschema.Schema {
-	properties := addTargetInputProperties(androidTargetsEnabled)
+func addTargetInputSchema() *jsonschema.Schema {
+	properties := addTargetInputProperties(true)
 	schema := &jsonschema.Schema{
 		Type:       "object",
 		Properties: properties,
-	}
-	if !androidTargetsEnabled {
-		schema.Required = []string{"ssh"}
-		return schema
 	}
 
 	// Codex code mode renders each root oneOf variant independently, so repeat
@@ -186,7 +186,7 @@ type addTargetOutput struct {
 	Error           *toolError `json:"error,omitempty"`
 }
 
-func addTargetOutputSchema(androidTargetsEnabled bool) *jsonschema.Schema {
+func addTargetOutputSchema() *jsonschema.Schema {
 	schema := &jsonschema.Schema{
 		Type: "object",
 		OneOf: []*jsonschema.Schema{
@@ -234,15 +234,13 @@ func addTargetOutputSchema(androidTargetsEnabled bool) *jsonschema.Schema {
 			"error": toolErrorSchema(),
 		},
 	}
-	if androidTargetsEnabled {
-		schema.Properties["serial_number"] = &jsonschema.Schema{
-			Type:        "string",
-			Description: "ADB serial number of the Android target that was added.",
-		}
-		schema.Properties["device_ip_address"] = &jsonschema.Schema{
-			Type:        "string",
-			Description: "Host and port used to reach the Android target through ADB, when provided.",
-		}
+	schema.Properties["serial_number"] = &jsonschema.Schema{
+		Type:        "string",
+		Description: "ADB serial number of the Android target that was added.",
+	}
+	schema.Properties["device_ip_address"] = &jsonschema.Schema{
+		Type:        "string",
+		Description: "Host and port used to reach the Android target through ADB, when provided.",
 	}
 	return schema
 }
@@ -344,10 +342,7 @@ func testTargetConnectivity(ctx context.Context, engine apapproto.ApapClient, tg
 }
 
 func (tool AddTargetTool) Register(server *mcp.Server, toolDeps ToolDependencies) {
-	targetTypes := "SSH"
-	if tool.AndroidTargetsEnabled {
-		targetTypes = "SSH or Android"
-	}
+	targetTypes := "SSH or Android"
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "add_target",
 		Description: "Adds a new " + terminology.GetProductFullName() + " " + targetTypes + " target to the persistent target configuration so it can be used for future runs. " +
@@ -356,8 +351,8 @@ func (tool AddTargetTool) Register(server *mcp.Server, toolDeps ToolDependencies
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint: false,
 		},
-		InputSchema:  addTargetInputSchema(tool.AndroidTargetsEnabled),
-		OutputSchema: addTargetOutputSchema(tool.AndroidTargetsEnabled),
+		InputSchema:  addTargetInputSchema(),
+		OutputSchema: addTargetOutputSchema(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input addTargetInput) (*mcp.CallToolResult, addTargetOutput, error) {
 		tgt, err := buildTarget(input)
 		if err != nil {

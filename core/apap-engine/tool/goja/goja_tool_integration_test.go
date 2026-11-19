@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,10 +59,87 @@ const ToolSourceEnd = `
 		onCancel: (engine, ctx) => {},
 		onStop: (engine, ctx) => {},
 		probe: (engine, ctx) => {return {available: true, capabilities: {}, advice: []}},
+		validate: () => {},
 	};
 `
 
 const ToolSource = ToolSourceBegin + ToolSourceRender + ToolSourceEnd
+
+func TestToolRequiresValidationCallback(t *testing.T) {
+	// Given a tool that does not declare validate().
+	source := strings.Replace(ToolSource, "validate: () => {},", "", 1)
+	sts := LoadFromSourceNoError(t, source)
+
+	// When the Engine constructs its integration.
+	_, err := sts.NewIntegration(integrationContext(&tool_mocks.MockEngineContext{}, nil))
+
+	// Then the Engine reports the missing callback.
+	require.ErrorContains(t, err, "has unset fields: Validate")
+}
+
+func TestToolValidationLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name, validation string
+		cached, warning  bool
+		wantError        bool
+	}{
+		{name: "ready"},
+		{name: "cached discovery", cached: true},
+		{name: "warning", warning: true, validation: `return [{level:"warning", messageCode:"engine.tool.OPTIONAL_CAPABILITY_UNAVAILABLE", metadata:{capability:"counter.cpu_cycles"}}];`},
+		{name: "error advice", wantError: true, validation: `return [{level:"error", messageCode:"tool_integrations.neoprof.JFR_UNSUPPORTED", metadata:{reason:"test configuration"}}];`},
+		{name: "exception", wantError: true, validation: `throw {code:"tool_integrations.neoprof.JFR_UNSUPPORTED", metadata:{reason:"test configuration"}};`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a tool with discovery, validation, collection, and reformat callbacks.
+			sts := LoadFromSourceNoError(t, ToolSource+`
+tool.probe = engine => {
+ engine.log("info", "probe");
+ return {available:true, capabilities:{native:"cycles"}, advice:[]};
+};
+tool.validate = async (engine, ctx) => {
+ engine.log("info", "validate:" + ctx.discovery.capabilities.native);
+ `+tc.validation+`
+};
+tool.run = engine => engine.log("info", "run");
+tool.reformat = engine => engine.log("info", "reformat");
+`)
+			reg := tool.NewToolRegistry()
+			reg.RegisterTool(sts)
+			var stages []string
+			engine := &tool_mocks.MockEngineContext{}
+			engine.On("Log", "info", mock.Anything).Run(func(args mock.Arguments) {
+				stages = append(stages, args.String(1))
+			})
+			if tc.warning {
+				engine.On("WriteUserMessage", "warn", mock.Anything).Once()
+			}
+			ic := integrationContext(engine, &tool.IntegrationContext{Name: sts.Name(), Version: sts.Version()})
+			if tc.cached {
+				ic.Discovery = &tool.ProbeResult{Available: true, Capabilities: map[string]any{"native": "cycles"}, Advice: []tool.ProbeAdvice{}}
+			}
+
+			// When the Engine runs the tool without a prior readiness command.
+			errs := tool.RunAndReformatToolIntegrations(nil, nil, []tool.IntegrationContext{*ic}, reg, nil)
+
+			// Then errors prevent collection; warnings allow it; matching discovery is reused.
+			expected := []string{"validate:cycles"}
+			if !tc.cached {
+				expected = append([]string{"probe"}, expected...)
+			}
+			if tc.wantError {
+				var msg *message.MessageImpl
+				require.ErrorAs(t, errors.Join(errs...), &msg)
+				require.Equal(t, message.MessageCode("tool_integrations.neoprof.JFR_UNSUPPORTED"), msg.Code())
+				require.Equal(t, "test configuration", msg.Metadata()["reason"])
+			} else {
+				require.NoError(t, errors.Join(errs...))
+				expected = append(expected, "run", "reformat")
+			}
+			require.Equal(t, expected, stages)
+			engine.AssertExpectations(t)
+		})
+	}
+}
 
 const parameterisedToolSuffix = `
 tool.parameters = [
@@ -173,6 +251,7 @@ func TestToolContextMetadataPreservesJavaScriptObjectIdentity(t *testing.T) {
 		reformat: (engine, ctx) => {},
 		onCancel: (engine, ctx) => {},
 		probe: (engine, ctx) => ({ available: true, capabilities: {}, advice: [] }),
+		validate: () => {},
 	};
 	`
 	integration, err := LoadFromSourceNoError(t, source).NewIntegration(
@@ -214,6 +293,7 @@ let tool = {
 	onCancel: (engine, ctx) => {},
 	onStop: (engine, ctx) => {},
 	probe: (engine, ctx) => {return {available: true, capabilities: {}, advice: []}},
+	validate: () => {},
 };
 `
 		sts := LoadFromSourceNoError(t, toolSource)
@@ -421,6 +501,7 @@ let tool = {
 			  reformatCalled = true
 			},
 			probe: (engine, ctx) => {return {available: true, capabilities: {}, advice: []}},
+			validate: () => {},
 	};
 		`
 		execOptions := process.LaunchCommand{
@@ -493,6 +574,7 @@ let tool = {
 			onCancel: async (engine, ctx) => {},
 			reformat: (engine, ctx) => {},
 			probe: (engine, ctx) => {return {available: true, capabilities: {bound: "yes"}, advice: [{level: "info", messageCode: "some.CODE"}]}},
+			validate: () => {},
 	};
 		`
 
@@ -515,6 +597,7 @@ let tool = {
 			onCancel: async (engine, ctx) => {},
 			reformat: (engine, ctx) => {},
 			probe: (engine, ctx) => {return {available: true, capabilities: {bound: "yes"}, advice: [{level: "info", messageCode: "some.CODE", metadata: {myKey: "myValue"}, cause: "a cause"}]}},
+			validate: () => {},
 	};
 		`
 
@@ -538,6 +621,7 @@ let tool = {
 			onCancel: async (engine, ctx) => {},
 			reformat: (engine, ctx) => {},
 			probe: (engine, ctx) => {return {available: true, capabilities: {bound: "yes"}, advice: [{level: "info"}]}},
+			validate: () => {},
 	};
 		`
 
@@ -1237,10 +1321,10 @@ let tool = {
 					assert.Equal(t, NewWorkloadLaunch("ls", []string{"ls"}, map[string]string{"FOO": "bar"}, "/some/dir", true), vm.Get("a").Export())
 				}},
 			{"workloadAndroidLaunch", `a = ctx.workload`, func(ic *tool.IntegrationContext) {
-				ic.Workload = &tool.WorkloadAndroidLaunch{PackageName: "com.example.app", ActivityName: ".MainActivity"}
+				ic.Workload = &tool.WorkloadAndroidLaunch{PackageName: "com.example.app", ActivityName: ".MainActivity", ActivityArguments: `--es greeting "hello world"`}
 			},
 				func(vm *goja.Runtime) {
-					assert.Equal(t, NewWorkloadAndroidLaunch("com.example.app", ".MainActivity"), vm.Get("a").Export())
+					assert.Equal(t, NewWorkloadAndroidLaunch("com.example.app", ".MainActivity", `--es greeting "hello world"`), vm.Get("a").Export())
 				}},
 			{"workloadSystemwide", `a = ctx.workload`, func(ic *tool.IntegrationContext) { ic.Workload = &tool.WorkloadSystemWide{} },
 				func(vm *goja.Runtime) {
@@ -1770,6 +1854,7 @@ let tool = {
 	}],
 	description: helper.buildDescriptions(),
 	probe: (engine, ctx) => ({available: true, capabilities: {}, advice: []}),
+	validate: () => {},
 	run: (engine, ctx) => {},
 	reformat: (engine, ctx) => {},
 	onCancel: (engine, ctx) => {},
@@ -1817,6 +1902,7 @@ let tool = {
 	}],
 	description: helper.buildDescriptions(),
 	probe: (engine, ctx) => ({available: true, capabilities: {}, advice: []}),
+	validate: () => {},
 	run: (engine, ctx) => {},
 	reformat: (engine, ctx) => {},
 	onCancel: (engine, ctx) => {},

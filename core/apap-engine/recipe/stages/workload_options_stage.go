@@ -70,8 +70,9 @@ func (s *WorkloadOptionsStage) Execute(ctx *recipe.StageContext) (func(), error)
 		}
 	case *tool.WorkloadAndroidLaunch:
 		resolvedWl = &tool.WorkloadAndroidLaunch{
-			PackageName:  w.PackageName,
-			ActivityName: w.ActivityName,
+			PackageName:       w.PackageName,
+			ActivityName:      w.ActivityName,
+			ActivityArguments: w.ActivityArguments,
 		}
 	case *tool.WorkloadAttach:
 		resolvedWl = &tool.WorkloadAttach{PID: w.PID}

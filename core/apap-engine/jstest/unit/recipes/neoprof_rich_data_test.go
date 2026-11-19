@@ -37,6 +37,7 @@ func TestCodeHotspotsForwardsRichDataOnAndroid(t *testing.T) {
 	context.On("TargetInfo").Return(harness.ToJSValue(t, map[string]any{
 		"Os": map[string]any{"OSFamily": "android"},
 	}), nil)
+	context.On("GetParameter", "collect_off_cpu_time").Return(false, nil)
 	context.On("GetParameter", "rich_data_capture").Return(true, nil)
 
 	params, err := harness.Call[map[string]any](t, "buildNeoprofParams", context, "normal")
@@ -55,6 +56,7 @@ func TestNeoprofRecipesForwardRichData(t *testing.T) {
 		context.On("TargetInfo").Return(harness.ToJSValue(t, map[string]any{
 			"Os": map[string]any{"OSFamily": "linux"},
 		}), nil)
+		context.On("GetParameter", "collect_off_cpu_time").Return(false, nil)
 		context.On("GetParameter", "rich_data_capture").Return(true, nil)
 		context.On("GetParameter", "reformat_on_host").Return(false, nil)
 		context.On("GetParameter", "collect_java_stacks").Return(false, nil)
@@ -133,7 +135,8 @@ func TestNeoprofRecipeFiltersRecognizeIncludedRawDataAsRichData(t *testing.T) {
 		"instruction_mix",
 	} {
 		t.Run(recipeName, func(t *testing.T) {
-			harness := jstest.LoadRecipe(t, recipeName)
+			// Given
+			harness := loadNeoprofFilterHarness(t, recipeName)
 			runDescription := recipeparser.RunDescription{
 				Parameters: map[string]any{
 					"include_raw_data":  true,
@@ -142,6 +145,7 @@ func TestNeoprofRecipeFiltersRecognizeIncludedRawDataAsRichData(t *testing.T) {
 				IsRunPhaseTwoComplete: true,
 			}
 
+			// When
 			filter, err := harness.Call[map[string]any](
 				t,
 				"enableFilterIfAvailable",
@@ -150,6 +154,7 @@ func TestNeoprofRecipeFiltersRecognizeIncludedRawDataAsRichData(t *testing.T) {
 				true,
 			)
 
+			// Then
 			require.NoError(t, err)
 			assert.Equal(t, "test_filter", filter["id"])
 			assert.NotContains(t, filter, "disabled")
@@ -162,17 +167,31 @@ func TestNeoprofRecipeFiltersRequireRichDataComponent(t *testing.T) {
 		t.Run(recipeName, func(t *testing.T) {
 			for _, parameter := range []string{"include_raw_data", "rich_data_capture"} {
 				t.Run(parameter, func(t *testing.T) {
-					h := jstest.LoadRecipe(t, recipeName)
+					// Given
+					h := loadNeoprofFilterHarness(t, recipeName)
 					description := recipeparser.RunDescription{
 						Parameters:            map[string]any{parameter: true},
 						IsRunPhaseTwoComplete: true,
 					}
+
+					// When
 					filter, err := h.Call[map[string]any](t, "enableFilterIfAvailable",
 						map[string]any{"id": "test_filter"}, description, false)
+
+					// Then
 					require.NoError(t, err)
 					assert.Contains(t, filter, "disabled")
 				})
 			}
 		})
 	}
+}
+
+func loadNeoprofFilterHarness(t *testing.T, recipeName string) *jstest.GenericJSHarness {
+	t.Helper()
+
+	if recipeName == "cpu_microarchitecture" || recipeName == "instruction_mix" {
+		return jstest.LoadJSModule(t, "recipes/analyses/"+recipeName+".js")
+	}
+	return jstest.LoadRecipe(t, recipeName).GenericJSHarness
 }

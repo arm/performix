@@ -25,7 +25,7 @@ Note on venv:
 Use `task core:test:robot TARGET=<name>` from the repository root to run this
 script with the repository's Python virtual environment. If you run this
 Python script directly, ensure a venv is activated that has required
-dependencies installed (see robot/requirements.txt).
+dependencies installed (see the repository root requirements.txt).
 
 Arguments:
   --target TARGET         Target JSON file <name> (without path or extension),

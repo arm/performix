@@ -71,65 +71,51 @@ func TestAddTargetTool(t *testing.T) {
 		assert.False(t, tools.Tools[0].Annotations.ReadOnlyHint)
 	})
 
-	t.Run("advertises only enabled target types", func(t *testing.T) {
-		for _, test := range []struct {
-			name          string
-			tool          AddTargetTool
-			expectAndroid bool
-		}{
-			{name: "SSH only", tool: AddTargetTool{}},
-			{name: "SSH and Android", tool: AddTargetTool{AndroidTargetsEnabled: true}, expectAndroid: true},
-		} {
-			t.Run(test.name, func(t *testing.T) {
-				ctx := context.Background()
-				clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{}, test.tool.Register)
-				defer clientSession.Close()
-				defer serverSession.Close()
+	t.Run("advertises SSH and Android targets by default", func(t *testing.T) {
+		// Given the default target tool.
+		ctx := context.Background()
+		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{}, AddTargetTool{}.Register)
+		defer clientSession.Close()
+		defer serverSession.Close()
 
-				tools, err := clientSession.ListTools(ctx, nil)
-				require.NoError(t, err)
-				require.Len(t, tools.Tools, 1)
+		// When inspecting its advertised schemas.
+		tools, err := clientSession.ListTools(ctx, nil)
+		// Then SSH and Android are available without a flag.
+		require.NoError(t, err)
+		require.Len(t, tools.Tools, 1)
 
-				schemaJSON, err := json.Marshal(tools.Tools[0].InputSchema)
-				require.NoError(t, err)
-				var schema struct {
-					Required   []string                   `json:"required"`
-					Properties map[string]json.RawMessage `json:"properties"`
-					OneOf      []struct {
-						Required   []string                   `json:"required"`
-						Properties map[string]json.RawMessage `json:"properties"`
-					} `json:"oneOf"`
-				}
-				require.NoError(t, json.Unmarshal(schemaJSON, &schema))
-				outputSchemaJSON, err := json.Marshal(tools.Tools[0].OutputSchema)
-				require.NoError(t, err)
-				var outputSchema struct {
-					Properties map[string]json.RawMessage `json:"properties"`
-				}
-				require.NoError(t, json.Unmarshal(outputSchemaJSON, &outputSchema))
-				for _, field := range []string{"serial_number", "device_ip_address"} {
-					_, present := outputSchema.Properties[field]
-					assert.Equal(t, test.expectAndroid, present, field)
-				}
+		schemaJSON, err := json.Marshal(tools.Tools[0].InputSchema)
+		require.NoError(t, err)
+		var schema struct {
+			Required   []string                   `json:"required"`
+			Properties map[string]json.RawMessage `json:"properties"`
+			OneOf      []struct {
+				Required   []string                   `json:"required"`
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"oneOf"`
+		}
+		require.NoError(t, json.Unmarshal(schemaJSON, &schema))
+		outputSchemaJSON, err := json.Marshal(tools.Tools[0].OutputSchema)
+		require.NoError(t, err)
+		var outputSchema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		require.NoError(t, json.Unmarshal(outputSchemaJSON, &outputSchema))
+		for _, field := range []string{"serial_number", "device_ip_address"} {
+			_, present := outputSchema.Properties[field]
+			assert.True(t, present, field)
+		}
 
-				assert.Contains(t, schema.Properties, "ssh")
-				if test.expectAndroid {
-					assert.Contains(t, schema.Properties, "android")
-					require.Len(t, schema.OneOf, 2)
-					assert.ElementsMatch(t, []string{"ssh"}, schema.OneOf[0].Required)
-					assert.ElementsMatch(t, []string{"android"}, schema.OneOf[1].Required)
-					for _, variant := range schema.OneOf {
-						assert.Contains(t, variant.Properties, "name")
-						assert.Contains(t, variant.Properties, "set_default")
-						assert.Contains(t, variant.Properties, "ssh")
-						assert.Contains(t, variant.Properties, "android")
-					}
-				} else {
-					assert.NotContains(t, schema.Properties, "android")
-					assert.Equal(t, []string{"ssh"}, schema.Required)
-					assert.Empty(t, schema.OneOf)
-				}
-			})
+		assert.Contains(t, schema.Properties, "ssh")
+		assert.Contains(t, schema.Properties, "android")
+		require.Len(t, schema.OneOf, 2)
+		assert.ElementsMatch(t, []string{"ssh"}, schema.OneOf[0].Required)
+		assert.ElementsMatch(t, []string{"android"}, schema.OneOf[1].Required)
+		for _, variant := range schema.OneOf {
+			assert.Contains(t, variant.Properties, "name")
+			assert.Contains(t, variant.Properties, "set_default")
+			assert.Contains(t, variant.Properties, "ssh")
+			assert.Contains(t, variant.Properties, "android")
 		}
 	})
 
@@ -173,7 +159,7 @@ func TestAddTargetTool(t *testing.T) {
 		assert.Equal(t, "object", outputSchema.Properties["error"].Type)
 		assert.Equal(t, "string", outputSchema.Properties["host"].Type)
 
-		resolved, err := addTargetOutputSchema(false).Resolve(nil)
+		resolved, err := addTargetOutputSchema().Resolve(nil)
 		require.NoError(t, err)
 		assert.NoError(t, resolved.Validate(map[string]any{
 			"target_name":     "myhost",
@@ -282,7 +268,7 @@ func TestAddTargetTool(t *testing.T) {
 		}, nil).Once()
 
 		engine := newTargetTestEngine(t, apapproto.ConnectionStatus_CONNECTION_STATUS_OK)
-		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine, Targets: targets}, AddTargetTool{AndroidTargetsEnabled: true}.Register)
+		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Engine: engine, Targets: targets}, AddTargetTool{}.Register)
 		defer clientSession.Close()
 		defer serverSession.Close()
 
@@ -313,7 +299,7 @@ func TestAddTargetTool(t *testing.T) {
 	t.Run("rejects both target types", func(t *testing.T) {
 		ctx := context.Background()
 		targets := &targetservice.MockTargetManager{}
-		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Targets: targets}, AddTargetTool{AndroidTargetsEnabled: true}.Register)
+		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Targets: targets}, AddTargetTool{}.Register)
 		defer clientSession.Close()
 		defer serverSession.Close()
 
@@ -323,23 +309,6 @@ func TestAddTargetTool(t *testing.T) {
 				"ssh":     map[string]any{"host": "10.0.0.1", "user": "alice"},
 				"android": map[string]any{"serial_number": "device-123"},
 			},
-		})
-
-		require.NoError(t, err)
-		require.True(t, result.IsError)
-		targets.AssertNotCalled(t, "AddTarget", mock.Anything, mock.Anything)
-	})
-
-	t.Run("rejects Android input when disabled", func(t *testing.T) {
-		ctx := context.Background()
-		targets := &targetservice.MockTargetManager{}
-		clientSession, serverSession := connectTestServer(t, ctx, ToolDependencies{Targets: targets}, AddTargetTool{}.Register)
-		defer clientSession.Close()
-		defer serverSession.Close()
-
-		result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
-			Name:      "add_target",
-			Arguments: map[string]any{"android": map[string]any{"serial_number": "device-123"}},
 		})
 
 		require.NoError(t, err)

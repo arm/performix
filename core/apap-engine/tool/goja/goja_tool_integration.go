@@ -257,16 +257,18 @@ func NewWorkloadLaunch(rawCommand string, command []string, environment map[stri
 func (l *WorkloadLaunch) isToolWorkload() {}
 
 type WorkloadAndroidLaunch struct {
-	Type         string `json:"type"`
-	PackageName  string `json:"packageName"`
-	ActivityName string `json:"activityName"`
+	Type              string `json:"type"`
+	PackageName       string `json:"packageName"`
+	ActivityName      string `json:"activityName"`
+	ActivityArguments string `json:"activityArguments"`
 }
 
-func NewWorkloadAndroidLaunch(packageName string, activityName string) *WorkloadAndroidLaunch {
+func NewWorkloadAndroidLaunch(packageName string, activityName string, activityArguments string) *WorkloadAndroidLaunch {
 	return &WorkloadAndroidLaunch{
-		Type:         "androidLaunch",
-		PackageName:  packageName,
-		ActivityName: activityName,
+		Type:              "androidLaunch",
+		PackageName:       packageName,
+		ActivityName:      activityName,
+		ActivityArguments: activityArguments,
 	}
 }
 
@@ -439,6 +441,7 @@ type GojaToolBinding struct {
 	SupportsStop               *bool `json:"supportsStop"`
 	ReportsCollectionFinished  bool
 	Probe                      func(goja.FunctionCall) goja.Value
+	Validate                   func(goja.FunctionCall) goja.Value
 	Run                        func(goja.FunctionCall) goja.Value
 	Reformat                   func(goja.FunctionCall) goja.Value
 	OnCancel                   func(goja.FunctionCall) goja.Value
@@ -581,6 +584,7 @@ func (s *ScriptedToolSource) NewIntegration(
 			toolContext.Workload = NewWorkloadAndroidLaunch(
 				w.PackageName,
 				w.ActivityName,
+				w.ActivityArguments,
 			)
 		case *tool.WorkloadAttach:
 			toolContext.Workload = NewWorkloadAttach(w.PID)
@@ -672,6 +676,7 @@ func (g *GojaToolInstance) newEngineObject(
 		{jsName: "endProgress", fn: vm.ToValue(bound.locality.Engine.EndProgress)},
 		{jsName: "isFullCaptureSupportEnabled", fn: vm.ToValue(bound.bec.IsFullCaptureSupportEnabled)},
 		{jsName: "isNeoprofTimelineEnabled", fn: vm.ToValue(bound.bec.IsNeoprofTimelineEnabled)},
+		{jsName: "isCPUSchedulingEnabled", fn: vm.ToValue(bound.bec.IsCPUSchedulingEnabled)},
 		{jsName: "withLocality", fn: vm.ToValue(bound.withLocality)},
 		{jsName: "getLocality", fn: vm.ToValue(bound.getLocality)},
 		{jsName: "toolsRoot", fn: vm.ToValue(bound.toolsRoot)},
@@ -741,6 +746,17 @@ func (g *GojaToolInstance) Probe() (tool.ProbeResult, error) {
 	// Metadata and cause can be unset - we might just want to return a message without any extra info
 	err = gojautils.ParseObjectFromJSWithRegex(obj, &probeResult, []*regexp.Regexp{regexp.MustCompile(`metadata|cause`)}, []*regexp.Regexp{})
 	return probeResult, err
+}
+
+// Validate executes tool.validate with the selected configuration and discovery.
+func (g *GojaToolInstance) Validate() ([]tool.ProbeAdvice, error) {
+	var advice []tool.ProbeAdvice
+	obj, err := g.callStage(g.toolBinding.Validate, "Validate")
+	if err != nil || goja.IsUndefined(obj) {
+		return nil, err
+	}
+	err = gojautils.ParseObjectFromJSWithRegex(obj, &advice, []*regexp.Regexp{regexp.MustCompile(`metadata|cause`)}, nil)
+	return advice, err
 }
 
 // Run executes tool.Run.

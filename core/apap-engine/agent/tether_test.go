@@ -38,6 +38,26 @@ func newTestLogger() (*log.Logger, *logtest.Hook) {
 	return logger, logtest.NewLocal(logger)
 }
 
+func blockTetherRecv(t *testing.T, stream *targetagentmocks.TetherHoldClient) (waitForStart func()) {
+	t.Helper()
+	recvStarted := make(chan struct{})
+	recvBlock := make(chan struct{})
+	t.Cleanup(func() { close(recvBlock) })
+	stream.On("Recv").Run(func(mock.Arguments) {
+		close(recvStarted)
+		<-recvBlock
+	}).Return(nil, io.EOF).Once()
+
+	return func() {
+		t.Helper()
+		select {
+		case <-recvStarted:
+		case <-time.After(5 * time.Second):
+			t.Fatal("tether did not start receiving ACKs")
+		}
+	}
+}
+
 func TestStart_SendsAndCloses(t *testing.T) {
 	sentPulse := make(chan struct{}, 1)
 	closeSendCalled := make(chan struct{}, 1)
@@ -128,11 +148,11 @@ func TestStart_FailedInitialPulse(t *testing.T) {
 }
 
 func TestStart_ClassifiesPulseSendFailure(t *testing.T) {
-	recvBlock := make(chan struct{})
+	// Given
 	stream := &targetagentmocks.TetherHoldClient{}
 	stream.On("Send", mock.Anything).Return(nil).Once()
 	stream.On("Send", mock.Anything).Return(assert.AnError).Once()
-	stream.On("Recv").Run(func(mock.Arguments) { <-recvBlock }).Return(nil, io.EOF).Once()
+	waitForRecvStart := blockTetherRecv(t, stream)
 	stream.On("CloseSend").Return(nil).Maybe()
 
 	tether := &targetagentmocks.TetherClient{}
@@ -142,11 +162,13 @@ func TestStart_ClassifiesPulseSendFailure(t *testing.T) {
 	disconnected := make(chan error, 1)
 	at.OnTransportFailure(func(err error) { disconnected <- err })
 
+	// When
 	require.NoError(t, at.Start())
 	defer at.Close()
-	defer close(recvBlock)
+	waitForRecvStart()
 	mockClock.Add(time.Second)
 
+	// Then
 	select {
 	case err := <-disconnected:
 		assert.ErrorIs(t, err, errTetherStreamFailure)
@@ -188,12 +210,12 @@ func TestStart_ClassifiesAckReceiveFailure(t *testing.T) {
 }
 
 func TestStart_DisconnectsAfterMaxMissedAcks(t *testing.T) {
+	// Given
 	logger, hook := newTestLogger()
 
-	recvBlock := make(chan struct{})
 	stream := &targetagentmocks.TetherHoldClient{}
 	stream.On("Send", mock.Anything).Return(nil).Once()
-	stream.On("Recv").Run(func(mock.Arguments) { <-recvBlock }).Return(nil, io.EOF).Once()
+	waitForRecvStart := blockTetherRecv(t, stream)
 	stream.On("CloseSend").Return(nil).Maybe()
 
 	tether := &targetagentmocks.TetherClient{}
@@ -205,9 +227,10 @@ func TestStart_DisconnectsAfterMaxMissedAcks(t *testing.T) {
 	disconnected := make(chan error, 1)
 	at.OnTransportFailure(func(err error) { disconnected <- err })
 
+	// When
 	require.NoError(t, at.Start())
-	defer close(recvBlock)
 	defer at.Close()
+	waitForRecvStart()
 
 	for i := 1; i <= at.maxMissedAcks; i++ {
 		mockClock.Add(at.ackTimeout)
@@ -231,6 +254,7 @@ func TestStart_DisconnectsAfterMaxMissedAcks(t *testing.T) {
 		t.Fatal("tether did not disconnect after three missed ACK deadlines")
 	}
 
+	// Then
 	missedAckEntries := missedAckLogEntries(hook)
 	require.Len(t, missedAckEntries, at.maxMissedAcks)
 	for i, entry := range missedAckEntries {

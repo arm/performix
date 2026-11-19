@@ -28,6 +28,7 @@ const (
 	runSummariesFile  = "runs.json"
 	systemDirName     = "system"
 	targetsDirName    = "targets"
+	settingsDirName   = "settings"
 	hostInfoFilename  = "host_info.json"
 	diskUsageFilename = "disk_usage.txt"
 	versionsFilename  = "versions.json"
@@ -45,6 +46,7 @@ type PackageOptions struct {
 	LogCount   int
 	LogFile    string
 	GUILogDir  string
+	ConfigDir  string
 }
 
 // PackageResult contains metadata about a generated support package.
@@ -54,8 +56,8 @@ type PackageResult struct {
 }
 
 // CreateSupportPackage gathers logs and any specified runs into a support package. If the engine logs, GUI logs,
-// target config file, or host info are missing, the support package will still be created as a partial support package.
-// The resulting archive contains engine/GUI logs, optional run exports, target configuration, host info, disk usage,
+// settings file, target config file, or host info are missing, the support package will still be created as a partial support package.
+// The resulting archive contains engine/GUI logs, optional run exports, settings, target configuration, host info, disk usage,
 // version metadata, and a generation timestamp under a support_pkg_<timestamp> root directory.
 func CreateSupportPackage(ctx context.Context, opts PackageOptions, configValues map[string]any, runs *run.RunCollection) (*PackageResult, error) {
 	cliVersion := strings.TrimSpace(opts.CLIVersion)
@@ -150,6 +152,10 @@ func CreateSupportPackage(ctx context.Context, opts PackageOptions, configValues
 
 	if err := collectRunSummaries(ctx, runs, pkgRoot); err != nil {
 		logx.FromContext(ctx).Warnf("failed to include run summaries in support package: %v", err)
+	}
+
+	if err := collectSettings(ctx, pkgRoot, opts.ConfigDir); err != nil {
+		logx.FromContext(ctx).Warnf("failed to include settings in support package: %v", err)
 	}
 
 	if err := collectTargets(pkgRoot); err != nil {

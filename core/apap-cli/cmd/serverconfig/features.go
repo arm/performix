@@ -20,13 +20,13 @@ type featureDefinition struct {
 // and where it is stored in Flags. Features are configured through YAML or environment variables.
 func featureDefinitions(featureFlags *featureflags.Flags) []featureDefinition {
 	return []featureDefinition{
-		defineFeature(EnableAndroidTargetsConfigKey, false, &featureFlags.AndroidTargets),
 		defineFeature("enable-full-capture-support", true, &featureFlags.FullCaptureSupport),
 		defineFeature("enable-rerendering", true, &featureFlags.Rerendering),
 		defineFeature("enable-experimental-recipes", false, &featureFlags.ExperimentalRecipes),
 		defineFeature("enable-secondary-run-paths", true, &featureFlags.SecondaryRunPaths),
 		defineFeature(EnableProfilingFocusConfigKey, false, &featureFlags.ProfilingFocus),
 		defineFeature("enable-render-db-sandbox", true, &featureFlags.RenderDBSandbox),
+		defineFeature("enable-cpu-scheduling", false, &featureFlags.CPUScheduling),
 		defineFeature("enable-neoprof-timeline", false, &featureFlags.NeoprofTimeline),
 		defineFeature("enable-custom-pmu-capture", false, &featureFlags.CustomPMUCapture),
 		defineFeature("enable-neoprof-system-utilization", false, &featureFlags.NeoprofSystemUtilization),

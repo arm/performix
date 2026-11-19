@@ -21,11 +21,6 @@ def parse_args():
         help="Include the --snapshot flag when running goreleaser"
     )
     parser.add_argument(
-        "--no-inject",
-        action="store_true",
-        help="Set NO_INJECT=1 for the goreleaser run (to skip version injection)"
-    )
-    parser.add_argument(
         "--no-sign",
         action="store_true",
         help="Set NO_SIGN=1 for the goreleaser run (to skip signing hooks)"
@@ -53,7 +48,7 @@ def require_goreleaser():
     sys.exit(1)
 
 
-def run_goreleaser(executable_path, config_path, snapshot, no_inject, no_sign):
+def run_goreleaser(executable_path, config_path, snapshot, no_sign):
     """
     Invoke goreleaser, optionally with --snapshot.
     """
@@ -71,8 +66,6 @@ def run_goreleaser(executable_path, config_path, snapshot, no_inject, no_sign):
 
     env = os.environ.copy()
     env["PERFORMIX_PYTHON_EXECUTABLE"] = Path(sys.executable).as_posix()
-    if no_inject:
-        env["NO_INJECT"] = "1"
     if no_sign:
         env["NO_SIGN"] = "1"
 
@@ -91,7 +84,6 @@ def main():
         executable_path=goreleaser_path,
         config_path=args.config,
         snapshot=args.snapshot,
-        no_inject=args.no_inject,
         no_sign=args.no_sign,
     )
 

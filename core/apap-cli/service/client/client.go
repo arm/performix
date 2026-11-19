@@ -6,6 +6,7 @@ package client
 import (
 	"google.golang.org/grpc"
 
+	"github.com/Arm-Debug/apap-cli/apap-engine/clientcontext"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcconnection"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
@@ -14,19 +15,18 @@ import (
 
 type client struct{}
 
-func newEngineConnector(host string, waitForAuthority bool) (grpcconnection.GRPCConnector, error) {
+func newEngineConnector(host string, waitForAuthority bool, origin clientcontext.Client) (grpcconnection.GRPCConnector, error) {
 	tlsCredentials, err := newTransportCredentials(host, waitForAuthority)
 	if err != nil {
 		return nil, err
 	}
-	return grpcconnection.NewLocalConnector(
-		grpc.WithTransportCredentials(tlsCredentials),
-		grpc.WithChainStreamInterceptor(message.ErrorHandlingClientStreamInterceptor()),
-	), nil
+	options := clientContextDialOptions(clientInfo(origin))
+	options = append(options, grpc.WithTransportCredentials(tlsCredentials), grpc.WithChainStreamInterceptor(message.ErrorHandlingClientStreamInterceptor()))
+	return grpcconnection.NewLocalConnector(options...), nil
 }
 
 func (c client) connect(host string, port int) (*grpc.ClientConn, error) {
-	connector, err := newEngineConnector(host, true)
+	connector, err := newEngineConnector(host, true, "")
 	if err != nil {
 		return nil, err
 	}

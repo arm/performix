@@ -17,15 +17,16 @@ Test Tags       recipe  ready
 
 
 *** Test Cases ***
-The Code Hotspots Recipe Reports As Ready When Tools Are Deployed
+The Code Hotspots Readiness Check Installs Required Tools
   [Documentation]  Tests that a recipe correctly reports as ready when the target is prepared
-  ...  and its required tools have been deployed.
+  ...  and readiness installs its required tools before the first recipe run.
   [Tags]  code-hotspots
-  Given The Code Hotspots Recipe Is Listed
-  And The Target Is Unprepared
+  Given The Target Is Unprepared
   When Prepare The Test Target
   Then The Target Is Prepared
-  And Run Keyword And Ignore Error  Deploy Tools For Recipe  code_hotspots
+  And Check Recipe Is Ready  code_hotspots  --target ${G_TARGET_NAME} --workload ${LAUNCH_WORKLOAD}
+  And The Recipe Is Ready
+  And The Code Hotspots Tool Is Deployed
   And Jitdump-JVM Is Not Deployed
   And Check Recipe Is Ready  code_hotspots  --target ${G_TARGET_NAME} --workload ${LAUNCH_WORKLOAD}
   And The Recipe Is Ready
@@ -65,7 +66,7 @@ The CPU Microarchitecture Recipe Reports As Ready For Dotnet Collection When Dot
   And The Target Is Unprepared
   When Prepare The Test Target
   And The Target Is Prepared
-  And Run Keyword And Ignore Error  Deploy Tools For Recipe  cpu_microarchitecture  --param collect_dotnet_stacks=true
+  And Deploy Tools For Recipe  cpu_microarchitecture  --param collect_dotnet_stacks=true
   And The Output Directory Is Removed From The Target
   And The Dotnet Agent Is Deployed
   And Check Recipe Is Ready
@@ -74,26 +75,28 @@ The CPU Microarchitecture Recipe Reports As Ready For Dotnet Collection When Dot
   Then The Recipe Is Ready
   [Teardown]  Set Ready Suite Default State
 
-The CPU Microarchitecture Recipe Reports As Not Ready For Java Collection When Jitdump-JVM Is Not Deployed
-  [Documentation]  CPU Microarchitecture reports as not ready when Jitdump-JVM is not deployed and Java stack collection is enabled.
+The CPU Microarchitecture Readiness Check Installs Jitdump-JVM When Java Collection Is Enabled
+  [Documentation]  CPU Microarchitecture installs Jitdump-JVM when Java stack collection is enabled.
   [Tags]  cpu-microarchitecture
-  [Setup]  Skip Unless CPU Microarchitecture Is Supported On Target
+  [Setup]  Run Keywords  Skip Unless CPU Microarchitecture Is Supported On Target
+  ...  AND  Skip Unless Target Arch Is  ${ARCH_AARCH64}
   Given The CPU Microarchitecture Recipe Is Listed
   And The Target Is Unprepared
   When Tools Are Deployed For Recipe Without Jitdump-JVM Tool Successfully  cpu_microarchitecture
   And Check Recipe Is Ready
   ...  cpu_microarchitecture
   ...  --param collect_java_stacks=true --target ${G_TARGET_NAME} --workload ${LAUNCH_WORKLOAD}
-  Then The Recipe Is Not Ready
-  And Check Advice Messages Contain When Target Is Aarch64  "The target does not have the `jitdump-jvm` tool."
+  Then The Recipe Is Ready
+  And Jitdump-JVM Is Deployed
   [Teardown]  Set Ready Suite Default State
 
-The CPU Microarchitecture Recipe Reports As Not Ready For Dotnet Collection When Dotnet Agent Is Not Deployed
-  [Documentation]  CPU Microarchitecture reports as not ready when the .NET agent is not deployed and .NET stack
-  ...  collection is enabled. This is a contract/readiness test that can be enabled early; it does not require .NET
+The CPU Microarchitecture Readiness Check Installs Dotnet Agent When Dotnet Collection Is Enabled
+  [Documentation]  CPU Microarchitecture installs the .NET agent when .NET stack
+  ...  collection is enabled. This test does not require .NET
   ...  symbolization to be working, only the readiness gating and deployment checks.
   [Tags]  cpu-microarchitecture  dotnet
-  [Setup]  Skip Unless CPU Microarchitecture Is Supported On Target
+  [Setup]  Run Keywords  Skip Unless CPU Microarchitecture Is Supported On Target
+  ...  AND  Skip Unless Target Arch Is  ${ARCH_AARCH64}
   Given The CPU Microarchitecture Recipe Is Listed
   And The Target Is Unprepared
   When Prepare The Test Target
@@ -103,8 +106,8 @@ The CPU Microarchitecture Recipe Reports As Not Ready For Dotnet Collection When
   And Check Recipe Is Ready
   ...  cpu_microarchitecture
   ...  --param collect_dotnet_stacks=true --target ${G_TARGET_NAME} --workload ${LAUNCH_WORKLOAD}
-  Then The Recipe Is Not Ready
-  And Check Advice Messages Contain When Target Is Aarch64  "The target does not have the `dotnet-agent` tool."
+  Then The Recipe Is Ready
+  And The Dotnet Agent Is Deployed
   [Teardown]  Set Ready Suite Default State
 
 The CPU Microarchitecture Recipe Reports An Error For Java Collection On Unsupported Architectures
@@ -150,8 +153,8 @@ The External Code Hotspots Recipe Reports As Not Ready When Target Is Not Prepar
   ...  "Arm Performix could not find the launch script for the agent server on the target."
   [Teardown]  Set Ready Suite Default State
 
-The Instruction Mix Recipe Reports As Not Ready In Static Mode When Tool Not Deployed
-  [Documentation]  Tests that the instruction mix recipe correctly reports as not ready in static mode when the tool is not deployed.
+The Instruction Mix Readiness Check Installs Tools In Static Mode
+  [Documentation]  Tests that the instruction mix recipe installs the required tool in static mode.
   [Tags]  instruction-mix
   [Setup]  Run Keywords  The Test Target Is Prepared Successfully
   ...  AND  Remove The Instruction Mix Tool Deployment Directory
@@ -161,23 +164,23 @@ The Instruction Mix Recipe Reports As Not Ready In Static Mode When Tool Not Dep
   When Check Recipe Is Ready
   ...  instruction_mix
   ...  --param mode=static --target ${G_TARGET_NAME} --workload ${LAUNCH_WORKLOAD}
-  Then The Recipe Is Not Ready
-  And Check Advice Messages Contain  "The target does not have the `instruction_mix` tool."
+  Then The Recipe Is Ready
   [Teardown]  Set Ready Suite Default State
 
-The Instruction Mix Recipe Reports As Not Ready In Dynamic Mode When Jitdump-JVM Tool Not Deployed
-  [Documentation]  Tests that the instruction mix recipe correctly reports as not ready in dynamic mode when Jitdump-JVM is not deployed
+The Instruction Mix Readiness Check Installs Jitdump-JVM In Dynamic Mode
+  [Documentation]  Tests that the instruction mix recipe installs Jitdump-JVM in dynamic mode
   ...  and Java stack collection is enabled.
   [Tags]  instruction-mix
-  [Setup]  Run Keywords  The Test Target Is Prepared Successfully
+  [Setup]  Run Keywords  Skip Unless Target Arch Is  ${ARCH_AARCH64}
+  ...  AND  The Test Target Is Prepared Successfully
   ...  AND  Jitdump-JVM Is Not Deployed
   Given The Instruction Mix Recipe Is Listed
   And The Target Is Prepared
   When Check Recipe Is Ready
   ...  instruction_mix
   ...  --param collect_java_stacks=true --param mode=dynamic --target ${G_TARGET_NAME} --workload ${LAUNCH_WORKLOAD}
-  Then The Recipe Is Not Ready
-  And Check Advice Messages Contain When Target Is Aarch64  "The target does not have the `jitdump-jvm` tool."
+  Then The Recipe Is Ready
+  And Jitdump-JVM Is Deployed
   [Teardown]  Set Ready Suite Default State
 
 The System Utilization Recipe Reports As Ready When Tools Are Deployed
@@ -194,9 +197,8 @@ The System Utilization Recipe Reports As Ready When Tools Are Deployed
   Then The Recipe Is Ready
   [Teardown]  Set Ready Suite Default State
 
-The System Utilization Recipe Reports As Not Ready When Tools Are Not Deployed
-  [Documentation]  Tests that the System Utilization recipe correctly reports as not ready when
-  ...  the sysutil-timeline tool has not been deployed
+The System Utilization Readiness Check Installs Required Tools
+  [Documentation]  Tests that the System Utilization recipe installs required tools on a prepared target.
   [Tags]  system-utilization
   [Setup]  Skip Unless System Utilization Is Supported On Target
   Given The System Utilization Recipe Is Listed
@@ -204,8 +206,7 @@ The System Utilization Recipe Reports As Not Ready When Tools Are Not Deployed
   And Prepare The Test Target
   And The Target Is Prepared
   When Check Recipe Is Ready  system_utilization  --target ${G_TARGET_NAME} --system-wide
-  Then The Recipe Is Not Ready
-  And Check Advice Messages Contain  "The target does not have the `sysutil-timeline` tool."
+  Then The Recipe Is Ready
   [Teardown]  Set Ready Suite Default State
 
 The System Utilization Recipe Reports As Not Ready On Unsupported OSes
@@ -226,7 +227,7 @@ Recipe Ready Uses The Correct Target When Multiple Targets Exist
   ...  AND  Create Default Dummy Target  dummy
   ...  AND  The Test Target Is Added Successfully
   ...  AND  Prepare The Test Target If Needed
-  ...  AND  Run Keyword And Ignore Error  Deploy Tools For Recipe  code_hotspots
+  ...  AND  Deploy Tools For Recipe  code_hotspots
   ...  AND  Jitdump-JVM Is Not Deployed
   Given The Code Hotspots Recipe Is Listed
   And The Target Is Prepared
@@ -266,6 +267,15 @@ Recipe Ready Respects Shell Mode
 
 *** Keywords ***
 # This section is for throwaway keywords that only exist to this test suite.
+The Code Hotspots Tool Is Deployed
+  [Documentation]  Check that the Code Hotspots profiling tool for the target OS has been deployed.
+  IF  '${G_TARGET_OS}' == '${OS_WINDOWS}'
+    Check Tool Deployed  wperf.exe  ${G_TEST_USERNAME}
+  ELSE
+    Check Tool Deployed  sl-record  ${G_TEST_USERNAME}
+  END
+  The Last Command Succeeded
+
 Recipe Ready Suite Setup
   Common Setup
   Set Ready Suite Default State

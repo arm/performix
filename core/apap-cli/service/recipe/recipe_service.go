@@ -55,15 +55,16 @@ type Ready interface {
 }
 
 type Workload struct {
-	Command             string
-	Environment         map[string]string
-	WorkingDir          string
-	PID                 int32
-	Timeout             uint32
-	UseShell            bool
-	AndroidLaunch       bool
-	AndroidPackageName  string
-	AndroidActivityName string
+	Command                  string
+	Environment              map[string]string
+	WorkingDir               string
+	PID                      int32
+	Timeout                  uint32
+	UseShell                 bool
+	AndroidLaunch            bool
+	AndroidPackageName       string
+	AndroidActivityName      string
+	AndroidActivityArguments string
 }
 
 func workloadToProto(workload Workload, includeEnvironment bool) *apapproto.RecipeWorkload {
@@ -71,8 +72,9 @@ func workloadToProto(workload Workload, includeEnvironment bool) *apapproto.Reci
 		return &apapproto.RecipeWorkload{
 			SpecificWorkload: &apapproto.RecipeWorkload_AndroidLaunchWorkload{
 				AndroidLaunchWorkload: &apapproto.AndroidLaunchWorkload{
-					PackageName:  workload.AndroidPackageName,
-					ActivityName: workload.AndroidActivityName,
+					PackageName:       workload.AndroidPackageName,
+					ActivityName:      workload.AndroidActivityName,
+					ActivityArguments: workload.AndroidActivityArguments,
 				},
 			},
 		}
@@ -284,7 +286,6 @@ func (s RecipeReady) ReadyRecipe(client apapproto.ApapClient, recipeInfo *engine
 	tgt := grpcserver.TargetToProto(recipeCtx.Target)
 
 	readyReq := &apapproto.RecipeReadyRequest{
-		ToolDeployType: apapproto.ToolDeploy_NONE,
 		RecipeInfo: &apapproto.RecipeStartCommand{
 			Target:          tgt,
 			TargetName:      &recipeCtx.TargetName,

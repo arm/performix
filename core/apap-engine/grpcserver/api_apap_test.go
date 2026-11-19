@@ -4,9 +4,11 @@
 package grpcserver
 
 import (
+	"archive/zip"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -42,6 +44,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/render"
 	"github.com/Arm-Debug/apap-cli/apap-engine/render/sessionfactory"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
+	"github.com/Arm-Debug/apap-cli/apap-engine/settings"
 	"github.com/Arm-Debug/apap-cli/apap-engine/target"
 	targetsessionmocks "github.com/Arm-Debug/apap-cli/apap-engine/targetsession/mocks"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
@@ -2499,12 +2502,12 @@ func TestListDirectories(t *testing.T) {
 }
 
 func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
+	// Given: server settings with all diagnostic fields represented.
 	server := &ApapServer{
 		config: &ApapServerConfig{
 			ParallelJobs:  3,
 			DataDirectory: "/var/lib/apap",
 			FeatureFlags: featureflags.Flags{
-				AndroidTargets:           true,
 				NeoprofSystemUtilization: true,
 				FullCaptureSupport:       true,
 				Rerendering:              true,
@@ -2533,7 +2536,6 @@ func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
 	// This structure is used to generate a JSON blob so the intermediate float64 isn't a problem. float64 can map to integers precisely
 	// so long as they're less than 9,007,199,254,740,992 (2^53).
 	expected := map[string]any{
-		"enable-android-targets":            true,
 		"server-hostname":                   "127.0.0.1",
 		"server-port":                       float64(9000),
 		"http-port":                         float64(8080),
@@ -2549,6 +2551,7 @@ func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
 		"enable-profiling-focus":            false,
 		"enable-render-db-sandbox":          false,
 		"enable-neoprof-timeline":           true,
+		"enable-cpu-scheduling":             false,
 		"enable-custom-pmu-capture":         false,
 		"enable-neoprof-system-utilization": true,
 		"enable-jfr-capture":                true,
@@ -2559,7 +2562,10 @@ func TestBuildSupportPackageConfigIncludesAllFields(t *testing.T) {
 		"adb-path":                          "",
 	}
 
-	require.Equal(t, expected, server.buildSupportPackageConfig())
+	// When: support-package diagnostics are built.
+	actual := server.buildSupportPackageConfig()
+	// Then: all configuration keys, including scheduling, are present.
+	require.Equal(t, expected, actual)
 }
 
 func TestNewSessionFactoryUsesRenderDBSandboxFlag(t *testing.T) {
@@ -2644,6 +2650,39 @@ func TestCreateSupportPackage_SucceedsWhenNoEngineLogs(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.FileExists(t, resp.GetPackagePath())
+}
+
+func TestSupportPackageUsesEngineSettingsDirectory(t *testing.T) {
+	// Given
+	t.Setenv(util.ApplyEnvPrefix("CONFIG_DIR"), t.TempDir())
+	configDir := t.TempDir()
+	contents := `{"profilingFocus":"mobile"}`
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, settings.Filename), []byte(contents), perms.LocalFilePerm))
+	runs, err := run.NewRunCollection(t.TempDir())
+	require.NoError(t, err)
+	server := &ApapServer{runs: runs, config: &ApapServerConfig{ConfigDirectory: configDir}}
+
+	// When
+	response, err := server.CreateSupportPackage(context.Background(), &apapproto.CreateSupportPackageRequest{OutputDirectory: t.TempDir()})
+
+	// Then
+	require.NoError(t, err)
+	archive, err := zip.OpenReader(response.PackagePath)
+	require.NoError(t, err)
+	defer archive.Close()
+	for _, file := range archive.File {
+		if !strings.HasSuffix(file.Name, "/settings/settings.json") {
+			continue
+		}
+		reader, err := file.Open()
+		require.NoError(t, err)
+		data, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		require.NoError(t, reader.Close())
+		require.Equal(t, contents, string(data))
+		return
+	}
+	t.Fatal("support package is missing settings/settings.json")
 }
 
 func TestResolvedFeaturesReachExecutionContext(t *testing.T) {

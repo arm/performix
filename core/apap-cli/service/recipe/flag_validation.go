@@ -76,10 +76,17 @@ func ValidateWorkloadFlags(flags *pflag.FlagSet, pid int32, workload string, cmd
 }
 
 // ValidateAndroidLaunchFlags requires the package and activity flags to be
-// provided together and reports whether Android launch mode was selected.
+// provided together, requires them when activity arguments are supplied, and
+// reports whether Android launch mode was selected.
 func ValidateAndroidLaunchFlags(flags *pflag.FlagSet) (bool, error) {
 	packageChanged := flags.Changed("android-package")
 	activityChanged := flags.Changed("android-activity")
+	if flags.Changed("android-activity-arguments") && !packageChanged && !activityChanged {
+		return false, message.New(message.CliCmdValidationFlagRequiresFlag).WithMetadata(map[string]string{
+			"flag":         "--android-activity-arguments",
+			"requiredFlag": "--android-package --android-activity",
+		})
+	}
 	if packageChanged == activityChanged {
 		return packageChanged, nil
 	}

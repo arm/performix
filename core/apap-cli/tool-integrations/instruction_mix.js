@@ -119,6 +119,8 @@ let tool = {
     };
   },
 
+  validate: () => {},
+
   run: async (engine, ctx) => {},
 
   reformat: async (engine, ctx) => {

@@ -537,7 +537,7 @@ func TestTimelineRangeQueryPrunesParquetBeforeBoundedExpansion(t *testing.T) {
 	var plan explainAnalyzePlan
 	require.NoError(t, json.Unmarshal([]byte(planJSON), &plan))
 	parquetScan := requireExplainOperator(t, plan.Children, func(operator explainAnalyzeOperator) bool {
-		return strings.TrimSpace(operator.Name) == "READ_PARQUET"
+		return operator.Name == "TABLE_SCAN" && fmt.Sprint(operator.ExtraInfo["Function"]) == "READ_PARQUET"
 	})
 	require.Equal(t, int64(4), parquetScan.Cardinality)
 	parquetFilters := fmt.Sprint(parquetScan.ExtraInfo["Filters"])
@@ -560,12 +560,12 @@ func TestTimelineRangeQueryPrunesParquetBeforeBoundedExpansion(t *testing.T) {
 }
 
 type explainAnalyzePlan struct {
-	Children []explainAnalyzeOperator `json:"children"`
+	Children []explainAnalyzeOperator `json:"operator"`
 }
 
 type explainAnalyzeOperator struct {
-	Name        string                   `json:"operator_name"`
-	Cardinality int64                    `json:"operator_cardinality"`
+	Name        string                   `json:"type"`
+	Cardinality int64                    `json:"intermediate_rows"`
 	ExtraInfo   map[string]any           `json:"extra_info"`
 	Children    []explainAnalyzeOperator `json:"children"`
 }

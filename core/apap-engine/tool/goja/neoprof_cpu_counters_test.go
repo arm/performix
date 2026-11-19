@@ -122,10 +122,31 @@ func TestNeoprofCPUCounterErrorPropagation(t *testing.T) {
 	)
 }
 
+func TestNeoprofCPUEventOutcomes(t *testing.T) {
+	for _, tc := range []struct{ name, failure string }{
+		{"success", ""},
+		{"identity", "identity"},
+		{"devices", "devices"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given selected events and captured output on the host.
+			factory := loadNeoprofLifecycle(t, fmt.Sprintf("(engine) => scenarios.cpu_event_outcomes(engine, %q)", tc.failure))
+
+			// When finalizing the native-event capabilities.
+			err := runCPUCounterScenario(t, factory, &tool_mocks.MockEngineContext{})
+
+			// Then the fixture verifies event bindings and incomplete outcomes.
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestNeoprofCPUCounterLifecycle(t *testing.T) {
 	for _, name := range []string{
 		"selected_counters_require_timeline_export",
 		"collector_arguments_apply_selection_before_workload",
+		"invalid_cpu_event_stop_capture",
+		"cpu_event_reach_collector",
 		"android_launch_preserves_explicit_counter_selection",
 		"timeline_metadata_failures_preserve_original_error_with_cpu_selection",
 		"missing_timeline_output_is_not_published",

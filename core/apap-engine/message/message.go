@@ -400,6 +400,9 @@ func FromGRPCStatus(err error) error {
 	}
 	// If there are no details, this is a plain error; return string error
 	if len(st.Details()) == 0 {
+		if st.Code() != codes.Unknown {
+			return &reconstructedPlainError{text: st.Message(), cause: err}
+		}
 		return errors.New(st.Message())
 	}
 	// This isn't a plain error, but also isn't a valid message; throw new unknown error

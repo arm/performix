@@ -3,6 +3,8 @@
 
 // Shared Java presentation for owner-integrated recipes.
 
+const { readTimelineFilterScope } = require('./timeline_filter_scope');
+
 const SQL_RENDERER_OUTPUT = {
   name: 'table',
   component_type: { name: 'flat_table', schema_version: '1.0' },
@@ -44,6 +46,7 @@ function getSelectedProcessId(context) {
  * @param {string} ownerParquetRoot
  * @param {any[]} existingVisualizations
  * @param {string} [timelineOffsetEpochNs] Timeline offset in nanoseconds as a decimal-string epoch timestamp. Used to align Java timeline events with another timeline. Defaults to recording_start_epoch_ns when omitted.
+ * @param {string} [processControlId] Opt into shared recorded-process indicators using this drawer control ID.
  * @returns {import("../docs/jsdocs").RecipeRenderOutput} Includes the existing visualizations with Java data composed in, without modifying the inputs.
  */
 function buildJavaAnalysisRender(
@@ -51,6 +54,7 @@ function buildJavaAnalysisRender(
   ownerParquetRoot,
   existingVisualizations = [],
   timelineOffsetEpochNs,
+  processControlId,
 ) {
   if (context.getRunDescriptions().length !== 1) {
     return emptyJavaRender(existingVisualizations);
@@ -59,12 +63,9 @@ function buildJavaAnalysisRender(
   const selectedProcessId = getSelectedProcessId(context);
   const components = discoverJfrComponents(context, ownerParquetRoot);
   if (!components) return emptyJavaRender(existingVisualizations);
-  const predicate = selectRecordingPredicate(
-    context,
-    components,
-    selectedProcessId,
-  );
-  if (predicate === null) return emptyJavaRender(existingVisualizations);
+  const selection = selectRecordings(context, components, selectedProcessId);
+  if (selection === null) return emptyJavaRender(existingVisualizations);
+  const { predicate, processIds } = selection;
 
   const visible = predicate !== 'FALSE';
   const summary = buildJavaSummary(components, predicate, visible);
@@ -74,6 +75,39 @@ function buildJavaAnalysisRender(
     visible,
     timelineOffsetEpochNs,
   );
+  if (processControlId !== undefined) {
+    const filterContext = {
+      controls: [],
+      recordedScope: processIds.map((pid) => ({
+        category: 'Recorded process',
+        value: `PID ${pid}`,
+        controlId: processControlId,
+      })),
+    };
+    summary.visualization.config.filterContext = filterContext;
+    heap.visualization.config.filterContext = filterContext;
+    // Only the unified capture timeline opts into chart-level scope labels.
+    if (
+      existingVisualizations.some(
+        (v) => v.id === 'timeline' && v.config.timeDomain,
+      )
+    ) {
+      heap.visualization.config.groups.heap_summary.visible = true;
+      heap.visualization.config.groups.heap_summary.noData = !visible;
+      heap.visualization.config.groups.heap_summary.filterContext = {
+        ...filterContext,
+        recordedScope: processIds.map((pid) => ({
+          category: 'Process',
+          value:
+            readTimelineFilterScope(context, {
+              pid: Number(pid),
+            })?.recordedScope.find((entry) => entry.controlId === 'process')
+              ?.value ?? `PID ${pid}`,
+          controlId: processControlId,
+        })),
+      };
+    }
+  }
   const hasTimeline = existingVisualizations.some(
     ({ id }) => id === 'timeline',
   );
@@ -118,7 +152,7 @@ function discoverJfrComponents(context, ownerParquetRoot) {
   return JFR_COMPONENTS;
 }
 
-function selectRecordingPredicate(context, JFR_COMPONENTS, selectedProcessId) {
+function selectRecordings(context, JFR_COMPONENTS, selectedProcessId) {
   const selectDefaultRecording = ['Launch', 'Attach'].includes(
     context.getRunDescriptions()[0].WorkloadType,
   );
@@ -155,9 +189,16 @@ function selectRecordingPredicate(context, JFR_COMPONENTS, selectedProcessId) {
   });
   // Keep renderer and widget IDs stable when the Process filter has no JVM.
   // Visibility hides Java views; empty queries preserve the render topology.
-  return recordingIds.length
-    ? `recording_id IN (${recordingIds.join(', ')})`
-    : 'FALSE';
+  return {
+    predicate: recordingIds.length
+      ? `recording_id IN (${recordingIds.join(', ')})`
+      : 'FALSE',
+    processIds: [
+      ...new Set(
+        selectedRecordings.map((recording) => String(recording.jvm_pid)),
+      ),
+    ],
+  };
 }
 
 function buildRawJavaRenderers(JFR_COMPONENTS) {
@@ -528,6 +569,7 @@ function mergeHeapSummaryIntoTimeline(timeline, javaTimeline) {
 
   heapGroup.index =
     Math.max(
+      -1,
       ...Object.values(timeline.config.groups).map((group) => group.index),
     ) + 1;
   return {

@@ -76,10 +76,10 @@ function makeIntervals(duration) {
           threads: 'STRUCT(unique_thread_id UBIGINT, end_timestamp BIGINT)[]'
         })
       ), cpu_switches AS (
-        SELECT *, LEAD(timestamp, 1, ${duration}) OVER (
-          PARTITION BY cpu ORDER BY timestamp, sequence
-        ) AS next_timestamp
+        SELECT *, LEAD(timestamp) OVER cpu_order AS switch_out_ns,
+          LEAD(reason) OVER cpu_order AS switch_out_reason
         FROM read_parquet({{path:${FILES.switches}}}, file_row_number = true)
+        WINDOW cpu_order AS (PARTITION BY cpu ORDER BY timestamp, sequence)
       ), switches AS (
         SELECT *,
         -- A normal thread cannot run on two CPUs at once. A later switch-in
@@ -101,12 +101,13 @@ function makeIntervals(duration) {
           GREATEST(0, s.timestamp)::BIGINT AS start_ns,
           -- Metadata already contains the analyzed lifetime, including inferred
           -- exits. Open lifetimes are bounded by the capture and CPU switches.
-          LEAST(${duration}, s.next_timestamp, s.next_thread_timestamp,
-            t.end_timestamp)::BIGINT AS end_ns
+          LEAST(${duration}, s.switch_out_ns, s.next_thread_timestamp,
+            t.end_timestamp)::BIGINT AS end_ns,
+          s.switch_out_ns, s.switch_out_reason
         FROM switches s
         LEFT JOIN threads ON t.unique_thread_id = s.utid
       )
-      SELECT interval_id, cpu, utid, start_ns, end_ns
+      SELECT interval_id, cpu, utid, start_ns, end_ns, switch_out_ns, switch_out_reason
       FROM intervals WHERE end_ns > start_ns
     `,
     'scheduler-execution-intervals',
@@ -262,6 +263,7 @@ function buildSchedulerTrace(context) {
     },
   };
   return {
+    sources: { intervals, threads, duration: capture.duration },
     renderers: [intervals, threads, tracks, spans, viewport],
     visualizations: [
       {

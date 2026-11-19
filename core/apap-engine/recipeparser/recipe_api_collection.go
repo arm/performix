@@ -85,16 +85,16 @@ func (r *ConcreteRecipeAPI) discoveryKey(ic tool.IntegrationContext) capabilityD
 	}
 	// The API instance belongs to one stage and its target execution context.
 	data, err := json.Marshal(struct {
-		Name, Version          string
-		Params                 map[string]any
-		Workload               tool.Workload
-		Env                    map[string]string
-		Full, Timeline         bool
-		SkipCounterEnumeration bool
+		Name, Version              string
+		Params                     map[string]any
+		Workload                   tool.Workload
+		Env                        map[string]string
+		Full, Timeline, Scheduling bool
+		Request                    *capabilities.CapabilityRequest
 	}{
 		ic.Name, ic.Version, ic.Params, ic.Workload, ic.Env,
-		ic.FeatureFlags.FullCaptureSupport, ic.FeatureFlags.NeoprofTimeline,
-		ic.CapabilityRequest != nil && len(ic.CapabilityRequest.Required) == 0 && len(ic.CapabilityRequest.Optional) == 0,
+		ic.FeatureFlags.FullCaptureSupport, ic.FeatureFlags.NeoprofTimeline, ic.FeatureFlags.CPUScheduling,
+		ic.CapabilityRequest,
 	})
 	if err != nil {
 		return capabilityDiscoveryKey{}

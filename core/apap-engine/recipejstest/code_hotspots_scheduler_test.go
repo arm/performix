@@ -47,7 +47,7 @@ func schedulerFixture(t *testing.T, root string, empty bool) []timelineComponent
 	// Unordered input includes a zero-duration slice, a missing switch-out,
 	// shared idle/unknown IDs, and an analyzed lifetime end without an exit row.
 	switches := `SELECT timestamp::BIGINT AS timestamp, sequence::UBIGINT AS sequence,
- cpu::UINTEGER AS cpu, utid::UBIGINT AS utid, 0::UINTEGER AS reason
+ cpu::UINTEGER AS cpu, utid::UBIGINT AS utid, timestamp::UINTEGER AS reason
  FROM (VALUES (30,18446744073709551614,0,11),(10,1,0,10),(10,2,1,0),(30,18446744073709551613,0,18446744073709551614),
  (40,6,1,10),(60,8,0,18446744073709551614),(70,9,1,99),(90,10,0,0),(45,7,2,10),(10,3,3,0),(15,4,4,18446744073709551615),(20,5,5,18446744073709551615),(10,11,6,0)) s(timestamp,sequence,cpu,utid)`
 	if empty {
@@ -56,7 +56,7 @@ func schedulerFixture(t *testing.T, root string, empty bool) []timelineComponent
 	for name, query := range map[string]string{
 		"scheduler_context_switch":  switches,
 		"scheduler_thread_exit":     `SELECT 50::BIGINT AS timestamp, 7::UBIGINT AS sequence, 11::UBIGINT AS utid`,
-		"scheduler_reason_metadata": `SELECT 0::UINTEGER AS reason, 'scheduled'::VARCHAR AS name`,
+		"scheduler_reason_metadata": `SELECT DISTINCT reason, 'scheduled'::VARCHAR AS name FROM (` + switches + `)`,
 	} {
 		path := schedulerRoot + "timeline/" + name + ".parquet"
 		abs := filepath.Join(root, filepath.FromSlash(path))
@@ -75,17 +75,18 @@ func schedulerFixture(t *testing.T, root string, empty bool) []timelineComponent
 
 // renderSchedulerRecipe supplies recipe inputs through the mock API while the
 // resulting renderer configurations are exercised against real DuckDB fixtures.
-func renderSchedulerRecipe(t *testing.T, components []timelineComponentFixture, tool string, comparison, timelineEnabled bool) (recipe.RenderOutput, error) {
+func renderSchedulerRecipe(t *testing.T, components []timelineComponentFixture, tool string, comparison, schedulingEnabled bool, workloadType string) (recipe.RenderOutput, error) {
 	t.Helper()
 	harness := jstest.LoadRecipe(t, "code_hotspots")
 	ctx := &mocks.MockRenderExecutionContext{}
-	descriptions := []recipeparser.RunDescription{{ToolsUsed: []string{tool}}}
+	descriptions := []recipeparser.RunDescription{{ToolsUsed: []string{tool}, WorkloadType: workloadType}}
 	if comparison {
 		descriptions = append(descriptions, descriptions[0])
 	}
 	ctx.On("GetRunDescriptions").Return(descriptions, nil)
 	ctx.On("IsRerenderingEnabled").Return(false, nil)
-	ctx.On("IsNeoprofTimelineEnabled").Return(timelineEnabled, nil).Maybe()
+	ctx.On("IsNeoprofTimelineEnabled").Return(false, nil).Maybe()
+	ctx.On("IsCPUSchedulingEnabled").Return(schedulingEnabled, nil).Maybe()
 	for _, parameter := range []string{"filter_pid", "filter_tid", "filter_start_time_ns", "filter_end_time_ns"} {
 		ctx.On("GetRenderParameter", parameter).Return(nil, nil)
 	}
@@ -98,7 +99,7 @@ func renderSchedulerRecipe(t *testing.T, components []timelineComponentFixture, 
 			FileName:      filepath.Base(component.RelativePath),
 			ComponentType: recipeparser.ComponentType{Name: component.ComponentType.Name, Version: component.ComponentType.SchemaVersion},
 		}}, nil).Maybe()
-		if component.RelativePath == schedulerRoot+"metadata/capture_metadata.json" {
+		if strings.HasSuffix(component.RelativePath, ".json") || strings.HasSuffix(component.RelativePath, ".txt") {
 			ctx.On("ReadRunComponent", 0, component.RelativePath).Return(string(component.Content), nil).Maybe()
 		}
 	}
@@ -132,7 +133,7 @@ func newSchedulerTestRender(t *testing.T, scenario string) schedulerTestRender {
 		}
 	}
 	model := newRunComponentPresenceModel(t, root, components)
-	output, err := renderSchedulerRecipe(t, components, "neoprof", false, true)
+	output, err := renderSchedulerRecipe(t, components, "neoprof", false, true, "")
 	require.NoError(t, err)
 	session := newRenderSession(t, "scheduler-run", root, model)
 	initializeRenderers(t, session, output, func(c recipe.RendererConfig) bool { return strings.HasPrefix(c.ID, "scheduler_") })
@@ -223,7 +224,7 @@ func TestCodeHotspotsSchedulerStorage(t *testing.T) {
 	var columns string
 	require.NoError(t, session.Database().Conn.QueryRowContext(context.Background(),
 		"SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=?", intervals).Scan(&columns))
-	require.Equal(t, "interval_id,cpu,utid,start_ns,end_ns", columns)
+	require.Equal(t, "interval_id,cpu,utid,start_ns,end_ns,switch_out_ns,switch_out_reason", columns)
 }
 
 func TestCodeHotspotsSchedulerEventIdentities(t *testing.T) {
@@ -349,7 +350,7 @@ func TestCodeHotspotsSchedulerVisibility(t *testing.T) {
 				tool = "wperf"
 			}
 			// When: the recipe renders with the scenario's mocked inputs.
-			output, err := renderSchedulerRecipe(t, filtered, tool, scenario == "comparison", scenario != "flag disabled")
+			output, err := renderSchedulerRecipe(t, filtered, tool, scenario == "comparison", scenario != "flag disabled", "")
 			require.NoError(t, err)
 			// Then: no scheduler widget is exposed.
 			for _, w := range output.Widgets {
@@ -357,4 +358,34 @@ func TestCodeHotspotsSchedulerVisibility(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCodeHotspotsSchedulerObservedSwitchOuts(t *testing.T) {
+	// Given: unordered switches on several CPUs, migration and bounded thread lifetimes.
+	rendered := newSchedulerTestRender(t, "populated")
+	intervals := findTableByComponentName(t, rendered.session.Manifest(), "scheduler-execution-intervals")
+
+	// When: reading observed switch-outs independently of derived interval ends.
+	rows, err := rendered.session.Database().Conn.QueryContext(context.Background(), fmt.Sprintf(`
+ SELECT cpu,start_ns,end_ns,COALESCE(switch_out_ns,-1),COALESCE(switch_out_reason::BIGINT,-1)
+ FROM %s WHERE utid IN (10,11,99) ORDER BY cpu,start_ns`, intervals))
+	require.NoError(t, err)
+	defer rows.Close()
+	var got [][5]int64
+	for rows.Next() {
+		var row [5]int64
+		require.NoError(t, rows.Scan(&row[0], &row[1], &row[2], &row[3], &row[4]))
+		got = append(got, row)
+	}
+	require.NoError(t, rows.Err())
+
+	// Then: reasons come from the next switch on the same CPU, even when the interval ends earlier.
+	// No next switch remains null rather than being reported as an observed switch at capture end.
+	require.Equal(t, [][5]int64{
+		{0, 10, 30, 30, 30},
+		{0, 30, 50, 60, 60},
+		{1, 40, 45, 70, 70},
+		{1, 70, 85, -1, -1},
+		{2, 45, 100, -1, -1},
+	}, got)
 }

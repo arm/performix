@@ -27,7 +27,6 @@ from sources import (
     read_proc_meminfo,
     read_proc_stat_counters,
     read_proc_vmstat,
-    read_sector_size,
     read_total_procs,
     read_total_threads,
 )
@@ -38,6 +37,9 @@ MIN_INTERVAL_SECONDS = 0.01
 MAX_INTERVAL_SECONDS = 60.0
 MIN_COMPLETE_SAMPLES = 2
 INSUFFICIENT_SAMPLES_EXIT_CODE = 3
+
+# Linux diskstats counts fixed 512-byte sectors, regardless of device sector size.
+DISKSTATS_SECTOR_BYTES = 512
 
 _STOP_EVENT = threading.Event()
 
@@ -244,7 +246,6 @@ class CollectorState:
     disk_devs: list[str]
     net_ifaces: list[str]
     numa_node_ids: list[str]
-    sector_sizes: dict[str, int]
 
 
 @dataclass
@@ -302,7 +303,6 @@ def init_collector_state(proc_root: str, sys_root: str, now: float, numa_command
 
     prev_disk = read_diskstats(proc_root=proc_root, sys_root=sys_root)
     disk_devs = sorted(prev_disk.keys())
-    sector_sizes = {dev: read_sector_size(dev, sys_root=sys_root) for dev in disk_devs}
 
     prev_net = read_net_dev(proc_root=proc_root)
     net_ifaces = sorted(prev_net.keys())
@@ -332,7 +332,6 @@ def init_collector_state(proc_root: str, sys_root: str, now: float, numa_command
         disk_devs=disk_devs,
         net_ifaces=net_ifaces,
         numa_node_ids=numa_node_ids,
-        sector_sizes=sector_sizes,
     )
 
 
@@ -499,9 +498,8 @@ def collect_sample(
             continue
         read_iops = rate_from_delta(prev.reads_completed, curr.reads_completed, elapsed)
         write_iops = rate_from_delta(prev.writes_completed, curr.writes_completed, elapsed)
-        sector_size = state.sector_sizes.get(dev, 512)
-        read_bps = rate_from_delta(prev.sectors_read, curr.sectors_read, elapsed) * sector_size
-        write_bps = rate_from_delta(prev.sectors_written, curr.sectors_written, elapsed) * sector_size
+        read_bps = rate_from_delta(prev.sectors_read, curr.sectors_read, elapsed) * DISKSTATS_SECTOR_BYTES
+        write_bps = rate_from_delta(prev.sectors_written, curr.sectors_written, elapsed) * DISKSTATS_SECTOR_BYTES
         row.extend(
             [
                 _fmt_float(read_iops, 2),

@@ -24,14 +24,11 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
-	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
 
-type RunRecipeTool struct {
-	AndroidTargetsEnabled bool
-}
+type RunRecipeTool struct{}
 
 const defaultRunTimeoutSeconds uint32 = 10
 
@@ -82,7 +79,7 @@ type systemOpts struct{}
 // timeout and PID ranges once. The oneOf variants pass false because a range
 // failure within every variant produces a generic oneOf error instead of the
 // specific invalid field error.
-func runRecipeInputProperties(validateRanges bool, androidTargetsEnabled bool) map[string]*jsonschema.Schema {
+func runRecipeInputProperties(validateRanges bool) map[string]*jsonschema.Schema {
 	properties := map[string]*jsonschema.Schema{
 		"run_name":   {Type: "string", Description: "Optional name for the new run. Empty uses a generated name."},
 		"group_name": {Type: "string", Description: "Optional group for the new run. Empty leaves it ungrouped."},
@@ -143,22 +140,20 @@ func runRecipeInputProperties(validateRanges bool, androidTargetsEnabled bool) m
 			Description: "Profile the whole target system instead of a specific workload. Pass an empty object ({}).",
 		},
 	}
-	if androidTargetsEnabled {
-		properties["android_launch"] = &jsonschema.Schema{
-			Type:        "object",
-			Required:    []string{"package_name", "activity_name"},
-			Description: "Launch an Android package activity on the target and profile it.",
-			Properties: map[string]*jsonschema.Schema{
-				"package_name": {
-					Type:        "string",
-					Description: "The Android application package to launch.",
-				},
-				"activity_name": {
-					Type:        "string",
-					Description: "The Android activity to launch.",
-				},
+	properties["android_launch"] = &jsonschema.Schema{
+		Type:        "object",
+		Required:    []string{"package_name", "activity_name"},
+		Description: "Launch an Android package activity on the target and profile it.",
+		Properties: map[string]*jsonschema.Schema{
+			"package_name": {
+				Type:        "string",
+				Description: "The Android application package to launch.",
 			},
-		}
+			"activity_name": {
+				Type:        "string",
+				Description: "The Android activity to launch.",
+			},
+		},
 	}
 	if validateRanges {
 		properties["timeout"].Minimum = jsonschema.Ptr(0.0)
@@ -167,29 +162,27 @@ func runRecipeInputProperties(validateRanges bool, androidTargetsEnabled bool) m
 	return properties
 }
 
-func runRecipeInputVariant(workload string, androidTargetsEnabled bool) *jsonschema.Schema {
+func runRecipeInputVariant(workload string) *jsonschema.Schema {
 	return &jsonschema.Schema{
 		Type:       "object",
 		Required:   []string{"recipe", "target", workload},
-		Properties: runRecipeInputProperties(false, androidTargetsEnabled),
+		Properties: runRecipeInputProperties(false),
 	}
 }
 
-func runRecipeInputSchema(androidTargetsEnabled bool) *jsonschema.Schema {
+func runRecipeInputSchema() *jsonschema.Schema {
 	workloads := []string{"launch", "attach_to_pid", "system"}
-	if androidTargetsEnabled {
-		workloads = append(workloads, "android_launch")
-	}
+	workloads = append(workloads, "android_launch")
 
 	variants := make([]*jsonschema.Schema, 0, len(workloads))
 	for _, workload := range workloads {
-		variants = append(variants, runRecipeInputVariant(workload, androidTargetsEnabled))
+		variants = append(variants, runRecipeInputVariant(workload))
 	}
 
 	return &jsonschema.Schema{
 		Type:       "object",
 		Required:   []string{"recipe", "target"},
-		Properties: runRecipeInputProperties(true, androidTargetsEnabled),
+		Properties: runRecipeInputProperties(true),
 		// Codex code mode renders each root oneOf variant independently and otherwise
 		// loses the common fields. Repeat the complete input schema in each variant
 		// to work around https://github.com/openai/codex/issues/42283.
@@ -236,13 +229,9 @@ func (tool RunRecipeTool) Register(server *mcp.Server, toolDeps ToolDependencies
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint: false,
 		},
-		InputSchema:  runRecipeInputSchema(tool.AndroidTargetsEnabled),
+		InputSchema:  runRecipeInputSchema(),
 		OutputSchema: runRecipeOutputSchema,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input runRecipeInput) (*mcp.CallToolResult, runRecipeResult, error) {
-		if input.AndroidLaunch != nil && !tool.AndroidTargetsEnabled {
-			err := message.New(message.CommonUnsupportedTargetType).WithMetadata(map[string]string{"targetType": "android"})
-			return runRecipeReturn(runRecipeResult{Status: runStatusError, Error: newToolError(err)})
-		}
 
 		workload, err := buildRecipeWorkload(input)
 		if err != nil {
@@ -261,10 +250,6 @@ func (tool RunRecipeTool) Register(server *mcp.Server, toolDeps ToolDependencies
 		targetName := input.Target
 		tgt, err := toolDeps.Targets.GetTarget(targetName)
 		if err != nil {
-			return runRecipeReturn(runRecipeResult{Status: runStatusError, Error: newToolError(err)})
-		}
-		if _, ok := tgt.(*engine_target.AndroidTarget); ok && !tool.AndroidTargetsEnabled {
-			err := message.New(message.CommonUnsupportedTargetType).WithMetadata(map[string]string{"targetType": "android"})
 			return runRecipeReturn(runRecipeResult{Status: runStatusError, Error: newToolError(err)})
 		}
 		protoTarget := grpcserver.TargetToProto(tgt)

@@ -341,6 +341,8 @@ const tool = {
     };
   },
 
+  validate: () => {},
+
   run: async (engine, ctx) => {
     ctx.metadata = ctx.metadata || {};
     const { options: execOptions, pythonPathRead } = await getExecutionOptions(

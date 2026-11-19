@@ -112,6 +112,7 @@ func (r *RenderStageAPIExposer) ExposeAPI(api RecipeAPI, jsContext *goja.Object)
 		{jsName: "logWarn", fn: api.logWarn},
 		{jsName: "isRerenderingEnabled", fn: api.isRerenderingEnabled},
 		{jsName: "isNeoprofTimelineEnabled", fn: api.isNeoprofTimelineEnabled},
+		{jsName: "isCPUSchedulingEnabled", fn: api.isCPUSchedulingEnabled},
 		// UPDATE jsdocs (recipes/docs/jsdocs.js) when adding or changing any API functions
 	}
 	for _, f := range funcList {

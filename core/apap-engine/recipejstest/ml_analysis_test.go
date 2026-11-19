@@ -5,6 +5,7 @@ package recipejstest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,8 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/cdf"
+	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
+	"github.com/Arm-Debug/apap-cli/apap-engine/deploymentsupport"
 	"github.com/Arm-Debug/apap-cli/apap-engine/jstest"
 	"github.com/Arm-Debug/apap-cli/apap-engine/jstest/mocks"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
+	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipeparser"
 	"github.com/Arm-Debug/apap-cli/apap-engine/render"
@@ -45,11 +50,13 @@ const (
 	mlTraceOperatorTrackID int64 = 3
 )
 
-func TestMLAnalysisReady(t *testing.T) {
+func TestMLAnalysisPyTorchReady(t *testing.T) {
+	// Given
 	harness := jstest.LoadRecipe(t, "ml_analysis")
 	workload := recipeparser.WorkloadArg{Type: "launch"}
 	expectedTools := mlAnalysisTools(workload, "/opt/pytorch/bin/python3")
 	context := &mocks.MockReadyExecutionContext{}
+	context.On("GetParameter", "flavor").Return("pytorch", nil).Once()
 	context.On("GetWorkload").Return(workload, nil).Once()
 	context.On("GetParameter", "python").Return("/opt/pytorch/bin/python3", nil).Once()
 	context.On("ProbeTools", expectedTools).Return([]tool.ProbeResult{{
@@ -57,32 +64,38 @@ func TestMLAnalysisReady(t *testing.T) {
 		Advice:    []tool.ProbeAdvice{},
 	}}, nil).Once()
 
+	// When
 	output, err := harness.RecipeReady(t, context)
 
+	// Then
 	require.NoError(t, err)
 	require.Equal(t, recipe.ReadyStatusReady, output.Status)
 	require.Empty(t, output.Advice)
 	context.AssertExpectations(t)
 }
 
-func TestMLAnalysisRun(t *testing.T) {
+func TestMLAnalysisPyTorchRun(t *testing.T) {
+	// Given
 	harness := jstest.LoadRecipe(t, "ml_analysis")
 	workload := recipeparser.WorkloadArg{Type: "launch"}
 	expectedTools := mlAnalysisTools(workload, ".venv/bin/python")
 	context := &mocks.MockRunExecutionContext{}
+	context.On("GetParameter", "flavor").Return("pytorch", nil).Once()
 	context.On("GetWorkload").Return(workload, nil).Once()
 	context.On("GetParameter", "python").Return(".venv/bin/python", nil).Once()
 	context.On("RunTools", expectedTools).Return(nil).Once()
 
+	// When
 	err := harness.RecipeRun(t, context)
 
+	// Then
 	require.NoError(t, err)
 	context.AssertExpectations(t)
 }
 
-func TestMLAnalysisSingleRunUsesTheRunOperatorCalls(t *testing.T) {
+func TestMLAnalysisPyTorchSingleRunUsesTheRunOperatorCalls(t *testing.T) {
 	model := newMLTraceModel(t)
-	output := executeMLAnalysisRenderStage(t, []cdf.ModelView{model})
+	output := executeMLAnalysisPyTorchRenderStage(t, []cdf.ModelView{model})
 
 	sql := findMLRenderer(t, output, "operator_summary").Config["sql"].(string)
 	require.Contains(t, sql, "{{path:"+mlOperatorCallsPath+"}}")
@@ -161,7 +174,7 @@ func TestMLAnalysisSingleRunUsesTheRunOperatorCalls(t *testing.T) {
 	require.Equal(t, "PyTorch,API calls,Operator calls", trackNames)
 }
 
-func TestMLAnalysisComparisonSummarizesBothRuns(t *testing.T) {
+func TestMLAnalysisPyTorchComparisonSummarizesBothRuns(t *testing.T) {
 	baseline := newMLOperatorCallsModel(t, `
 		SELECT 'shared'::VARCHAR AS operator_name,
 		       0::BIGINT AS ts_begin_ns,
@@ -177,7 +190,7 @@ func TestMLAnalysisComparisonSummarizesBothRuns(t *testing.T) {
 		UNION ALL
 		SELECT 'current_only', 0::BIGINT, 2000000::BIGINT`)
 	models := []cdf.ModelView{baseline, current}
-	output := executeMLAnalysisRenderStage(t, models)
+	output := executeMLAnalysisPyTorchRenderStage(t, models)
 
 	sql := findMLRenderer(t, output, "operator_summary").Config["sql"].(string)
 	require.Contains(t, sql, "{{path:0:"+mlOperatorCallsPath+"}}")
@@ -307,7 +320,7 @@ func TestMLAnalysisComparisonSummarizesBothRuns(t *testing.T) {
 	require.InDelta(t, 4, currentAverage, 0.000001)
 }
 
-func TestMLAnalysisComparisonWithEmptyRuns(t *testing.T) {
+func TestMLAnalysisPyTorchComparisonWithEmptyRuns(t *testing.T) {
 	for _, empty := range []string{"baseline", "current", "both"} {
 		t.Run(empty, func(t *testing.T) {
 			calls := "SELECT 'aten.mm.default' AS operator_name, 0::BIGINT AS ts_begin_ns, 2000000::BIGINT AS ts_end_ns"
@@ -319,7 +332,7 @@ func TestMLAnalysisComparisonWithEmptyRuns(t *testing.T) {
 				current = "SELECT * FROM (" + calls + ") WHERE FALSE"
 			}
 			models := []cdf.ModelView{newMLOperatorCallsModel(t, baseline), newMLOperatorCallsModel(t, current)}
-			output := executeMLAnalysisRenderStage(t, models)
+			output := executeMLAnalysisPyTorchRenderStage(t, models)
 			session := newMLComparisonRenderSession(t, models)
 			initializeRenderers(t, session, output, nil)
 			deltas := findMLOperatorTable(t, session, "operator_deltas")
@@ -346,7 +359,7 @@ func TestMLAnalysisComparisonWithEmptyRuns(t *testing.T) {
 	}
 }
 
-func TestMLAnalysisSummaryPercentagesAndNumericValues(t *testing.T) {
+func TestMLAnalysisPyTorchSummaryPercentagesAndNumericValues(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		rows            string
@@ -361,7 +374,7 @@ func TestMLAnalysisSummaryPercentagesAndNumericValues(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			model := newMLOperatorCallsModel(t, tc.rows)
-			output := executeMLAnalysisRenderStage(t, []cdf.ModelView{model})
+			output := executeMLAnalysisPyTorchRenderStage(t, []cdf.ModelView{model})
 			// Only the summary is needed; these fixtures deliberately contain no API trace.
 			output.Renderers = selectMLRenderers(t, output, "operator_summary")
 			session := newRenderSession(t, "ml-summary", model.BasePath(), model)
@@ -401,7 +414,7 @@ func TestMLAnalysisSummaryPercentagesAndNumericValues(t *testing.T) {
 	}
 }
 
-func TestMLAnalysisOperatorGrouping(t *testing.T) {
+func TestMLAnalysisPyTorchOperatorGrouping(t *testing.T) {
 	cases := []struct{ operator, group string }{
 		{"aten.mm.default", "Matrix operations"},
 		{"aten.add.Tensor", "Elementwise arithmetic and activations"},
@@ -445,7 +458,7 @@ func TestMLAnalysisOperatorGrouping(t *testing.T) {
 		newMLOperatorCallsModel(t, strings.Join(baselineRows, " UNION ALL ")),
 		newMLOperatorCallsModel(t, strings.Join(currentRows, " UNION ALL ")),
 	}
-	output := executeMLAnalysisRenderStage(t, models)
+	output := executeMLAnalysisPyTorchRenderStage(t, models)
 	session := newMLComparisonRenderSession(t, models)
 	initializeRenderers(t, session, output, nil)
 	table := findMLOperatorTable(t, session, "operator_summary")
@@ -502,7 +515,7 @@ func findMLOperatorTable(t *testing.T, session render.Session, rendererID string
 	return ""
 }
 
-func TestMLAnalysisCategorySummaries(t *testing.T) {
+func TestMLAnalysisPyTorchCategorySummaries(t *testing.T) {
 	for _, empty := range []bool{false, true} {
 		t.Run(fmt.Sprintf("empty=%t", empty), func(t *testing.T) {
 			rowsSQL := `SELECT 'aten.mm.default' AS operator_name, 0::BIGINT AS ts_begin_ns, 2000000::BIGINT AS ts_end_ns
@@ -513,7 +526,7 @@ func TestMLAnalysisCategorySummaries(t *testing.T) {
 				rowsSQL = "SELECT * FROM (" + rowsSQL + ") WHERE FALSE"
 			}
 			model := newMLOperatorCallsModel(t, rowsSQL)
-			output := executeMLAnalysisRenderStage(t, []cdf.ModelView{model})
+			output := executeMLAnalysisPyTorchRenderStage(t, []cdf.ModelView{model})
 			output.Renderers = selectMLRenderers(t, output,
 				"operator_summary", "operator_nodes", "operator_drilldown", "operator_symbols",
 				"operator_measurements", "operator_measurement_order", "operator_images", "operator_source_files",
@@ -559,10 +572,13 @@ func TestMLAnalysisCategorySummaries(t *testing.T) {
 	}
 }
 
-func executeMLAnalysisRenderStage(t *testing.T, models []cdf.ModelView) recipe.RenderOutput {
+func executeMLAnalysisPyTorchRenderStage(t *testing.T, models []cdf.ModelView) recipe.RenderOutput {
 	t.Helper()
 	harness := jstest.LoadRecipe(t, "ml_analysis")
 	descriptions := make([]recipeparser.RunDescription, len(models))
+	for i := range descriptions {
+		descriptions[i].Parameters = map[string]any{"flavor": "pytorch"}
+	}
 	context := &mocks.MockRenderExecutionContext{}
 	context.On("GetRunDescriptions").Return(descriptions, nil).Once()
 	if len(models) == 1 {
@@ -707,4 +723,212 @@ func newMLComparisonRenderSession(t *testing.T, models []cdf.ModelView) render.S
 	require.NoError(t, err)
 	t.Cleanup(func() { session.Close() })
 	return session
+}
+
+func TestMLAnalysisVulkanMLReady(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		advice []tool.ProbeAdvice
+		status string
+	}{
+		{name: "ready", status: recipe.ReadyStatusReady},
+		{name: "warning", advice: []tool.ProbeAdvice{{Level: recipe.AdviceSeverityWarning, MessageCode: message.ToolIntegrationsNeoprofGpuMetricUnavailable, Metadata: map[string]string{"counter": "example"}}}, status: recipe.ReadyStatusWarning},
+		{name: "error", advice: []tool.ProbeAdvice{{Level: recipe.AdviceSeverityError, MessageCode: message.ToolIntegrationsCommonToolNotDeployed, Metadata: map[string]string{"tool": "sl-record"}, Cause: "missing collector"}}, status: recipe.ReadyStatusError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			harness := jstest.LoadRecipe(t, "ml_analysis")
+			workload := recipeparser.WorkloadArg{Type: "androidLaunch", Data: recipeparser.AndroidLaunchWorkloadData{PackageName: "com.example.ml", ActivityName: ".MainActivity"}}
+			ctx := &mocks.MockReadyExecutionContext{}
+			ctx.On("GetParameter", "flavor").Return("vulkanml", nil).Once()
+			ctx.On("GetWorkload").Return(workload, nil).Once()
+			ctx.On("ProbeTools", vulkanMLTools(workload)).Return([]tool.ProbeResult{{Available: tc.status != recipe.ReadyStatusError, Advice: tc.advice}}, nil).Once()
+
+			// When
+			output, err := harness.RecipeReady(t, ctx)
+
+			// Then
+			require.NoError(t, err)
+			require.Equal(t, tc.status, output.Status)
+			require.Len(t, output.Advice, len(tc.advice))
+			if len(tc.advice) != 0 {
+				require.Equal(t, "neoprof", output.Advice[0].ToolName)
+				expected := message.New(tc.advice[0].MessageCode).WithMetadata(tc.advice[0].Metadata)
+				if tc.advice[0].Cause != "" {
+					expected = expected.WithCause(errors.New(tc.advice[0].Cause))
+				}
+				require.Equal(t, expected, output.Advice[0].AdviceMessage)
+			}
+			ctx.AssertExpectations(t)
+		})
+	}
+}
+
+func TestMLAnalysisVulkanMLRun(t *testing.T) {
+	for _, workload := range []recipeparser.WorkloadArg{
+		{Type: "androidLaunch", Data: recipeparser.AndroidLaunchWorkloadData{PackageName: "com.example.ml", ActivityName: ".MainActivity"}},
+	} {
+		t.Run(workload.Type, func(t *testing.T) {
+			// Given
+			harness := jstest.LoadRecipe(t, "ml_analysis")
+			ctx := &mocks.MockRunExecutionContext{}
+			ctx.On("GetParameter", "flavor").Return("vulkanml", nil).Once()
+			ctx.On("GetWorkload").Return(workload, nil).Once()
+			ctx.On("RunTools", vulkanMLTools(workload)).Return(nil).Once()
+
+			// When
+			err := harness.RecipeRun(t, ctx)
+
+			// Then
+			require.NoError(t, err)
+			ctx.AssertExpectations(t)
+		})
+	}
+}
+
+func TestMLAnalysisVulkanMLReadyCannotReadWorkload(t *testing.T) {
+	// Given
+	harness := jstest.LoadRecipe(t, "ml_analysis")
+	ctx := &mocks.MockReadyExecutionContext{}
+	ctx.On("GetParameter", "flavor").Return("vulkanml", nil).Once()
+	ctx.On("GetWorkload").Return(recipeparser.WorkloadArg{}, errors.New("workload unavailable")).Once()
+
+	// When
+	_, err := harness.RecipeReady(t, ctx)
+
+	// Then
+	require.ErrorContains(t, err, "workload unavailable")
+	ctx.AssertExpectations(t)
+}
+
+func TestMLAnalysisCannotCompareFlavors(t *testing.T) {
+	// Given
+	harness := jstest.LoadRecipe(t, "ml_analysis")
+	runs := []recipeparser.RunDescription{
+		{Parameters: map[string]any{"flavor": "pytorch"}},
+		{Parameters: map[string]any{"flavor": "vulkanml"}},
+	}
+	ctx := &mocks.MockRenderExecutionContext{}
+	ctx.On("GetRunDescriptions").Return(runs, nil).Once()
+
+	// When
+	_, err := harness.RecipeRender(t, ctx)
+
+	// Then
+	require.ErrorIs(t, err, message.New(message.RecipesMlAnalysisCompareMismatchedFlavors))
+	ctx.AssertExpectations(t)
+}
+
+func TestMLAnalysisAndroidPlatformSupportDependsOnFlavor(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		inputs map[string]any
+		want   deploymentsupport.PlatformSupportResult
+	}{
+		{name: "default PyTorch", inputs: map[string]any{}, want: deploymentsupport.PlatformNotSupported},
+		{name: "explicit PyTorch", inputs: map[string]any{"flavor": "pytorch"}, want: deploymentsupport.PlatformNotSupported},
+		{name: "VulkanML", inputs: map[string]any{"flavor": "vulkanml"}, want: deploymentsupport.PlatformIsSupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			properties := jstest.LoadRecipe(t, "ml_analysis").RecipeProperties()
+			bound, err := parameters.BindRecipeParameters(tc.inputs, properties.Parameters, "ml_analysis")
+			require.NoError(t, err)
+			resolver := func(name, version string) ([]deploymentsupport.DeploymentDeclaration, error) {
+				toolProperties := jstest.LoadToolIntegration(t, name).ToolProperties()
+				require.Equal(t, toolProperties.Version, version)
+				return toolProperties.Deployments, nil
+			}
+			platform := conductor.PlatformConfiguration{OS: conductor.Android, Architecture: conductor.AArch64}
+
+			// When
+			support, err := deploymentsupport.GetDeploymentSupportForPlatform(resolver, deploymentsupport.MatchAll, properties.Deployments, platform)
+			require.NoError(t, err)
+			require.Equal(t, deploymentsupport.PlatformSupportConditional, support.Result)
+			resolved, err := deploymentsupport.ResolveParameterSupport(t.Context(), support, bound)
+
+			// Then
+			require.NoError(t, err)
+			require.Equal(t, tc.want, resolved.Result)
+		})
+	}
+}
+
+func TestMLAnalysisDeploysOnlySelectedFlavor(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		platform  conductor.PlatformConfiguration
+		flavor    string
+		collector string
+		layers    bool
+	}{
+		{name: "Linux x86 PyTorch", platform: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.X86_64}, flavor: "pytorch", collector: "pytorch-collect"},
+		{name: "Linux Arm PyTorch", platform: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64}, flavor: "pytorch", collector: "pytorch-collect"},
+		{name: "Android VulkanML", platform: conductor.PlatformConfiguration{OS: conductor.Android, Architecture: conductor.AArch64}, flavor: "vulkanml", collector: "neoprof", layers: true},
+		{name: "Linux VulkanML", platform: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.AArch64}, flavor: "vulkanml", collector: "neoprof"},
+		{name: "Linux x86 VulkanML", platform: conductor.PlatformConfiguration{OS: conductor.Linux, Architecture: conductor.X86_64}, flavor: "vulkanml", collector: "neoprof"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			properties := jstest.LoadRecipe(t, "ml_analysis").RecipeProperties()
+			inputs := map[string]any{"flavor": tc.flavor}
+			bound, err := parameters.BindRecipeParameters(inputs, properties.Parameters, "ml_analysis")
+			require.NoError(t, err)
+			var collectors []string
+			resolver := func(name, version string) ([]deploymentsupport.DeploymentDeclaration, error) {
+				collectors = append(collectors, name)
+				toolProperties := jstest.LoadToolIntegration(t, name).ToolProperties()
+				require.Equal(t, toolProperties.Version, version)
+				return toolProperties.Deployments, nil
+			}
+
+			// When
+			bundles, err := deploymentsupport.ResolveToolBundles(t.Context(), tc.platform, &bound, properties.Deployments, resolver)
+
+			// Then
+			require.NoError(t, err)
+			require.Equal(t, []string{tc.collector}, collectors)
+			names := map[string]bool{}
+			for _, bundle := range bundles {
+				names[bundle.Name] = true
+			}
+			require.Equal(t, tc.layers, names["gpulayers"])
+			require.True(t, names[tc.collector] || names["sl-record"])
+		})
+	}
+}
+
+func vulkanMLTools(workload recipeparser.WorkloadArg) recipeparser.RunToolConfigurationsArg {
+	return recipeparser.RunToolConfigurationsArg{ToolConfigs: []recipeparser.ToolConfiguration{{
+		Name: "neoprof", Params: map[string]any{"reformat_on_host": true, "download_images": false, "collect_call_chains": false, "rich_data_capture": true, "collect_gpu_timeline": true, "requested_gpu_metrics": `["*"]`}, Workload: workload, Env: map[string]string{},
+	}}}
+}
+
+func TestMLAnalysisVulkanMLRejectsUnsupportedWorkloads(t *testing.T) {
+	for _, workloadType := range []string{"launch", "attach", "systemWide"} {
+		t.Run(workloadType, func(t *testing.T) {
+			// Given
+			harness := jstest.LoadRecipe(t, "ml_analysis")
+			workload := recipeparser.WorkloadArg{Type: workloadType}
+			readyCtx := &mocks.MockReadyExecutionContext{}
+			readyCtx.On("GetParameter", "flavor").Return("vulkanml", nil).Once()
+			readyCtx.On("GetWorkload").Return(workload, nil).Once()
+			runCtx := &mocks.MockRunExecutionContext{}
+			runCtx.On("GetParameter", "flavor").Return("vulkanml", nil).Once()
+			runCtx.On("GetWorkload").Return(workload, nil).Once()
+			expected := message.New(message.RecipesMlAnalysisVulkanmlRequiresAndroidLaunch)
+			// When
+			output, err := harness.RecipeReady(t, readyCtx)
+			runErr := harness.RecipeRun(t, runCtx)
+			// Then
+			require.NoError(t, err)
+			require.Equal(t, recipe.ReadyStatusError, output.Status)
+			require.Len(t, output.Advice, 1)
+			require.Equal(t, recipe.AdviceSeverityError, output.Advice[0].AdviceSeverity)
+			require.Equal(t, expected, output.Advice[0].AdviceMessage)
+			require.ErrorIs(t, runErr, expected)
+			readyCtx.AssertExpectations(t)
+			runCtx.AssertExpectations(t)
+		})
+	}
 }

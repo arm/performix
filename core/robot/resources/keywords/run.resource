@@ -191,12 +191,19 @@ The Run Details Contains
   Dictionary Should Contain Item  ${run}  ${field}  ${expected_value}
 
 Extract The Run ID
-  [Documentation]  Extract the run ID from last command's stdout, following a recipe run invocation.
-  ${run_info} =  Parse Last JSON Stdout Line To Dictionary
-  ${data} =  Get From Dictionary  ${run_info}  data
-  ${run_id} =  Get From Dictionary  ${data}  run_id
-  ${run_id_value} =  Get From Dictionary  ${run_id}  value
-  RETURN  ${run_id_value}
+  [Documentation]  Extract the run ID from recipe output, including when the final response is an error.
+  ${lines} =  Split To Lines  ${G_LAST_RESULT.stdout}
+  FOR  ${line}  IN  @{lines}
+    IF  not $line.strip()  CONTINUE
+    ${run_info} =  Parse JSON To Dictionary  ${line}
+    ${data} =  Get From Dictionary  ${run_info}  data
+    ${run_id} =  Get From Dictionary  ${data}  run_id  default=${None}
+    IF  $run_id is None  CONTINUE
+    ${run_id_value} =  Get From Dictionary  ${run_id}  value
+    Should Not Be Empty  ${run_id_value}
+    RETURN  ${run_id_value}
+  END
+  Fail  Recipe output does not contain a run ID.
 
 Run Code Hotspots Recipe And Extract Run ID
   [Documentation]  Run code_hotspots recipe against the test target and return a run ID
@@ -261,8 +268,9 @@ Run Recipe And Extract Run ID
   The Run Exists  ${id}
   RETURN  ${id}
 
-Deploy Tools For Recipe
-  [Documentation]  Deploy the required tools for a recipe by running it with --deploy-tools and removing the generated run.
+Deploy Tools For Recipe Successfully
+  [Documentation]  Deploy the required tools for a recipe by running it with --deploy-tools removing the generated run.
+  ...  Requires recipe run to succeed.
   ...  TODO: Right now the only way to deploy recipe tools is to run it. Refactor after/with APAP-2506.
   [Arguments]  ${recipe_name}  ${args}=${EMPTY}
   ${timeout} =  Get Default Recipe Timeout  1
@@ -271,5 +279,15 @@ Deploy Tools For Recipe
   ...  ${args} --workload ${LAUNCH_WORKLOAD} --timeout ${timeout} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   The Last Command Succeeded
   ${run_id} =  Extract The Run ID
-  Delete Run  ${run_id}
-  The Last Command Succeeded
+  The Run Is Deleted Successfully  ${run_id}
+
+Deploy Tools For Recipe
+  [Documentation]  Deploy the required tools for a recipe by running it with --deploy-tools and removing the generated run.
+  ...  TODO: Right now the only way to deploy recipe tools is to run it. Refactor after/with APAP-2506.
+  [Arguments]  ${recipe_name}  ${args}=${EMPTY}
+  ${timeout} =  Get Default Recipe Timeout  1
+  Run Recipe
+  ...  ${recipe_name}
+  ...  ${args} --workload ${LAUNCH_WORKLOAD} --timeout ${timeout} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  ${run_id} =  Extract The Run ID
+  The Run Is Deleted Successfully  ${run_id}

@@ -22,6 +22,7 @@ const (
 // It relies on TotalSamplesProcessor to get the total samples.
 // This works on V2 renderers only
 type PercentageProcessor struct {
+	Optional              bool
 	Columns               []string
 	TotalSamplesProcessor *TotalSamplesProcessor
 	UseLegacyMeasurements bool // if true, use legacy measurements table (for backward compatibility)
@@ -135,6 +136,22 @@ func (p *PercentageProcessor) convertSamplesToPercentage(metric string, totalSam
 }
 
 func (p *PercentageProcessor) Compute(ctx render.DrilldownProcessorContext) error {
+	if p.Optional {
+		requiredMetrics := append([]string{p.TotalSamplesProcessor.FromMetric}, p.Columns...)
+		query := strings.NewReplacer(
+			"__MEASUREMENTS__", ctx.MeasurementsTable.TableName(),
+		).Replace("SELECT EXISTS (SELECT 1 FROM __MEASUREMENTS__ WHERE name = ?)")
+		for _, metric := range requiredMetrics {
+			var exists bool
+			if err := ctx.Session.Database().Conn.QueryRowContext(context.Background(), query, metric).Scan(&exists); err != nil {
+				return fmt.Errorf("checking percentage metric %q: %w", metric, err)
+			}
+			if !exists {
+				return nil
+			}
+		}
+	}
+
 	// First get the total samples
 	err := p.TotalSamplesProcessor.Compute(ctx)
 	if err != nil {

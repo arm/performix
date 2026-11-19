@@ -55,6 +55,7 @@ type discoveryExecutionContext struct {
 	*recipe.RunExecutionContext
 	result       *tool.ProbeResult
 	probes       int
+	validations  int
 	fail         bool
 	cacheContext recipe.DiscoveryCacheContext
 	received     []tool.IntegrationContext
@@ -74,13 +75,61 @@ func (c *discoveryExecutionContext) ProbeToolsFromIntegrations(_ context.Context
 			results[i] = *c.result
 			continue
 		}
-		results[i] = tool.ProbeResult{Available: true, Capabilities: map[string]any{"legacy": map[string]any{"value": c.probes, "params": inputs[i].Params}}, Advice: []tool.ProbeAdvice{}}
+		results[i] = tool.ProbeResult{Available: true, Capabilities: map[string]any{
+			"legacy": map[string]any{"value": c.probes, "params": inputs[i].Params},
+			"counter.cpu_cycles": capabilities.CPUCounterValue{
+				ComponentType: capabilities.ComponentType{Name: capabilities.CPUCounter, Version: capabilities.CPUCounterVersion},
+				State:         capabilities.CPUCounterStateAvailable,
+				Payload:       capabilities.CPUCounterPayload{Title: "CPU Cycles", Units: "cycles", Bindings: []capabilities.CPUCounterBinding{}},
+			},
+		}, Advice: []tool.ProbeAdvice{}}
 	}
 	return results, nil
 }
 func (c *discoveryExecutionContext) RunToolIntegrations(_ context.Context, _ *cmdsync.CommandStateChannel, inputs []tool.IntegrationContext) (func(), []error) {
 	c.received = inputs
 	return func() {}, nil
+}
+
+func (c *discoveryExecutionContext) ValidateToolsFromIntegrations(_ context.Context, _ *cmdsync.CommandStateChannel, inputs []tool.IntegrationContext) ([]tool.ProbeResult, []error) {
+	c.validations += len(inputs)
+	results := make([]tool.ProbeResult, len(inputs))
+	errs := make([]error, len(inputs))
+	for i, ic := range inputs {
+		results[i] = *ic.Discovery
+		errs[i] = tool.AddCapabilitySelectionAdvice(&results[i], ic.CapabilityRequest)
+	}
+	return results, errs
+}
+
+func TestProbeToolsRevalidatesCachedDiscovery(t *testing.T) {
+	// Given a tool configuration with a capability selection and stage-local discovery.
+	f := newDiscoveryFixture(t, nil)
+	selection, err := f.api.vm.RunString(`({required:["counter.cpu_cycles"],optional:[]})`)
+	require.NoError(t, err)
+	require.NoError(t, f.config.Set("capabilityRequest", selection))
+
+	// When the recipe checks the same setup twice.
+	require.NoError(t, f.call(t, f.api.probeTools))
+	require.NoError(t, f.call(t, f.api.probeTools))
+
+	// Then each call validates the setup and reuses the original discovery.
+	require.Equal(t, 1, f.exec.probes)
+	require.Equal(t, 2, f.exec.validations)
+}
+
+func TestCollectionReusesMatchingDiscovery(t *testing.T) {
+	// Given a tool configuration without a capability request.
+	f := newDiscoveryFixture(t, nil)
+	require.NoError(t, f.call(t, f.api.probeTools))
+
+	// When the recipe collects using the same configuration.
+	require.NoError(t, f.call(t, f.api.runTools))
+
+	// Then collection receives the existing discovery without another probe.
+	require.Equal(t, 1, f.exec.probes)
+	require.Len(t, f.exec.received, 1)
+	require.NotNil(t, f.exec.received[0].Discovery)
 }
 
 type discoveryFixture struct {
@@ -139,7 +188,7 @@ func TestStageDiscoveryLifecycle(t *testing.T) {
 		require.NoError(t, f.call(t, f.api.probeTools))
 		require.Equal(t, 2, f.exec.probes, "the original configuration retains its cache entry")
 	})
-	t.Run("selection_reuses_discovery_then_collection_invalidates_it", func(t *testing.T) {
+	t.Run("changed_selection_does_not_reuse_discovery", func(t *testing.T) {
 		f := newDiscoveryFixture(t, nil)
 		require.NoError(t, f.call(t, f.api.probeTools))
 		selection, err := f.api.vm.RunString(`({required:["counter.cpu_cycles"],optional:[]})`)
@@ -147,10 +196,8 @@ func TestStageDiscoveryLifecycle(t *testing.T) {
 		require.NoError(t, f.config.Set("capabilityRequest", selection))
 		require.NoError(t, f.call(t, f.api.runTools))
 		require.Len(t, f.exec.received, 1)
-		require.NotNil(t, f.exec.received[0].Discovery, "selection must not change the discovery key")
+		require.Nil(t, f.exec.received[0].Discovery, "a new selection needs its own readiness checks")
 		require.Equal(t, 1, f.exec.probes)
-		require.NoError(t, f.call(t, f.api.probeTools))
-		require.Equal(t, 2, f.exec.probes, "collection consumes cached discovery")
 	})
 	t.Run("explicit_empty_readiness_does_not_reuse_full_discovery", func(t *testing.T) {
 		f := newDiscoveryFixture(t, nil)
@@ -176,11 +223,11 @@ func TestStageDiscoveryLifecycle(t *testing.T) {
 
 		require.NoError(t, f.config.Delete("capabilityRequest"))
 		require.NoError(t, f.call(t, f.api.probeTools))
-		require.Equal(t, 3, f.exec.probes, "omitted and selected requests share full discovery")
+		require.Equal(t, 4, f.exec.probes, "omitted requests have no selection-specific readiness checks")
 
 		require.NoError(t, f.config.Set("capabilityRequest", empty))
 		require.NoError(t, f.call(t, f.api.probeTools))
-		require.Equal(t, 3, f.exec.probes, "empty readiness retains its separate cache entry")
+		require.Equal(t, 4, f.exec.probes, "empty readiness retains its separate cache entry")
 	})
 	t.Run("context_changes_discard_previous_catalogues", func(t *testing.T) {
 		f := newDiscoveryFixture(t, nil)
@@ -279,7 +326,7 @@ func TestCachedDiscoveryRecomputesSelectionAdvice(t *testing.T) {
 				}
 				require.Equal(t, level, advice.Get("1").ToObject(f.api.vm).Get("level").String())
 			}
-			require.Equal(t, 1, f.exec.probes, "selection changes must reuse the raw catalogue")
+			require.Equal(t, 2, f.exec.probes, "each policy must reuse its own discovery")
 		})
 	}
 }

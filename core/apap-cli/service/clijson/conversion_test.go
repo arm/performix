@@ -211,6 +211,10 @@ func TestCLIRunSummaryFromRunDescription(t *testing.T) {
 }
 
 func TestCLIRunDescriptionFromProtoIncludesAndroidLaunch(t *testing.T) {
+	// Given an Android launch run with activity arguments.
+	activityArguments := `--es greeting "hello world"`
+
+	// When converting the run description from protobuf.
 	desc, err := CLIRunDescriptionFromProto("android-run", &apapproto.RunDescription{
 		Metadata: &apapproto.RunMetadata{
 			WorkloadType: "Android Launch",
@@ -220,14 +224,23 @@ func TestCLIRunDescriptionFromProtoIncludesAndroidLaunch(t *testing.T) {
 				},
 			},
 			AndroidLaunchWorkload: &apapproto.AndroidLaunchWorkload{
-				PackageName:  "com.example.app",
-				ActivityName: ".MainActivity",
+				PackageName:       "com.example.app",
+				ActivityName:      ".MainActivity",
+				ActivityArguments: activityArguments,
 			},
 		},
 	})
+
+	// Then preserve the package, activity, and arguments for CLI output.
 	require.NoError(t, err)
 	assert.Equal(t, "com.example.app", desc.AndroidPackageName)
 	assert.Equal(t, ".MainActivity", desc.AndroidActivityName)
+	assert.Equal(t, activityArguments, desc.AndroidActivityArguments)
+	encoded, err := json.Marshal(desc)
+	require.NoError(t, err)
+	var jsonDescription map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &jsonDescription))
+	assert.Equal(t, activityArguments, jsonDescription["android_activity_arguments"])
 }
 
 func TestCLIRunSummaryListingFromRunListing(t *testing.T) {

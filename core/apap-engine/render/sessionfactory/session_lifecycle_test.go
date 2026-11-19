@@ -982,6 +982,8 @@ func currentSettingStringList(t *testing.T, db *render.Database, name string) []
 func requireSettingOmitsPath(t *testing.T, db *render.Database, name string, unexpectedPath string) {
 	t.Helper()
 
+	unexpectedPath, err := filepath.EvalSymlinks(unexpectedPath)
+	require.NoError(t, err)
 	rawPaths := currentSettingStringList(t, db, name)
 	for _, rawPath := range rawPaths {
 		require.NotEqual(t, filepath.Clean(unexpectedPath), filepath.Clean(rawPath))
@@ -998,6 +1000,8 @@ func requireSettingContainsPaths(t *testing.T, db *render.Database, name string,
 	}
 
 	for _, expectedPath := range expectedPaths {
+		expectedPath, err := filepath.EvalSymlinks(expectedPath)
+		require.NoError(t, err)
 		_, ok := actual[filepath.Clean(expectedPath)]
 		require.True(t, ok, "expected current_setting(%q) to contain %q, got %v", name, expectedPath, rawPaths)
 	}

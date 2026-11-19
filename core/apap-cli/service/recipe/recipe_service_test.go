@@ -407,16 +407,20 @@ func TestParseInputParameters(t *testing.T) {
 }
 
 func TestWorkloadToProtoUsesStructuredAndroidLaunch(t *testing.T) {
-	workload := workloadToProto(Workload{
-		AndroidLaunch:       true,
-		AndroidPackageName:  "com.example.app",
-		AndroidActivityName: ".MainActivity",
-	}, true)
+	input := Workload{
+		AndroidLaunch:            true,
+		AndroidPackageName:       "com.example.app",
+		AndroidActivityName:      ".MainActivity",
+		AndroidActivityArguments: `--es greeting "hello world"`,
+	}
+
+	workload := workloadToProto(input, true)
 
 	android := workload.GetAndroidLaunchWorkload()
 	require.NotNil(t, android)
 	assert.Equal(t, "com.example.app", android.PackageName)
 	assert.Equal(t, ".MainActivity", android.ActivityName)
+	assert.Equal(t, input.AndroidActivityArguments, android.ActivityArguments)
 	assert.Nil(t, workload.GetLaunchWorkload())
 }
 

@@ -87,11 +87,15 @@ Select groups with `--ai-act`; combine them with commas, for example
 `--ai-act act1,act2`. Use `--ai-attempts N` or `AI_INSIGHTS_ATTEMPTS=N` for
 repetitions. Each attempt is a separate pytest item.
 
-| Selection | Coverage |
-| --- | --- |
-| `act1` (default) | A small smoke suite across supported recipes. |
-| `act2` | A larger stable set covering CPU, memory, cache sharing, system behaviour and prompt-injection resistance. |
-| `act3` | Experimental, external, expensive or mode-limited cases for manual investigation. |
+Use `--ai-min-pass-rate` or `AI_INSIGHTS_MIN_PASS_RATE` to set the fraction of attempts
+that must pass for a case to be accepted. Use `0` (the default) to select
+`defaults.min_pass_rate` from the manifest.
+
+| Selection        | Coverage                                                                                                   |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| `act1` (default) | A small smoke suite across supported recipes.                                                              |
+| `act2`           | A larger stable set covering CPU, memory, cache sharing, system behaviour and prompt-injection resistance. |
+| `act3`           | Experimental, external, expensive or mode-limited cases for manual investigation.                          |
 
 See [pre-recorded run inputs](#pre-recorded-run-inputs) for caching and overrides.
 
@@ -100,8 +104,8 @@ See [pre-recorded run inputs](#pre-recorded-run-inputs) for caching and override
 Use `--ai-modes` to select modes. If omitted, local execution selects
 `performix_mcp`:
 
-| Mode | Purpose |
-| --- | --- |
+| Mode            | Purpose                                         |
+| --------------- | ----------------------------------------------- |
 | `performix_mcp` | Codex uses the production Performix MCP server. |
 
 All supported recipes, including Code Hotspots, use SQL through `run_query`.
@@ -195,14 +199,14 @@ An expected model failure is reported as `xfail`, and an unexpected pass as
 
 Local reports are under `core/scripts/ai-insights-evaluation/results/reporting/`:
 
-| Output | Contents |
-| --- | --- |
-| `ai-insights-evaluation.xml` | JUnit test report and recorded metrics. |
-| `payload/metadata.json` | Reporting metadata. |
-| `payload/reports/ai_insights_performance.json` | Benchmark report data. |
-| `ai-insights-performance-dashboard.json` | Dashboard data. |
-| `graphs/index.html` | Quality, runtime, token and MCP graphs. |
-| `graphs/observations.csv` | Plotted observations. |
+| Output                                         | Contents                                |
+| ---------------------------------------------- | --------------------------------------- |
+| `ai-insights-evaluation.xml`                   | JUnit test report and recorded metrics. |
+| `payload/metadata.json`                        | Reporting metadata.                     |
+| `payload/reports/ai_insights_performance.json` | Benchmark report data.                  |
+| `ai-insights-performance-dashboard.json`       | Dashboard data.                         |
+| `graphs/index.html`                            | Quality, runtime, token and MCP graphs. |
+| `graphs/observations.csv`                      | Plotted observations.                   |
 
 Each evaluation run replaces these reports; collection and help leave them intact.
 Reporting runs even after test failures,
@@ -229,7 +233,7 @@ Regenerate graphs from an existing complete report:
 
 ```bash
 cd core/scripts/ai-insights-evaluation
-.venv/bin/python plot_ai_insights_junit.py \
+python plot_ai_insights_junit.py \
   results/reporting/ai-insights-evaluation.xml \
   --output-dir results/reporting/graphs
 ```
@@ -259,6 +263,13 @@ transcript; the harness does not capture a separate source patch.
 Pathways does not retain `run_meta.json`, `invoke_metadata.json` or `aggregate.json`;
 summary metadata is recorded in JUnit.
 
+### Pathways judge input
+
+The judge receives structured records with original transcript line numbers and
+run IDs. Matching requests use line references. Exact duplicate tool results and
+session metadata are removed. All query rows and cell values remain unchanged,
+including full function names. Raw saved transcripts are unchanged.
+
 ### CI artifacts
 
 Both workflows publish staged evidence to GitHub Actions and Artifactory at
@@ -286,7 +297,7 @@ Pass the rubric followed by one or more response files:
 
 ```bash
 cd core/scripts/ai-insights-evaluation
-.venv/bin/python judge_ai_insights_response.py \
+python judge_ai_insights_response.py \
   rubrics/test_case_28.md \
   results/test_case_28/performix_mcp/attempts/001/llm_response.md
 ```
@@ -298,7 +309,7 @@ Pass one response and its session transcript:
 ```bash
 cd core/scripts/ai-insights-evaluation
 attempt="results/invocations/<invocation-id>/pathways_01/performix_mcp/attempts/001"
-.venv/bin/python judge_ai_insights_response.py \
+python judge_ai_insights_response.py \
   rubrics/pathways_01.md "$attempt/llm_response.md" \
   --pathways-session "$attempt/codex_session.jsonl" \
   --supplied-run-id "<pre-recorded-run-id>"
@@ -313,16 +324,16 @@ Replace the placeholders with the saved attempt and the original pre-recorded ru
 
 Pass options after `task core:test:eval:ai-insights --`:
 
-| Option | Purpose |
-| --- | --- |
-| `--ai-act act1,act2` | Select groups; `act4` selects Pathways. |
-| `--ai-recipe code_hotspots` | Filter by recipe; excludes live-only Pathways cases without a fixed recipe. |
-| `-k test_case_03` | Filter by case name. |
-| `--ai-model-config MODEL EFFORT` | Repeat for each model/reasoning pair. |
-| `--ai-judge-model MODEL` | Choose the separate judge model. |
-| `--ai-judge-reasoning-effort medium` | Set judge reasoning (default: `medium`). |
-| `--collect-only` | List selected attempts without running them. |
-| `--log-cli-level=INFO` | Show live progress, including during passing tests. |
+| Option                               | Purpose                                                                     |
+| ------------------------------------ | --------------------------------------------------------------------------- |
+| `--ai-act act1,act2`                 | Select groups; `act4` selects Pathways.                                     |
+| `--ai-recipe code_hotspots`          | Filter by recipe; excludes live-only Pathways cases without a fixed recipe. |
+| `-k test_case_03`                    | Filter by case name.                                                        |
+| `--ai-model-config MODEL EFFORT`     | Repeat for each model/reasoning pair.                                       |
+| `--ai-judge-model MODEL`             | Choose the separate judge model.                                            |
+| `--ai-judge-reasoning-effort medium` | Set judge reasoning (default: `medium`).                                    |
+| `--collect-only`                     | List selected attempts without running them.                                |
+| `--log-cli-level=INFO`               | Show live progress, including during passing tests.                         |
 
 `--log-level=INFO` changes captured logging only. For live progress, use
 `--log-cli-level=INFO` as above, or `-o log_cli=true --log-level=INFO`.
@@ -525,14 +536,14 @@ a record of the changes uploaded with the run but not shown to the evaluation mo
 
 ### Python dependencies
 
-The harness uses its own [requirements.txt](requirements.txt), separate from Robot
-Framework tooling. To prepare it without running the suite:
+The harness uses the shared repository [requirements.txt](../../../requirements.txt).
+To prepare its virtual environment without running the suite:
 
 ```bash
 task core:deps:ai-insights-eval
 ```
 
-Dependencies are installed into `core/scripts/ai-insights-evaluation/.venv`.
+Dependencies are installed into the shared repository-root `.venv`.
 Remove that directory first to rebuild with a different Python interpreter or
 refreshed dependencies.
 

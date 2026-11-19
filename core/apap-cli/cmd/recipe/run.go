@@ -45,6 +45,7 @@ func NewRunCommand(cc client.ClientConnector,
 	var workload string
 	var androidPackage string
 	var androidActivity string
+	var androidActivityArguments string
 	var timeout uint32
 	var systemWide = false
 	var sourceCodePaths string
@@ -54,16 +55,13 @@ func NewRunCommand(cc client.ClientConnector,
 	var detachBackgroundTransfers bool
 
 	runCmd := &cobra.Command{
-		Use:   runCommandUse(),
+		Use:   "run [recipe] [--workload OR --pid OR --system-wide OR --android-package --android-activity]",
 		Short: "Run a recipe on a target.",
 		Args:  cobra.ExactArgs(1),
 		Annotations: map[string]string{
 			grouping.GroupAnnotation: grouping.GroupRecipeSub,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := validateAndroidLaunchFeature(cmd); err != nil {
-				return err
-			}
 
 			deploymentType, err := recipe.DeploymentTypeFromFlags(deployTools, forceDeployTools)
 			if err != nil {
@@ -80,6 +78,7 @@ func NewRunCommand(cc client.ClientConnector,
 			}
 			workloadCtx.AndroidPackageName = androidPackage
 			workloadCtx.AndroidActivityName = androidActivity
+			workloadCtx.AndroidActivityArguments = androidActivityArguments
 
 			// Must specify one workload mode.
 			if !cmd.Flags().Changed("pid") && !cmd.Flags().Changed("workload") && !cmd.Flags().Changed("system-wide") && !workloadCtx.AndroidLaunch {
@@ -145,13 +144,13 @@ func NewRunCommand(cc client.ClientConnector,
 	runCmd.Flags().StringVar(&workload, "workload", "", "Specifies the workload to run on the target")
 	runCmd.Flags().StringVar(&androidPackage, "android-package", "", "Specifies the Android package to launch on the target")
 	runCmd.Flags().StringVar(&androidActivity, "android-activity", "", "Specifies the Android activity to launch on the target")
+	runCmd.Flags().StringVar(&androidActivityArguments, "android-activity-arguments", "", "Specifies Android activity manager arguments ")
 	runCmd.Flags().Uint32Var(&timeout, "timeout", 0, "Specifies the number of seconds to profile the workload for")
 	runCmd.Flags().BoolVar(&systemWide, "system-wide", false, "Specifies that system-wide profiling should be used")
 	runCmd.Flags().StringVar(&sourceCodePaths, "source", "", "Specifies the host-based source code path(s) that will be used for source code attribution")
 	runCmd.Flags().StringVar(&target, "target", "", "Specify the target for the specified action.")
 	runCmd.Flags().BoolVar(&noCleanup, "no-cleanup", false, "If set, the working area on the target will not be removed after the run completes")
 	runCmd.Flags().BoolVar(&detachBackgroundTransfers, "background-transfer", false, "Return after required transfers complete while background transfers continue in the engine")
-	setAndroidLaunchFlagVisibility(runCmd)
 
 	return runCmd
 }

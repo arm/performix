@@ -5,6 +5,7 @@
 // Component types identify the persisted CDF schema name and version for each
 // capability; CPU_CYCLES identifies the logical capability itself.
 const CPU_CYCLES = 'counter.cpu_cycles';
+const NATIVE_CPU_COUNTER_ID_PREFIX = 'nativecounter.';
 const CPU_COUNTER_CAPABILITY_COMPONENT_TYPE = Object.freeze({
   name: 'tool_capabilities/cpu_counter',
   version: '1.0',
@@ -20,6 +21,7 @@ const NATIVE_CPU_COUNTER_CAPABILITY_COMPONENT_TYPE = Object.freeze({
 
 module.exports = {
   CPU_CYCLES,
+  NATIVE_CPU_COUNTER_ID_PREFIX,
   CPU_COUNTER_CAPABILITY_COMPONENT_TYPE,
   COUNTER_CAPABILITY_COMPONENT_TYPE,
   NATIVE_CPU_COUNTER_CAPABILITY_COMPONENT_TYPE,

@@ -135,7 +135,6 @@ func TestInitConfigSetsDefaults(t *testing.T) {
 	initConfig()
 
 	assert.Equal(t, false, viper.GetBool("enable-experimental-recipes"))
-	assert.False(t, viper.GetBool(serverconfig.EnableAndroidTargetsConfigKey))
 	assert.Equal(t, true, viper.GetBool("enable-render-db-sandbox"))
 	assert.Equal(t, false, viper.GetBool("enable-neoprof-timeline"))
 	assert.False(t, viper.GetBool("enable-neoprof-system-utilization"))

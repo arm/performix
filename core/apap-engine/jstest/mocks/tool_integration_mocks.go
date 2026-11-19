@@ -27,6 +27,7 @@ type ToolEngine interface {
 	AddToolCapability(capabilityID string, metadata tool_goja.OutputMetadata, capabilityData tool_goja.CapabilityData) goja.Value // returns promise to void
 	IsFullCaptureSupportEnabled() (bool, error)
 	IsNeoprofTimelineEnabled() (bool, error)
+	IsCPUSchedulingEnabled() (bool, error)
 	CreateRunFile(relativePath string, metadata tool_goja.OutputMetadata) goja.Value // returns promise to tool.FileHandle
 	ReadHostFile(path string) goja.Value                                             // returns promise to string
 	Log(level string, message string) error
@@ -92,6 +93,11 @@ func (m *MockToolEngine) AddToolCapability(capabilityID string, metadata tool_go
 }
 
 func (m *MockToolEngine) IsFullCaptureSupportEnabled() (bool, error) {
+	args := m.Called()
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockToolEngine) IsCPUSchedulingEnabled() (bool, error) {
 	args := m.Called()
 	return args.Bool(0), args.Error(1)
 }

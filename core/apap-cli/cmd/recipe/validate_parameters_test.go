@@ -250,8 +250,8 @@ func TestValidateCommand(t *testing.T) {
 	})
 
 	t.Run("Android launch options are passed through", func(t *testing.T) {
-		withAndroidTargetsEnabled(t, true)
 
+		activityArguments := `--es greeting "hello world"`
 		client := apapprotomocks.NewApapClient(t)
 		cc := &mocks.MockAutostartClientConnector{}
 		cc.SetClient(client, nil)
@@ -261,8 +261,9 @@ func TestValidateCommand(t *testing.T) {
 			Workload: &apapproto.RecipeWorkload{
 				SpecificWorkload: &apapproto.RecipeWorkload_AndroidLaunchWorkload{
 					AndroidLaunchWorkload: &apapproto.AndroidLaunchWorkload{
-						PackageName:  "com.example.app",
-						ActivityName: ".MainActivity",
+						PackageName:       "com.example.app",
+						ActivityName:      "com.example.app.MainActivity",
+						ActivityArguments: activityArguments,
 					},
 				},
 			},
@@ -274,7 +275,8 @@ func TestValidateCommand(t *testing.T) {
 		cmd.SetArgs([]string{
 			"testRecipe",
 			"--android-package", "com.example.app",
-			"--android-activity", ".MainActivity",
+			"--android-activity", "com.example.app.MainActivity",
+			"--android-activity-arguments", activityArguments,
 		})
 
 		err := cmd.Execute()
@@ -283,8 +285,21 @@ func TestValidateCommand(t *testing.T) {
 		client.AssertExpectations(t)
 	})
 
+	t.Run("activity arguments require Android launch flags", func(t *testing.T) {
+		cmd := NewValidateCommand(nil, nil, nil)
+		cmd.SetArgs([]string{"testRecipe", "--android-activity-arguments", `--es greeting "hello world"`})
+
+		err := cmd.Execute()
+
+		expectedErr := message.New(message.CliCmdValidationFlagRequiresFlag).WithMetadata(map[string]string{
+			"flag":         "--android-activity-arguments",
+			"requiredFlag": "--android-package --android-activity",
+		})
+		assert.Equal(t, expectedErr, err)
+		assert.NoError(t, message.ValidateMetadataPlaceholders(err))
+	})
+
 	t.Run("Android package and activity must be provided together", func(t *testing.T) {
-		withAndroidTargetsEnabled(t, true)
 
 		tests := []struct {
 			name         string
@@ -324,7 +339,6 @@ func TestValidateCommand(t *testing.T) {
 	})
 
 	t.Run("Android launch and workload options are mutually exclusive", func(t *testing.T) {
-		withAndroidTargetsEnabled(t, true)
 
 		cmd := NewValidateCommand(nil, nil, targetloginmocks.NewMockLoginService(t))
 		cmd.SetArgs([]string{

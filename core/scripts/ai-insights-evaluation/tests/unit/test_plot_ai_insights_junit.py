@@ -9,6 +9,8 @@ from dataclasses import replace
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+import pytest
+
 from matplotlib import pyplot as plt
 from matplotlib.ticker import LogFormatterSciNotation, LogLocator
 
@@ -382,3 +384,47 @@ def test_html_omits_comparison_without_performix_baseline(tmp_path: Path) -> Non
     assert output_dir / "cost-quality.svg" not in outputs
     html = (output_dir / "index.html").read_text(encoding="utf-8")
     assert 'src="cost-quality.svg"' not in html
+
+
+@pytest.mark.parametrize(("minimum", "count", "expected_failure", "expected"), [
+    ("0.66", 3, False, "Passed: 2/3 attempts; minimum 0.66"),
+    ("1.0", 3, False, "Failed: 2/3 attempts; minimum 1"),
+    ("0.66", 1, False, "Failed: 1/3 attempts; minimum 0.66"),
+    ("0.66", 3, True, "Passed: 2/3 attempts; minimum 0.66"),
+])
+def test_html_case_results_keep_individual_attempts(
+    tmp_path: Path, minimum: str, count: int, expected_failure: bool, expected: str,
+) -> None:
+    junit = tmp_path / "results.xml"
+    write_junit(junit, attempts=count)
+    tree = ET.parse(junit)
+    for case in tree.findall(".//testcase"):
+        properties = case.find("properties")
+        values = {p.get("name"): p.get("value") for p in properties}
+        number = int(values["ai_attempt"])
+        failed = number == 2 or (expected_failure and number == 3)
+        for failure in case.findall("failure"):
+            case.remove(failure)
+        if expected_failure and number == 2:
+            ET.SubElement(case, "skipped", type="pytest.xfail", message="known model failure")
+        elif failed:
+            ET.SubElement(case, "failure", message="judge rejected answer")
+        for prop in properties:
+            if prop.get("name") == "ai_display_scores":
+                prop.set("value", "xfail" if expected_failure and number == 2 else "fail" if failed else "pass")
+        for name, value in {"ai_scores": "fail" if failed else "pass",
+                            "ai_attempts_total": "3", "ai_min_pass_rate": minimum}.items():
+            ET.SubElement(properties, "property", name=name, value=value)
+    tree.write(junit)
+    observations = load_observations(junit)
+    report = tmp_path / "index.html"
+    _write_html_report(observations, list(MODE_ORDER), set(), report)
+    content = report.read_text()
+    assert "<h2>Case results</h2>" in content
+    assert expected in content
+    assert "attempt 1 PASS" in content
+    if count == 3:
+        assert ("attempt 3 FAIL" if expected_failure else "attempt 2 FAIL") in content
+        assert tree.findall(".//failure")
+        assert any(not observation.passed for observation in observations)
+    assert len(observations) == 2 * len(MODE_ORDER) * count

@@ -53,6 +53,7 @@ func NewValidateCommand(cc client.ClientConnector, targetService engine_target.T
 	var workload string
 	var androidPackage string
 	var androidActivity string
+	var androidActivityArguments string
 	var target string
 	readyCmd := &cobra.Command{
 		Use:   "validate-parameters [recipe] <workload>",
@@ -63,9 +64,6 @@ func NewValidateCommand(cc client.ClientConnector, targetService engine_target.T
 			grouping.GroupAnnotation: grouping.GroupRecipeSub,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := validateAndroidLaunchFeature(cmd); err != nil {
-				return err
-			}
 
 			androidLaunchChanged, err := recipe_service.ValidateAndroidLaunchFlags(cmd.Flags())
 			if err != nil {
@@ -84,7 +82,7 @@ func NewValidateCommand(cc client.ClientConnector, targetService engine_target.T
 			if cmd.Flags().Changed("working-dir") && !cmd.Flags().Changed("workload") {
 				return message.New(message.CliCmdRecipeCommonNonLaunchWorkingDir)
 			}
-			return validateRecipeParameters(cmd, args[0], params, workload, androidLaunchChanged, androidPackage, androidActivity, workingDir, useShell, cc, targetService, loginService, target)
+			return validateRecipeParameters(cmd, args[0], params, workload, androidLaunchChanged, androidPackage, androidActivity, androidActivityArguments, workingDir, useShell, cc, targetService, loginService, target)
 		},
 	}
 
@@ -94,12 +92,12 @@ func NewValidateCommand(cc client.ClientConnector, targetService engine_target.T
 	readyCmd.Flags().StringVar(&workload, "workload", "", "The workload to validate parameters for")
 	readyCmd.Flags().StringVar(&androidPackage, "android-package", "", "The Android package to validate parameters for")
 	readyCmd.Flags().StringVar(&androidActivity, "android-activity", "", "The Android activity to validate parameters for")
+	readyCmd.Flags().StringVar(&androidActivityArguments, "android-activity-arguments", "", "Specifies optional Android activity manager arguments following the intent arguments spec")
 	readyCmd.Flags().StringVar(&target, "target", "", "Specify the target for the specified action.")
-	setAndroidLaunchFlagVisibility(readyCmd)
 	return readyCmd
 }
 
-func validateRecipeParameters(cmd *cobra.Command, recipeName string, params []string, workload string, androidLaunch bool, androidPackage string, androidActivity string, workingDir string, useShell bool, cc client.ClientConnector, targetService engine_target.TargetManagerService, loginService targetlogin.TargetLoginService, target string) error {
+func validateRecipeParameters(cmd *cobra.Command, recipeName string, params []string, workload string, androidLaunch bool, androidPackage string, androidActivity string, androidActivityArguments string, workingDir string, useShell bool, cc client.ClientConnector, targetService engine_target.TargetManagerService, loginService targetlogin.TargetLoginService, target string) error {
 	paramMap, err := ParamListToMap(params)
 	if err != nil {
 		return err
@@ -121,8 +119,9 @@ func validateRecipeParameters(cmd *cobra.Command, recipeName string, params []st
 		req.Workload = &apapproto.RecipeWorkload{
 			SpecificWorkload: &apapproto.RecipeWorkload_AndroidLaunchWorkload{
 				AndroidLaunchWorkload: &apapproto.AndroidLaunchWorkload{
-					PackageName:  androidPackage,
-					ActivityName: androidActivity,
+					PackageName:       androidPackage,
+					ActivityName:      androidActivity,
+					ActivityArguments: androidActivityArguments,
 				},
 			},
 		}

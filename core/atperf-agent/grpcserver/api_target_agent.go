@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -47,7 +48,8 @@ type AgentServerAPI struct {
 	cpl        *filelock.CrossProcessLock
 
 	// Synchronization
-	stopCh chan struct{}
+	stopCh   chan struct{}
+	stopOnce sync.Once
 
 	// Privilege
 	Elevator
@@ -76,7 +78,8 @@ func (s *AgentServerAPI) Shutdown(ctx context.Context, req *targetagentproto.Shu
 		s.Am.Wait()
 	}
 
-	// Shutdown gRPC server
+	// Give the response a bounded chance to drain before closing the transport.
+	// Forced shutdown uses a short response deadline, not the tether deadline.
 	s.ShutdownCb(force, defaultTetherShutdownDeadline)
 
 	return &emptypb.Empty{}, err
@@ -180,13 +183,27 @@ func (s *AgentServerAPI) StartProcess(ctx context.Context, req *targetagentproto
 		}
 		//nolint:gosec // pid is in valid range for int32
 		resp = &targetagentproto.StartProcessResponse{Pid: pid}
-		err = startErr
+		err = launchFailureStatus(startErr)
 	}
 
 	return resp, err
 }
 
 func (s *AgentServerAPI) ReleaseProcessHandles(ctx context.Context, req *targetagentproto.ReleaseProcessHandlesRequest) (*emptypb.Empty, error) {
+	asPrivileged, token := s.extractMetadata(ctx)
+	err, shouldProxy := s.shouldProxyToRootWorker(asPrivileged, token)
+	if err != nil {
+		return nil, err
+	}
+	if shouldProxy {
+		return proxyUnary(s, unaryProxyOptions[*emptypb.Empty]{
+			RPCName: "ReleaseProcessHandles",
+			Token:   token,
+			Invoke: func(client targetagentproto.TargetAgentClient) (*emptypb.Empty, error) {
+				return client.ReleaseProcessHandles(ctx, req)
+			},
+		})
+	}
 	s.Pm.ReleaseProcessHandles(util.Map(req.Pids, func(pid int32) int { return int(pid) }))
 	return &emptypb.Empty{}, nil
 }
@@ -222,7 +239,12 @@ func (s *AgentServerAPI) ExecCommand(ctx context.Context, req *targetagentproto.
 		result, execErr := s.Pm.ExecCommand(launchCommand)
 
 		resp = CommandResultToProto(result)
-		err = execErr
+		var cleanup *process.CleanupError
+		if resp != nil && errors.As(execErr, &cleanup) {
+			resp.CleanupFailureReason = string(process.FailureReasonForError(cleanup))
+		} else {
+			err = execErr
+		}
 	}
 
 	return resp, err
@@ -469,7 +491,8 @@ func (a *AgentServerAPI) StreamLogs(_ *emptypb.Empty, stream targetagentproto.Ta
 
 // Close closes the stopCh and cleans up any internal resources.
 func (a *AgentServerAPI) Close() {
-	close(a.stopCh)
+	// The shutdown RPC and subsequent tether closure can both request cleanup.
+	a.stopOnce.Do(func() { close(a.stopCh) })
 }
 
 // WaitProcess blocks until a process to finished and returns its exit code.
@@ -500,7 +523,13 @@ func (s *AgentServerAPI) WaitProcess(ctx context.Context, req *targetagentproto.
 
 		//nolint:gosec // rc is in valid range for int32
 		resp = &targetagentproto.WaitProcessResponse{ExitCode: int32(rc)}
-		err = waitErr
+		var cleanup *process.CleanupError
+		if errors.As(waitErr, &cleanup) {
+			// A gRPC error would discard the response, including the completed exit code.
+			resp.CleanupFailureReason = string(process.FailureReasonForError(cleanup))
+		} else {
+			err = waitErr
+		}
 	}
 
 	return resp, err

@@ -1,0 +1,116 @@
+{
+  "processes": [
+    {
+      "unique_process_id": 1363,
+      "process_id": 0,
+      "parent_unique_process_id": null,
+      "name": "idle",
+      "start_timestamp": -1,
+      "end_timestamp": 9223372036854775807
+    },
+    {
+      "unique_process_id": 1364,
+      "process_id": 4451,
+      "parent_unique_process_id": null,
+      "name": "",
+      "start_timestamp": -1,
+      "end_timestamp": 9223372036854775807
+    },
+    {
+      "unique_process_id": 1365,
+      "process_id": 4454,
+      "parent_unique_process_id": 1364,
+      "name": "java",
+      "start_timestamp": -1,
+      "end_timestamp": 60958570422
+    }
+  ],
+  "threads": [
+    {
+      "unique_thread_id": 0,
+      "thread_id": 0,
+      "unique_process_id": 1363,
+      "name": "idle",
+      "start_timestamp": -1,
+      "end_timestamp": 9223372036854775807,
+      "is_kernel": false,
+      "is_idle": true
+    },
+    {
+      "unique_thread_id": 1329,
+      "thread_id": 4454,
+      "unique_process_id": 1365,
+      "name": "java",
+      "start_timestamp": -1,
+      "end_timestamp": 60958570422,
+      "is_kernel": false,
+      "is_idle": false
+    },
+    {
+      "unique_thread_id": 1330,
+      "thread_id": 4451,
+      "unique_process_id": 1364,
+      "name": "",
+      "start_timestamp": -1,
+      "end_timestamp": 9223372036854775807,
+      "is_kernel": false,
+      "is_idle": false
+    },
+    {
+      "unique_thread_id": 1331,
+      "thread_id": 4459,
+      "unique_process_id": 1365,
+      "name": "java",
+      "start_timestamp": 221458382,
+      "end_timestamp": 60956862734,
+      "is_kernel": false,
+      "is_idle": false
+    },
+    {
+      "unique_thread_id": 1332,
+      "thread_id": 4460,
+      "unique_process_id": 1365,
+      "name": "GC Thread#0",
+      "start_timestamp": 286641747,
+      "end_timestamp": 60958493481,
+      "is_kernel": false,
+      "is_idle": false
+    },
+    {
+      "unique_thread_id": 1333,
+      "thread_id": 4461,
+      "unique_process_id": 1365,
+      "name": "G1 Main Marker",
+      "start_timestamp": 288079099,
+      "end_timestamp": 60946488931,
+      "is_kernel": false,
+      "is_idle": false
+    }
+  ],
+  "devices": [
+    {
+      "device_no": 0,
+      "cluster_no": 0,
+      "cluster_name": "Neoverse-V2",
+      "device_name": "Neoverse-V2",
+      "cpuid": 269647,
+      "relative_core_id": 4294967295
+    },
+    {
+      "device_no": 1,
+      "cluster_no": 0,
+      "cluster_name": "Neoverse-V2",
+      "device_name": "Neoverse-V2",
+      "cpuid": 269647,
+      "relative_core_id": 4294967295
+    },
+    {
+      "device_no": 2,
+      "cluster_no": 0,
+      "cluster_name": "Neoverse-V2",
+      "device_name": "Neoverse-V2",
+      "cpuid": 269647,
+      "relative_core_id": 4294967295
+    }
+  ]
+}

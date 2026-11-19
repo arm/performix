@@ -27,6 +27,7 @@ func TestWperfSetupProgress(t *testing.T) {
 		{name: "run reports progress"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// Given
 			h := jstest.LoadToolIntegration(t, "wperf")
 			engine := &mocks.MockToolEngine{}
 			ctx := jstest.EmptyToolContext()
@@ -62,12 +63,16 @@ func TestWperfSetupProgress(t *testing.T) {
 			if tc.probe {
 				engine.On("ExecCommand", []string{helper, "record", "metrics", "--frequency", "normal", "--dry-run"}, tool_goja.ExecOptions{}).
 					Return(h.ToJSValPromise(t, process.CommandResult{}, nil)).Once()
+				// When
 				result, err := h.ToolProbe(t, engine, ctx)
+				// Then
 				require.NoError(t, err)
 				assert.True(t, result.Available)
 				assert.Empty(t, result.Advice)
 			} else {
-				result, err := h.Call[map[string]any](t, "setup", engine, ctx)
+				// When
+				result, err := h.CallAwait[map[string]any](t, "setup", engine, ctx)
+				// Then
 				require.NoError(t, err)
 				assert.Nil(t, result["error"])
 			}

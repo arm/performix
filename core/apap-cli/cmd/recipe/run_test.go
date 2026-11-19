@@ -509,8 +509,8 @@ func TestRunCommandEnvVarsWorkingDir(t *testing.T) {
 
 func TestRunCommandAndroidLaunch(t *testing.T) {
 	t.Run("passes Android launch options to the recipe runner", func(t *testing.T) {
-		withAndroidTargetsEnabled(t, true)
 
+		activityArguments := `--es greeting "hello world"`
 		client := apapprotomocks.NewApapClient(t)
 		cc := &mocks.MockAutostartClientConnector{}
 		cc.SetClient(client, nil)
@@ -531,7 +531,8 @@ func TestRunCommandAndroidLaunch(t *testing.T) {
 				ctx.TargetName == "android-target" &&
 				ctx.Workload.AndroidLaunch &&
 				ctx.Workload.AndroidPackageName == "com.example.app" &&
-				ctx.Workload.AndroidActivityName == ".MainActivity"
+				ctx.Workload.AndroidActivityName == "com.example.app.MainActivity" &&
+				ctx.Workload.AndroidActivityArguments == activityArguments
 		})).Return(recipe.RunResponse{Stage: "complete", Progress: 100}, nil)
 
 		cmd := NewRunCommand(cc, reader, runner, targetService, loginService)
@@ -539,7 +540,8 @@ func TestRunCommandAndroidLaunch(t *testing.T) {
 			testRecipeName,
 			"--target", "android-target",
 			"--android-package", "com.example.app",
-			"--android-activity", ".MainActivity",
+			"--android-activity", "com.example.app.MainActivity",
+			"--android-activity-arguments", activityArguments,
 		})
 
 		err := cmd.Execute()
@@ -551,7 +553,6 @@ func TestRunCommandAndroidLaunch(t *testing.T) {
 	})
 
 	t.Run("requires Android package and activity together", func(t *testing.T) {
-		withAndroidTargetsEnabled(t, true)
 
 		tests := []struct {
 			name         string
@@ -591,7 +592,6 @@ func TestRunCommandAndroidLaunch(t *testing.T) {
 	})
 
 	t.Run("Android launch and workload options are mutually exclusive", func(t *testing.T) {
-		withAndroidTargetsEnabled(t, true)
 
 		cmd := NewRunCommand(nil, nil, nil, nil, nil)
 		cmd.SetArgs([]string{

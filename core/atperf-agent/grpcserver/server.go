@@ -35,6 +35,10 @@ import (
 )
 
 const defaultTetherShutdownDeadline = 30 * time.Second
+
+// Forced shutdown briefly drains the response, then cancels unrelated RPCs.
+// A stalled transport cannot guarantee delivery and bounded shutdown together.
+const forcedShutdownResponseDeadline = 250 * time.Millisecond
 const lockFileName = "lockfile_v2"
 
 type Server interface {
@@ -177,34 +181,24 @@ func NewServer(config GrpcServerConfig) (*GrpcServer, error) {
 		log.WithField("transport", gs.listener.Name()).Info("gRPC server shutting down")
 
 		if force {
-			log.Info("Force stopping gRPC server")
-			go func() {
-				agentServerAPI.Close()
-				gs.Stop(true)
-			}()
-		} else {
-			done := make(chan struct{})
-
-			// Attempt specified shutdown option
-			go func() {
-				agentServerAPI.Close()
-				gs.Stop(false)
-				close(done)
-			}()
-
-			go func() {
-				// If normal shutdown failed, force shutdown after timeout
-				select {
-				case <-done:
-					// Graceful shutdown was successful - don't do anything
-				case <-time.After(deadline):
-					// Graceful shutdown timed out - force shutdown
-					go func() {
-						gs.Stop(true)
-					}()
-				}
-			}()
+			log.Info("Force stopping gRPC server after draining the shutdown response")
+			deadline = forcedShutdownResponseDeadline
 		}
+		done := make(chan struct{})
+		go func() {
+			agentServerAPI.Close()
+			gs.Stop(false)
+			close(done)
+		}()
+		go func() {
+			timer := time.NewTimer(deadline)
+			defer timer.Stop()
+			select {
+			case <-done:
+			case <-timer.C:
+				gs.Stop(true)
+			}
+		}()
 	}
 	targetagentproto.RegisterTargetAgentServer(s, agentServerAPI)
 	healthproto.RegisterHealthServer(s, NewHealthServer())

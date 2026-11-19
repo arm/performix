@@ -27,6 +27,7 @@ from matplotlib.ticker import FuncFormatter  # noqa: E402
 
 from evaluation_summary import MODE_LABELS as SUMMARY_MODE_LABELS  # noqa: E402
 from evaluation_summary import MODE_ORDER as SUMMARY_MODE_ORDER  # noqa: E402
+from evaluation_summary import render_markdown_summary  # noqa: E402
 from junit_attempts import attempts_from_junit  # noqa: E402
 
 
@@ -65,6 +66,7 @@ class Observation:
     mcp_tool_duration_seconds_succeeded: float
     mcp_tool_duration_seconds_failed: float
     model_config: str = ""
+    attempt_properties: dict[str, str] | None = None
 
     @property
     def test_label(self) -> str:
@@ -260,6 +262,7 @@ def load_observations(junit_xml: Path) -> list[Observation]:
         observations.append(
             Observation(
                 test_id=_required(attempt, "ai_test_id"),
+                attempt_properties=attempt,
                 model_config=attempt.get("ai_model_config", ""),
                 mode=mode,
                 attempt=_integer(attempt, "ai_attempt"),
@@ -1326,6 +1329,15 @@ def _write_html_report(
     figure_names: set[str],
     path: Path,
 ) -> None:
+    attempts = [observation.attempt_properties for observation in observations
+                if observation.attempt_properties is not None]
+    case_results = ""
+    if any("ai_min_pass_rate" in attempt for attempt in attempts):
+        case_results = (
+            '<h2>Case results</h2>\n'
+            '<p>Case results use the recorded minimum pass rate. Individual attempt results remain visible.</p>\n'
+            '<div class="table-scroll">' + render_markdown_summary(attempts) + '</div>'
+        )
     mode_rows = []
     for mode in modes:
         mode_observations = [
@@ -1457,6 +1469,7 @@ its median.</p>
 <tbody>{''.join(mode_rows)}</tbody>
 </table>
 </div>
+{case_results}
 <div class="key">
 <h2>Reading the figures</h2>
 <p>A filled circle is a high-confidence pass, an open circle is a non-high-confidence pass, and

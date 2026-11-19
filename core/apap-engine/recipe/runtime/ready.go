@@ -16,6 +16,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe/stages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
+	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
 )
 
@@ -102,7 +103,7 @@ func isPermittedReadyFailure(result run.RunResult) bool {
 	}
 }
 
-// CheckRecipeReady checks whether the given recipe run configuration is ready to run.
+// CheckRecipeReady installs required tools on a prepared target and checks the recipe run configuration.
 func CheckRecipeReady(context context.Context, config *StageConfiguration) (*recipe.ReadyOutput, error) {
 	readinessCollector := &ReadinessCollector{}
 	stageContext := &recipe.StageContext{
@@ -144,15 +145,10 @@ func ConfigureRecipeReadyStages(config *StageConfiguration, scriptedReadyStages 
 	workloadOptionsStage := stages.NewWorkloadOptionsStage(config.Ctx.OrigWorkload, &config.Ctx.ResolvedWorkload, connectStage.TargetSessionSupplier, connectStage.CommandRunnerSupplier)
 	s = append(s, workloadOptionsStage)
 
-	requiresTools := config.Recipe.ParameterValidationStage != nil && parameterOptionsRequireTools(config.Recipe.ParameterOptionsStages)
-	deployment := newRecipeToolDeployment(config, connectStage, targetArchitectureStage, deployer.ToolDeployENSURE)
+	deployment := newRecipeToolDeployment(config, connectStage, targetArchitectureStage, deployer.ToolDeployAUTO)
 	toolBundleResolutionStage := deployment.resolution
 	hostArchitectureStage := deployment.hostArchitecture
-	if requiresTools {
-		s = append(s, deployment.stages()...)
-	} else {
-		s = append(s, toolBundleResolutionStage, hostArchitectureStage)
-	}
+	s = append(s, toolBundleResolutionStage, hostArchitectureStage)
 
 	connectingToAgentStage := stages.NewConnectingToTargetAgentStage(
 		config.Ctx.Target,
@@ -173,7 +169,12 @@ func ConfigureRecipeReadyStages(config *StageConfiguration, scriptedReadyStages 
 		hostArchitectureStage.TargetFilesystemSupplier,
 		hostArchitectureStage.TargetSessionSupplier,
 	)
-	s = append(s, connectingToAgentStage, targetLockStage, getTargetInfoStage, connectingToHostAgentStage)
+	s = append(s, connectingToAgentStage, targetLockStage,
+		deployment.target, deployment.host)
+	if _, ok := config.Ctx.OrigWorkload.(*tool.WorkloadAndroidLaunch); ok {
+		s = append(s, stages.NewValidateAndroidActivityStage(agentSupplier, &config.Ctx.ResolvedWorkload))
+	}
+	s = append(s, getTargetInfoStage, connectingToHostAgentStage)
 
 	// Add the scripted recipe ready stages
 	execCtx := config.NewRunExecutionContext(hostFs)

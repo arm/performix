@@ -59,12 +59,9 @@ func TestListTarget(t *testing.T) {
 	})
 
 	t.Run("default discoverer uses configured adb path", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
 		originalADBPath := viper.GetString("adb-path")
-		viper.Set(enableAndroidTargetsConfigKey, true)
 		viper.Set("adb-path", "configured-adb-that-does-not-exist")
 		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
 			viper.Set("adb-path", originalADBPath)
 		})
 
@@ -82,25 +79,7 @@ func TestListTarget(t *testing.T) {
 		assert.Equal(t, "configured-adb-that-does-not-exist", execErr.Name)
 	})
 
-	t.Run("discover flag is hidden when android targets are disabled", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, false)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
-		})
-
-		cmd := newListCommand(&mtm, &fakeAndroidTargetDiscoverer{})
-
-		assert.True(t, cmd.Flags().Lookup("discover").Hidden)
-	})
-
-	t.Run("discover flag is visible when android targets are enabled", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, true)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
-		})
-
+	t.Run("discover flag is visible by default", func(t *testing.T) {
 		cmd := newListCommand(&mtm, &fakeAndroidTargetDiscoverer{})
 
 		assert.False(t, cmd.Flags().Lookup("discover").Hidden)
@@ -128,33 +107,7 @@ func TestListTarget(t *testing.T) {
 		},
 	}
 
-	t.Run("items are listed in a table", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, false)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
-		})
-
-		buf := bytes.Buffer{}
-		printTargetListing(listingFromConfig(testConfig), &buf)
-
-		expected := `name     default  host_key_policy  value
-aaa      yes      accept-new       b@a:123 [key=c] (via whoever@q:222 [key=c])
-bbbeeee  no                        localhost
-
-2 targets found
-`
-
-		assert.Equal(t, expected, buf.String())
-	})
-
-	t.Run("type column is listed in a table when android targets are enabled", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, true)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
-		})
-
+	t.Run("type column is listed in a table by default", func(t *testing.T) {
 		buf := bytes.Buffer{}
 		printTargetListing(listingFromConfig(testConfig), &buf)
 
@@ -169,12 +122,6 @@ bbbeeee  no       local                   localhost
 	})
 
 	t.Run("android item is listed in a table", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, true)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
-		})
-
 		deviceIP := "10.0.0.1:5555"
 		config := &engine_target.TargetConfig{
 			Default: "android",
@@ -193,69 +140,6 @@ android  yes      android  n/a              device-123@10.0.0.1:5555
 `
 
 		assert.Equal(t, expected, buf.String())
-	})
-
-	t.Run("android item is hidden in a table when disabled", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, false)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
-		})
-
-		deviceIP := "10.0.0.1:5555"
-		config := &engine_target.TargetConfig{
-			Default: "ssh",
-			Targets: map[string]engine_target.Target{
-				"android": &engine_target.AndroidTarget{SerialNumber: "device-123", DeviceIPAddress: &deviceIP},
-				"ssh": &engine_target.SSHTarget{Jumps: []engine_target.SSHHostConfig{
-					{
-						Host:          "host",
-						Port:          22,
-						Username:      "user",
-						HostKeyPolicy: engine_target.ValidHostKeyPolicyValues["strict"],
-					},
-				}},
-			},
-		}
-
-		buf := bytes.Buffer{}
-		printTargetListing(listingFromConfig(config), &buf)
-
-		expected := `name  default  host_key_policy  value
-ssh   yes      strict           user@host [key]
-
-1 target found
-`
-
-		assert.Equal(t, expected, buf.String())
-	})
-
-	t.Run("android item is hidden as json when disabled", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, false)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
-		})
-
-		deviceIP := "10.0.0.1:5555"
-		config := &engine_target.TargetConfig{
-			Default: "android",
-			Targets: map[string]engine_target.Target{
-				"android": &engine_target.AndroidTarget{SerialNumber: "device-123", DeviceIPAddress: &deviceIP},
-			},
-		}
-
-		buf := bytes.Buffer{}
-		err := clijson.MarshalJSONCLIResponse(&buf, listingFromConfig(config))
-		assert.NoError(t, err)
-		if err != nil {
-			return
-		}
-
-		var response map[string]interface{}
-		err = json.Unmarshal(buf.Bytes(), &response)
-		assert.NoError(t, err)
-		assert.Empty(t, response["data"])
 	})
 
 	t.Run("items are listed as json", func(t *testing.T) {
@@ -367,12 +251,6 @@ unauthorized-device	unauthorized
 	})
 
 	t.Run("discovers android targets in a table", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, true)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
-		})
-
 		discoverer := &fakeAndroidTargetDiscoverer{
 			targets: []*engine_target.AndroidTarget{
 				{SerialNumber: "emulator-5556"},
@@ -413,12 +291,6 @@ emulator-5556  no       android  n/a              emulator-5556
 	})
 
 	t.Run("discovers android targets as json", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, true)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
-		})
-
 		discoverer := &fakeAndroidTargetDiscoverer{
 			targets: []*engine_target.AndroidTarget{
 				{SerialNumber: "emulator-5556"},
@@ -476,34 +348,7 @@ emulator-5556  no       android  n/a              emulator-5556
 		assert.JSONEq(t, expected, buf.String())
 	})
 
-	t.Run("discover fails when android targets are disabled", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, false)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
-		})
-
-		discoverer := &fakeAndroidTargetDiscoverer{}
-		mtm := target.MockTargetManager{}
-		mtm.On("ReadTargetConfig").Return(&engine_target.TargetConfig{Targets: map[string]engine_target.Target{}}, nil)
-		cmd := newListCommand(&mtm, discoverer)
-		cmd.SetOut(&bytes.Buffer{})
-		cmd.SetArgs([]string{"--discover"})
-
-		_, err := cmd.ExecuteC()
-
-		require.Error(t, err)
-		assert.Equal(t, 0, discoverer.calls)
-		assert.Equal(t, message.CommonUnsupportedTargetType, err.(*message.MessageImpl).Code())
-	})
-
 	t.Run("discover preserves non-not-found adb errors", func(t *testing.T) {
-		originalEnableAndroidTargets := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, true)
-		t.Cleanup(func() {
-			viper.Set(enableAndroidTargetsConfigKey, originalEnableAndroidTargets)
-		})
-
 		adbErr := errors.New("adb unavailable")
 		discoverer := &fakeAndroidTargetDiscoverer{err: adbErr}
 		mtm := target.MockTargetManager{}

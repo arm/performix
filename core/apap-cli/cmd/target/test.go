@@ -19,7 +19,6 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/clijson"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/target"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/targetlogin"
-	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	engine_target "github.com/Arm-Debug/apap-cli/apap-engine/target"
 	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
@@ -77,9 +76,6 @@ func targetTestCommand(cmd *cobra.Command, out io.Writer, args []string, cc clie
 	target, err := ts.GetTarget(targetName)
 	if err != nil {
 		return err
-	}
-	if _, ok := target.(*engine_target.AndroidTarget); ok && !viper.GetBool(enableAndroidTargetsConfigKey) {
-		return message.New(message.CommonUnsupportedTargetType).WithMetadata(map[string]string{"targetType": "android"})
 	}
 
 	client, err := cc.ApapClient(serverconfig.FromViperForBackground())

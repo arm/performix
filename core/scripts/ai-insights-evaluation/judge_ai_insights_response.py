@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from pathways_artifacts import load_pathways_judge_evidence
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("rubric", type=Path, help="Rubric used by the judge")
     parser.add_argument(

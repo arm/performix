@@ -365,6 +365,83 @@ func TestNeoprofGPUMetricSQLUsesCollectedCounterMetadata(t *testing.T) {
 	}
 }
 
+// TestGPUHardwareCounterScaling verifies that generated SQL applies a metric's
+// scaleMultiplier to its raw GPU counter value. A raw value of 10 becomes 40
+// with a multiplier of 4, or 5 with a multiplier of 0.5.
+//
+// The fixture spans one output bin to isolate this conversion from interval
+// normalization. Integer and fractional multipliers are supplied directly;
+// the test does not validate the catalogue definition or collector output.
+func TestGPUHardwareCounterScaling(t *testing.T) {
+	// Given: one hardware counter with a raw count of 10 in a 100 ms capture.
+	connector, err := duckdb.NewConnector("", nil)
+	require.NoError(t, err)
+	db := dbsql.OpenDB(connector)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	root := t.TempDir()
+	counterPath := filepath.Join(root, "counter.parquet")
+	capturePath := filepath.Join(root, "capture.json")
+	require.NoError(t, os.WriteFile(capturePath, []byte(`{"duration":100000000}`), 0o600))
+	// Write one synthetic GPU sample to Parquet: a raw count of 10 over 100 ms
+	// for device 0. The key_type and series_id match the counter below; the
+	// production SQL will read this fixture and apply the metric's multiplier.
+	_, err = db.Exec(`COPY (
+		SELECT
+			0::BIGINT AS start_timestamp,
+			100000000::BIGINT AS end_timestamp,
+			0 AS device_no,
+			8 AS key_type,
+			1 AS series_id,
+			10::BIGINT AS value,
+			100000000::BIGINT AS bin_duration
+	) TO ? (FORMAT PARQUET)`, counterPath)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name       string
+		multiplier float64
+		expected   float64
+	}{
+		{name: "integer multiplier", multiplier: 4, expected: 40},
+		{name: "fractional multiplier", multiplier: 0.5, expected: 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given: a metric with an integer or fractional scaleMultiplier.
+			metric := map[string]any{
+				"id":              int64(1),
+				"kind":            "hardware",
+				"machineName":     "MaliFragThread",
+				"scaleMultiplier": tc.multiplier,
+			}
+			counter := map[string]any{
+				"alias":        "MaliFragThread",
+				"keyType":      int64(8), // Matches key_type in the Parquet sample.
+				"seriesId":     int64(1), // Matches series_id in the Parquet sample.
+				"counterClass": int64(0), // Delta counter.
+			}
+			plan := map[string]any{
+				"requiredMetrics": []any{metric},
+				"counters":        []any{counter},
+			}
+
+			// When: execute the production SQL using the generated fixture files.
+			h := jstest.LoadJSModule(t, "recipes/lib/gpu-metrics/neoprof.js")
+			query, err := h.Call[string](t, "buildNeoprofHardwareSql", plan, []string{"counter"}, "capture")
+			require.NoError(t, err)
+			query = strings.ReplaceAll(query, "{{path:counter}}", "?")
+			query = strings.ReplaceAll(query, "{{path:capture}}", "?")
+			var start, end, device int64
+			var scaledValue float64
+			err = db.QueryRow(query, counterPath, capturePath).Scan(&start, &end, &device, &scaledValue)
+
+			// Then: the raw count is scaled without rounding the multiplier.
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, scaledValue)
+		})
+	}
+}
+
 func TestGPUSelectedMetricsShareSemanticTimelineRows(t *testing.T) {
 	for _, selectors := range [][]string{
 		{"GPUFront-end.GPUCycles"},

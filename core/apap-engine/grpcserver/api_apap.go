@@ -34,6 +34,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/packages"
 	"github.com/Arm-Debug/apap-cli/apap-engine/parameters"
 	"github.com/Arm-Debug/apap-cli/apap-engine/perms"
+	"github.com/Arm-Debug/apap-cli/apap-engine/producttelemetry"
 	"github.com/Arm-Debug/apap-cli/apap-engine/progress"
 	"github.com/Arm-Debug/apap-cli/apap-engine/query"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
@@ -58,6 +59,7 @@ import (
 )
 
 type ApapServer struct {
+	productTelemetry *producttelemetry.Service
 	apapproto.UnimplementedApapServer
 	ctx                  context.Context
 	shutdownCb           func()
@@ -1118,6 +1120,7 @@ func (s *ApapServer) CreateSupportPackage(ctx context.Context, req *apapproto.Cr
 		LogCount:   int(req.GetLogCount()),
 		LogFile:    s.config.LogFile,
 		GUILogDir:  req.GetGuiLogDirectory(),
+		ConfigDir:  s.config.ConfigDirectory,
 	}
 
 	result, err := support.CreateSupportPackage(ctx, options, s.buildSupportPackageConfig(), s.runs)

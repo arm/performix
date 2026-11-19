@@ -29,7 +29,12 @@ type lifecycleFiles struct {
 	cdf.ModelView
 	root                   string
 	components             []cdf.Component
+	messages               []string
 	failOutcomePublication bool
+}
+
+func (f *lifecycleFiles) WriteUserMessage(level, text string) {
+	f.messages = append(f.messages, level+": "+text)
 }
 
 func (f *lifecycleFiles) AddComponent(entity string, typ cdf.ComponentType, relative string) (string, error) {
@@ -64,10 +69,11 @@ let tool = {
  name:"synthetic",version:"1.0",capabilityInterfaceVersion:"1.0",
  description:{short:"Synthetic",long:"Synthetic"},
  probe:(engine,ctx)=>({available:true,capabilities:{"counter.cpu_cycles":cycles,legacyField:true},advice:[]}),
+ validate: () => {},
  run:async(engine,ctx)=>{
   if(ctx.capabilityRequest===undefined) return;
   if(ctx.capabilityRequest.required.length===0 && ctx.capabilityRequest.optional.length===0) {
-   if(ctx.discovery!==undefined) throw "empty request discovered counters";
+   if(!ctx.discovery || !ctx.discovery.available) throw "missing readiness discovery";
    return;
   }
   if(!ctx.discovery || !ctx.discovery.capabilities.legacyField) throw "missing discovery";
@@ -82,8 +88,8 @@ let tool = {
 // Count actual constructions while preserving the factory's static metadata.
 type countingCounterFactory struct {
 	tool.Factory
-	constructions          int
-	failSecondRuntimeStart bool
+	constructions            int
+	failReformatRuntimeStart bool
 }
 
 func (f *countingCounterFactory) CapabilityInterfaceVersion() string {
@@ -92,20 +98,20 @@ func (f *countingCounterFactory) CapabilityInterfaceVersion() string {
 func (f *countingCounterFactory) NewIntegration(ic *tool.IntegrationContext) (tool.ToolIntegration, error) {
 	f.constructions++
 	integration, err := f.Factory.NewIntegration(ic)
-	if err != nil || !f.failSecondRuntimeStart {
+	if err != nil || !f.failReformatRuntimeStart {
 		return integration, err
 	}
-	return &failSecondRuntimeIntegration{ToolIntegration: integration}, nil
+	return &failReformatRuntimeIntegration{ToolIntegration: integration}, nil
 }
 
-type failSecondRuntimeIntegration struct {
+type failReformatRuntimeIntegration struct {
 	tool.ToolIntegration
 	starts int
 }
 
-func (i *failSecondRuntimeIntegration) StartRuntime() (func(), error) {
+func (i *failReformatRuntimeIntegration) StartRuntime() (func(), error) {
 	i.starts++
-	if i.starts == 2 {
+	if i.starts == 3 {
 		return nil, errors.New("reformat runtime failed to start")
 	}
 	return i.ToolIntegration.StartRuntime()
@@ -218,7 +224,7 @@ func TestCounterLifecycleOmittedRequest(t *testing.T) {
 	f := newCounterLifecycleFixture(t, lifecycleSource)
 	f.ic.CapabilityRequest = nil
 	require.NoError(t, f.collect(t))
-	require.Equal(t, 1, f.factory.constructions, "legacy collection must skip counter discovery")
+	require.Equal(t, 2, f.factory.constructions, "collection must probe before validation")
 	require.NoFileExists(t, filepath.Join(f.files.root, f.ic.OutputEntityDir, "requests/counter_collection.json"))
 	require.Empty(t, f.files.components)
 	require.Empty(t, f.loadOutcomes(t))
@@ -257,11 +263,19 @@ func TestCounterLifecycleUnavailableOutcome(t *testing.T) {
 			name, constructions = "cached_discovery", 1
 		}
 		t.Run(name, func(t *testing.T) {
+			// Given an unavailable optional capability with fresh or cached discovery.
 			f := newCounterLifecycleFixture(t, lifecycleSource)
 			if cached {
 				f.ic.Discovery = &f.discovery
 			}
-			require.NoError(t, f.collect(t))
+
+			// When the engine collects the requested capability.
+			err := f.collect(t)
+
+			// Then collection succeeds and reports the optional capability warning.
+			require.NoError(t, err)
+			require.Len(t, f.files.messages, 1)
+			require.Contains(t, f.files.messages[0], "warn: Optional tool capability counter.cpu_cycles")
 			require.Equal(t, constructions, f.factory.constructions, "only uncached discovery needs another integration")
 			f.assertSavedRequest(t)
 			got := f.renderCPUOutcome(t)
@@ -327,6 +341,7 @@ func TestCPUCounterBindingPublicationRejectsInvalidIdentities(t *testing.T) {
   });
  },
  probe: () => ({available: true, capabilities: {}, advice: []}),
+ validate: () => {},
  reformat: () => {}, onStop: () => {}, onCancel: () => {}
 };`, field, test.js)
 				files := &lifecycleFiles{root: t.TempDir()}
@@ -356,6 +371,7 @@ func TestCPUOutcomePublicationRequiresExplicitSelection(t *testing.T) {
   state: "unavailable", payload: {title: "CPU Cycles", units: "cycles", bindings: [], reason: "not_supported"}
  }),
  probe: () => ({available: true, capabilities: {}, advice: []}),
+ validate: () => {},
  reformat: () => {}, onStop: () => {}, onCancel: () => {}
 };`
 	for _, test := range []struct {
@@ -398,6 +414,7 @@ func TestCPUComponentTypeRejectsWrongCapabilityID(t *testing.T) {
 	const source = `let tool = {
  name:"synthetic", version:"1.0", description:{short:"Synthetic",long:"Synthetic"},
  probe:()=>({available:true,capabilities:{},advice:[]}),
+ validate: () => {},
  run:async(engine)=>engine.addToolCapability("counter.other", {name:"tool_capabilities/cpu_counter",version:"1.0"}, {
   state:"unavailable", payload:{title:"CPU Cycles",units:"cycles",bindings:[],reason:"not_supported"}
  }), reformat:()=>{}, onStop:()=>{}, onCancel:()=>{}
@@ -447,6 +464,7 @@ let tool = {
  name: "synthetic", version: "1.0", capabilityInterfaceVersion: "1.0",
  description: {short: "Synthetic", long: "Synthetic"},
  probe: () => ({available: true, capabilities: {"counter.cpu_cycles": cycles}, advice: []}),
+ validate: () => {},
  run: async (engine, ctx) => { %s },
  reformat: async (engine) => { %s },
  onStop: () => {}, onCancel: () => {}
@@ -508,6 +526,7 @@ func TestCollectedCounterOutcomeIsFinalizedAfterLifecycle(t *testing.T) {
  probe: () => ({available: true, capabilities: {"counter.cpu_cycles": {
   componentType: {name: "tool_capabilities/cpu_counter", version: "1.0"}, state: "available",
   payload: {title: "CPU Cycles", units: "cycles", bindings: []}}}, advice: []}),
+ validate: () => {},
  run: async (engine) => {%s%s},
  reformat: async () => {%s}, onStop: () => {}, onCancel: () => {}
 };`, publishCollected, test.runTail, test.reformatBody)
@@ -528,6 +547,7 @@ func TestCollectedCounterOutcomeIsFinalizedWhenReformatRuntimeFailsToStart(t *te
  probe: () => ({available: true, capabilities: {"counter.cpu_cycles": {
   componentType: {name: "tool_capabilities/cpu_counter", version: "1.0"}, state: "available",
   payload: {title: "CPU Cycles", units: "cycles", bindings: []}}}, advice: []}),
+ validate: () => {},
  run: async (engine) => {
   await engine.addToolCapability("series.one", {name: "tool_capabilities/counter", version: "1.0"}, {
    state: "collected", payload: {key_type: 0, series_id: 0}
@@ -540,7 +560,7 @@ func TestCollectedCounterOutcomeIsFinalizedWhenReformatRuntimeFailsToStart(t *te
 };`
 
 	f := newCounterLifecycleFixture(t, source)
-	f.factory.failSecondRuntimeStart = true
+	f.factory.failReformatRuntimeStart = true
 	err := f.collect(t)
 	require.ErrorContains(t, err, "reformat runtime failed to start")
 	got := f.renderCPUOutcome(t)
@@ -566,13 +586,14 @@ func TestMissingCounterOutcomesArePublishedOnFailure(t *testing.T) {
  probe: () => ({available: true, capabilities: {"counter.cpu_cycles": {
   componentType: {name: "tool_capabilities/cpu_counter", version: "1.0"}, state: "available",
   payload: {title: "CPU Cycles", units: "cycles", bindings: []}}}, advice: []}),
+ validate: () => {},
  run: () => {%s}, reformat: () => {%s}, onStop: () => {}, onCancel: () => {}
 };`, test.runBody, test.reformatBody)
 				f := newCounterLifecycleFixture(t, source)
 				if policy == "required" {
 					f.ic.CapabilityRequest = &capabilities.CapabilityRequest{Required: []string{"counter.cpu_cycles"}, Optional: []string{}}
 				}
-				f.factory.failSecondRuntimeStart = test.failRuntime
+				f.factory.failReformatRuntimeStart = test.failRuntime
 				f.files.failOutcomePublication = test.failPublication
 				err := f.collect(t)
 				require.ErrorContains(t, err, test.errorText)
@@ -609,6 +630,46 @@ func TestCapabilityFailurePreservesPublishedOutcome(t *testing.T) {
 			require.Equal(t, "unavailable", outcome.State)
 			require.Equal(t, "not_supported", outcome.Payload["reason"])
 			require.Len(t, f.files.components, 2, "the existing outcome must not be published again")
+		})
+	}
+}
+
+func TestNativeCounterRequestLifecycle(t *testing.T) {
+	for _, phase := range []string{"success", "record", "reformat"} {
+		t.Run(phase, func(t *testing.T) {
+			// Given a required native counter with a successful or failed capture phase.
+			source := lifecycleSource + fmt.Sprintf(`
+const native = {componentType:{name:"tool_capabilities/native_cpu_counter",version:"1.0"},state:"available",payload:{title:"Instructions",pmu:{id:"pmu",name:"PMU"},eventCode:"0x8"}};
+tool.probe = () => ({available:true, capabilities:{"nativecounter.pmu.8":native}, advice:[]});
+tool.run = async () => { if (%q === "record") throw new Error("record failed"); };
+tool.reformat = async (engine) => {
+  await engine.addToolCapability("series", {name:"tool_capabilities/counter",version:"1.0"}, {state:"collected",payload:{key_type:8,series_id:10}});
+  await engine.addToolCapability("nativecounter.pmu.8",native.componentType,{state:"collected",payload:{...native.payload,binding:{seriesCapabilityId:"series"}}});
+  if (%q === "reformat") throw new Error("reformat failed");
+};`, phase, phase)
+			f := newCounterLifecycleFixture(t, source)
+			f.ic.CapabilityRequest = &capabilities.CapabilityRequest{Required: []string{"nativecounter.pmu.8"}, Optional: []string{}}
+
+			// When collecting and loading the saved outcome.
+			err := f.collect(t)
+
+			// Then the outcome reflects the capture result and retains its binding.
+			if phase == "success" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, phase+" failed")
+			}
+			f.assertSavedRequest(t)
+			value := f.loadOutcomes(t)["nativecounter.pmu.8"]
+			if phase == "success" {
+				require.Equal(t, "collected", value.State)
+			} else {
+				require.Equal(t, "incomplete", value.State)
+				require.Equal(t, phase+"_failed", value.Payload["reason"])
+			}
+			if phase != "record" {
+				require.Equal(t, map[string]any{"seriesCapabilityId": "series"}, value.Payload["binding"])
+			}
 		})
 	}
 }

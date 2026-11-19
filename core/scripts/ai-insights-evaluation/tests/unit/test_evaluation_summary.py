@@ -13,6 +13,24 @@ from evaluation_summary import render_console_summary, render_markdown_summary  
 
 
 class EvaluationSummaryTests(unittest.TestCase):
+    def test_saved_policy_reports_accepted_rejected_and_incomplete_groups(self):
+        attempts = [{"ai_test_id": "case", "ai_mode": "performix_mcp", "ai_attempt": str(n),
+                     "ai_attempts_total": "3", "ai_min_pass_rate": "0.66",
+                     "ai_scores": "fail" if n == 2 else "pass",
+                     "ai_display_scores": "fail" if n == 2 else "pass",
+                     "pytest_outcome": "failed" if n == 2 else "passed"} for n in (1, 2, 3)]
+        for render in (render_console_summary, render_markdown_summary):
+            summary = render(attempts)
+            self.assertIn("Passed: 2/3 attempts; minimum 0.66", summary)
+            self.assertIn("attempt 2 FAIL", summary)
+            self.assertIn("Failed: 1/3 attempts; minimum 0.66", render(attempts[:2]))
+            self.assertIn("Failed: 1/3 attempts; minimum 0.66", render(attempts[:1]))
+            strict = [{**a, "ai_min_pass_rate": "1.0"} for a in attempts]
+            self.assertIn("Failed: 2/3 attempts; minimum 1", render(strict))
+        self.assertIn("✅", render_markdown_summary(attempts))
+        self.assertIn("❌", render_markdown_summary(strict))
+
+
     def test_timeout_is_explicit_in_console_and_ci_summaries(self):
         attempt = {"ai_test_id": "pathways_01", "ai_mode": "performix_mcp", "ai_attempt": "1",
                    "ai_display_scores": "error", "pytest_outcome": "failed",

@@ -396,27 +396,6 @@ func TestLoadSourceContentsUDFCancellation(t *testing.T) {
 	client.AssertExpectations(t)
 }
 
-func TestRegisterLoadSourceContentFunctionSameSessionCollides(t *testing.T) {
-	db, err := (&render.DuckDBFactory{}).Connect(t.Name())
-	require.NoError(t, err)
-	t.Cleanup(db.Close)
-	sqlConn := db.Conn
-
-	_, err = sqlConn.ExecContext(context.Background(), `
-CREATE TABLE source_files (run_id VARCHAR, source_file_id INTEGER, host_location VARCHAR, target_location VARCHAR);
-INSERT INTO source_files VALUES ('run1', 1, '/tmp/a', NULL);
-`)
-	require.NoError(t, err)
-	require.NoError(t, createSourceFilesUnionView(sqlConn, "source_files_union", map[string]string{"run1": "source_files"}))
-
-	// Minimal target map; we don't actually execute the UDF here.
-	runTargets := map[string]target.Target{"run1": fakeTarget{}}
-
-	require.NoError(t, registerLoadSourceContentFunction(db, "source_files_union", nil, runTargets, "same"))
-	err = registerLoadSourceContentFunction(db, "source_files_union", nil, runTargets, "same")
-	require.Error(t, err)
-}
-
 func TestLRUEviction(t *testing.T) {
 	lru := newLRU(2)
 	lru.add("a", "1")

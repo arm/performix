@@ -31,6 +31,27 @@ import (
 	"github.com/Arm-Debug/apap-cli/atperf-version/versions"
 )
 
+func TestNeoprofAndroidActivityArguments(t *testing.T) {
+	for _, arguments := range []string{"", `--es greeting "hello world" --ez enabled true`} {
+		t.Run(arguments, func(t *testing.T) {
+			h := jstest.LoadToolIntegration(t, "neoprof")
+			workload := map[string]any{
+				"type":              "androidLaunch",
+				"packageName":       "com.example.app",
+				"activityName":      ".MainActivity",
+				"activityArguments": arguments,
+			}
+			args, err := h.Call[[]string](t, "workloadToSLArgs", workload)
+			require.NoError(t, err)
+			expected := []string{"--android-pkg", "com.example.app", "--android-activity", ".MainActivity"}
+			if arguments != "" {
+				expected = append(expected, "--activity-args", arguments)
+			}
+			assert.Equal(t, expected, args)
+		})
+	}
+}
+
 func TestNeoprofCPUPMUEventProbe(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -118,7 +139,7 @@ func TestNeoprofCPUPMUEventProbe(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, result.Available)
 			assert.Empty(t, result.Advice)
-			assert.Contains(t, result.Capabilities, "armv8_neoverse_n1.8")
+			assert.Contains(t, result.Capabilities, "nativecounter.armv8_neoverse_n1.8")
 			cpuCapability, err := capabilities.ParseCPUCounterValue(cpuCounterID, result.Capabilities[cpuCounterID], false)
 			require.NoError(t, err)
 			assert.Equal(t, capabilities.CPUCounterStateAvailable, cpuCapability.State)
@@ -266,6 +287,31 @@ func TestNeoprofDoesNotDeclareRawDataParameter(t *testing.T) {
 
 	for _, parameter := range harness.ToolParameters(t).Checkbox {
 		assert.NotEqual(t, "include_raw_data", parameter.ID)
+	}
+}
+
+func TestNeoprofWorkloadErrorCodes(t *testing.T) {
+	for _, tc := range []struct {
+		name, diagnostic string
+		code             message.MessageCode
+	}{
+		{"missing workload", "ERROR: The specified command does not exist. Please verify this executable exists.", message.ToolIntegrationsCommonWorkloadNotExistOrNotExecutable},
+		{"non-executable workload", "ERROR: The specified command is not executable. Please verify this executable has execute permissions.", message.ToolIntegrationsCommonWorkloadNotExecutable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a collector diagnostic for the selected workload.
+			h := jstest.LoadToolIntegration(t, "neoprof")
+			ctx := jstest.EmptyToolContext()
+			ctx.Workload = tool_goja.NewWorkloadLaunch("/workload", []string{"/workload"}, nil, "", false)
+
+			// When translating the diagnostic for preparation or collection.
+			result, err := h.Call[map[string]any](t, "matchNeoprofError", ctx, tc.diagnostic)
+
+			// Then retain the specific error code and workload metadata.
+			require.NoError(t, err)
+			assert.Equal(t, tc.code, result["code"])
+			assert.Equal(t, map[string]any{"workload": "/workload", "executable": "/workload"}, result["metadata"])
+		})
 	}
 }
 
@@ -499,6 +545,7 @@ func TestNeoprofImmediateCaptureOutputs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Given the current rich-data setting.
 			harness := jstest.LoadToolIntegration(t, "neoprof")
 			engine := &mocks.MockToolEngine{}
 			engine.On("IsFullCaptureSupportEnabled").Return(tt.fullCaptureSupport, nil)
@@ -514,9 +561,13 @@ func TestNeoprofImmediateCaptureOutputs(t *testing.T) {
 				assert.NotEqual(t, "capture_log.txt", args.String(1), "Stdout is already captured on the host")
 				if path := args.String(1); strings.HasPrefix(path, "capture.apc/") {
 					emittedPaths = append(emittedPaths, path)
+					assert.Equal(t, "/"+path, args.String(0))
+					assert.Equal(t, tool_goja.OutputMetadata{ComponentType: "capture_apc", Version: "1.0"}, args.Get(2))
+					assert.Equal(t, tool.TransferOptions{ImmediateRetrieval: true, BackgroundTransfer: true}, args.Get(3))
 				}
 			}).Return(nil).Maybe()
 
+			// When the recording outputs are registered.
 			_, err := harness.Call[any](
 				t,
 				"immediateEmitSlRecordFiles",
@@ -525,6 +576,7 @@ func TestNeoprofImmediateCaptureOutputs(t *testing.T) {
 				"/capture.apc",
 			)
 
+			// Then rich capture keeps the same files and transfer options, once each.
 			require.NoError(t, err)
 			var expectedPaths []string
 			if tt.expectRichData {
@@ -539,6 +591,51 @@ func TestNeoprofImmediateCaptureOutputs(t *testing.T) {
 				expectedPaths = append(expectedPaths, "capture.apc/0000000000")
 			}
 			assert.ElementsMatch(t, expectedPaths, emittedPaths)
+			engine.AssertExpectations(t)
+		})
+	}
+}
+
+func TestNeoprofHostCaptureInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name, workload, mode, workflow string
+		rich, fullCapture, wantInputs  bool
+	}{
+		{name: "normal Android hotspots", workload: "androidLaunch", mode: "samples", fullCapture: true, wantInputs: true},
+		{name: "full capture disabled", workload: "androidLaunch", mode: "samples", rich: true, wantInputs: true},
+		{name: "rich Android already saves inputs", workload: "androidLaunch", mode: "samples", rich: true, fullCapture: true},
+		{name: "Linux host analysis", workload: "launch", mode: "samples"},
+		{name: "Android SPE", workload: "androidLaunch", mode: "spe"},
+		{name: "Android metrics", workload: "androidLaunch", mode: "metrics"},
+		{name: "Android system utilization", workload: "androidLaunch", mode: "samples", workflow: "sys_util"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given the workload and capture settings.
+			h := jstest.LoadToolIntegration(t, "neoprof")
+			engine := &mocks.MockToolEngine{}
+			engine.On("IsFullCaptureSupportEnabled").Return(tc.fullCapture, nil).Maybe()
+			if tc.wantInputs {
+				for _, name := range []string{"0000000000", "captured.xml"} {
+					engine.On("EmitOutput", "/host/capture.apc/"+name, "capture.apc/"+name,
+						tool_goja.OutputMetadata{ComponentType: "capture_apc", Version: "1.0"},
+						tool.TransferOptions{BackgroundTransfer: true}).Return(nil).Once()
+				}
+			}
+			ctx := map[string]any{
+				"workload": map[string]any{"type": tc.workload},
+				"params":   map[string]any{"mode": tc.mode, "workflow": tc.workflow, "rich_data_capture": tc.rich},
+			}
+
+			// When host capture inputs are registered.
+			_, err := h.Call[any](t, "emitHostCaptureInputs", engine, ctx, "/host/capture.apc")
+
+			// Then eligible runs save exactly the two inputs; other runs save nothing here.
+			require.NoError(t, err)
+			wantCalls := 0
+			if tc.wantInputs {
+				wantCalls = 2
+			}
+			engine.AssertNumberOfCalls(t, "EmitOutput", wantCalls)
 			engine.AssertExpectations(t)
 		})
 	}
@@ -626,6 +723,7 @@ func TestNeoprofAnalysisOutputsUseExpectedDirectories(t *testing.T) {
 		}).
 		Return(nil)
 	engine.On("IsNeoprofTimelineEnabled").Return(true, nil)
+	engine.On("IsCPUSchedulingEnabled").Return(false, nil).Maybe()
 	engine.On("ReadHostFile", "/capture.apc/db/executable_paths.xml").
 		Run(func(_ mock.Arguments) {
 			outputPaths = append(outputPaths, "/capture.apc/db/executable_paths.xml")
@@ -900,12 +998,13 @@ func TestNeoprofExplicitCPUCounterRequestRejectsMissingTimelineOutput(t *testing
 }
 
 func TestNeoprofRecordFailurePropagatesToEngine(t *testing.T) {
+	// Given a collector that is not deployed.
 	h := jstest.LoadToolIntegration(t, "neoprof")
 	engine := &mocks.MockToolEngine{}
 	engine.On("ToolsRoot").Return("/tools", nil).Maybe()
 	engine.On("GetPlatform").Return(conductor.PlatformConfiguration{OS: conductor.Linux}, nil).Maybe()
 	engine.On("GetLocality").Return("target", nil).Maybe()
-	engine.On("IsNeoprofTimelineEnabled").Return(true, nil).Once()
+	engine.On("IsCPUSchedulingEnabled").Return(false, nil).Maybe()
 	engine.On("ExecCommand", mock.MatchedBy(func(command []string) bool {
 		return len(command) == 2 && command[0] == "stat" && strings.Contains(command[1], "sl-record")
 	}), tool_goja.ExecOptions{}).Return(h.ToJSValPromise(t, process.CommandResult{Rc: 1, Stderr: "missing collector"}, nil)).Once()
@@ -913,7 +1012,11 @@ func TestNeoprofRecordFailurePropagatesToEngine(t *testing.T) {
 	ctx := jstest.EmptyToolContext()
 	ctx.Params["mode"] = "samples"
 	ctx.CapabilityRequest = &capabilities.CapabilityRequest{Required: []string{cpuCounterID}, Optional: []string{}}
+
+	// When collection starts.
 	err := h.ToolRun(t, engine, ctx)
+
+	// Then the tool reports the deployment error without publishing a capability.
 	assert.Error(t, err)
 	assert.ErrorContains(t, err, "TOOL_NOT_DEPLOYED")
 	engine.AssertNotCalled(t, "AddToolCapability", mock.Anything, mock.Anything, mock.Anything)
@@ -933,6 +1036,7 @@ func TestNeoprofOutputCompressionDeclarationsAreCompatible(t *testing.T) {
 				require.NoError(t, updater.AddComponentWithFlags(args.String(1), cdf.ComponentType{}, run.ComponentFlags{Compressed: opts.Compressed}))
 			}).Return(nil)
 			engine.On("IsNeoprofTimelineEnabled").Return(true, nil)
+			engine.On("IsCPUSchedulingEnabled").Return(false, nil).Maybe()
 			_, err := h.Call[any](t, "emitAnalysisFiles", engine, map[string]any{"params": map[string]any{"mode": mode}}, "/analysis", "/capture.apc")
 			require.NoError(t, err)
 			_, err = h.Call[any](t, "emitCaptureDir", engine, "/capture.apc")
@@ -962,6 +1066,7 @@ func TestNeoprofBuildAnalyzeArgsIncludesCoreFilter(t *testing.T) {
 	harness := jstest.LoadToolIntegration(t, "neoprof")
 	engine := &mocks.MockToolEngine{}
 	engine.On("IsNeoprofTimelineEnabled").Return(false, nil).Once()
+	engine.On("IsCPUSchedulingEnabled").Return(false, nil).Maybe()
 
 	toolContext := jstest.EmptyToolContext()
 	toolContext.Params["filter_core_numbers"] = "1,2"
@@ -1058,6 +1163,7 @@ func TestNeoprofBuildAnalyzeArgsRejectsMalformedCoreFilter(t *testing.T) {
 			harness := jstest.LoadToolIntegration(t, "neoprof")
 			engine := &mocks.MockToolEngine{}
 			engine.On("IsNeoprofTimelineEnabled").Return(false, nil).Once()
+			engine.On("IsCPUSchedulingEnabled").Return(false, nil).Maybe()
 
 			toolContext := jstest.EmptyToolContext()
 			toolContext.Params["filter_core_numbers"] = coreNumbers
@@ -1131,6 +1237,7 @@ func TestNeoprofGPUProbeReportsPlatformAndCounters(t *testing.T) {
 			h := jstest.LoadToolIntegration(t, "neoprof")
 			engine := mocks.MockToolEngineIgnoreLogs()
 			engine.On("IsNeoprofTimelineEnabled").Return(false, nil).Once()
+			engine.On("IsCPUSchedulingEnabled").Return(false, nil).Maybe()
 			ctx := jstest.EmptyToolContext()
 			ctx.Params["requested_gpu_metrics"] = fmt.Sprintf(`[%q,"NeuralAccelerator.*","NeuralAcceleratorMemoryAccess.*"]`, selector)
 			ctx.Workload = tool_goja.NewWorkloadSystemWide()
@@ -1489,6 +1596,7 @@ func TestNeoprofGPUAvailabilityPolicy(t *testing.T) {
 					engine.On("ToolsRoot").Return("/tools", nil).Maybe()
 					if stage == "probe" {
 						engine.On("IsNeoprofTimelineEnabled").Return(false, nil).Once()
+						engine.On("IsCPUSchedulingEnabled").Return(false, nil).Maybe()
 						engine.On("GetPlatform").Return(conductor.PlatformConfiguration{OS: conductor.Linux}, nil).Maybe()
 						engine.On("ExecCommand", mock.MatchedBy(func(args []string) bool { return args[0] == "stat" }), mock.Anything).
 							Return(h.ToJSValPromise(t, process.CommandResult{}, nil)).Times(3)
@@ -1617,4 +1725,227 @@ func TestNeoprofSystemUtilizationPollInterval(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []string{"-r", "normal", "--workflow", "sys_util", "--poll-interval", "1000"}, args)
 	})
+}
+
+func TestNeoprofOffCPUCollection(t *testing.T) {
+	outputs := map[string]tool_goja.OutputMetadata{
+		"call_tree_off-cpu.json":            {ComponentType: "sl-collect-call-tree", Version: "1.0"},
+		"callpath_self_off-cpu.json":        {ComponentType: "sl-collect-metrics", Version: "1.0"},
+		"callpath_total_off-cpu.json":       {ComponentType: "sl-collect-metrics", Version: "1.0"},
+		"callpaths-capture-off_cpu.csv":     {ComponentType: "sl-collect", Version: "1.0"},
+		"functions-capture-off_cpu.csv":     {ComponentType: "sl-collect-flat-functions-csv", Version: "1.1"},
+		"disassembly-capture-off_cpu-*.csv": {ComponentType: "disassembly_capture_samples", Version: "1.1"},
+		"sources-capture-off_cpu-*.csv":     {ComponentType: "sl-collect-source-line-attribution", Version: "1.0"},
+	}
+	for _, tc := range []struct {
+		name, mode string
+		value      any
+		want       bool
+	}{
+		{name: "omitted", mode: "samples"},
+		{name: "disabled", mode: "samples", value: false},
+		{name: "enabled", mode: "samples", value: true, want: true},
+		{name: "metrics", mode: "metrics", value: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			h := jstest.LoadToolIntegration(t, "neoprof")
+			ctx := jstest.EmptyToolContext()
+			ctx.Params["sampling_frequency"] = "normal"
+			ctx.Params["metrics_group"] = "Topdown_L1"
+			ctx.Params["mode"] = tc.mode
+			if tc.value != nil {
+				ctx.Params["collect_off_cpu_time"] = tc.value
+			}
+			engine := &mocks.MockToolEngine{}
+			engine.On("IsNeoprofTimelineEnabled").Return(false, nil).Maybe()
+			engine.On("IsCPUSchedulingEnabled").Return(false, nil).Maybe()
+			var emitted []string
+			engine.On("EmitOutput", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				path := args.String(0)
+				if !strings.Contains(path, "off-cpu") && !strings.Contains(path, "off_cpu") {
+					return
+				}
+				name := strings.TrimPrefix(path, "/analysis/")
+				emitted = append(emitted, name)
+				require.Contains(t, outputs, name)
+				assert.Equal(t, "output/"+name, args.String(1))
+				assert.Equal(t, outputs[name], args.Get(2))
+				assert.True(t, args.Get(3).(tool.TransferOptions).Compressed)
+			}).Return(nil)
+
+			// When
+			bound, err := parameters.BindToolIntegrationParameters(ctx.Params, h.ToolParameters(t), "neoprof")
+			require.NoError(t, err)
+			args, err := h.Call[[]string](t, "buildRecordArgs", ctx)
+			require.NoError(t, err)
+			_, err = h.Call[any](t, "emitAnalysisFiles", engine, ctx, "/analysis", "/capture.apc")
+
+			// Then
+			require.NoError(t, err)
+			assert.Equal(t, tc.value == true, bound.CollapseToMap()["collect_off_cpu_time"], "tool binding must preserve the option and default to false")
+			if tc.want {
+				assert.Contains(t, strings.Join(args, " "), "--off-cpu-time yes")
+				var expected []string
+				for name := range outputs {
+					expected = append(expected, name)
+				}
+				assert.ElementsMatch(t, expected, emitted, "each off-CPU output must be emitted exactly once")
+			} else {
+				assert.NotContains(t, args, "--off-cpu-time")
+				assert.Empty(t, emitted)
+			}
+			engine.AssertExpectations(t)
+		})
+	}
+}
+
+func TestSchedulingExportsRequiredTimelineArtifacts(t *testing.T) {
+	// Given: scheduling enabled for a samples capture.
+	h := jstest.LoadToolIntegration(t, "neoprof")
+	engine := &mocks.MockToolEngine{}
+	engine.On("IsNeoprofTimelineEnabled").Return(false, nil)
+	engine.On("IsCPUSchedulingEnabled").Return(true, nil)
+	ctx := jstest.EmptyToolContext()
+	ctx.Params["mode"] = "samples"
+	ctx.Workload = tool_goja.NewWorkloadSystemWide()
+	var outputs []string
+	engine.On("EmitOutput", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		outputs = append(outputs, args.String(1))
+	}).Return(nil)
+	// When: analysis arguments and exported artifacts are prepared.
+	args, err := h.Call[[]string](t, "buildAnalyzeArgs", engine, ctx, map[string]any{
+		"slAnalyzePath": "/tools/sl-analyze", "outputDirectory": "/output", "captureDirectory": "/capture.apc", "collectImages": false,
+	})
+	require.NoError(t, err)
+	_, err = h.Call[any](t, "emitAnalysisFiles", engine, ctx, "/output", "/capture.apc")
+	// Then: scheduling alone exports its metadata and scheduler data.
+	require.NoError(t, err)
+	require.Contains(t, args, "--bin-durations")
+	require.Contains(t, outputs, "output/parquet/metadata/capture_metadata.json")
+	require.Contains(t, outputs, "output/parquet/timeline/scheduler_*.parquet")
+}
+
+func TestNeoprofAndroidGPUTimelineFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		enabled, android bool
+		expected         []string
+	}{
+		{name: "Android timeline", enabled: true, android: true, expected: []string{"--gpu-timeline", "yes", "-C", "ARM_GPU_ACTIVE,MaliTimeline_Perfetto"}},
+		{name: "Android counters only", android: true, expected: []string{"-C", "ARM_GPU_ACTIVE"}},
+		{name: "Linux counters only", enabled: true, expected: []string{"-C", "ARM_GPU_ACTIVE"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			h := jstest.LoadToolIntegration(t, "neoprof")
+			ctx := jstest.EmptyToolContext()
+			ctx.Workload = tool_goja.NewWorkloadLaunch("./model", []string{"./model"}, nil, "", false)
+			ctx.Params["requested_gpu_metrics"] = `["*"]`
+			ctx.Params["collect_gpu_timeline"] = tc.enabled
+			if tc.android {
+				ctx.Workload = tool_goja.NewWorkloadAndroidLaunch("com.example.ml", ".MainActivity", "")
+			}
+			// When
+			args, err := h.Call[[]string](t, "buildRecordArgs", ctx, []map[string]string{{"counter": "ARM_GPU_ACTIVE"}})
+			// Then
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, args)
+		})
+	}
+}
+
+func TestNeoprofHostImageDownloads(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		params   map[string]any
+		download bool
+	}{
+		{name: "default preserves downloads", params: map[string]any{}, download: true},
+		{name: "explicit downloads", params: map[string]any{"download_images": true}, download: true},
+		{name: "VulkanML skips downloads", params: map[string]any{"download_images": false}},
+		{name: "system utilization skips downloads", params: map[string]any{"workflow": "sys_util", "download_images": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			h := jstest.LoadToolIntegration(t, "neoprof")
+			bound, err := parameters.BindToolIntegrationParameters(tc.params, h.ToolParameters(t), "neoprof")
+			require.NoError(t, err)
+			ctx := jstest.EmptyToolContext()
+			ctx.Params = bound.CollapseToMap()
+			// When
+			download, err := h.Call[bool](t, "shouldDownloadImages", ctx)
+			// Then
+			require.NoError(t, err)
+			require.Equal(t, tc.download, download)
+		})
+	}
+}
+
+func TestNeoprofCallChainCollection(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		params   map[string]any
+		expected []string
+	}{
+		{name: "default preserves call chains", params: map[string]any{}, expected: []string{"-r", "normal", "-C", "ARM_GPU_ACTIVE"}},
+		{name: "explicit call chains", params: map[string]any{"collect_call_chains": true}, expected: []string{"-r", "normal", "-C", "ARM_GPU_ACTIVE"}},
+		{name: "VulkanML disables call chains", params: map[string]any{"collect_call_chains": false}, expected: []string{"-r", "normal", "--call-stack-unwinding", "no", "-C", "ARM_GPU_ACTIVE"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			h := jstest.LoadToolIntegration(t, "neoprof")
+			bound, err := parameters.BindToolIntegrationParameters(tc.params, h.ToolParameters(t), "neoprof")
+			require.NoError(t, err)
+			ctx := jstest.EmptyToolContext()
+			ctx.Params = bound.CollapseToMap()
+			// When
+			args, err := h.Call[[]string](t, "buildRecordArgs", ctx, []map[string]string{{"counter": "ARM_GPU_ACTIVE"}})
+			// Then
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, args)
+		})
+	}
+}
+
+func TestNeoprofTimelineExportPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		params map[string]any
+		want   bool
+	}{
+		{"omitted", map[string]any{}, false},
+		{"disabled", map[string]any{"export_timeline": false}, false},
+		{"recipe enabled", map[string]any{"export_timeline": true}, true},
+		{"system utilization", map[string]any{"workflow": "sys_util"}, true},
+		{"GPU metrics", map[string]any{"requested_gpu_metrics": `["gpu_utilization"]`}, true},
+		{"samples", map[string]any{"mode": "samples"}, false},
+		{"metrics", map[string]any{"mode": "metrics"}, false},
+		{"SPE", map[string]any{"mode": "spe"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given: recipe parameters and the default experimental settings.
+			h := jstest.LoadToolIntegration(t, "neoprof")
+			engine := &mocks.MockToolEngine{}
+			engine.On("IsNeoprofTimelineEnabled").Return(false, nil)
+			engine.On("IsCPUSchedulingEnabled").Return(false, nil).Maybe()
+			ctx := jstest.EmptyToolContext()
+			ctx.Params = tc.params
+			ctx.Workload = tool_goja.NewWorkloadSystemWide()
+			// When: the shared policy and analysis argument builder run.
+			enabled, err := h.Call[bool](t, "isTimelineExportEnabled", engine, ctx)
+			require.NoError(t, err)
+			args, err := h.Call[[]string](t, "buildAnalyzeArgs", engine, ctx, map[string]any{
+				"slAnalyzePath": "/tools/sl-analyze", "outputDirectory": "/output", "captureDirectory": "/capture.apc", "collectImages": false,
+			})
+			// Then: all callers use the same export condition.
+			require.NoError(t, err)
+			require.Equal(t, tc.want, enabled)
+			if tc.want {
+				require.Contains(t, args, "--bin-durations")
+			} else {
+				require.NotContains(t, args, "--bin-durations")
+			}
+		})
+	}
 }

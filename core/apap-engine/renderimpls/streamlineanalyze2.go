@@ -32,6 +32,7 @@ type SLMeasurements struct {
 
 // This can be different per metric processor
 type ComputedMetric struct {
+	Optional              bool     `json:"optional,omitempty"`
 	Type                  string   `json:"type"`
 	TotalFrom             string   `json:"total-from"`
 	Columns               []string `json:"columns"`
@@ -532,7 +533,13 @@ func CreateMetricsProcessorsV2(metrics []ComputedMetric, useLegacyMeasurementsTa
 				return nil, fmt.Errorf("invalid relative-order-priority '%s'", metric.RelativeOrderPriority)
 			}
 
-			p := &PercentageProcessor{Columns: metric.Columns, TotalSamplesProcessor: t, UseLegacyMeasurements: useLegacyMeasurementsTable, OrderPriority: orderPriority}
+			p := &PercentageProcessor{
+				Columns:               metric.Columns,
+				TotalSamplesProcessor: t,
+				UseLegacyMeasurements: useLegacyMeasurementsTable,
+				OrderPriority:         orderPriority,
+				Optional:              metric.Optional,
+			}
 			metricsProcessors = append(metricsProcessors, p)
 		case CPUTimeComputeMetric:
 			t := &TotalSamplesProcessor{FromMetric: metric.TotalFrom}

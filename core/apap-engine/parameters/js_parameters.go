@@ -71,11 +71,12 @@ type RadioConfig struct {
 	Custom        map[string]string
 }
 
-// ParameterOption maps to the JS representation of an option object used by radio parameters.
+// ParameterOption maps to the JS representation of a select or radio option.
 type ParameterOption struct {
 	Value       string
 	Label       string
 	Description string
+	Metadata    map[string]string
 }
 
 // ParameterDefinition is the JS mapping of a parameter definition and contains all the common properties.

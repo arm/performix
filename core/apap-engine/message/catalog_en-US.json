@@ -1262,6 +1262,32 @@
       }
     },
     "conductor": {
+      "execution": {
+        "INVALID_REQUEST": {
+          "Severity": "Error",
+          "Message": "The execution request is invalid.",
+          "Explanation": "An executable, argument, environment field or working directory is invalid.",
+          "Advice": "Check the supplied fields and remove unsupported zero characters."
+        },
+        "UNSUPPORTED": {
+          "Severity": "Error",
+          "Message": "This execution method does not support the request.",
+          "Explanation": "The selected execution method cannot preserve the requested shell, process options or platform behavior.",
+          "Advice": "Use a supported shell or the agent execution method for options such as elevated permissions."
+        },
+        "LAUNCH_FAILED": {
+          "Severity": "Error",
+          "Message": "The program could not start.",
+          "Explanation": "The target could not launch the requested program.",
+          "Advice": "Check that the program exists, is executable and supports the target platform."
+        },
+        "TRANSPORT_FAILED": {
+          "Severity": "Error",
+          "Message": "Communication with the execution helper failed.",
+          "Explanation": "The execution helper did not complete a valid response.",
+          "Advice": "Check the target connection and that the deployed helper matches this version of {$PRODUCT_FULL_NAME}."
+        }
+      },
       "adb": {
         "ADB_NOT_FOUND": {
           "Severity": "Error",
@@ -1709,7 +1735,51 @@
         "Advice": "Try relaunching the server. If the issue continues, contact Arm support."
       }
     },
+    "settings": {
+      "READ_FAILED": {
+        "Severity": "Error",
+        "Message": "{$PRODUCT_FULL_NAME} cannot read your saved settings.",
+        "Explanation": "The settings file at '{path}' could not be accessed.",
+        "Advice": "Check that you can access the directory containing this file and have permission to read the file. If the issue continues, contact Arm support."
+      },
+      "PARSE_FAILED": {
+        "Severity": "Error",
+        "Message": "{$PRODUCT_FULL_NAME} cannot load your saved settings.",
+        "Explanation": "The settings file at '{path}' contains invalid data.",
+        "Advice": "If you edited the settings file manually, check your changes for errors. If the issue continues, contact Arm support."
+      },
+      "WRITE_FAILED": {
+        "Severity": "Error",
+        "Message": "{$PRODUCT_FULL_NAME} cannot save your setting.",
+        "Explanation": "The settings file at '{path}' could not be created or updated.",
+        "Advice": "Check that you can access the directory containing this file and have permission to create and update files there. If the issue continues, contact Arm support."
+      },
+      "INVALID_NAME": {
+        "Severity": "Error",
+        "Message": "The setting '{name}' is not supported.",
+        "Explanation": "{$PRODUCT_FULL_NAME} does not recognize this setting, so the request could not be completed.",
+        "Advice": "Check the name provided is correct. If the issue continues, contact Arm support."
+      },
+      "INVALID_VALUE": {
+        "Severity": "Error",
+        "Message": "The value for setting '{name}' is invalid.",
+        "Explanation": "The supplied value does not match the options or format accepted for this setting.",
+        "Advice": "Check the value provided is correct. If the issue continues, contact Arm support."
+      }
+    },
     "product_telemetry": {
+      "EVENT_INVALID": {
+        "Severity": "Error",
+        "Message": "The event could not be submitted.",
+        "Explanation": "The submitting application supplied an unsupported event or invalid event properties.",
+        "Advice": "Check that the application and server versions are compatible."
+      },
+      "EVENT_SUBMISSION_FAILED": {
+        "Severity": "Error",
+        "Message": "The event could not be queued for delivery.",
+        "Explanation": "The server is shutting down or its event queue is full.",
+        "Advice": "For feedback, wait until the server is available, then submit it again."
+      },
       "IDENTITY_ACCESS_FAILED": {
         "Severity": "Error",
         "Message": "The telemetry user ID could not be accessed.",
@@ -1999,6 +2069,20 @@
             "Message": "{$PRODUCT_FULL_NAME} cannot write the list of running processes.",
             "Explanation": "This operation needs a list of processes running on the target. The operation collected a list and transferred it to the host, but could not write it to `{path}`. Possible causes include permission issues or file system errors.",
             "Advice": "Check that you have permission to write to `{path}` on the host. If {$PRODUCT_FULL_NAME} still cannot collect the list of processes, contact Arm support."
+          }
+        },
+        "validate_android_activity_stage": {
+          "ACTIVITY_UNRESOLVED": {
+            "Severity": "Error",
+            "Message": "The Android activity `{activity}` cannot be resolved for package `{package}`.",
+            "Explanation": "The target did not resolve the selected activity for this package.",
+            "Advice": "Check the activity name and that the activity is enabled for the selected package, then try again."
+          },
+          "CHECK_FAILED": {
+            "Severity": "Error",
+            "Message": "The Android activity could not be checked on the target.",
+            "Explanation": "The target did not return a usable result when checking activity `{activity}` in package `{package}`.",
+            "Advice": "Check the target connection and retry the readiness check. If the issue continues, contact Arm support."
           }
         },
         "validate_target_pid_stage": {
@@ -2973,6 +3057,20 @@
         "Advice": "Run the Graphics recipe again on a supported target. If the problem continues, collect a support package for the Run and contact Arm support."
       }
     },
+    "ml_analysis": {
+      "VULKANML_REQUIRES_ANDROID_LAUNCH": {
+        "Severity": "Error",
+        "Message": "VulkanML profiling requires an Android app launch.",
+        "Explanation": "The VulkanML flavor currently collects graph data only when launching an Android app.",
+        "Advice": "Select an Android target and provide the app package and activity to launch."
+      },
+      "COMPARE_MISMATCHED_FLAVORS": {
+        "Severity": "Error",
+        "Message": "ML Analysis cannot compare PyTorch and VulkanML runs.",
+        "Explanation": "The runs use different ML Analysis flavors and produce different types of data.",
+        "Advice": "Select Runs with the same ML Analysis flavor. Select 2 PyTorch Runs to compare operator summaries."
+      }
+    },
     "code_hotspots": {
       "TELEMETRY_SPECIFICATION_UNAVAILABLE": {
         "Severity": "Warning",
@@ -3222,6 +3320,12 @@
       }
     },
     "asct": {
+      "INCOMPLETE_DEPLOYMENT": {
+        "Severity": "Error",
+        "Message": "The ASCT deployment on the Target is incomplete.",
+        "Explanation": "One or more required files are missing from the deployed ASCT package.",
+        "Advice": "Rerun the Recipe with the `--deploy-tools-force` flag."
+      },
       "INSTALL_FAILED": {
         "Severity": "Error",
         "Message": "ASCT could not be installed on the Target.",
@@ -3693,6 +3797,24 @@
         "Message": "The tool options conflict with explicit CPU counter selection.",
         "Explanation": "Explicit CPU counter selection requires samples mode without metric groups or IPC collection. Selected counters also require timeline output.",
         "Advice": "Use samples mode, disable metric groups and IPC collection, and enable timeline output when requesting counters."
+      },
+      "CPU_EVENT_UNAVAILABLE": {
+        "Severity": "Error",
+        "Message": "The requested CPU PMU event '{event}' is unavailable on this target.",
+        "Explanation": "The event is not a programmable CPU PMU event on an available PMU.",
+        "Advice": "Run '{cmd}'. Select an event from the listed 'cpu_event' options."
+      },
+      "CPU_EVENT_ALREADY_REQUESTED": {
+        "Severity": "Error",
+        "Message": "The recipe already requests CPU PMU event '{event}'.",
+        "Explanation": "The additional event duplicates an event already requested by the recipe.",
+        "Advice": "Remove this event from the selection."
+      },
+      "CPU_EVENTS_CAPACITY_EXCEEDED": {
+        "Severity": "Error",
+        "Message": "Too many CPU PMU events are selected for '{pmu}'.",
+        "Explanation": "The number of PMU events specified for collection exceeds the number of programmable counters for PMU `{pmu}` on the target. Selected event count: {selected}. Available counter count: {capacity}.",
+        "Advice": "Remove {remove} of the selected events for '{pmu}' and try again."
       },
       "CPU_COUNTER_OPTIONAL_UNAVAILABLE": {
         "Severity": "Warning",

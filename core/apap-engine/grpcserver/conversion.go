@@ -332,8 +332,9 @@ func DescToProto(in *run.RunDescription) (*apapproto.RunDescription, error) {
 	}
 	if in.WorkloadType == "Android Launch" {
 		meta.AndroidLaunchWorkload = &apapproto.AndroidLaunchWorkload{
-			PackageName:  in.AndroidPackageName,
-			ActivityName: in.AndroidActivityName,
+			PackageName:       in.AndroidPackageName,
+			ActivityName:      in.AndroidActivityName,
+			ActivityArguments: in.AndroidActivityArguments,
 		}
 	}
 
@@ -384,8 +385,9 @@ func RecipeWorkloadFromProto(in *apapproto.RecipeWorkload) (tool.Workload, error
 		}, nil
 	case *apapproto.RecipeWorkload_AndroidLaunchWorkload:
 		return &tool.WorkloadAndroidLaunch{
-			PackageName:  workloadType.AndroidLaunchWorkload.PackageName,
-			ActivityName: workloadType.AndroidLaunchWorkload.ActivityName,
+			PackageName:       strings.TrimSpace(workloadType.AndroidLaunchWorkload.PackageName),
+			ActivityName:      strings.TrimSpace(workloadType.AndroidLaunchWorkload.ActivityName),
+			ActivityArguments: workloadType.AndroidLaunchWorkload.ActivityArguments,
 		}, nil
 	}
 
@@ -499,8 +501,9 @@ func parameterOptionItemsToProto(items []parameters.ParameterOption) []*apapprot
 	out := make([]*apapproto.ParameterOption, len(items))
 	for i, item := range items {
 		proto := &apapproto.ParameterOption{
-			Value: item.Value,
-			Label: item.Label,
+			Value:    item.Value,
+			Label:    item.Label,
+			Metadata: item.Metadata,
 		}
 		if item.Description != "" {
 			proto.Description = &item.Description

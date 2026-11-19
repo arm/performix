@@ -21,6 +21,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-cli/cmd/serverconfig"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/daemonstate"
 	"github.com/Arm-Debug/apap-cli/apap-cli/service/server"
+	"github.com/Arm-Debug/apap-cli/apap-engine/clientcontext"
 	"github.com/Arm-Debug/apap-cli/apap-engine/grpcserver"
 	"github.com/Arm-Debug/apap-cli/api/apapproto"
 )
@@ -42,13 +43,14 @@ type foregroundServerRunner interface {
 }
 
 type autostartClient struct {
+	origin           clientcontext.Client
 	serverRunner     backgroundServerRunner
 	foregroundRunner foregroundServerRunner
 	killServer       func(host string, port int) error
 }
 
 func (c autostartClient) runServerAndConnect(config grpcserver.GrpcServerConfig) (*grpc.ClientConn, error) {
-	connector, err := newEngineConnector(config.Host, false)
+	connector, err := newEngineConnector(config.Host, false, c.origin)
 	var conn *grpc.ClientConn
 	if err == nil {
 		conn, err = connector.Connect(config.Host, config.Port, initialConnectionTimeout)
@@ -61,7 +63,7 @@ func (c autostartClient) runServerAndConnect(config grpcserver.GrpcServerConfig)
 		if err != nil {
 			return nil, err
 		}
-		connector, err = newEngineConnector(config.Host, true)
+		connector, err = newEngineConnector(config.Host, true, c.origin)
 		if err != nil {
 			return nil, err
 		}
@@ -93,7 +95,7 @@ func (c autostartClient) startAndConnect(config grpcserver.GrpcServerConfig) (*g
 	if err := c.serverRunner.Run(config); err != nil {
 		return nil, err
 	}
-	connector, err := newEngineConnector(config.Host, true)
+	connector, err := newEngineConnector(config.Host, true, c.origin)
 	if err != nil {
 		return nil, errors.Join(err, c.killServer(config.Host, config.Port))
 	}
@@ -136,7 +138,7 @@ func (c autostartClient) connectOrStartDaemon(config grpcserver.GrpcServerConfig
 				return nil, false, daemonstate.ErrNoRunningDaemon
 			}
 		} else {
-			connector, healthErr := newEngineConnector(daemon.Host, true)
+			connector, healthErr := newEngineConnector(daemon.Host, true, c.origin)
 			var conn *grpc.ClientConn
 			if healthErr == nil {
 				conn, healthErr = connector.Connect(daemon.Host, daemon.ServerPort, daemonHealthTimeout)
@@ -231,7 +233,7 @@ func (c autostartClient) connectOrStartDaemon(config grpcserver.GrpcServerConfig
 		}
 		return nil, false, err
 	}
-	connector, err := newEngineConnector(config.Host, true)
+	connector, err := newEngineConnector(config.Host, true, c.origin)
 	if err != nil {
 		return nil, true, err
 	}
@@ -341,4 +343,10 @@ func NewAttachedAutostartClientWithOutput(output io.Writer) autostartClient {
 		foregroundRunner: server.NewForegroundRunner(),
 		killServer:       shutter.Kill,
 	}
+}
+
+// WithClient identifies the application using this connection without changing process-global state.
+func (c autostartClient) WithClient(origin clientcontext.Client) autostartClient {
+	c.origin = origin
+	return c
 }

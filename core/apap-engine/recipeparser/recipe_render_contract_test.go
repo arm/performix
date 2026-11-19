@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/dop251/goja"
+	gojarequire "github.com/dop251/goja_nodejs/require"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -155,6 +156,7 @@ func TestCPUMicroarchitectureOptionsAreEmptyWithoutTelemetry(t *testing.T) {
 }
 
 func TestCodeHotspotsParamsInToolConfigs(t *testing.T) {
+	// Given capture parameters for each supported platform.
 	tests := []struct {
 		os                  string
 		toolName            string
@@ -224,12 +226,16 @@ func TestCodeHotspotsParamsInToolConfigs(t *testing.T) {
 				}
 				return !hasJavaStacks && !hasCollectJFR && !hasDotnetStacks
 			})
+			probe := tool.ProbeResult{Available: true}
+			if test.os != "Windows" {
+				probe.Capabilities = availableCPUCyclesForContract()
+			}
 			execCtx.On(
 				"ProbeToolsFromIntegrations",
 				mock.Anything,
 				mock.Anything,
 				hasExpectedParams,
-			).Return([]tool.ProbeResult{{Available: true}}, []error(nil))
+			).Return([]tool.ProbeResult{probe}, []error(nil))
 			execCtx.On(
 				"RunToolIntegrations",
 				mock.Anything,
@@ -242,6 +248,7 @@ func TestCodeHotspotsParamsInToolConfigs(t *testing.T) {
 				ScriptedStage: parsedRecipe.ReadyStages[0],
 				Ctx:           execCtx,
 			}
+			// When checking readiness and collecting with the same configuration.
 			_, err = readyStage.Execute(&recipe.StageContext{
 				Context:           t.Context(),
 				ReadinessNotifier: &recipe.NullReadinessNotifier{},
@@ -254,13 +261,17 @@ func TestCodeHotspotsParamsInToolConfigs(t *testing.T) {
 				Ctx:           execCtx,
 			}
 			_, err = runStage.Execute(&recipe.StageContext{Context: t.Context()})
+			// Then both stages accept the requested collection parameters.
 			require.NoError(t, err)
 		})
 	}
 }
 
 func TestJavaRenderUsesProcessSelection(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "apap-cli", "recipes", "lib", "java_analysis_render.js"))
+	// Given
+	sourcePath, err := filepath.Abs(filepath.Join("..", "..", "apap-cli", "recipes", "lib", "java_analysis_render.js"))
+	require.NoError(t, err)
+	data, err := os.ReadFile(sourcePath)
 	require.NoError(t, err)
 	for _, workload := range []string{"Launch", "Attach", "System Wide"} {
 		for _, scenario := range []struct {
@@ -274,9 +285,11 @@ func TestJavaRenderUsesProcessSelection(t *testing.T) {
 			{"empty index", "42", "[]", ""},
 		} {
 			t.Run(workload+"/"+scenario.name, func(t *testing.T) {
+				// Given
 				vm := goja.New()
+				gojarequire.NewRegistry().Enable(vm)
 				require.NoError(t, vm.Set("workloadType", workload))
-				_, err := vm.RunString("var module = {exports: {}};\n" + string(data))
+				_, err := vm.RunScript(sourcePath, "var module = {exports: {}};\n"+string(data))
 				require.NoError(t, err)
 				_, err = vm.RunString(`
 function renderJava(selectedPid, recordings) {
@@ -291,8 +304,10 @@ function renderJava(selectedPid, recordings) {
 function sql(result) { return result.renderers.find(r => r.id === 'java_summary').config.sql; }
 `)
 				require.NoError(t, err)
+				// When
 				_, err = vm.RunString("var result = renderJava(" + scenario.selectedPID + ", " + scenario.recordings + ");")
 				require.NoError(t, err)
+				// Then
 				filters, err := vm.RunString("result.ui.side_panel_filters.length")
 				require.NoError(t, err)
 				assert.Zero(t, filters.ToInteger(), "No separate Recording filter")
@@ -1110,6 +1125,9 @@ func executeRecipeReadiness(
 		for i := range probeResults {
 			probeResults[i] = tool.ProbeResult{Available: true, Capabilities: map[string]any{}}
 		}
+		if recipeDefinition.Name == "code_hotspots" && targetInfo.Os.OSFamily != "Windows" {
+			probeResults[0].Capabilities = availableCPUCyclesForContract()
+		}
 		probeResults[0].Advice = probeAdvice
 		executionContext.
 			On("ProbeToolsFromIntegrations", mock.Anything, mock.Anything, mock.Anything).
@@ -1897,5 +1915,15 @@ func TestCoreTypeFilteringRequiresRetainedRichCapture(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func availableCPUCyclesForContract() map[string]any {
+	return map[string]any{
+		"counter.cpu_cycles": map[string]any{
+			"componentType": map[string]any{"name": "tool_capabilities/cpu_counter", "version": "1.0"},
+			"state":         "available",
+			"payload":       map[string]any{"title": "CPU Cycles", "units": "cycles", "bindings": []any{}},
+		},
 	}
 }

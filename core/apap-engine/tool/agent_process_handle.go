@@ -15,12 +15,15 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/agent"
+	"github.com/Arm-Debug/apap-cli/apap-engine/conductor"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
 	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/privilege"
 	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/process"
 )
+
+const processCleanupTimeout = 5 * time.Second
 
 // AgentProcessHandle manages a remote process via the target agent.
 // It supports lifecycle operations (kill, interrupt, wait) and I/O streams.
@@ -172,8 +175,6 @@ func (p *AgentProcessHandle) PID() int {
 	return int(p.pid)
 }
 
-const processCleanupTimeout = 5 * time.Second
-
 // Kill sends a process kill request even after the operation has been canceled.
 // If the request fails, local waits and streams are canceled so cleanup can finish.
 func (p *AgentProcessHandle) Kill() error {
@@ -251,6 +252,9 @@ func (p *AgentProcessHandle) Wait() (int, error) {
 	}
 
 	if resp != nil {
+		if resp.CleanupFailureReason != "" {
+			err = errors.Join(err, cleanupFailureFromProto(resp.CleanupFailureReason))
+		}
 		return int(resp.ExitCode), err
 	}
 	return 0, err
@@ -282,3 +286,12 @@ func (p *AgentProcessHandle) WriteStdin(data string) error {
 
 func (p *AgentProcessHandle) Stdout() io.Reader { return p.stdoutPipeReader }
 func (p *AgentProcessHandle) Stderr() io.Reader { return p.stderrPipeReader }
+
+// Only allowlisted diagnostics cross the RPC boundary; arbitrary cleanup paths
+// and OS error text stay on the execution host.
+func cleanupFailureFromProto(reason string) error {
+	if reason == "" {
+		return nil
+	}
+	return &process.CleanupError{Err: conductor.NewExecutionErrorReason(conductor.ExecutionTransport, process.SafeFailureReason(process.FailureReason(reason)))}
+}

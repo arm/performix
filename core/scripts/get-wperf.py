@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import os
 import platform
 import subprocess
 import shutil
@@ -164,6 +165,24 @@ def main() -> None:
     log("Removing redundant directories")
     _clean(wperf_helper_license_dir) # The licenses have already been copied and renamed accordingly, so remove this directory
     _clean(tmp_dir / "lib") # lib is not used by the wperf tool
+
+    if os.environ.get("SIGN_REQUIRED") == "true":
+        binaries = [tmp_dir / "wperf" / "wperf-helper.exe"]
+        # Older helper releases also include this unsigned DLL. Leave the
+        # signed WindowsPerf binaries and driver unchanged.
+        record_dll = tmp_dir / "wperf" / "libwperf_record.dll"
+        if record_dll.is_file():
+            binaries.append(record_dll)
+        for binary in binaries:
+            subprocess.run([
+                sys.executable,
+                SCRIPT_DIR / "run-bash.py",
+                (SCRIPT_DIR / "sign.sh").as_posix(),
+                "windows",
+                binary.resolve().as_posix(),
+                BUNDLE_VERSION,
+                "arm64",
+            ], check=True)
 
     log(f"Creating tarball {output_file}")
     _create_tarball(tmp_dir, output_file)

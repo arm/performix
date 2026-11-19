@@ -69,9 +69,14 @@ func validateCapabilityRequest(ic IntegrationContext, reg *Registry) error {
 		return nil
 	}
 	request := ic.CapabilityRequest
-	for _, id := range append(append([]string{}, request.Required...), request.Optional...) {
-		if _, supported := capabilities.LookupDefinition(id); !supported {
+	for _, id := range request.Required {
+		if _, supported := capabilities.LookupDefinition(id); !supported && !capabilities.IsNativeCPUCounterID(id) {
 			return invalidCounterCollectionError(fmt.Errorf("unsupported capability %q", id))
+		}
+	}
+	for _, id := range request.Optional {
+		if _, supported := capabilities.LookupDefinition(id); !supported {
+			return invalidCounterCollectionError(fmt.Errorf("unsupported optional capability %q", id))
 		}
 	}
 	factory := reg.FindTool(ic.Name, ic.Version)
@@ -84,36 +89,28 @@ func validateCapabilityRequest(ic IntegrationContext, reg *Registry) error {
 	return nil
 }
 
-func prepareCounterCollection(ic *IntegrationContext, reg *Registry) error {
-	if err := validateCapabilityRequest(*ic, reg); err != nil {
-		return err
-	}
+func prepareCounterCollection(ic *IntegrationContext) error {
 	if ic.CapabilityRequest == nil {
 		return nil
 	}
 	request := ic.CapabilityRequest
-	if ic.Discovery == nil {
-		probeContext := *ic
-		// A non-empty selection needs the full catalogue. An explicit-empty
-		// selection keeps its request so the integration can skip enumeration
-		// while still performing normal readiness checks.
-		if len(request.Required)+len(request.Optional) > 0 {
-			probeContext.CapabilityRequest = nil
-		}
-		results, errs := ProbeTools([]IntegrationContext{probeContext}, reg, nil)
-		if err := errors.Join(errs...); err != nil {
-			return err
-		}
-		ic.Discovery = &results[0]
-	}
 	if !ic.Discovery.Available {
+		for _, advice := range ic.Discovery.Advice {
+			if advice.Level != "error" {
+				continue
+			}
+			msg := message.New(message.MessageCode(advice.MessageCode))
+			if msg != nil {
+				return msg.WithMetadata(advice.Metadata).WithCause(errors.New(advice.Cause))
+			}
+		}
 		return invalidCounterCollectionError(fmt.Errorf("tool %s is not ready", ic.Name))
 	}
-	if err := validateCPUDiscovery(*ic.Discovery, true, len(request.Required)+len(request.Optional) > 0); err != nil {
+	if err := validateCPUDiscovery(*ic.Discovery, true, requiresLogicalDiscovery(request)); err != nil {
 		return err
 	}
 	for _, id := range request.Required {
-		capability, err := capabilities.ParseCPUCounterValue(id, ic.Discovery.Capabilities[id], false)
+		capability, err := capabilities.ParseCPUCounterCapabilityValue(id, ic.Discovery.Capabilities[id], false)
 		if err != nil {
 			return invalidCounterCollectionError(err)
 		}
@@ -122,12 +119,20 @@ func prepareCounterCollection(ic *IntegrationContext, reg *Registry) error {
 				WithMetadata(map[string]string{"capability": id})
 		}
 	}
-	if len(request.Required)+len(request.Optional) == 0 {
-		// Readiness is established, but an empty selection has no catalogue to
-		// pass into collection and must not trigger integration enumeration.
-		ic.Discovery = nil
-	}
 	return nil
+}
+
+func requiresLogicalDiscovery(request *capabilities.CapabilityRequest) bool {
+	// Request validation allows optional selections only for logical counters.
+	if request == nil || len(request.Optional) > 0 {
+		return true
+	}
+	for _, id := range request.Required {
+		if _, logical := capabilities.LookupDefinition(id); logical {
+			return true
+		}
+	}
+	return false
 }
 
 func validateCPUDiscovery(result ProbeResult, optedIn, required bool) error {
@@ -185,9 +190,9 @@ func AddCapabilitySelectionAdvice(result *ProbeResult, request *capabilities.Cap
 		for _, id := range selection.ids {
 			value, ok := result.Capabilities[id]
 			if !ok {
-				continue
+				return invalidCounterCollectionError(fmt.Errorf("counter discovery did not return %s", id))
 			}
-			capability, err := capabilities.ParseCPUCounterValue(id, value, false)
+			capability, err := capabilities.ParseCPUCounterCapabilityValue(id, value, false)
 			if err != nil {
 				return invalidCounterCollectionError(err)
 			}
@@ -206,18 +211,18 @@ func AddCapabilitySelectionAdvice(result *ProbeResult, request *capabilities.Cap
 // counterOutcomeSet belongs to one collection invocation and is shared by its localities.
 type counterOutcomeSet struct {
 	mu        sync.Mutex
-	published map[string]capabilities.CPUCounterValue
+	published map[string]capabilities.CPUCounterCapabilityValue
 	staged    map[string]stagedCounterOutcome
 }
 
 type stagedCounterOutcome struct {
-	value   capabilities.CPUCounterValue
-	publish func(capabilities.CPUCounterValue) error
+	value   capabilities.CPUCounterCapabilityValue
+	publish func(capabilities.CPUCounterCapabilityValue) error
 }
 
 // StageCPUCounterOutcome keeps a collected outcome private until the complete
 // record and reformat lifecycle has succeeded.
-func (ic *IntegrationContext) StageCPUCounterOutcome(id string, value capabilities.CPUCounterValue, publish func(capabilities.CPUCounterValue) error) bool {
+func (ic *IntegrationContext) StageCPUCounterOutcome(id string, value capabilities.CPUCounterCapabilityValue, publish func(capabilities.CPUCounterCapabilityValue) error) bool {
 	if ic.counterOutcomes == nil {
 		return false
 	}
@@ -239,8 +244,7 @@ func (ic *IntegrationContext) finalizeCounterOutcomes(failureReason string) erro
 	for id, staged := range ic.counterOutcomes.staged {
 		value := staged.value
 		if failureReason != "" {
-			value.State = capabilities.CPUCounterStateIncomplete
-			value.Payload.Reason = &failureReason
+			value = value.Incomplete(failureReason)
 		}
 		if err := staged.publish(value); err != nil {
 			errs = append(errs, err)
@@ -258,24 +262,17 @@ func (ic *IntegrationContext) finalizeCounterOutcomes(failureReason string) erro
 				// A failed publication must retain its original outcome for retry.
 				continue
 			}
-			definition, _ := capabilities.LookupDefinition(id) // Validated during preparation.
-			value := capabilities.CPUCounterValue{
-				ComponentType: definition.ComponentType,
-				State:         capabilities.CPUCounterStateIncomplete,
-				Payload: capabilities.CPUCounterPayload{
-					Title: definition.Title, Units: definition.Units,
-					Bindings: []capabilities.CPUCounterBinding{}, Reason: &failureReason,
-				},
-			}
-			contents, err := json.Marshal(struct {
-				State   string                         `json:"state"`
-				Payload capabilities.CPUCounterPayload `json:"payload"`
-			}{value.State, value.Payload})
+			value, err := capabilities.ParseCPUCounterCapabilityValue(id, ic.Discovery.Capabilities[id], false)
 			if err == nil {
-				loc := ic.DefaultEngineLocality
-				err = PublishJSONComponent(loc.Engine, loc.CapabilityPublisher, ic.OutputEntityDir,
-					cdf.ComponentType{Name: definition.ComponentType.Name, SchemaVersion: definition.ComponentType.Version},
-					filepath.Join("capabilities", id+".json"), string(contents))
+				value = value.Incomplete(failureReason)
+				var contents []byte
+				contents, err = value.MarshalOutcome()
+				if err == nil {
+					loc := ic.DefaultEngineLocality
+					err = PublishJSONComponent(loc.Engine, loc.CapabilityPublisher, ic.OutputEntityDir,
+						cdf.ComponentType{Name: value.ComponentType.Name, SchemaVersion: value.ComponentType.Version},
+						filepath.Join("capabilities", id+".json"), string(contents))
+				}
 			}
 			if err != nil {
 				errs = append(errs, err)
@@ -297,7 +294,7 @@ func (ic *IntegrationContext) discardStagedCounterOutcomes() {
 }
 
 // RecordCPUCounterOutcome records a validated outcome only after publication succeeds.
-func (ic *IntegrationContext) RecordCPUCounterOutcome(id string, value capabilities.CPUCounterValue) {
+func (ic *IntegrationContext) RecordCPUCounterOutcome(id string, value capabilities.CPUCounterCapabilityValue) {
 	// Probes and directly constructed integrations do not have a collection tracker.
 	if ic.counterOutcomes == nil {
 		return
@@ -322,7 +319,7 @@ func (ic *IntegrationContext) validateCounterOutcomes() error {
 			return invalidCounterCollectionError(fmt.Errorf("successful tool invocation omitted final outcome for %s", id))
 		}
 		if outcome.FailsCollectionRegardlessOfPolicy() {
-			return invalidCounterCollectionError(fmt.Errorf("capability %s finished with %s", id, *outcome.Payload.Reason))
+			return invalidCounterCollectionError(fmt.Errorf("capability %s finished with %s", id, outcome.Reason()))
 		}
 	}
 	for _, id := range ic.CapabilityRequest.Required {

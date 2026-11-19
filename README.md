@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Arm Performix
 
-Arm Performix is a performance analysis toolkit for developers building on Arm-based infrastructure. It combines target-side data collection with guided analysis, function-level insights, and desktop visualisations.
+Arm Performix is a performance analysis toolkit for developers building on Arm-based infrastructure. It combines target-side data collection with guided analysis, function-level insights, and desktop visualisations. With the Arm Performix MCP server, you can use a compatible AI coding agent to investigate profiling results and run profiling workflows directly from your development environment.
 
 ## What Does This Repository Contain?
 
@@ -176,3 +176,7 @@ cd core/apap-cli
 ./apx recipe ready system_utilization --system-wide --target linux-target
 ./apx recipe run system_utilization --system-wide --timeout 30 --deploy-tools --target linux-target
 ```
+
+## Testing
+
+See [TEST.md](TEST.md) for the complete list of Performix test suites.

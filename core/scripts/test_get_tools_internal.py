@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import io
 import tarfile
 import tempfile
 import unittest
@@ -101,6 +102,71 @@ class AndroidToolPackagingTests(unittest.TestCase):
             "lib-gpu-layers-build-9.8.0.ngp_b7193aa2_3-target-binary.zip",
         )
         package.assert_called_once()
+
+
+class WindowsToolSigningTests(unittest.TestCase):
+    def package_variant(self, root, os_name, arch, signing, sign):
+        name = "sl-analyze.exe" if os_name == "Windows" else "sl-analyze"
+
+        def download(url, destination, **kwargs):
+            with tarfile.open(destination, "w:gz") as archive:
+                for path, content in {
+                    f"bin/{name}": b"original binary",
+                    "license_terms/third_party_licenses.txt": b"license",
+                }.items():
+                    member = tarfile.TarInfo(path)
+                    member.size = len(content)
+                    archive.addfile(member, io.BytesIO(content))
+
+        with patch.dict(get_tools.os.environ, {"SIGN_REQUIRED": signing}), patch.object(
+            get_tools, "_download", side_effect=download
+        ), patch.object(get_tools.public_tools, "run_script", side_effect=sign) as signer:
+            get_tools._get_neoprof_variant(
+                os_name, arch, root / "tools", root / "staging", root / "host",
+                "9.8.0", "rc1", "9.8.0", "test-token",
+            )
+        return signer
+
+    def test_archive_and_host_copy_have_expected_signatures(self):
+        cases = [
+            ("Windows Arm64 release", "Windows", "aarch64", "true", b"signed binary", 1),
+            ("Windows x64 release", "Windows", "x86_64", "true", b"signed binary", 1),
+            ("Windows developer build", "Windows", "aarch64", "false", b"original binary", 0),
+            ("Darwin skips Windows signing", "Darwin", "aarch64", "true", b"original binary", 0),
+        ]
+        for case_name, os_name, arch, signing, expected, expected_calls in cases:
+            with (
+                self.subTest(case=case_name),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+
+                def sign(command):
+                    Path(command[2]).write_bytes(b"signed binary")
+
+                signer = self.package_variant(root, os_name, arch, signing, sign)
+                self.assertEqual(signer.call_count, expected_calls)
+                name = "sl-analyze.exe" if os_name == "Windows" else "sl-analyze"
+                archive = (
+                    root / "tools/sl-analyze/9.8.0-rc1"
+                    / f"sl-analyze-{os_name}-{arch}.tar.gz"
+                )
+                with tarfile.open(archive) as bundle:
+                    self.assertEqual(bundle.extractfile(f"bin/{name}").read(), expected)
+                    license_file = bundle.extractfile("license_terms/third_party_licenses.txt")
+                    self.assertEqual(license_file.read(), b"license")
+                host_binary = next((root / "host").rglob(name))
+                self.assertEqual(host_binary.read_bytes(), expected)
+
+    def test_signing_failure_stops_archive_and_host_copy_creation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(RuntimeError, "signing failed"):
+                self.package_variant(
+                    root, "Windows", "aarch64", "true", RuntimeError("signing failed")
+                )
+            self.assertFalse((root / "tools").exists())
+            self.assertFalse((root / "host").exists())
 
 
 if __name__ == "__main__":

@@ -46,8 +46,10 @@ func recipeTestPath(t *testing.T, recipeFile string) string {
 }
 
 type renderStageOptions struct {
+	cpuSchedulingEnabled            bool
 	neoprofTimelineEnabled          bool
 	neoprofSystemUtilizationEnabled bool
+	rerenderingEnabled              bool
 }
 
 func executeRenderStage(
@@ -120,7 +122,7 @@ func executeRenderStageWithResolvedCapabilities(
 			RunDescriptions: runDescriptions,
 			RunModels:       runModels,
 			RunCapabilities: runCapabilities,
-			FeatureFlags:    featureflags.Flags{NeoprofTimeline: options.neoprofTimelineEnabled, NeoprofSystemUtilization: options.neoprofSystemUtilizationEnabled, Rerendering: false},
+			FeatureFlags:    featureflags.Flags{CPUScheduling: options.cpuSchedulingEnabled, NeoprofTimeline: options.neoprofTimelineEnabled, NeoprofSystemUtilization: options.neoprofSystemUtilizationEnabled, Rerendering: options.rerenderingEnabled},
 		},
 	}
 

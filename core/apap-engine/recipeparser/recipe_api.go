@@ -44,8 +44,9 @@ type LaunchWorkloadData struct {
 }
 
 type AndroidLaunchWorkloadData struct {
-	PackageName  string
-	ActivityName string
+	PackageName       string
+	ActivityName      string
+	ActivityArguments string
 }
 
 type ToolArg struct {
@@ -134,6 +135,7 @@ type RecipeAPI interface {
 	isRerenderingEnabled(goja.FunctionCall) goja.Value
 	isJfrCaptureEnabled(goja.FunctionCall) goja.Value
 	isNeoprofSystemUtilizationEnabled(goja.FunctionCall) goja.Value
+	isCPUSchedulingEnabled(goja.FunctionCall) goja.Value
 	isNeoprofTimelineEnabled(goja.FunctionCall) goja.Value
 }
 
@@ -186,14 +188,15 @@ func extractWorkload(arg WorkloadArg) (tool.Workload, error) {
 		} else if err := gojautils.ParseObjectWithRegex(
 			arg.Data,
 			&androidData,
-			[]*regexp.Regexp{},
+			[]*regexp.Regexp{regexp.MustCompile(`^ActivityArguments$`)},
 			[]*regexp.Regexp{},
 		); err != nil {
 			return nil, fmt.Errorf("android launch workload data cannot be parsed as AndroidLaunchWorkloadData struct")
 		}
 		workload = &tool.WorkloadAndroidLaunch{
-			PackageName:  androidData.PackageName,
-			ActivityName: androidData.ActivityName,
+			PackageName:       androidData.PackageName,
+			ActivityName:      androidData.ActivityName,
+			ActivityArguments: androidData.ActivityArguments,
 		}
 	case "attach":
 		commandData, ok := arg.Data.(int32)
@@ -547,8 +550,9 @@ func (r *ConcreteRecipeAPI) getWorkload(call goja.FunctionCall) goja.Value {
 	case *tool.WorkloadAndroidLaunch:
 		workloadOut.Type = "androidLaunch"
 		workloadOut.Data = AndroidLaunchWorkloadData{
-			PackageName:  w.PackageName,
-			ActivityName: w.ActivityName,
+			PackageName:       w.PackageName,
+			ActivityName:      w.ActivityName,
+			ActivityArguments: w.ActivityArguments,
 		}
 	case *tool.WorkloadAttach:
 		workloadOut.Type = "attach"
@@ -678,9 +682,6 @@ func (r *ConcreteRecipeAPI) runToolsImpl(arg RunToolConfigurationsArg) []error {
 		panic(r.vm.NewGoError(err))
 	}
 	for i := range intCtxs {
-		if intCtxs[i].CapabilityRequest == nil {
-			continue
-		}
 		if cached, ok := r.cachedDiscovery(intCtxs[i]); ok {
 			copy := r.cloneDiscovery(cached)
 			intCtxs[i].Discovery = &copy
@@ -849,11 +850,14 @@ func (r *ConcreteRecipeAPI) probeTools(call goja.FunctionCall) goja.Value {
 			r.discovery[key] = r.cloneDiscovery(result)
 		}
 	}
-	// Keep cached discovery selection-neutral; every caller gets fresh policy advice.
-	for i := range resp {
-		if err := tool.AddCapabilitySelectionAdvice(&resp[i], intCtxs[i].CapabilityRequest); err != nil {
-			panic(r.vm.NewGoError(err))
-		}
+	// Keep cached discovery selection-neutral; validate each caller's setup.
+	for i := range intCtxs {
+		intCtxs[i].Discovery = &resp[i]
+	}
+	var errs []error
+	resp, errs = r.execCtx.ValidateToolsFromIntegrations(r.context, r.cmdStateCh, intCtxs)
+	if err := errors.Join(errs...); err != nil {
+		panic(r.vm.NewGoError(err))
 	}
 	obj, err := gojautils.GoArrayToJS(r.vm, resp)
 	if err != nil {
@@ -921,6 +925,10 @@ func (r *ConcreteRecipeAPI) isFullCaptureSupportEnabled(call goja.FunctionCall) 
 
 func (r *ConcreteRecipeAPI) isRerenderingEnabled(call goja.FunctionCall) goja.Value {
 	return r.vm.ToValue(r.execCtx.GetFeatureFlags().Rerendering)
+}
+
+func (r *ConcreteRecipeAPI) isCPUSchedulingEnabled(call goja.FunctionCall) goja.Value {
+	return r.vm.ToValue(r.execCtx.GetFeatureFlags().CPUScheduling)
 }
 
 func (r *ConcreteRecipeAPI) isNeoprofTimelineEnabled(call goja.FunctionCall) goja.Value {

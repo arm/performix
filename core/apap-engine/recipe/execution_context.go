@@ -53,6 +53,7 @@ type ExecutionContext interface {
 	ToolsDir() string
 	RunToolIntegrations(context context.Context, cmdStateCh *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext) (func(), []error)
 	ProbeToolsFromIntegrations(context context.Context, cmdStateCh *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext) ([]tool.ProbeResult, []error)
+	ValidateToolsFromIntegrations(context context.Context, cmdStateCh *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext) ([]tool.ProbeResult, []error)
 	GetFeatureFlags() featureflags.Flags
 	ToolVersions() map[string]string
 }
@@ -253,8 +254,8 @@ func (c *RunExecutionContext) recordRunStopSupport(ctx context.Context, intCtxs 
 	return nil
 }
 
-func (c *RunExecutionContext) prepareAndRecordRunStopSupport(ctx context.Context, intCtxs []tool.IntegrationContext, tr *tool.Registry) (*tool.PreparedToolIntegrations, []error) {
-	prepared, errs := tool.PrepareToolIntegrations(intCtxs, tr)
+func (c *RunExecutionContext) prepareAndRecordRunStopSupport(ctx context.Context, intCtxs []tool.IntegrationContext, tr *tool.Registry, cancelCh <-chan struct{}) (*tool.PreparedToolIntegrations, []error) {
+	prepared, errs := tool.PrepareToolIntegrations(intCtxs, tr, cancelCh)
 	if errors.Join(errs...) != nil {
 		return nil, errs
 	}
@@ -301,7 +302,7 @@ func (c *RunExecutionContext) RunToolIntegrations(ctx context.Context, cmdStateC
 		// Response expects an error for each integration context, replicate the error for all contexts
 		return cleanup, integrationErrors(len(intCtxs), err)
 	}
-	prepared, errs := c.prepareAndRecordRunStopSupport(ctx, intCtxs, tr)
+	prepared, errs := c.prepareAndRecordRunStopSupport(ctx, intCtxs, tr, cmdStateCh.CancelChan)
 	if errors.Join(errs...) != nil {
 		return cleanup, errs
 	}
@@ -333,6 +334,15 @@ func (c *RunExecutionContext) toolPaths() deployer.BaseToolDeploymentPaths {
 // ProbeToolsFromIntegrations returns discovery without request-specific advice so it can be cached.
 // Upon cancellation request the probe will be ended prematurely with an error
 func (c *RunExecutionContext) ProbeToolsFromIntegrations(ctx context.Context, cmdStateCh *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext) ([]tool.ProbeResult, []error) {
+	return c.checkToolIntegrations(ctx, cmdStateCh, intCtxs, tool.ProbeToolDiscovery)
+}
+
+// ValidateToolsFromIntegrations checks requests against matching discovery.
+func (c *RunExecutionContext) ValidateToolsFromIntegrations(ctx context.Context, cmdStateCh *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext) ([]tool.ProbeResult, []error) {
+	return c.checkToolIntegrations(ctx, cmdStateCh, intCtxs, tool.ValidateTools)
+}
+
+func (c *RunExecutionContext) checkToolIntegrations(ctx context.Context, cmdStateCh *cmdsync.CommandStateChannel, intCtxs []tool.IntegrationContext, check func([]tool.IntegrationContext, *tool.Registry, <-chan struct{}) ([]tool.ProbeResult, []error)) ([]tool.ProbeResult, []error) {
 	// Keep integration runtimes and localities alive while cancellation hooks
 	// settle. Parent and explicit cancellation are observed separately below.
 	cleanupCtx, cancelCleanup := context.WithCancel(context.WithoutCancel(ctx))
@@ -367,7 +377,7 @@ func (c *RunExecutionContext) ProbeToolsFromIntegrations(ctx context.Context, cm
 		case <-cleanupCtx.Done():
 		}
 	}()
-	return tool.ProbeToolDiscovery(
+	return check(
 		intCtxs,
 		tr,
 		probeCancelled,

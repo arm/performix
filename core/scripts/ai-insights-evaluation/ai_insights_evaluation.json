@@ -844,7 +844,7 @@
       "mcp_prompt": "The throughput of my workload at `./build-release/test_case_52` is too low on the supplied Arm hardware target, but I have no idea what the root cause is. Use Performix to gather and analyze evidence to establish the root cause or causes of this performance problem. Support your diagnosis with recorded measurements from the Arm target, attributed to the relevant workload functions or call paths. Where the evidence points to a CPU bottleneck, use hardware performance-counter evidence to explain the limiting microarchitectural mechanism and distinguish it from other plausible causes. Edit the workload source code to increase completed iterations by at least 10% without changing the test runtime. Rebuild the optimized workload and validate its performance against the original baseline with fresh comparable Performix runs, throughput measurements and the correctness check. The correctness check should compare the original and modified implementations on identical inputs and the same amount of completed work in a separate functional check. Preserve the workload’s inputs, required work per iteration, component weights, warm-up and measured duration. Do not move required measured work into setup or replace it with precomputed results.",
       "pathways_execution": {
         "mode": "host_ssh",
-        "agent_timeout_seconds": 1800,
+        "agent_timeout_seconds": 2400,
         "workload_source": {
           "repository": "https://github.com/Arm-Debug/performix-workloads.git",
           "branch": "main",
@@ -876,7 +876,7 @@
       "mcp_prompt": "Use Performix to help me investigate and improve my application's performance. If you need more information before starting, ask all your clarification questions together and wait for my answers.",
       "pathways_execution": {
         "mode": "host_ssh",
-        "agent_timeout_seconds": 600,
+        "agent_timeout_seconds": 180,
         "workload_source": {
           "repository": "https://github.com/Arm-Debug/performix-workloads.git",
           "branch": "main",

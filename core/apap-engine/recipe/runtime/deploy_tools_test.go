@@ -119,9 +119,6 @@ func TestDeployMandatoryTools_ReturnsDeployWhenMissing(t *testing.T) {
 			mandatoryTools := []tool.ToolInfo{
 				{Name: terminology.GetAgentBinaryName(), Version: versions.GetVersion()},
 			}
-			if testCase.platform.OS == conductor.Android {
-				mandatoryTools = append(mandatoryTools, tool.ToolInfo{Name: "sl-record", Version: versions.SlRecordVersion})
-			}
 			toolsDir := filepath.Join(tmpDir, "tools")
 			for _, ti := range mandatoryTools {
 				writeToolBundle(t, toolsDir, ti, testCase.platform)
@@ -167,9 +164,6 @@ func (s *optionsDeploymentCallback) Execute(recipe.ExecutionContext, *recipe.Sta
 
 func TestOptionsToolChecksOnlyWhenRequired(t *testing.T) {
 	for name, build := range map[string]func(*StageConfiguration) []recipe.Stage{
-		"readiness": func(cfg *StageConfiguration) []recipe.Stage {
-			return ConfigureRecipeReadyStages(cfg, cfg.Recipe.ReadyStages)
-		},
 		"info and validation evaluator": func(cfg *StageConfiguration) []recipe.Stage {
 			return ConfigureRecipeInfoStages(cfg, cfg.Recipe.ParameterOptionsStages)
 		},
@@ -179,6 +173,7 @@ func TestOptionsToolChecksOnlyWhenRequired(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, required := range []bool{false, true} {
+				// Given
 				cfg := newReadyStageConfiguration(&recipe.Recipe{
 					ParameterOptionsStages: []recipe.ParameterOptionsStage{
 						&optionsDeploymentCallback{requiresTools: required},
@@ -186,7 +181,10 @@ func TestOptionsToolChecksOnlyWhenRequired(t *testing.T) {
 					},
 					ParameterValidationStage: &fakeScriptedStage{},
 				})
+				// When
 				ss := build(cfg)
+
+				// Then
 				var sequence []string
 				for _, stage := range ss {
 					switch stage := stage.(type) {
@@ -211,15 +209,19 @@ func TestOptionsToolChecksOnlyWhenRequired(t *testing.T) {
 }
 
 func TestOptionsDeploymentNotScheduledWhenOptionsSkipped(t *testing.T) {
+	// Given
 	cfg := newReadyStageConfiguration(&recipe.Recipe{
 		ParameterOptionsStages: []recipe.ParameterOptionsStage{&optionsDeploymentCallback{requiresTools: true}},
 	})
 	includeOptions := false
-	for _, ss := range [][]recipe.Stage{
-		ConfigureRecipeReadyStages(cfg, nil),
+	// When
+	stageLists := [][]recipe.Stage{
 		ConfigureRecipeInfoStages(cfg, nil),
 		(&ValidationStageFactoryImpl{IncludeOptionStages: &includeOptions}).BuildStages(cfg, nil),
-	} {
+	}
+
+	// Then
+	for _, ss := range stageLists {
 		for _, stage := range ss {
 			require.IsNotType(t, &stages.ToolDeploymentStage{}, stage)
 		}

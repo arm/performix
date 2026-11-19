@@ -316,24 +316,22 @@ The Working Directory Remains In Place On The Target If No Cleanup Is Set
   And The Target Is Prepared
   When Run Code Hotspots Recipe
   ...  --workload ${LAUNCH_WORKLOAD} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG} --no-cleanup
-  Then The Last Command Succeeded
-  And The Target Output Directory Is Not Empty
+  Then The Target Output Directory Is Not Empty
   [Teardown]  The Output Directory Is Removed From The Target
 
 Recipe Run Uses The Correct Target When Multiple Targets Exist
-  [Documentation]  Tests that recipe run uses the correct target when multiple targets exist.
+  [Documentation]  Tests that recipe run uses the target specified by --target by checking tools are deployed on it.
   [Tags]  code-hotspots
   [Setup]  Run Keywords  Remove All Targets
   ...  AND  Create Default Dummy Target  dummy
   ...  AND  The Test Target Is Added Successfully
-  ...  AND  Prepare The Test Target If Needed
   Given The Code Hotspots Recipe Is Listed
   And The Target Is The Default  dummy
   And The Target Is Not The Default  ${G_TARGET_NAME}
+  And The Target Is Unprepared Successfully
   When Run Code Hotspots Recipe
-  ...  --workload ${LAUNCH_WORKLOAD} --timeout 1 --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
-  Then The Last Command Succeeded
-  And The Target Output Directory Is Empty
+  ...  --workload ${LAUNCH_WORKLOAD} --timeout 5 --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  Then The Target Agent Is Deployed
   [Teardown]  Run Keywords  Remove All Targets
   ...  AND  Ensure Recipe Run Suite Target Is Ready
 

@@ -441,6 +441,7 @@ func TestNeoprofBuildAnalyzeArgsForSysUtilWorkflow(t *testing.T) {
 
 	engine := vm.NewObject()
 	require.NoError(t, engine.Set("isNeoprofTimelineEnabled", func() bool { return false }))
+	require.NoError(t, engine.Set("isCPUSchedulingEnabled", func() bool { return false }))
 	ctx := vm.NewObject()
 	require.NoError(t, ctx.Set("params", map[string]any{"workflow": "sys_util"}))
 	require.NoError(t, ctx.Set("workload", map[string]any{"type": "androidLaunch"}))
@@ -491,6 +492,7 @@ func TestNeoprofBuildAnalyzeArgsDoesNotEnableTimelineForCPURequest(t *testing.T)
 
 	engine := vm.NewObject()
 	require.NoError(t, engine.Set("isNeoprofTimelineEnabled", func() bool { return false }))
+	require.NoError(t, engine.Set("isCPUSchedulingEnabled", func() bool { return false }))
 	ctx := vm.NewObject()
 	require.NoError(t, ctx.Set("params", map[string]any{}))
 	require.NoError(t, ctx.Set("workload", map[string]any{"type": "launch"}))
@@ -1058,7 +1060,7 @@ tool.run = async () => {
     makeWritable: async () => {}, chown: async () => {},
     createRunFile: async () => ({append: async () => {}, close: async () => {}}),
     log: () => {}, startProgressTracker: () => {}, endProgress: () => {},
-    isNeoprofTimelineEnabled: () => false, isFullCaptureSupportEnabled: () => false,
+    isNeoprofTimelineEnabled: () => false, isCPUSchedulingEnabled: () => false, isFullCaptureSupportEnabled: () => false,
     emitOutput: (path) => outputs.push(path),
     execCommand: async (args) => {
       if (args[0] === 'find' && args.includes('/tmp/hsperfdata_*/42'))
@@ -1125,7 +1127,7 @@ tool.run = async () => {
     toolsRoot: () => '/tools', getPlatform: () => ({OS: 'Linux'}),
     mkDir: async () => {}, log: () => {},
     startProgressTracker: () => {}, endProgress: () => {},
-    isNeoprofTimelineEnabled: () => false, isFullCaptureSupportEnabled: () => false,
+    isNeoprofTimelineEnabled: () => false, isCPUSchedulingEnabled: () => false, isFullCaptureSupportEnabled: () => false,
     emitOutput: () => {},
     writeUserMessage: (level, text) => {
     if (level !== "warn" || !text.includes("Java")) throw new Error("Expected Java warning");
@@ -1563,7 +1565,7 @@ tool.run = async () => {
     toolsRoot: () => '/tools', getPlatform: () => ({OS: 'Linux'}),
     getLocality: () => 'target', mkDir: async () => {}, log: () => {},
     startProgressTracker: () => {}, endProgress: () => {},
-    isNeoprofTimelineEnabled: () => false, isFullCaptureSupportEnabled: () => false,
+    isNeoprofTimelineEnabled: () => false, isCPUSchedulingEnabled: () => false, isFullCaptureSupportEnabled: () => false,
     addToolCapability: async (id, type, value) => capabilities.push(value),
     execCommand: async (args, options) => {
       if (args[0] === 'cat') {

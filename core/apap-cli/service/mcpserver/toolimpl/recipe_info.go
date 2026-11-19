@@ -192,6 +192,7 @@ func recipeInfoOptionItemsSchema() *jsonschema.Schema {
 				"value":       {Type: "string"},
 				"label":       {Type: "string"},
 				"description": {Type: "string"},
+				"metadata":    {Type: "object", AdditionalProperties: &jsonschema.Schema{Type: "string"}},
 			},
 		},
 	}

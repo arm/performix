@@ -20,6 +20,7 @@ import (
 	"github.com/Arm-Debug/apap-cli/apap-engine/progress"
 	"github.com/Arm-Debug/apap-cli/apap-engine/recipe"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
+	"github.com/Arm-Debug/apap-cli/apap-engine/terminology"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool"
 	"github.com/Arm-Debug/apap-cli/apap-engine/tool/deployer"
 )
@@ -111,6 +112,7 @@ func (t *ToolDeploymentStage) Execute(ctx *recipe.StageContext) (func(), error) 
 	}
 
 	totalBytesTransferred := int64(0)
+	agentDeployed := false
 
 	reportProgress(totalBytesTransferred, totalBytesToTransfer)
 
@@ -156,6 +158,9 @@ func (t *ToolDeploymentStage) Execute(ctx *recipe.StageContext) (func(), error) 
 			return nil, err
 		}
 
+		if toolInfo.Name == terminology.GetAgentBinaryName() && result == deployer.Deployed {
+			agentDeployed = true
+		}
 		totalBytesTransferred += toolSizes[i]
 		reportProgress(totalBytesTransferred, totalBytesToTransfer)
 		reconcileResults = append(reconcileResults, result)
@@ -163,9 +168,8 @@ func (t *ToolDeploymentStage) Execute(ctx *recipe.StageContext) (func(), error) 
 
 	t.updateStageResult(reconcileResults)
 
-	// If any tool has been newly deployed, shut down any existing agent process, to avoid stale cwd inodes
-	if t.deploymentMode != deployer.ToolDeployAUTOFORCE && t.Result == deployer.Deployed {
-		logx.FromContext(ctx.Context).Debugf("Tool(s) newly deployed; closing %s agent connection", t.locality)
+	if t.deploymentMode != deployer.ToolDeployAUTOFORCE && agentDeployed {
+		logx.FromContext(ctx.Context).Debugf("Agent bundle deployed; closing %s agent connection", t.locality)
 		t.closeAgentConnectionIfOpen(ctx.Context)
 	}
 

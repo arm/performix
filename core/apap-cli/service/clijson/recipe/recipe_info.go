@@ -17,9 +17,10 @@ type ParameterBaseJSON struct {
 }
 
 type ParameterOptionJSON struct {
-	Value       string `json:"value"`
-	Label       string `json:"label"`
-	Description string `json:"description,omitempty"`
+	Value       string            `json:"value"`
+	Label       string            `json:"label"`
+	Description string            `json:"description,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // Config holds type-specific settings
@@ -242,6 +243,7 @@ func ConvertOptionItems(items []*apapproto.ParameterOption) []ParameterOptionJSO
 			Value:       item.GetValue(),
 			Label:       item.GetLabel(),
 			Description: item.GetDescription(),
+			Metadata:    item.GetMetadata(),
 		}
 	}
 	return out

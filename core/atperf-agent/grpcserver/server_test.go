@@ -4,6 +4,7 @@
 package grpcserver
 
 import (
+	"context"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -14,10 +15,56 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/Arm-Debug/apap-cli/api/targetagentproto"
+	"github.com/Arm-Debug/apap-cli/api/tetherproto"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/agentconfig"
 	"github.com/Arm-Debug/apap-cli/atperf-agent/ioutil"
 )
+
+func TestForcedShutdownRPCRespondsBeforeStopping(t *testing.T) {
+	// Given
+	for _, activeTether := range []bool{false, true} {
+		name := "idle transport"
+		if activeTether {
+			name = "unrelated active tether"
+		}
+		t.Run(name, func(t *testing.T) {
+			server, err := NewServer(GrpcServerConfig{
+				TransportConfig: TCPTransportConfig{Host: "127.0.0.1", Port: 0},
+				LogBuffer:       NewLogBuffer(512),
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { server.Stop(true) })
+			stopped := server.Start()
+			connection, err := grpc.NewClient(server.listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, connection.Close()) })
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if activeTether {
+				tether, err := tetherproto.NewTetherClient(connection).Hold(ctx)
+				require.NoError(t, err)
+				require.NoError(t, tether.Send(&tetherproto.PulseRequest{}))
+				_, err = tether.Recv()
+				require.NoError(t, err, "the unrelated stream must be active before shutdown")
+			}
+			force := true
+			// When
+			response, err := targetagentproto.NewTargetAgentClient(connection).Shutdown(ctx, &targetagentproto.ShutdownRequest{Force: &force})
+			require.NoError(t, err, "forced shutdown must deliver its response on a writable transport")
+			require.NotNil(t, response)
+			select {
+			case err := <-stopped:
+				require.NoError(t, err)
+			case <-time.After(2 * time.Second):
+				t.Fatal("forced shutdown waited for an unrelated RPC")
+			}
+		})
+	}
+}
 
 func captureLog(t *testing.T) *ioutil.CutoffWriter {
 	t.Helper()

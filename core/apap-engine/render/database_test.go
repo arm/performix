@@ -53,6 +53,8 @@ func requireSettingContainsPaths(t *testing.T, db *Database, name string, expect
 	}
 
 	for _, expectedPath := range expectedPaths {
+		expectedPath, err := filepath.EvalSymlinks(expectedPath)
+		require.NoError(t, err)
 		_, ok := actual[filepath.Clean(expectedPath)]
 		require.True(t, ok, "expected current_setting(%q) to contain %q, got %v", name, expectedPath, rawPaths)
 	}
@@ -378,10 +380,11 @@ func TestApplyDuckDBSandboxForRunRoots_AppliesAndLocksDuckDBSettings(t *testing.
 	require.NoError(t, err)
 	defer db.Close()
 
-	err = ApplyDuckDBSandboxForRunRoots("key-security", db, []string{"/tmp/run-a", "/tmp/run-b"})
+	runRoots := []string{t.TempDir(), t.TempDir()}
+	err = ApplyDuckDBSandboxForRunRoots("key-security", db, runRoots)
 	require.NoError(t, err)
 
-	requireSettingContainsPaths(t, db, "allowed_directories", []string{"/tmp/run-a", "/tmp/run-b"})
+	requireSettingContainsPaths(t, db, "allowed_directories", runRoots)
 	require.Equal(t, false, currentSetting(t, db, "enable_external_access"))
 	require.Equal(t, true, currentSetting(t, db, "lock_configuration"))
 }

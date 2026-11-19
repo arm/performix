@@ -97,6 +97,12 @@ message ElevatePrivilegesResponse {
     PrivilegeProofToken token = 1;
 }
 
+// Created on the execution host and removed after its process tree stops.
+message TemporaryDirectory {
+    string environment_variable = 1;
+    string parent_directory = 2;
+}
+
 message StartProcessRequest {
     repeated string command = 1;
     bool as_privileged = 2;
@@ -109,6 +115,7 @@ message StartProcessRequest {
     // StreamStderr must be called to drain the stderr buffer if Stream mode is enabled for stderr
     StreamRedirect stderr = 7;
     StdinMode stdin = 8;
+    TemporaryDirectory temporary_directory = 9;
 }
 
 message ReleaseProcessHandlesRequest {
@@ -125,9 +132,12 @@ message WaitProcessRequest {
 
 message WaitProcessResponse {
     int32 exit_code = 1;
+    // Empty on successful cleanup; otherwise an allowlisted process.FailureReason.
+    string cleanup_failure_reason = 2;
 }
 
 message ExecCommandRequest {
+    TemporaryDirectory temporary_directory = 6;
     repeated string command = 1;
     bool as_privileged = 2;
     repeated string affinity = 3;
@@ -139,6 +149,8 @@ message CommandResult {
     int32 rc = 1;
     string stdout = 2;
     string stderr = 3;
+    // Empty on successful cleanup; otherwise an allowlisted process.FailureReason.
+    string cleanup_failure_reason = 4;
 }
 
 message KillProcessRequest {

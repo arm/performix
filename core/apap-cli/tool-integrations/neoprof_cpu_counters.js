@@ -1,16 +1,17 @@
 // SPDX-FileCopyrightText: Copyright 2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: Apache-2.0
 
-// Adapt the deployed collector's native CPU counters to counter.cpu_cycles.
+// Bind the deployed collector's native CPU counters to logical CPU cycles and
+// explicitly selected native events.
 // Lifecycle:
 // - discover reads counters.xml and events.xml with sl-record --print, then
 //   resolves a logical availability descriptor and retains the native catalogue.
 // - discoverNativeEvents lists programmable events for available CPU PMUs.
 // - prepare resolves the requested native selections and supplies the collector
 //   configuration. An omitted request preserves defaults; an empty request
-//   explicitly disables counters.
+//   disables implicit counters. Native events are selected in the request.
 // - verify joins captured.xml identities to timeline series, validates their
-//   output, and emits only verified series and logical capability bindings.
+//   output, and saves capability bindings for verified data.
 // - save publishes the final logical outcome once: collected, unavailable, or
 //   incomplete. It does not publish the discovery descriptor. Required failures
 //   stop collection; optional unavailable or unverified output produces a warning.
@@ -22,6 +23,7 @@ const {
   CPU_CYCLES: ID,
   CPU_COUNTER_CAPABILITY_COMPONENT_TYPE: TYPE,
   NATIVE_CPU_COUNTER_CAPABILITY_COMPONENT_TYPE,
+  NATIVE_CPU_COUNTER_ID_PREFIX,
 } = require('./tool_capabilities');
 const EMPTY_XML =
   '<?xml version="1.0" encoding="UTF-8"?>\n<configurations revision="3">\n</configurations>\n';
@@ -45,7 +47,7 @@ function value(state, reason, bindings = []) {
     },
   };
 }
-function selected(ctx) {
+function cyclesSelected(ctx) {
   return (
     !!ctx.capabilityRequest &&
     [
@@ -54,8 +56,18 @@ function selected(ctx) {
     ].includes(ID)
   );
 }
+function requestedNativeEvents(ctx) {
+  if (!ctx.capabilityRequest) return [];
+  return ctx.capabilityRequest.required.filter((id) =>
+    id.startsWith(NATIVE_CPU_COUNTER_ID_PREFIX),
+  );
+}
 function discoveryRequested(ctx) {
-  return ctx.capabilityRequest === undefined || selected(ctx);
+  return (
+    ctx.capabilityRequest === undefined ||
+    cyclesSelected(ctx) ||
+    requestedNativeEvents(ctx).length > 0
+  );
 }
 function initialProbeCapabilities(ctx) {
   return discoveryRequested(ctx)
@@ -230,8 +242,10 @@ function resolveNativeCatalogue(catalogue) {
         const slot = name.slice(counterSet.length);
         if (/^\d+$/.test(slot)) slots.set(Number(slot), name);
       }
+      const previous = pmus.get(pmuID);
       pmus.set(pmuID, {
         name: cluster.name,
+        devices: [...new Set([...(previous?.devices || []), ...devices])],
         counters: [...slots].sort(([a], [b]) => a - b).map(([, name]) => name),
       });
       // A programmable counter slot must be available on this PMU.
@@ -244,10 +258,11 @@ function resolveNativeCatalogue(catalogue) {
         if (event.counter) continue;
         const hexCode = integer(event.event).toString(16);
         const eventCode = `0x${hexCode}`;
-        const id = `${pmuID}.${hexCode}`;
+        const id = `${NATIVE_CPU_COUNTER_ID_PREFIX}${pmuID}.${hexCode}`;
         if (capabilities[id]) continue;
         const payload = {
           title: `${event.title}: ${event.name}`,
+          category: event.title,
           pmu: { id: pmuID, name: category.name },
           eventCode,
         };
@@ -267,6 +282,62 @@ function resolveNativeCatalogue(catalogue) {
       error,
     );
   }
+}
+
+function cpuEventAdvice(code, metadata) {
+  return {
+    level: 'error',
+    messageCode: 'tool_integrations.neoprof.' + code,
+    metadata,
+  };
+}
+
+function validateCPUEvents(catalogue, ids, logicalEventIDs, resolved) {
+  if (!ids.length) return [];
+  const { capabilities: native, pmus } =
+    resolved || resolveNativeCatalogue(catalogue);
+  const logicalEvents = new Set(logicalEventIDs);
+
+  const advice = [];
+  const eventsByPMU = new Map();
+  for (const id of ids) {
+    const event = id.slice(NATIVE_CPU_COUNTER_ID_PREFIX.length);
+    if (logicalEvents.has(id)) {
+      advice.push(
+        cpuEventAdvice('CPU_EVENT_ALREADY_REQUESTED', {
+          event,
+        }),
+      );
+    } else if (!native[id]) {
+      advice.push(
+        cpuEventAdvice('CPU_EVENT_UNAVAILABLE', {
+          event,
+          cmd: 'apx recipe info code_hotspots --target <target-name>',
+        }),
+      );
+    } else {
+      const pmuID = native[id].payload.pmu.id;
+      const events = eventsByPMU.get(pmuID) || [];
+      events.push(event);
+      eventsByPMU.set(pmuID, events);
+    }
+  }
+  for (const [pmuID, events] of eventsByPMU) {
+    const pmu = pmus.get(pmuID);
+    const count = events.length;
+    if (count > pmu.counters.length) {
+      advice.push(
+        cpuEventAdvice('CPU_EVENTS_CAPACITY_EXCEEDED', {
+          pmu: pmu.name,
+          selected: String(count),
+          capacity: String(pmu.counters.length),
+          remove: String(count - pmu.counters.length),
+          selection: events.join(', '),
+        }),
+      );
+    }
+  }
+  return advice;
 }
 
 async function readCatalogue(engine, ctx, command) {
@@ -309,6 +380,8 @@ async function loadCatalogue(engine, ctx, slRecordPath) {
     try {
       result = await readCatalogue(engine, ctx, [
         slRecordPath,
+        // Without an explicit scope, --print defaults to system-wide profiling.
+        ...(ctx.workload?.type === 'launch' ? ['-S', 'no'] : []),
         '--print',
         `${name}.xml`,
       ]);
@@ -319,7 +392,9 @@ async function loadCatalogue(engine, ctx, slRecordPath) {
         error,
       );
     }
-    if (result.rc !== 0)
+    const xml = result.stdout.replace(/^(?:WARN:[^\r\n]*\r?\n)+/, '');
+    // NeoProf can exit successfully after reporting an initialization error.
+    if (result.rc !== 0 || !xml.trim())
       throw failure(
         'tool_integrations.neoprof.CPU_COUNTER_DISCOVERY_FAILED',
         JSON.stringify(result),
@@ -330,7 +405,7 @@ async function loadCatalogue(engine, ctx, slRecordPath) {
       const warning = line.trim();
       if (warning) engine.log('warn', warning);
     }
-    catalogue[name] = result.stdout.replace(/^(?:WARN:[^\r\n]*\r?\n)+/, '');
+    catalogue[name] = xml;
   }
   return catalogue;
 }
@@ -338,9 +413,29 @@ async function loadCatalogue(engine, ctx, slRecordPath) {
 async function discover(engine, ctx, slRecordPath) {
   const catalogue = await loadCatalogue(engine, ctx, slRecordPath);
   const resolved = resolveCatalogue(catalogue);
-  return {
+  const capabilities = {
     [ID]: resolved.capability,
     neoprof_cpu_counter_catalogue: catalogue,
+  };
+  const logicalEventIDs = [];
+  if (cyclesSelected(ctx)) {
+    for (const { name, event } of resolved.native) {
+      const pmuID = name.toLowerCase().replace(/_ccnt$/, '');
+      const hexCode = event.toString(16);
+      logicalEventIDs.push(
+        `${NATIVE_CPU_COUNTER_ID_PREFIX}${pmuID}.${hexCode}`,
+      );
+    }
+  }
+  const nativeEvents = requestedNativeEvents(ctx);
+  const native = nativeEvents.length
+    ? resolveNativeCatalogue(catalogue)
+    : undefined;
+  if (native) Object.assign(capabilities, native.capabilities);
+  return {
+    catalogue,
+    capabilities,
+    advice: validateCPUEvents(catalogue, nativeEvents, logicalEventIDs, native),
   };
 }
 
@@ -355,7 +450,7 @@ async function discoverNativeEvents(engine, ctx, slRecordPath) {
 }
 
 async function save(engine, ctx, outcome) {
-  if (!selected(ctx) || ctx.metadata.cpuCounterOutcomeSaved) return;
+  if (!cyclesSelected(ctx) || ctx.metadata.cpuCounterOutcomeSaved) return;
   // Claim the final outcome before writing so cleanup does not replace a failed
   // publication with a different outcome; the saved request remains unresolved.
   ctx.metadata.cpuCounterOutcomeSaved = true;
@@ -364,14 +459,16 @@ async function save(engine, ctx, outcome) {
     payload: outcome.payload,
   });
 }
-async function prepare(engine, ctx) {
+async function prepare(
+  engine,
+  ctx,
+  catalogue = ctx.discovery?.capabilities.neoprof_cpu_counter_catalogue,
+) {
   validateOptions(ctx);
   if (ctx.capabilityRequest === undefined) return [];
   let native = [];
-  if (selected(ctx)) {
-    const resolved = resolveCatalogue(
-      ctx.discovery?.capabilities.neoprof_cpu_counter_catalogue,
-    );
+  if (cyclesSelected(ctx)) {
+    const resolved = resolveCatalogue(catalogue);
     if (resolved.capability.state === 'unavailable') {
       await save(engine, ctx, resolved.capability);
       if (ctx.capabilityRequest.required.includes(ID))
@@ -386,6 +483,29 @@ async function prepare(engine, ctx) {
     } else native = resolved.native;
   }
   ctx.metadata.cpuCounterNative = native;
+  const counters = native.map((n) => n.name);
+  ctx.metadata.cpuEventNative = [];
+  const nativeEvents = requestedNativeEvents(ctx);
+  if (nativeEvents.length) {
+    // The integration validates this selection against the fresh catalogue
+    // before preparation. Consume one available slot per event on each PMU.
+    const { capabilities, pmus } = resolveNativeCatalogue(catalogue);
+    for (const id of nativeEvents) {
+      const { payload } = capabilities[id];
+      const { pmu, eventCode } = payload;
+      const nativePMU = pmus.get(pmu.id);
+      const name = nativePMU.counters.shift();
+      ctx.metadata.cpuEventNative.push({
+        id,
+        payload,
+        name,
+        event: Number(eventCode),
+        devices: nativePMU.devices,
+      });
+      counters.push(`${name}:${eventCode}`);
+    }
+  }
+  const counterArgs = counters.length ? ['-C', counters.join(',')] : [];
   const directory = await engine.createTempDir();
   const path = `${directory}/counter_collection.xml`;
   // Data and path are positional arguments, not interpolated shell source.
@@ -402,13 +522,9 @@ async function prepare(engine, ctx) {
   if (checked.rc !== 0 || checked.stdout !== EMPTY_XML)
     throw failure(
       'common.UNKNOWN_ERROR',
-      `Counter configuration did not round trip: ${JSON.stringify(checked)}`,
+      `Counter configuration verification failed: ${JSON.stringify(checked)}`,
     );
-  return [
-    '-c',
-    path,
-    ...(native.length ? ['-C', native.map((n) => n.name).join(',')] : []),
-  ];
+  return ['-c', path, ...counterArgs];
 }
 
 function capturedCounters(xml) {
@@ -450,6 +566,7 @@ function bindSeries(native, xml, metadata, capabilityID) {
     );
     if (!Number.isSafeInteger(key) || series.length !== 1) continue;
     bindings.push({
+      selection,
       seriesCapabilityId: capabilityID(series[0]),
       series: series[0],
       devices: selection.devices,
@@ -605,37 +722,27 @@ async function verify(
   emitSeries = () => {},
   attemptSeries = () => {},
 ) {
-  if (!selected(ctx) || ctx.metadata.cpuCounterOutcomeSaved) return;
-  const native = ctx.metadata.cpuCounterNative;
-  let result;
-  if (engine.getLocality() === 'host') {
-    try {
-      result = {
-        rc: 0,
-        stdout: await engine.readHostFile(`${captureDirectory}/captured.xml`),
-      };
-    } catch (error) {
-      // Go marks missing and permission-denied reads explicitly. Internal API
-      // failures still propagate, even for optional requests.
-      if (error.value?.unavailable !== true) throw error;
-      engine.log(
-        'debug',
-        `Could not read captured counter identities: ${String(error)}`,
-      );
-      return unverified(engine, ctx);
-    }
-  } else {
-    result = await engine.execCommand(
-      ['cat', `${captureDirectory}/captured.xml`],
-      artifactReadOptions(engine, ctx),
-    );
-  }
-  if (result.rc !== 0) return unverified(engine, ctx);
-  const bindings = bindSeries(native, result.stdout, metadata, capabilityID);
-  const fileList = await loadSeriesRegistry(engine, ctx, captureDirectory);
-  if (!fileList) return unverified(engine, ctx);
-  const verified = [];
-  for (const binding of bindings) {
+  const verifyCycles =
+    cyclesSelected(ctx) && !ctx.metadata.cpuCounterOutcomeSaved;
+  const native = verifyCycles ? ctx.metadata.cpuCounterNative : [];
+  const additional = ctx.metadata.cpuEventNative || [];
+  if (!verifyCycles && !additional.length) return;
+  const captured = await readCapturedCounters(engine, ctx, captureDirectory);
+  const bindings =
+    captured === undefined
+      ? []
+      : bindSeries(
+          [...native, ...additional],
+          captured,
+          metadata,
+          capabilityID,
+        );
+  const fileList =
+    captured === undefined
+      ? []
+      : await loadSeriesRegistry(engine, ctx, captureDirectory);
+  const verified = new Map();
+  for (const binding of fileList ? bindings : []) {
     attemptSeries(binding.series);
     const valid = await verifySeries(
       engine,
@@ -649,27 +756,73 @@ async function verify(
     // Capability construction and publication are internal operations. Their
     // failures must propagate, even when counter collection is optional.
     await emitSeries(binding.series);
-    verified.push({ seriesCapabilityId: binding.seriesCapabilityId });
+    verified.set(binding.selection.name, {
+      seriesCapabilityId: binding.seriesCapabilityId,
+    });
   }
-  const complete =
-    native.length > 0 &&
-    verified.length === native.length &&
-    new Set(verified.map((b) => b.seriesCapabilityId)).size === verified.length;
-  if (complete)
-    await save(engine, ctx, value('collected', undefined, verified));
-  else await unverified(engine, ctx, verified);
+  if (verifyCycles) {
+    const cycleBindings = native.flatMap(
+      (selection) => verified.get(selection.name) || [],
+    );
+    const complete =
+      native.length > 0 &&
+      cycleBindings.length === native.length &&
+      new Set(cycleBindings.map((b) => b.seriesCapabilityId)).size ===
+        cycleBindings.length;
+    if (complete)
+      await save(engine, ctx, value('collected', undefined, cycleBindings));
+    else await unverified(engine, ctx, cycleBindings);
+  }
+  for (const selection of additional) {
+    const binding = verified.get(selection.name);
+    await engine.addToolCapability(
+      selection.id,
+      NATIVE_CPU_COUNTER_CAPABILITY_COMPONENT_TYPE,
+      {
+        state: binding ? 'collected' : 'incomplete',
+        payload: {
+          ...selection.payload,
+          ...(binding ? { binding } : { reason: 'output_unverified' }),
+        },
+      },
+    );
+  }
+}
+
+async function readCapturedCounters(engine, ctx, captureDirectory) {
+  if (engine.getLocality() === 'host') {
+    try {
+      return await engine.readHostFile(`${captureDirectory}/captured.xml`);
+    } catch (error) {
+      // Go marks missing and permission-denied reads explicitly. Internal API
+      // failures still propagate, even for optional requests.
+      if (error.value?.unavailable !== true) throw error;
+      engine.log(
+        'debug',
+        `Could not read captured counter identities: ${String(error)}`,
+      );
+      return undefined;
+    }
+  }
+  const result = await engine.execCommand(
+    ['cat', `${captureDirectory}/captured.xml`],
+    artifactReadOptions(engine, ctx),
+  );
+  return result.rc === 0 ? result.stdout : undefined;
 }
 
 module.exports = {
   ID,
   TYPE,
   EMPTY_XML,
-  selected,
+  cyclesSelected,
   discoveryRequested,
+  requestedNativeEvents,
   initialProbeCapabilities,
   validateOptions,
   resolveCatalogue,
   resolveNativeEvents,
+  validateCPUEvents,
   discover,
   discoverNativeEvents,
   prepare,

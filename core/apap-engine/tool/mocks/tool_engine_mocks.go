@@ -125,6 +125,8 @@ func (m *ToolIntegrationMock) Probe() (tool.ProbeResult, error) {
 	return args.Get(0).(tool.ProbeResult), args.Error(1)
 }
 
+func (m *ToolIntegrationMock) Validate() ([]tool.ProbeAdvice, error) { return nil, nil }
+
 func (m *ToolIntegrationMock) StartRuntime() (cleanup func(), err error) {
 	args := m.Called()
 	return args.Get(0).(func()), args.Error(1)

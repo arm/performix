@@ -5,11 +5,10 @@ version: '3'
 
 vars:
   APX_BINARY: '{{if eq OS "windows"}}apx.exe{{else}}apx{{end}}'
-  PYTHON_SYSTEM: '{{if eq OS "windows"}}python{{else}}python3{{end}}'
-  PYTHON_VENV: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
-  TOOLS_PYTHON: '{{.PYTHON_SYSTEM}}'
-  BASH_RUNNER: '{{.PYTHON_SYSTEM}} "{{.TASKFILE_DIR}}/scripts/run-bash.py"'
+  BASH_RUNNER: 'python "{{.TASKFILE_DIR}}/scripts/run-bash.py"'
   DEFAULT_APX_BUILD_TAGS: duckdb_arrow
+  LOCAL_TOOLS: target_agent sysutil-timeline pytorch-collect parquet-writer parquet-to-json
+  INTERNAL_LOCAL_TOOLS: ''
   # The optional internal Taskfile adds JavaScript lint to this list.
   LINT_TASKS: [lint:go, lint:robot]
 
@@ -40,7 +39,6 @@ tasks:
     cmds:
       - task: generate
       - task: build:apx
-      - task: build:agent
 
   generate:
     desc: Generate all sources (Go, Protobuf, Messages, etc.)
@@ -48,29 +46,39 @@ tasks:
       - '{{.BASH_RUNNER}} ./scripts/generate-all.sh'
 
   deps:tools:
-    desc: Package the tools available in the current checkout
+    desc: Package tools (optionally TOOL=<name>)
+    vars:
+      TOOL: '{{default "" .TOOL}}'
     env:
-      SKIP_APX_AGENT_BUILD: true
+      PERFORMIX_ENGINE_VERSION: &engine-version
+        sh: 'python "{{.TASKFILE_DIR}}/scripts/get_atperf_version.py" --dev'
+      # Dependency setup skips the agent unless explicitly selected.
+      SKIP_APX_AGENT_BUILD: '{{if eq .TOOL ""}}true{{end}}'
+    deps: [':deps:python']
     cmds:
-      - '{{.TOOLS_PYTHON}} scripts/get-tools.py'
+      - 'python scripts/get-tools.py {{if .TOOL}}{{.TOOL | shellQuote}}{{end}}'
+
+  deps:tools_and_agent:
+    desc: Package all tools and build the Performix agent
+    deps: [':deps:python']
+    cmds:
+      - python scripts/get-tools.py
 
   deps:tools:python:
-    desc: Install Python dependencies for Core tools and tests
-    cmds:
-      - '{{.PYTHON_SYSTEM}} -m venv .venv'
-      - '{{.PYTHON_VENV}} -m pip install --disable-pip-version-check -r robot/requirements.txt'
-      - '{{.PYTHON_VENV}} -c "from pathlib import Path; Path(''.venv/.deps-installed'').touch()"'
+    desc: Install shared Python dependencies for Core tools and tests
+    deps: [':deps:python']
 
   generate:arm-cpus:
     desc: Download Arm CPU data and regenerate the Go source
     deps: [deps:tools:python]
     cmds:
-      - '{{.PYTHON_VENV}} scripts/update-arm-cpus.py'
+      - 'python scripts/update-arm-cpus.py'
 
   telemetry:validate:
     desc: Validate CPU telemetry specifications against the vendored schemas
+    deps: [':deps:python']
     cmds:
-      - '{{.TOOLS_PYTHON}} scripts/validate_telemetry.py'
+      - 'python scripts/validate_telemetry.py'
 
   deps:
     desc: Install dependencies required by the current checkout
@@ -84,13 +92,46 @@ tasks:
   build:apx:
     desc: Build the APX binary
     dir: apap-cli
+    deps: [build:tools]
+    env:
+      PERFORMIX_ENGINE_VERSION: *engine-version
     cmds:
-      - go build -tags={{default .DEFAULT_APX_BUILD_TAGS .APX_BUILD_TAGS}} -v -o {{.APX_BINARY}}
+      - go build -tags={{default .DEFAULT_APX_BUILD_TAGS .APX_BUILD_TAGS}} -ldflags="-X github.com/Arm-Debug/apap-cli/atperf-version/versions.version=$PERFORMIX_ENGINE_VERSION" -v -o {{.APX_BINARY}}
+
+  build:tools:
+    desc: Build all local tool bundles
+    env:
+      PERFORMIX_ENGINE_VERSION: *engine-version
+    cmds:
+      - 'python scripts/get-tools.py {{.LOCAL_TOOLS}} {{.INTERNAL_LOCAL_TOOLS}}'
 
   build:agent:
-    desc: Build the Performix agent; requires deps:tools:python
+    desc: Build the Performix agent
+    env:
+      PERFORMIX_ENGINE_VERSION: *engine-version
     cmds:
-      - '{{.TOOLS_PYTHON}} scripts/get-tools.py target_agent'
+      - task: deps:tools
+        vars:
+          TOOL: target_agent
+
+  build:execution-probe:
+    desc: Build the execution contract probe for a test target
+    dir: atperf-agent
+    requires:
+      vars: [TARGET_GOOS, TARGET_GOARCH, OUTPUT]
+    env:
+      GOOS: '{{.TARGET_GOOS}}'
+      GOARCH: '{{.TARGET_GOARCH}}'
+      CGO_ENABLED: '0'
+    cmds:
+      - go build -o '{{.OUTPUT}}' ./process/processcontracttest/testdata/processprobe
+
+  test:execution:
+    desc: Test structured execution helpers and agent lifecycle behaviour
+    dir: apap-engine
+    cmds:
+      - go test -tags=duckdb_arrow ./conductor ./tool ./tool/deployer ./targetsession ./agent
+      - go -C ../atperf-agent test ./process ./grpcserver ./cmd
 
   clean:
     desc: Remove core build outputs
@@ -146,4 +187,4 @@ tasks:
     deps:
       - task: deps:tools:python
     cmds:
-      - '../{{.PYTHON_VENV}} -m robocop check --config robocop.toml'
+      - 'python -m robocop check --config robocop.toml'

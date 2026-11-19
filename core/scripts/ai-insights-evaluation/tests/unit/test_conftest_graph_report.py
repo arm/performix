@@ -134,6 +134,7 @@ class AiInsightsGraphReportTests(unittest.TestCase):
     def test_unexpected_graph_failure_preserves_existing_failure(self):
         config = types.SimpleNamespace(
             option=types.SimpleNamespace(collectonly=False),
+            _ai_insights_min_pass_rate=1.0,
         )
         session = types.SimpleNamespace(
             config=config,

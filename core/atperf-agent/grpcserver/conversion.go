@@ -23,6 +23,7 @@ type launchRequest interface {
 	GetWorkingDirectory() string
 	GetEnvironment() map[string]string
 	GetAffinity() []string
+	GetTemporaryDirectory() *targetagentproto.TemporaryDirectory
 }
 
 func buildLaunchCommand(in launchRequest) (*process.LaunchCommand, error) {
@@ -36,6 +37,11 @@ func buildLaunchCommand(in launchRequest) (*process.LaunchCommand, error) {
 		WorkingDirectory: in.GetWorkingDirectory(),
 		Environment:      in.GetEnvironment(),
 		Affinity:         in.GetAffinity(),
+	}
+	if directory := in.GetTemporaryDirectory(); directory != nil {
+		launchCommand.TemporaryDirectory = &process.TemporaryDirectory{
+			EnvironmentVariable: directory.EnvironmentVariable, ParentDirectory: directory.ParentDirectory,
+		}
 	}
 	if err := process.ValidateLaunchCommand(launchCommand); err != nil {
 		if errors.Is(err, process.ErrMissingExecutable) {

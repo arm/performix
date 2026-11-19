@@ -100,6 +100,7 @@ func printRun(e clijson.CLIRunDescription, out io.Writer) {
 	case "Android Launch":
 		field("Package", e.AndroidPackageName)
 		field("Activity", e.AndroidActivityName)
+		maybeField("Activity Arguments", e.AndroidActivityArguments)
 	case "Attach":
 		field("PID", e.Pid)
 	case "System Wide":

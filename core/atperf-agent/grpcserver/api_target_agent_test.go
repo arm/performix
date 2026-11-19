@@ -69,13 +69,20 @@ func TestShutdown(t *testing.T) {
 		mam := &MockAdmissionManager{}
 		mam.On("Restrict").Once()
 
-		shutdownCb := func(bool, time.Duration) {}
+		shutdownCalled := false
+		shutdownCb := func(forceTransport bool, deadline time.Duration) {
+			shutdownCalled = true
+			assert.True(t, forceTransport, "forced shutdown must use the short response-drain deadline")
+			assert.Equal(t, defaultTetherShutdownDeadline, deadline)
+		}
 
 		server := &AgentServerAPI{ShutdownCb: shutdownCb, Pm: mpm, Am: mam}
 		resp, err := server.Shutdown(context.Background(), &targetagentproto.ShutdownRequest{Force: &force})
 
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
+		assert.True(t, shutdownCalled)
+		mpm.AssertExpectations(t)
 		mam.AssertExpectations(t)
 	})
 
@@ -603,6 +610,28 @@ func TestPrivilegePath(t *testing.T) {
 
 		pm.AssertNotCalled(t, "ExecCommand", mock.Anything)
 		client.AssertExpectations(t)
+	})
+
+	t.Run("successfully proxies ReleaseProcessHandles", func(t *testing.T) {
+		ts := newTestTokenStorage(t)
+		token := generateToken(t, ts)
+		client := &targetagentmocks.TargetAgentClient{}
+		req := &targetagentproto.ReleaseProcessHandlesRequest{Pids: []int32{123, 456}}
+		client.On("ReleaseProcessHandles", mock.Anything, req).Return(&emptypb.Empty{}, nil).Once()
+		pm := &process.MockProcessManager{}
+		server := &AgentServerAPI{TokenStorage: ts, Pm: pm, Checker: notElevatedChecker(), Elevator: Elevator{client: client}}
+		_, err := server.ReleaseProcessHandles(withPrivilegeMetadata(context.Background(), token), req)
+		require.NoError(t, err)
+		pm.AssertNotCalled(t, "ReleaseProcessHandles", mock.Anything)
+		client.AssertExpectations(t)
+	})
+
+	t.Run("invalid privilege token cannot release handles", func(t *testing.T) {
+		pm := &process.MockProcessManager{}
+		server := &AgentServerAPI{TokenStorage: newTestTokenStorage(t), Pm: pm}
+		_, err := server.ReleaseProcessHandles(withPrivilegeMetadata(context.Background(), "invalid"), &targetagentproto.ReleaseProcessHandlesRequest{Pids: []int32{123}})
+		require.ErrorIs(t, err, message.New(message.AgentElevatePrivilegesInvalidToken))
+		pm.AssertNotCalled(t, "ReleaseProcessHandles", mock.Anything)
 	})
 
 	t.Run("successfully proxies KillProcess", func(t *testing.T) {

@@ -108,6 +108,7 @@ func (r *RecipeCtx) CreateMetadata(runBuilder *run.RunBuilder, boundParams param
 		metadata.WorkloadType = "Android Launch"
 		metadata.AndroidPackageName = w.PackageName
 		metadata.AndroidActivityName = w.ActivityName
+		metadata.AndroidActivityArguments = w.ActivityArguments
 		metadata.Cmdline = ""
 		metadata.Env = nil
 		metadata.WorkingDir = ""

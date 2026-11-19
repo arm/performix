@@ -68,3 +68,16 @@ func TestBuildLaunchCommand(t *testing.T) {
 		})
 	}
 }
+
+func TestTemporaryDirectoryLaunchConversion(t *testing.T) {
+	// Given a request for a process-owned temporary directory on the target.
+	request := &targetagentproto.StartProcessRequest{Command: []string{"program"}, TemporaryDirectory: &targetagentproto.TemporaryDirectory{
+		EnvironmentVariable: "SCRIPT_DIRECTORY", ParentDirectory: "parent with spaces",
+	}}
+	// When the agent converts the wire request.
+	command, err := buildLaunchCommand(request)
+	// Then it preserves the target-side parent and variable name.
+	require.NoError(t, err)
+	require.Equal(t, "SCRIPT_DIRECTORY", command.TemporaryDirectory.EnvironmentVariable)
+	require.Equal(t, "parent with spaces", command.TemporaryDirectory.ParentDirectory)
+}

@@ -543,7 +543,43 @@ func TestToolDeploymentStage_ClosesAgentConnection(t *testing.T) {
 		session.AssertNotCalled(t, "CloseTargetAgent")
 	})
 
-	t.Run("closes agent connection if any tool was deployed", func(t *testing.T) {
+	for _, locality := range []deploymentsupport.DeploymentLocality{
+		deploymentsupport.DeploymentLocalityTarget,
+		deploymentsupport.DeploymentLocalityHost,
+	} {
+		t.Run(fmt.Sprintf("preserves the %s agent when installing recipe tools", locality), func(t *testing.T) {
+			tmpDir := t.TempDir()
+			writeMandatoryPackages(t, tmpDir)
+			bundle := tool.ToolInfo{Name: "recipe-tool", Version: "1.0"}
+			writeToolBundleWithContents(t, tmpDir, bundle, pc, []byte{1})
+			remoteFS := afero.NewMemMapFs()
+			markToolDeployed(t, remoteFS, remoteToolsDir, tool.ToolInfo{
+				Name: terminology.GetAgentBinaryName(), Version: versions.GetVersion(),
+			}, pc)
+			session := &targetsessionmocks.MockTargetSession{}
+			stage := newStage(t, deployer.ToolDeployAUTO, packages.NewPackageManager(tmpDir, ""), remoteFS, session)
+			stage.locality = locality
+			stage.toolBundlesSupplier = func() []deploymentsupport.ToolBundleInfo {
+				return []deploymentsupport.ToolBundleInfo{{
+					Name: bundle.Name, Version: bundle.Version, Locality: locality,
+				}}
+			}
+			runner := &conductormocks.MockCommandRunner{}
+			runner.On("RunCommand", mock.Anything).Return("", "", nil).Once()
+			stage.commandRunnerSupplier = func() conductor.CommandRunner { return runner }
+
+			_, err := stage.Execute(&recipe.StageContext{Context: context.Background()})
+			require.NoError(t, err)
+			require.Equal(t, deployer.Deployed, stage.Result)
+			_, err = stage.Execute(&recipe.StageContext{Context: context.Background()})
+			require.NoError(t, err)
+			require.Equal(t, deployer.NoAction, stage.Result)
+			runner.AssertExpectations(t)
+			session.AssertNotCalled(t, "CloseTargetAgent")
+		})
+	}
+
+	t.Run("closes agent connection when the agent was deployed", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		writeMandatoryPackages(t, tmpDir)
 		pm := packages.NewPackageManager(tmpDir, "")

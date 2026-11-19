@@ -3,6 +3,11 @@
 
 // @ts-check
 
+const {
+  buildTimelineFilterPredicate,
+  buildTimelineScopeQuery,
+} = require('./timeline_filter_scope');
+
 const TABLE_PLACEHOLDER = '{table}';
 const RANGE_START_PLACEHOLDER = '{rangeStart}';
 const RANGE_END_PLACEHOLDER = '{rangeEnd}';
@@ -16,12 +21,14 @@ const NANOSECONDS_PER_SECOND = 1_000_000_000;
  * half-open range before applying chart projection.
  *
  * @param {number} [binOrigin]
+ * @param {import("./timeline_filter_scope").TimelineFilterScope} [filterScope]
  * @returns {string}
  */
-function buildTimelinePivotQuery(binOrigin) {
+function buildTimelinePivotQuery(binOrigin, filterScope) {
   const rangeCTEs = buildTimelineRangeCTEs({
     binOrigin,
     columns: 'source.value',
+    predicate: buildTimelineFilterPredicate(filterScope),
     // Hotspots delta rows cover their complete compressed interval.
     projection: `relevant_rows.value * ${NANOSECONDS_PER_SECOND}.0 /
       (relevant_rows.end_timestamp - relevant_rows.start_timestamp) AS value`,
@@ -39,10 +46,15 @@ function buildTimelinePivotQuery(binOrigin) {
 /**
  * Build SQL to select and expand bins in the requested time range.
  * The caller supplies the value calculation.
- * @param {{binOrigin?: number, columns: string, projection: string}} args
+ * @param {{binOrigin?: number, columns: string, projection: string, predicate?: string}} args
  * @returns {string}
  */
-function buildTimelineRangeCTEs({ binOrigin, columns, projection }) {
+function buildTimelineRangeCTEs({
+  binOrigin,
+  columns,
+  projection,
+  predicate = '',
+}) {
   if (binOrigin !== undefined)
     assertSafeInteger(binOrigin, 'Timeline binOrigin');
   // All intervals for one LoD share an alignment. If no explicit origin is
@@ -52,6 +64,7 @@ function buildTimelineRangeCTEs({ binOrigin, columns, projection }) {
       ? 'MIN(start_timestamp)'
       : `CAST(${binOrigin} AS BIGINT)`;
   return `
+    ${predicate ? `scope_source AS (SELECT * FROM ${TABLE_PLACEHOLDER}),` : ''}
     requested_range AS (
       SELECT
         CAST(${RANGE_START_PLACEHOLDER} AS BIGINT) AS range_start,
@@ -65,10 +78,10 @@ function buildTimelineRangeCTEs({ binOrigin, columns, projection }) {
         ${columns},
         requested_range.range_start,
         requested_range.range_end
-      FROM ${TABLE_PLACEHOLDER} AS source
+      FROM ${predicate ? 'scope_source' : TABLE_PLACEHOLDER} AS source
       CROSS JOIN requested_range
       WHERE source.end_timestamp > requested_range.range_start
-        AND source.start_timestamp < requested_range.range_end
+        AND source.start_timestamp < requested_range.range_end${predicate ? `\n        ${predicate}` : ''}
     ),
     expanded AS (
       SELECT
@@ -141,6 +154,7 @@ function assertSafeInteger(value, name) {
  * @typedef {Object} TimelineConfigArgs
  * @property {TimelineSource[]} timelineSources
  * @property {{start: number, end: number, unit: 'ns'}} timeDomain
+ * @property {import("./timeline_filter_scope").TimelineFilterScope} [filterScope]
  * @property {number} [binOrigin]
  * @property {readonly number[]} [expectedBinDurations]
  * @property {string} [incompleteCatalogueMessageCode]
@@ -303,7 +317,7 @@ function buildTimelineVisualization(args) {
   const tables = {};
   /** @type {Record<string, any>} */
   const groups = {};
-  const query = buildTimelinePivotQuery(args.binOrigin);
+  const query = buildTimelinePivotQuery(args.binOrigin, args.filterScope);
 
   for (const [groupIndex, group] of logicalGroups.entries()) {
     const lods = buildTimelineLods(tables, group.groupKey, group.sources);
@@ -317,6 +331,21 @@ function buildTimelineVisualization(args) {
         : `Key ${group.keyType}, Series ${group.seriesId}`;
     const seriesLabel = seriesMetadata?.title ?? defaultSeriesLabel;
     groups[group.groupKey] = {
+      ...(args.filterScope
+        ? {
+            filterContext: {
+              controls: args.filterScope.controls,
+              recordedScope: args.filterScope.recordedScope,
+              limitations: args.filterScope.limitations,
+            },
+            scopeQuery: {
+              // The GUI resolves a LoD-backed scope against all group resolutions.
+              sourceKey: lods[lods.length - 1].sourceKey,
+              tableNamePlaceholder: TABLE_PLACEHOLDER,
+              query: buildTimelineScopeQuery(args.filterScope),
+            },
+          }
+        : {}),
       title: seriesLabel,
       type: 'line',
       index: groupIndex,
@@ -406,6 +435,7 @@ function getNeoprofTimelineDomain(captureMetadata) {
  * @param {{
  *   timelineSources: TimelineSource[],
  *   captureMetadata: unknown,
+ *   filterScope?: import("./timeline_filter_scope").TimelineFilterScope,
  *   expectedBinDurations?: readonly number[],
  *   incompleteCatalogueMessageCode?: string,
  *   metadataBySeriesKey?: Map<string, {title: string, description: string, units: string}>,
@@ -417,6 +447,7 @@ function buildNeoprofTimelineVisualization(args) {
   return buildTimelineVisualization({
     timelineSources: args.timelineSources,
     timeDomain: getNeoprofTimelineDomain(args.captureMetadata),
+    filterScope: args.filterScope,
     binOrigin: 0,
     expectedBinDurations: args.expectedBinDurations,
     incompleteCatalogueMessageCode: args.incompleteCatalogueMessageCode,

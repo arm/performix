@@ -68,18 +68,8 @@ func newUpdateCommand(cc client.ClientConnector, targetService target.TargetMana
 	return cmd
 }
 
-func RefreshTargetUpdateHelp() {
-	if flag := TargetUpdateCmd.Flags().Lookup("host"); flag != nil {
-		flag.Usage = targetUpdateHostDescription()
-	}
-}
-
 func targetUpdateHostDescription() string {
-	if viper.GetBool(enableAndroidTargetsConfigKey) {
-		return "Update the target host. For SSH targets, use [user@]host[:port][:private_ssh_key_path][:auth=key|password]. For Android targets, use android://serial[@host]."
-	}
-
-	return "Update the final host for the SSH connection via a [user@]host[:port][:private_ssh_key_path][:auth=key|password] string"
+	return "Update the target host. For SSH targets, use [user@]host[:port][:private_ssh_key_path][:auth=key|password]. For Android targets, use android://serial[@host]."
 }
 
 func updateTarget(cc client.ClientConnector, name string, args AddTargetArgs, targetService target.TargetManagerService) error {
@@ -119,9 +109,6 @@ func updateTarget(cc client.ClientConnector, name string, args AddTargetArgs, ta
 			return err
 		}
 	case *engine_target.AndroidTarget:
-		if !viper.GetBool(enableAndroidTargetsConfigKey) {
-			return message.New(message.CommonUnsupportedTargetType).WithMetadata(map[string]string{"targetType": "android"})
-		}
 		targetFromJSON, err := engine_target.TryUnmarshalJSONTargetString(args.loginString)
 		if err != nil {
 			return err

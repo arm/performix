@@ -66,9 +66,6 @@ func prepareTarget(cc client.ClientConnector, targetService target.TargetManager
 			return err
 		}
 	}
-	if _, android := targetDefinition.(*engine_target.AndroidTarget); android && !viper.GetBool(enableAndroidTargetsConfigKey) {
-		return message.New(message.CommonUnsupportedTargetType).WithMetadata(map[string]string{"targetType": "android"})
-	}
 
 	client, err := cc.ApapClient(serverconfig.FromViperForBackground())
 	if err != nil {

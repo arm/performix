@@ -10,11 +10,17 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// instructions is the server-level guidance advertised during initialization.
-// Detailed guides are embedded and registered separately.
+// instructions is the compact server-level guidance advertised during initialization.
+// Detailed task guides are embedded and registered separately.
 //
 //go:embed instructions.md
 var instructions string
+
+//go:embed guides/recipe-selection.md
+var recipeSelectionGuide string
+
+//go:embed guides/analysing-runs.md
+var analysingRunsGuide string
 
 //go:embed guides/performance-investigation.md
 var performanceInvestigationGuide string
@@ -28,6 +34,18 @@ func registerInstructionResources(server *mcp.Server) {
 	for _, guide := range []struct {
 		name, title, description, text string
 	}{
+		{
+			name:        "recipe-selection",
+			title:       "Choosing and Running a Recipe",
+			description: "Read before choosing an initial or follow-up recipe, selecting a target or recording a workload.",
+			text:        recipeSelectionGuide,
+		},
+		{
+			name:        "analysing-runs",
+			title:       "Analysing Runs",
+			description: "Read before discovering, importing or analysing existing recordings.",
+			text:        analysingRunsGuide,
+		},
 		{
 			name:        "performance-investigation",
 			title:       "Performance Investigation Pathway",

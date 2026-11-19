@@ -159,7 +159,7 @@ The Neoprof Tool Reports As Not Ready When Workload Does Not Exist
   When Check Recipe Is Ready  code_hotspots  --workload my-made-up-workload --target ${G_TARGET_NAME}
   Then The Recipe Is Not Ready
   And Check Advice Messages Contain
-  ...  "The specified command does not exist. Please verify this executable exists."
+  ...  "The workload does not exist or is not executable on the target."
 
 The Neoprof Tool Reports As Ready When Workload Exists Using Working Dir
   [Documentation]  Tests that the neoprof tool integration correctly reports as ready
@@ -183,9 +183,41 @@ The Neoprof Tool Supports Reformat On Host
   And The Reformat On Host Run Is Recorded
   And Runs Are Rendered Successfully  ${RUN_ID}
 
+The Neoprof Tool Collects Off-CPU Time
+  [Documentation]  Enable off-CPU collection and verify the compressed output files.
+  [Tags]  code-hotspots  off-cpu
+  [Setup]  Skip Unless Target OS Is  ${OS_LINUX}
+  Given The Test Target Exists
+  When Run Code Hotspots Recipe
+  ...  --system-wide --timeout 3 --param collect_off_cpu_time=true --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  Then The Last Command Succeeded
+  ${run_id} =  And Extract The Run ID
+  And Off-CPU Output Files Exist  ${run_id}
+
+The Neoprof Tool Exports Scheduler Files When CPU Scheduling Is Enabled
+  [Documentation]  Verify scheduler exports from a fresh Linux capture.
+  [Tags]  code-hotspots  thread-analysis
+  [Setup]  Enable CPU Scheduling For Test
+  Given The Code Hotspots Recipe Is Listed
+  And The Test Target Exists
+  When Run Code Hotspots Recipe  --workload ${LAUNCH_WORKLOAD} --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
+  Then The Last Command Succeeded
+  And The Scheduler Files Exist
+  And The Target Output Directory Is Empty
+  [Teardown]  Clear CPU Scheduling Test Environment
+
 
 *** Keywords ***
 # This section is for throwaway keywords that only exist to this test suite.
+
+Off-CPU Output Files Exist
+  [Arguments]  ${run_id}
+  VAR  ${off_cpu_dir}  ${G_RUNS_DIR}${/}${run_id}${/}tool${/}neoprof${/}0${/}output
+  FOR  ${filename}  IN  call_tree_off-cpu.json  callpath_self_off-cpu.json  callpath_total_off-cpu.json
+  ...  callpaths-capture-off_cpu.csv  functions-capture-off_cpu.csv
+    File Should Exist  ${off_cpu_dir}${/}${filename}.zst
+  END
+  # Source/disassembly exports are optional; their registration is covered by unit tests.
 
 Neoprof Suite Setup
   Common Setup
@@ -258,3 +290,24 @@ Run Code Hotspots Recipe With Environment Variables In Workload
   ...  --env FOO=bar --target ${G_TARGET_NAME} ${DEPLOY_TOOLS_FLAG}
   ${escaped} =  Escape Dollar If Needed  ${code_hotspots_args}
   Run Code Hotspots Recipe  ${escaped}
+
+Enable CPU Scheduling For Test
+  [Documentation]  Enable scheduler collection for this test.
+  Skip Unless Target OS Is  ${OS_LINUX}
+  Set Performix Env Var  ENABLE_CPU_SCHEDULING  true
+
+Clear CPU Scheduling Test Environment
+  [Documentation]  Clear the CPU scheduling feature flag.
+  IF  $G_TARGET_OS != $OS_LINUX  RETURN
+  Clear Performix Env Var  ENABLE_CPU_SCHEDULING
+
+The Scheduler Files Exist
+  [Documentation]  Check that scheduler events and metadata have been transferred.
+  ${run_id} =  Extract The Run ID
+  VAR  ${root} =  ${G_RUNS_DIR}${/}${run_id}${/}tool${/}neoprof${/}0${/}output${/}parquet
+  File Should Exist  ${root}${/}timeline${/}scheduler_context_switch.parquet
+  File Should Exist  ${root}${/}timeline${/}scheduler_thread_exit.parquet
+  File Should Exist  ${root}${/}timeline${/}scheduler_reason_metadata.parquet
+  File Should Exist  ${root}${/}metadata${/}capture_metadata.json
+  File Should Exist  ${root}${/}metadata${/}processes.json
+  File Should Exist  ${root}${/}metadata${/}threads.json

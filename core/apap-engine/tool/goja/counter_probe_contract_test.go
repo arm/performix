@@ -44,6 +44,8 @@ func assertCapabilityProbeContract(t *testing.T, makeFactory func(*testing.T, ca
 		{"opted_in_missing_descriptor", `capabilityInterfaceVersion:"1.0",`, `{}`, nil, true, true},
 		{"opted_in_invalid_descriptor", `capabilityInterfaceVersion:"1.0",`, `{"counter.cpu_cycles":{}}`, nil, true, true},
 		{"opted_in_valid_descriptor", `capabilityInterfaceVersion:"1.0",`, available, nil, false, true},
+		{"opted_in_optional_logical_counter", `capabilityInterfaceVersion:"1.0",`, available, &capabilities.CapabilityRequest{Required: []string{}, Optional: []string{"counter.cpu_cycles"}}, false, true},
+		{"opted_in_optional_native_counter", `capabilityInterfaceVersion:"1.0",`, `{}`, &capabilities.CapabilityRequest{Required: []string{}, Optional: []string{"nativecounter.pmu.8"}}, true, false},
 		{"opted_in_explicit_empty_without_descriptor", `capabilityInterfaceVersion:"1.0",`, `{}`, &capabilities.CapabilityRequest{Required: []string{}, Optional: []string{}}, false, true},
 		{"opted_in_explicit_empty_invalid_descriptor", `capabilityInterfaceVersion:"1.0",`, `{"counter.cpu_cycles":{}}`, &capabilities.CapabilityRequest{Required: []string{}, Optional: []string{}}, true, true},
 		{"unsupported_omitted_request", "", `{legacyField:true}`, nil, false, true},
@@ -53,10 +55,13 @@ func assertCapabilityProbeContract(t *testing.T, makeFactory func(*testing.T, ca
 		{"unsupported_freeform_cpu_cycles_without_request", "", `{"counter.cpu_cycles":{legacy:true}}`, nil, false, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			// Given a tool with the declared capability contract.
 			factory := &countingCapabilityFactory{Factory: makeFactory(t, test)}
 			registry := tool.NewToolRegistry()
 			registry.RegisterTool(factory)
+			// When the caller checks discovery and readiness.
 			results, errs := tool.ProbeTools([]tool.IntegrationContext{*integrationContext(&tool.AgentEngine{}, &tool.IntegrationContext{Name: factory.Name(), Version: factory.Version(), CapabilityRequest: test.request})}, registry, nil)
+			// Then invalid discovery fails before validation starts.
 			err := errors.Join(errs...)
 			if test.wantError {
 				require.ErrorContains(t, err, "engine.tool.COUNTER_COLLECTION_INVALID")
@@ -65,7 +70,11 @@ func assertCapabilityProbeContract(t *testing.T, makeFactory func(*testing.T, ca
 				require.True(t, results[0].Available)
 			}
 			if test.wantConstruction {
-				require.Equal(t, 1, factory.constructions)
+				wantConstructions := 1
+				if !test.wantError {
+					wantConstructions++ // Validation uses the final selection in a new instance.
+				}
+				require.Equal(t, wantConstructions, factory.constructions)
 			} else {
 				require.Zero(t, factory.constructions, "preflight rejection must happen before integration construction")
 			}
@@ -82,6 +91,7 @@ func TestCounterProbeContract(t *testing.T) {
  description: {short: "probe", long: "probe"},
  %s
  probe: () => ({available: true, capabilities: %s, advice: []}),
+ validate: () => {},
  run: () => {},
  reformat: () => {},
  onStop: () => {},

@@ -151,6 +151,8 @@ let tool = {
     return { available, advice, capabilities: {} };
   },
 
+  validate: () => {},
+
   run: async (engine, ctx) => {
     const configInvalidMessage = checkRunRequestConfiguration(ctx);
 

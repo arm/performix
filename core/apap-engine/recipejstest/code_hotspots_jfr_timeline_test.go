@@ -49,6 +49,27 @@ func TestCodeHotspotsJfrTimelineCaptureOrigin(t *testing.T) {
 	}
 }
 
+func TestCodeHotspotsAlignsJavaWithoutCounterData(t *testing.T) {
+	// Given: capture metadata and Java events without counter artifacts or experimental flags.
+	model := newCodeHotspotsJfrTimelineModel(t, strconv.FormatInt(javaHeapCaptureEpochNS, 10), true,
+		[]javaHeapRecordingFixture{{start: javaHeapCaptureEpochNS + 2_000_000_000, event: javaHeapCaptureEpochNS + 5_000_000_000}})
+	manifest := model.(*cdf.OnDiskModel).Manifest()
+	var entries []cdf.ManifestEntry
+	for _, entry := range manifest.Entries {
+		if strings.Contains(entry.Path, "/java/") || strings.HasSuffix(entry.Path, "/capture_metadata.json") {
+			entries = append(entries, entry)
+		}
+	}
+	manifest.Entries = entries
+	model = cdf.NewOnDiskModel(model.BasePath(), &manifest, cdf.Metadata{})
+	// When: the recipe renders available Java events.
+	output, err := renderCodeHotspotsJfrTimeline(t, model, "Launch", nil)
+	require.NoError(t, err)
+	session, table := initializeCodeHotspotsHeap(t, model, output)
+	// Then: Java uses capture time even without a CPU counter timeline.
+	require.Equal(t, []int64{5_000_000_000}, queryCodeHotspotsHeapTimes(t, session, "SELECT time_ns FROM "+table))
+}
+
 func TestCodeHotspotsJfrTimelineProcessSelection(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -73,11 +94,36 @@ func TestCodeHotspotsJfrTimelineProcessSelection(t *testing.T) {
 			output, err := renderCodeHotspotsJfrTimeline(t, model, tc.workload, tc.pid)
 			require.NoError(t, err)
 			heap := requireTimelineGroup(t, requireTimelineGroups(t, requireTimelineWidget(t, output)), "heap_summary")
-			require.Equal(t, len(tc.want) > 0, heap["visible"])
+			require.Equal(t, true, heap["visible"])
+			require.Equal(t, len(tc.want) == 0, heap["noData"])
 			session, table := initializeCodeHotspotsHeap(t, model, output)
 			require.Equal(t, tc.want, queryCodeHotspotsHeapTimes(t, session, "SELECT time_ns FROM "+table+" ORDER BY time_ns"))
 		})
 	}
+}
+
+func TestCodeHotspotsDeclaresAnalysisFilterScope(t *testing.T) {
+	// Given a recording belonging to a real captured process.
+	model := newCodeHotspotsJfrTimelineModel(t, strconv.FormatInt(javaHeapCaptureEpochNS, 10), true,
+		[]javaHeapRecordingFixture{{start: javaHeapCaptureEpochNS, event: javaHeapCaptureEpochNS + 1, pid: 42}})
+	// When the user clears the process filter, the launch default still selects that recording.
+	output, err := renderCodeHotspotsJfrTimeline(t, model, "Launch", nil)
+	require.NoError(t, err)
+	// Then only the declared analysis tabs receive their applicable categories.
+	checked := map[string]bool{}
+	for _, widget := range output.Widgets {
+		switch widget.ID {
+		case "flame_graph", "functions", "call_stack":
+			require.Equal(t, map[string]any{"controls": []any{"process", "thread", "core_type"}}, widget.Config["filterContext"])
+			checked[widget.ID] = true
+		case "jvm_info":
+			require.Equal(t, map[string]any{"controls": []any{}, "recordedScope": []any{map[string]any{"category": "Recorded process", "value": "PID 42", "controlId": "process"}}}, widget.Config["filterContext"])
+			checked[widget.ID] = true
+		default:
+			require.NotContains(t, widget.Config, "filterContext", "Pinned timeline and unrelated widgets must not opt in")
+		}
+	}
+	require.Len(t, checked, 4)
 }
 
 func TestCodeHotspotsJfrTimelineRangeBoundaries(t *testing.T) {
@@ -146,11 +192,16 @@ func newCodeHotspotsJfrTimelineModel(t *testing.T, anchor any, metadata bool, re
 
 func renderCodeHotspotsJfrTimeline(t *testing.T, model cdf.ModelView, workload string, pid any) (recipe.RenderOutput, error) {
 	t.Helper()
+	return renderCodeHotspotsJfrTimelineWithOptions(t, model, workload, pid, renderStageOptions{})
+}
+
+func renderCodeHotspotsJfrTimelineWithOptions(t *testing.T, model cdf.ModelView, workload string, pid any, options renderStageOptions) (recipe.RenderOutput, error) {
+	t.Helper()
 	return executeRenderStage(t, parseRecipeFile(t, "code_hotspots.js"),
 		[]*run.RunDescription{{WorkloadType: workload, ToolsUsed: []cdf.ToolUsed{{Tool: "neoprof"}}}},
 		[]cdf.ModelView{model}, map[string]any{
 			"filter_pid": pid, "filter_tid": nil, "filter_start_time_ns": nil, "filter_end_time_ns": nil,
-		}, renderStageOptions{neoprofTimelineEnabled: true})
+		}, options)
 }
 
 func initializeCodeHotspotsHeap(t *testing.T, model cdf.ModelView, output recipe.RenderOutput) (render.Session, string) {
@@ -175,4 +226,93 @@ func queryCodeHotspotsHeapTimes(t *testing.T, session render.Session, query stri
 	}
 	require.NoError(t, rows.Err())
 	return times
+}
+
+func TestCodeHotspotsJavaAlignmentWithScheduling(t *testing.T) {
+	anchor := strconv.FormatInt(javaHeapCaptureEpochNS, 10)
+	for _, tc := range []struct {
+		name               string
+		anchor             any
+		metadata, counters bool
+		wantTime           int64
+		wantError          bool
+	}{
+		{"scheduling without counters", anchor, true, false, 5_000_000_001, false},
+		{"scheduling with CPU counters", anchor, true, true, 5_000_000_001, false},
+		{"missing anchor", nil, true, false, 3_000_000_001, false},
+		{"zero anchor", "0", true, false, 3_000_000_001, false},
+		{"missing metadata", nil, false, false, 3_000_000_001, false},
+		{"invalid anchor", "invalid", true, false, 0, true},
+		{"numeric anchor", javaHeapCaptureEpochNS, true, false, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given: Java and scheduler artifacts with different capture metadata.
+			model := newCodeHotspotsJfrTimelineModel(t, tc.anchor, tc.metadata, []javaHeapRecordingFixture{{
+				start: javaHeapCaptureEpochNS + 2_000_000_000, event: javaHeapCaptureEpochNS + 5_000_000_001,
+			}})
+			manifest := model.(*cdf.OnDiskModel).Manifest()
+			if !tc.counters {
+				var entries []cdf.ManifestEntry
+				for _, entry := range manifest.Entries {
+					if strings.Contains(entry.Path, "/java/") || strings.HasSuffix(entry.Path, "/capture_metadata.json") {
+						entries = append(entries, entry)
+					}
+				}
+				manifest.Entries = entries
+			}
+			var schedulerComponents []timelineComponentFixture
+			for _, component := range schedulerFixture(t, model.BasePath(), false) {
+				// Keep the scheduler's synthetic 64-bit process outside the Java PID scope.
+				if strings.HasSuffix(component.RelativePath, "/processes.json") {
+					component.Content = []byte(strings.ReplaceAll(string(component.Content),
+						`"process_id":42,"name":"new app"`, `"process_id":43,"name":"new app"`))
+				}
+				if !strings.HasSuffix(component.RelativePath, "/capture_metadata.json") {
+					schedulerComponents = append(schedulerComponents, component)
+				}
+			}
+			schedulerModel := newRunComponentPresenceModel(t, model.BasePath(), schedulerComponents).(*cdf.OnDiskModel)
+			manifest.Entries = append(manifest.Entries, schedulerModel.Manifest().Entries...)
+			model = cdf.NewOnDiskModel(model.BasePath(), &manifest, cdf.Metadata{})
+			// When: the real recipe renders Java and scheduling together.
+			output, err := renderCodeHotspotsJfrTimelineWithOptions(t, model, "Launch", nil,
+				renderStageOptions{cpuSchedulingEnabled: true})
+			// Then: Java uses capture time when available, independently of counter rendering.
+			if tc.wantError {
+				require.ErrorContains(t, err, "decimal-string")
+				return
+			}
+			require.NoError(t, err)
+			var schedulerVisible bool
+			for _, widget := range output.Widgets {
+				if widget.ID == "scheduler" {
+					schedulerVisible = true
+				}
+				if widget.ID == "timeline" {
+					_, hasCaptureDomain := widget.Config["timeDomain"]
+					require.Equal(t, tc.counters && tc.metadata, hasCaptureDomain)
+				}
+			}
+			require.Equal(t, tc.metadata, schedulerVisible)
+			session, table := initializeCodeHotspotsHeap(t, model, output)
+			initializeRenderers(t, session, output, func(config recipe.RendererConfig) bool {
+				return strings.HasPrefix(config.ID, "scheduler_")
+			})
+			require.Equal(t, []int64{tc.wantTime}, queryCodeHotspotsHeapTimes(t, session, "SELECT time_ns FROM "+table))
+		})
+	}
+}
+
+func TestCodeHotspotsHeapCarriesProcessOnlyScope(t *testing.T) {
+	// Given
+	model := newCodeHotspotsJfrTimelineModel(t, "0", true, []javaHeapRecordingFixture{{start: javaHeapCaptureEpochNS, event: javaHeapCaptureEpochNS + 1}})
+	// When
+	output, err := renderCodeHotspotsJfrTimeline(t, model, "Launch", nil)
+	// Then
+	require.NoError(t, err)
+	heap := requireTimelineGroup(t, requireTimelineGroups(t, requireTimelineWidget(t, output)), "heap_summary")
+	scope := heap["filterContext"].(map[string]any)
+	require.Empty(t, scope["controls"])
+	require.NotContains(t, scope, "limitations")
+	require.Equal(t, []any{map[string]any{"category": "Process", "value": "PID 42", "controlId": "process"}}, scope["recordedScope"])
 }

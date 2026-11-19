@@ -96,6 +96,7 @@ func TestLifecycleHarnessesRegisterCoverageExport(t *testing.T) {
 				version: "1",
 				description: { short: "short", long: "long" },
 				probe: () => ({ available: true, capabilities: {}, advice: [] }),
+				validate: () => {},
 				run: () => {},
 				reformat: () => {},
 				onStop: () => {},

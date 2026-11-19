@@ -5,7 +5,7 @@
 
 const {
   probePythonVenv,
-  probeWhl,
+  probeDeployment,
   normalizeRootOutputAccess,
 } = require('./utils');
 
@@ -62,23 +62,22 @@ const readinessMessageCode =
  */
 
 /**
- * Build the deployed ASCT bundle path.
+ * Build the deployed ASCT package paths.
  *
  * @param {string} toolsRoot
- * @returns {string}
+ * @returns {{deploymentPath: string, archivePath: string, installerPath: string, requiredInputs: string[]}}
  */
-function buildBundlePath(toolsRoot) {
-  return `${toolsRoot}/${BUNDLE_DIR}/${BUNDLE_ARCHIVE_NAME}`;
-}
-
-/**
- * Build the deployed ASCT installer path.
- *
- * @param {string} toolsRoot
- * @returns {string}
- */
-function buildInstallerPath(toolsRoot) {
-  return `${toolsRoot}/${BUNDLE_DIR}/${INSTALL_SCRIPT_NAME}`;
+function buildDeploymentPaths(toolsRoot) {
+  const deploymentPath = `${toolsRoot}/${BUNDLE_DIR}`;
+  const archivePath = `${deploymentPath}/${BUNDLE_ARCHIVE_NAME}`;
+  const installerPath = `${deploymentPath}/${INSTALL_SCRIPT_NAME}`;
+  return {
+    deploymentPath,
+    archivePath,
+    installerPath,
+    // Readiness and installer staging both consume this authoritative list.
+    requiredInputs: [archivePath, installerPath],
+  };
 }
 
 /**
@@ -882,13 +881,40 @@ let tool = {
     );
     if (py.level !== 'ready') advice.push(py);
 
-    let whlAdvice = await probeWhl(
-      engine,
-      buildBundlePath(ctx.toolsRoot),
-      tool.name,
-    );
-    if (whlAdvice.level !== 'ready') {
-      advice.push(whlAdvice);
+    const deploymentPaths = buildDeploymentPaths(ctx.toolsRoot);
+    const installRoot = resolvePersistentInstallRoot(ctx.toolsRoot);
+    const installPaths = buildPersistentInstallPaths(installRoot);
+    // The deployed package is the source for rebuilding the installed venv.
+    // A reusable venv can run without it, but a new install requires every
+    // package input to be present.
+    if (!(await hasReusableInstall(engine, installPaths))) {
+      // No deployment is the normal first-use state and must retain the common
+      // TOOL_NOT_DEPLOYED result so APX can deploy ASCT automatically. An
+      // existing deployment with missing inputs is partial and needs explicit
+      // recovery because the deployment marker can otherwise make it look valid.
+      const deploymentAdvice = await probeDeployment(
+        engine,
+        deploymentPaths.deploymentPath,
+        tool.name,
+      );
+      if (deploymentAdvice.level !== 'ready') {
+        advice.push(deploymentAdvice);
+      } else {
+        for (const deployPath of deploymentPaths.requiredInputs) {
+          const inputAdvice = await probeDeployment(
+            engine,
+            deployPath,
+            tool.name,
+          );
+          if (inputAdvice.level !== 'ready') {
+            inputAdvice.messageCode =
+              'tool_integrations.asct.INCOMPLETE_DEPLOYMENT';
+            inputAdvice.metadata.deployPath = deploymentPaths.deploymentPath;
+            advice.push(inputAdvice);
+            break;
+          }
+        }
+      }
     }
 
     return {
@@ -897,6 +923,8 @@ let tool = {
       advice,
     };
   },
+
+  validate: () => {},
 
   /**
    * Reformat is currently a no-op because ASCT outputs are already emitted as-is.
@@ -917,8 +945,9 @@ let tool = {
     throwIfInterrupted(engine, ctx, 'ASCT setup');
 
     await waitForPendingInterruption(engine, ctx, 'ASCT setup');
-    const deployPath = buildBundlePath(ctx.toolsRoot);
-    const installerPath = buildInstallerPath(ctx.toolsRoot);
+    const deploymentPaths = buildDeploymentPaths(ctx.toolsRoot);
+    const deployPath = deploymentPaths.archivePath;
+    const installerPath = deploymentPaths.installerPath;
 
     // Create a scratch area for per-run logs and collected ASCT artifacts.
     let outputDir = await engine.createTempDir();
@@ -962,18 +991,16 @@ let tool = {
       await engine.mkDir(installRoot);
       throwIfInterrupted(engine, ctx, 'bundle verification');
 
-      for (const artifactPath of [deployPath, installerPath]) {
+      for (const artifactPath of deploymentPaths.requiredInputs) {
         const artifactExistsResult = await engine.execCommand(
           ['stat', artifactPath],
           {},
         );
         if (artifactExistsResult.rc !== 0) {
           throw {
-            code: 'tool_integrations.common.TOOL_NOT_DEPLOYED',
+            code: 'tool_integrations.asct.INCOMPLETE_DEPLOYMENT',
             metadata: {
-              tool: tool.name,
-              deployPath: artifactPath,
-              locality: engine.getLocality(),
+              deployPath: deploymentPaths.deploymentPath,
             },
           };
         }
@@ -982,7 +1009,7 @@ let tool = {
       const installerInputs = buildInstallerInputPaths(installRoot);
       await engine.mkDir(installerInputs.inputsDir);
       const copyResult = await engine.execCommand(
-        ['cp', deployPath, installerPath, installerInputs.inputsDir],
+        ['cp', ...deploymentPaths.requiredInputs, installerInputs.inputsDir],
         {},
       );
       if (copyResult.rc !== 0) {

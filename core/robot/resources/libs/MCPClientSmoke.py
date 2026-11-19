@@ -14,6 +14,7 @@ import uuid
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.types import PaginatedRequestParams
 from robot.api.deco import keyword, library
 
 from mcp_test_client_codex import CodexMCPTestClient
@@ -92,7 +93,6 @@ class MCPClientSmoke:
         self._environment, self._state_directory = isolated_environment(
             self._test_root
         )
-        self._environment["APXD_ENABLE_ANDROID_TARGETS"] = "1"
         copy_known_hosts(self._test_root)
         self._apx_binary = str(Path(apx_binary).resolve())
         self._output_dir = Path(output_dir)
@@ -598,9 +598,11 @@ class MCPClientSmoke:
                     await wait_for_pid_file_count(self._state_directory, 1)
                     cursor = None
                     while True:
-                        page = await session.list_tools(cursor)
+                        page = await session.list_tools(
+                            params=PaginatedRequestParams(cursor=cursor)
+                        )
                         tool_names.update(tool.name for tool in page.tools)
-                        cursor = page.nextCursor
+                        cursor = page.next_cursor
                         if cursor is None:
                             break
         await wait_for_pid_file_count(self._state_directory, 0)

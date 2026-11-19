@@ -35,8 +35,6 @@ type AddTargetArgs struct {
 
 var provisionKey = false
 
-const enableAndroidTargetsConfigKey = serverconfig.EnableAndroidTargetsConfigKey
-
 var TargetAddCmd = newAddCommand(client.NewAutostartClient(), engine_target.NewDefaultTargetManager(), ssh.NewDefaultSSHKeyProvisioner())
 
 func newAddCommand(cc client.ClientConnector, targetService target.TargetManagerService, sshService ssh.SSHKeyProvisioner) *cobra.Command {
@@ -73,9 +71,6 @@ func newAddCommand(cc client.ClientConnector, targetService target.TargetManager
 						return err
 					}
 				case "android":
-					if !viper.GetBool(enableAndroidTargetsConfigKey) {
-						return message.New(message.CommonUnsupportedTargetType).WithMetadata(map[string]string{"targetType": protocol})
-					}
 					tgt := parseAndroidLoginString(parsed.loginString)
 					if err := addAndroidTargetConfig(parsed, targetService, &tgt); err != nil {
 						return err
@@ -108,23 +103,14 @@ func newAddCommand(cc client.ClientConnector, targetService target.TargetManager
 	return addCmd
 }
 
-func RefreshTargetAddHelp() {
-	TargetAddCmd.Long = targetAddLongDescription()
-}
-
 func targetAddLongDescription() string {
-	if viper.GetBool(enableAndroidTargetsConfigKey) {
-		return `Add a target configuration.
+	return `Add a target configuration.
 
 The target may be an SSH target or an Android target.
 
 Target forms:
   [ssh://][user@]host[:port][:private_ssh_key_path][:auth=key|password]
   android://serial[@host]`
-	}
-
-	return `Add a target configuration.
-  [ssh://][user@]host[:port][:private_ssh_key_path][:auth=key|password]`
 }
 
 func resolveAddTargetProtocol(target string) (string, string) {
@@ -149,9 +135,6 @@ func addJSONTargetCommand(cc client.ClientConnector, args AddTargetArgs, targetS
 	case *engine_target.SSHTarget:
 		return true, addSSHTargetConfig(cc, args, targetService, sshService, t)
 	case *engine_target.AndroidTarget:
-		if !viper.GetBool(enableAndroidTargetsConfigKey) {
-			return true, message.New(message.CommonUnsupportedTargetType).WithMetadata(map[string]string{"targetType": "android"})
-		}
 		return true, addAndroidTargetConfig(args, targetService, t)
 	case *engine_target.LocalTarget:
 		return true, message.New(message.CommonUnsupportedTargetType).WithMetadata(map[string]string{"targetType": "local"})

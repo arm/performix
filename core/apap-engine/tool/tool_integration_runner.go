@@ -12,6 +12,7 @@ import (
 
 	"github.com/Arm-Debug/apap-cli/apap-engine/capabilities"
 	"github.com/Arm-Debug/apap-cli/apap-engine/logging/logx"
+	"github.com/Arm-Debug/apap-cli/apap-engine/message"
 	"github.com/Arm-Debug/apap-cli/apap-engine/run"
 )
 
@@ -145,7 +146,7 @@ func RunAndReformatToolIntegrations(
 	reg *Registry,
 	manifestUpdater *run.RunManifestUpdater,
 ) []error {
-	prepared, errs := PrepareToolIntegrations(intCtxs, reg)
+	prepared, errs := PrepareToolIntegrations(intCtxs, reg, cancelCh)
 	if errors.Join(errs...) != nil {
 		return errs
 	}
@@ -161,14 +162,26 @@ type PreparedToolIntegrations struct {
 
 // PrepareToolIntegrations completes all work which can reject an integration
 // before collection starts.
-func PrepareToolIntegrations(intCtxs []IntegrationContext, reg *Registry) (*PreparedToolIntegrations, []error) {
+func PrepareToolIntegrations(intCtxs []IntegrationContext, reg *Registry, cancelCh <-chan struct{}) (*PreparedToolIntegrations, []error) {
 	errs := make([]error, len(intCtxs))
 	for i := range intCtxs {
 		if err := normalizeCapabilityRequest(&intCtxs[i]); err != nil {
 			errs[i] = err
 			continue
 		}
-		if err := prepareCounterCollection(&intCtxs[i], reg); err != nil {
+		if err := validateCapabilityRequest(intCtxs[i], reg); err != nil {
+			errs[i] = err
+			continue
+		}
+		if intCtxs[i].Discovery == nil {
+			results, probeErrs := ProbeToolDiscovery([]IntegrationContext{intCtxs[i]}, reg, cancelCh)
+			if err := errors.Join(probeErrs...); err != nil {
+				errs[i] = err
+				continue
+			}
+			intCtxs[i].Discovery = &results[0]
+		}
+		if err := prepareCounterCollection(&intCtxs[i]); err != nil {
 			errs[i] = err
 		}
 	}
@@ -180,7 +193,36 @@ func PrepareToolIntegrations(intCtxs []IntegrationContext, reg *Registry) (*Prep
 	if ConstructToolIntegrations(intCtxs, reg, errs, toolInts) {
 		return nil, errs
 	}
+	results, errs := checkToolInstances(intCtxs, toolInts, cancelCh, validateTool)
+	for i, intCtx := range intCtxs {
+		if errs[i] != nil {
+			continue
+		}
+		errs[i] = handleToolAdvice(intCtx.DefaultEngineLocality.Engine, results[i].Advice)
+	}
+	if errors.Join(errs...) != nil {
+		return nil, errs
+	}
 	return &PreparedToolIntegrations{contexts: intCtxs, integrations: toolInts}, errs
+}
+
+func handleToolAdvice(engine Engine, advice []ProbeAdvice) error {
+	for _, item := range advice {
+		msg := message.New(item.MessageCode).WithMetadata(item.Metadata)
+		if item.Cause != "" {
+			msg = msg.WithCause(errors.New(item.Cause))
+		}
+		if item.Level == "error" {
+			return msg
+		}
+		catalogMessage, _ := message.LookupMessage(msg)
+		level := item.Level
+		if level == "warning" {
+			level = "warn"
+		}
+		engine.WriteUserMessage(level, catalogMessage.Text())
+	}
+	return nil
 }
 
 // RunAndReformatPreparedToolIntegrations launches integrations which have
@@ -197,7 +239,7 @@ func RunAndReformatPreparedToolIntegrations(
 		intCtxs[i].counterOutcomes = nil
 		if request := intCtxs[i].CapabilityRequest; request != nil && len(request.Required)+len(request.Optional) > 0 {
 			intCtxs[i].counterOutcomes = &counterOutcomeSet{
-				published: make(map[string]capabilities.CPUCounterValue),
+				published: make(map[string]capabilities.CPUCounterCapabilityValue),
 				staged:    make(map[string]stagedCounterOutcome),
 			}
 		}
@@ -295,27 +337,66 @@ func finishCapabilityFailure(ic *IntegrationContext, cancelCh <-chan struct{}, p
 	return phaseErr
 }
 
-// ProbeTools runs the Probe method of all provided tool integrations concurrently.
-// It returns a slice of ProbeResult and a slice of errors (index-aligned with input).
-// Each probe result represents the capabilities of the corresponding tool integration.
+// ProbeTools discovers capabilities and validates the selected configuration.
 func ProbeTools(
 	probeRequests []IntegrationContext,
 	reg *Registry,
 	cancelCh <-chan struct{},
 ) ([]ProbeResult, []error) {
 	results, errs := ProbeToolDiscovery(probeRequests, reg, cancelCh)
-	for i, request := range probeRequests {
-		if errs[i] == nil {
-			errs[i] = AddCapabilitySelectionAdvice(&results[i], request.CapabilityRequest)
-		}
+	if errors.Join(errs...) != nil {
+		return results, errs
 	}
-	return results, errs
+	for i := range probeRequests {
+		probeRequests[i].Discovery = &results[i]
+	}
+	return ValidateTools(probeRequests, reg, cancelCh)
 }
 
 // ProbeToolDiscovery returns validated discovery with integration advice only.
 // Callers caching these results must apply request-specific advice after cloning
-// the cached result, using AddCapabilitySelectionAdvice.
+// the cached result, using ValidateTools.
 func ProbeToolDiscovery(probeRequests []IntegrationContext, reg *Registry, cancelCh <-chan struct{}) ([]ProbeResult, []error) {
+	return checkToolIntegrations(probeRequests, reg, cancelCh, func(ti ToolIntegration, ic IntegrationContext) (ProbeResult, error) {
+		result, err := ti.Probe()
+		if err == nil {
+			factory := reg.FindTool(ic.Name, ic.Version)
+			optedIn := CapabilityInterfaceVersion(factory) == capabilities.CPUCounterVersion
+			required := requiresLogicalDiscovery(ic.CapabilityRequest)
+			err = validateCPUDiscovery(result, optedIn, required)
+		}
+		return result, err
+	})
+}
+
+// ValidateTools checks current requests without changing the discovery results.
+// Each context must contain discovery for the same target and configuration.
+func ValidateTools(requests []IntegrationContext, reg *Registry, cancelCh <-chan struct{}) ([]ProbeResult, []error) {
+	return checkToolIntegrations(requests, reg, cancelCh, validateTool)
+}
+
+func validateTool(ti ToolIntegration, ic IntegrationContext) (ProbeResult, error) {
+	if ic.Discovery == nil {
+		return ProbeResult{}, fmt.Errorf("tool %s has no discovery for validation", ic.Name)
+	}
+	result := *ic.Discovery
+	result.Advice = append([]ProbeAdvice{}, result.Advice...)
+	advice, err := ti.Validate()
+	if err != nil {
+		return result, err
+	}
+	result.Advice = append(result.Advice, advice...)
+	for _, item := range advice {
+		if item.Level == "error" {
+			result.Available = false
+		}
+	}
+	err = AddCapabilitySelectionAdvice(&result, ic.CapabilityRequest)
+	return result, err
+}
+
+// checkToolIntegrations shares runtime and cancellation handling between checks.
+func checkToolIntegrations(probeRequests []IntegrationContext, reg *Registry, cancelCh <-chan struct{}, check func(ToolIntegration, IntegrationContext) (ProbeResult, error)) ([]ProbeResult, []error) {
 	errs := make([]error, len(probeRequests))
 	probeResults := make([]ProbeResult, len(probeRequests))
 	for i := range probeRequests {
@@ -334,67 +415,73 @@ func ProbeToolDiscovery(probeRequests []IntegrationContext, reg *Registry, cance
 	if ConstructToolIntegrations(probeRequests, reg, errs, toolInts) {
 		return probeResults, errs
 	}
+	return checkToolInstances(probeRequests, toolInts, cancelCh, check)
+}
 
-	// Run all tool probes concurrently
-	probeWg := sync.WaitGroup{}
-	probeWg.Add(len(probeRequests))
+func checkToolInstances(requests []IntegrationContext, toolInts []ToolIntegration, cancelCh <-chan struct{}, check func(ToolIntegration, IntegrationContext) (ProbeResult, error)) ([]ProbeResult, []error) {
+	errs := make([]error, len(requests))
+	results := make([]ProbeResult, len(requests))
+
+	// Run all tool checks concurrently.
+	checkWg := sync.WaitGroup{}
+	checkWg.Add(len(requests))
 	for i, toolInstance := range toolInts {
 		go func(indx int) {
-			defer probeWg.Done()
+			defer checkWg.Done()
+			select {
+			case <-requests[indx].Ctx.Done():
+				errs[indx] = requests[indx].Ctx.Err()
+				return
+			case <-cancelCh:
+				errs[indx] = context.Canceled
+				return
+			default:
+			}
 
-			probeComplete := make(chan error, 1)
+			checkComplete := make(chan error, 1)
 
-			// Run tool probe on a goroutine to allow support cancellation observation
+			// Observe cancellation while the check runs.
 			go func() {
 				cleanUp, err := toolInstance.StartRuntime()
 				if err != nil {
-					probeComplete <- err
+					checkComplete <- err
 					return
 				}
 
-				probeResults[indx], err = toolInstance.Probe()
-				if err == nil {
-					factory := reg.FindTool(probeRequests[indx].Name, probeRequests[indx].Version)
-					optedIn := CapabilityInterfaceVersion(factory) == capabilities.CPUCounterVersion
-					required := optedIn
-					if request := probeRequests[indx].CapabilityRequest; request != nil && len(request.Required)+len(request.Optional) == 0 {
-						required = false
-					}
-					err = validateCPUDiscovery(probeResults[indx], optedIn, required)
-				}
+				results[indx], err = check(toolInstance, requests[indx])
 				cleanUp()
-				probeComplete <- err
+				checkComplete <- err
 			}()
 
-			// Cancellation must settle the probe before its runtime and shared
+			// Cancellation must settle the check before its runtime and shared
 			// locality resources can be cleaned up by the caller.
 			var cancellationErr error
 			select {
-			case <-probeRequests[indx].Ctx.Done():
-				cancellationErr = probeRequests[indx].Ctx.Err()
+			case <-requests[indx].Ctx.Done():
+				cancellationErr = requests[indx].Ctx.Err()
 			case <-cancelCh:
 				cancellationErr = context.Canceled
-			case err := <-probeComplete:
+			case err := <-checkComplete:
 				errs[indx] = err
 				return
 			}
 			select {
-			case err := <-probeComplete:
+			case err := <-checkComplete:
 				errs[indx] = err
 				return
 			default:
 			}
 			cancelErr := toolInstance.Cancel()
-			probeErr := <-probeComplete
+			checkErr := <-checkComplete
 			errs[indx] = cancellationErr
-			if cancelErr != nil || probeErr != nil {
-				errs[indx] = errors.Join(errs[indx], cancelErr, probeErr)
+			if cancelErr != nil || checkErr != nil {
+				errs[indx] = errors.Join(errs[indx], cancelErr, checkErr)
 			}
 		}(i)
 	}
-	probeWg.Wait()
+	checkWg.Wait()
 
-	return probeResults, errs
+	return results, errs
 }
 
 // ConstructToolIntegrations constructs tool integrations to be used for tool probing or running.

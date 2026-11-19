@@ -9,7 +9,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -251,33 +250,6 @@ func TestTargetsTestCmd(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Contains(t, cmdBuf.String(), "Target Connection - Success")
 		assert.Contains(t, cmdBuf.String(), "Test completed with 0 errors.")
-	})
-
-	t.Run("android target fails before connection when Android targets are disabled", func(t *testing.T) {
-		wasEnabled := viper.GetBool(enableAndroidTargetsConfigKey)
-		viper.Set(enableAndroidTargetsConfigKey, false)
-		defer viper.Set(enableAndroidTargetsConfigKey, wasEnabled)
-
-		androidTarget := &engine_target.AndroidTarget{SerialNumber: "device-123"}
-		loginService := targetloginmocks.NewMockLoginService(t)
-		mtm := &target.MockTargetManager{}
-		mtm.On("GetTarget", "androidTarget").Return(androidTarget, nil)
-		cc := &mocks.MockAutostartClientConnector{}
-		mdt := &mockTargetTester{}
-
-		cmd := newTargetTestCmd(cc, mtm, mdt, loginService)
-		cmd.SetArgs([]string{"androidTarget"})
-
-		err := cmd.Execute()
-
-		var msgErr message.Message
-		ok := errors.As(err, &msgErr)
-		require.True(t, ok)
-		assert.Equal(t, message.CommonUnsupportedTargetType, msgErr.Code())
-		assert.Equal(t, "android", msgErr.Metadata()["targetType"])
-		cc.AssertNotCalled(t, "ApapClient", mock.Anything)
-		mdt.AssertNotCalled(t, "TestTarget", mock.Anything, mock.Anything)
-		mtm.AssertExpectations(t)
 	})
 
 	t.Run("valid target with persistent flag", func(t *testing.T) {

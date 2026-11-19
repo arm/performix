@@ -75,7 +75,7 @@ func newTransportCredentials(host string, waitForAuthority bool) (credentials.Tr
 // AuthenticateWithAuthService establishes a mutual TLS connection to the AuthService and returns a ready-to-use client.
 // The caller is responsible for closing the returned connection when finished.
 func AuthenticateWithAuthService(host string, port int) (authproto.AuthClient, *grpc.ClientConn, error) {
-	connector, err := newEngineConnector(host, true)
+	connector, err := newEngineConnector(host, true, "")
 	if err != nil {
 		return nil, nil, err
 	}
